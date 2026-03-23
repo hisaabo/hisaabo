@@ -27,6 +27,12 @@ export interface DocumentCreatorProps {
   editInvoiceId?: string;
 }
 
+interface UnitOption {
+  unit: string;
+  salePrice: string;
+  conversionFactor: number;
+}
+
 interface LineItem {
   id: string;
   itemId?: string;
@@ -35,6 +41,8 @@ interface LineItem {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  selectedUnit?: string;
+  availableUnits?: UnitOption[];
 }
 
 interface Charge {
@@ -99,6 +107,8 @@ export function DocumentCreator({
   const [terms, setTerms] = useState("");
   const [items, setItems] = useState<LineItem[]>([newLineItem()]);
   const [charges, setCharges] = useState<Charge[]>([]);
+  const [invoiceDiscount, setInvoiceDiscount] = useState("0");
+  const [invoiceDiscountType, setInvoiceDiscountType] = useState<"amount" | "percent">("amount");
   const [roundOff, setRoundOff] = useState("0");
 
   const { data: partiesData } = trpc.party.list.useQuery({
@@ -234,16 +244,19 @@ export function DocumentCreator({
         discountPercent: li.discountPercent || "0",
       })),
       charges: activeCharges.map((c) => ({ amount: c.amount })),
+      invoiceDiscount: invoiceDiscount || "0",
+      invoiceDiscountType,
       roundOff: roundOff || "0",
     });
     return {
       subtotal: money.toNumber(result.subtotal),
       taxTotal: money.toNumber(result.taxTotal),
-      discountTotal: money.toNumber(result.discountTotal),
+      lineDiscountTotal: money.toNumber(result.lineDiscountTotal),
+      invoiceDiscountAmount: money.toNumber(result.invoiceDiscountAmount),
       chargesTotal: money.toNumber(result.chargesTotal),
       total: money.toNumber(result.total),
     };
-  }, [items, charges, roundOff]);
+  }, [items, charges, invoiceDiscount, invoiceDiscountType, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {
     setItems((prev) =>
@@ -254,6 +267,16 @@ export function DocumentCreator({
   function selectProduct(lineId: string, productId: string) {
     const product = itemsData?.data.find((p) => p.id === productId);
     if (!product) return;
+
+    const basePrice = (invoiceType === "sale" ? product.salePrice : product.purchasePrice) || "";
+    const baseUnit: UnitOption = { unit: product.unit, salePrice: basePrice, conversionFactor: 1 };
+    const variants: UnitOption[] = ((product.unitVariants as any[]) || []).map((v: any) => ({
+      unit: v.unit,
+      salePrice: invoiceType === "sale" ? v.salePrice : (v.purchasePrice || v.salePrice),
+      conversionFactor: v.conversionFactor,
+    }));
+    const allUnits = [baseUnit, ...variants];
+
     setItems((prev) =>
       prev.map((li) =>
         li.id === lineId
@@ -261,11 +284,10 @@ export function DocumentCreator({
               ...li,
               itemId: product.id,
               description: product.name,
-              unitPrice:
-                (invoiceType === "sale"
-                  ? product.salePrice
-                  : product.purchasePrice) || "",
+              unitPrice: basePrice,
               taxPercent: product.taxPercent,
+              selectedUnit: product.unit,
+              availableUnits: allUnits.length > 1 ? allUnits : undefined,
             }
           : li
       )
@@ -301,6 +323,8 @@ export function DocumentCreator({
       unitPrice: li.unitPrice,
       taxPercent: li.taxPercent,
       discountPercent: li.discountPercent,
+      selectedUnit: li.selectedUnit || undefined,
+      conversionFactor: li.availableUnits?.find((u) => u.unit === li.selectedUnit)?.conversionFactor?.toString() || undefined,
     }));
 
     const chargesPayload = charges
@@ -316,6 +340,8 @@ export function DocumentCreator({
         notes: notes || null,
         termsAndConditions: terms || null,
         charges: chargesPayload,
+        invoiceDiscount: invoiceDiscount || "0",
+        invoiceDiscountType,
         roundOff: roundOff || "0",
         lineItems: lineItemsPayload,
       });
@@ -328,6 +354,8 @@ export function DocumentCreator({
         notes: notes || undefined,
         termsAndConditions: terms || undefined,
         charges: chargesPayload,
+        invoiceDiscount: invoiceDiscount || "0",
+        invoiceDiscountType,
         roundOff: roundOff || undefined,
         lineItems: lineItemsPayload,
       });
@@ -370,7 +398,7 @@ export function DocumentCreator({
     >
       <div className="space-y-5">
         {/* Top row: party, dates */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-[1fr_140px_140px] gap-3">
           <Combobox
             label={partyLabel}
             required
@@ -400,162 +428,160 @@ export function DocumentCreator({
           </div>
         </div>
 
-        {/* Line items table */}
-        <div className="card overflow-hidden min-w-0">
-          {/* Table header */}
-          <div className="grid gap-2 px-3 py-2 text-[11px] font-medium text-text-tertiary bg-surface-1 border-b border-border-light [grid-template-columns:1fr_200px_72px_90px_64px_64px_90px_28px]">
-            <span>Product</span>
-            <span>Description</span>
-            <span className="text-right">Qty</span>
-            <span className="text-right">Price</span>
-            <span className="text-right">Tax %</span>
-            <span className="text-right">Disc %</span>
-            <span className="text-right">Amount</span>
-            <span />
-          </div>
+        {/* Line items */}
+        <div className="space-y-3">
+          <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide">Line Items</p>
 
-          {/* Line item rows */}
-          <div className="divide-y divide-border-light">
-            {items.map((li) => {
-              const calc = calcLine(li);
-              return (
-                <div
-                  key={li.id}
-                  className="grid gap-2 px-3 py-2 items-center min-w-0 [grid-template-columns:1fr_200px_72px_90px_64px_64px_90px_28px]"
-                >
-                  {/* Product selector */}
-                  <select
-                    value={li.itemId || ""}
-                    onChange={(e) => selectProduct(li.id, e.target.value)}
-                    className="input py-1.5 text-xs"
-                  >
-                    <option value="">Custom item</option>
-                    {itemsData?.data.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Description */}
-                  <input
-                    value={li.description}
-                    onChange={(e) =>
-                      updateItem(li.id, "description", e.target.value)
-                    }
-                    placeholder="Description *"
-                    required
-                    className="input py-1.5 text-xs"
-                  />
-
-                  {/* Quantity */}
-                  <input
-                    type="number"
-                    value={li.quantity}
-                    onChange={(e) =>
-                      updateItem(li.id, "quantity", e.target.value)
-                    }
-                    min="0.001"
-                    step="any"
-                    required
-                    className="input py-1.5 text-xs text-right tabular-nums"
-                  />
-
-                  {/* Unit price */}
-                  <input
-                    type="number"
-                    value={li.unitPrice}
-                    onChange={(e) =>
-                      updateItem(li.id, "unitPrice", e.target.value)
-                    }
-                    min="0"
-                    step="0.01"
-                    required
-                    placeholder="0.00"
-                    className="input py-1.5 text-xs text-right tabular-nums"
-                  />
-
-                  {/* Tax % */}
-                  <input
-                    type="number"
-                    value={li.taxPercent}
-                    onChange={(e) =>
-                      updateItem(li.id, "taxPercent", e.target.value)
-                    }
-                    min="0"
-                    step="0.01"
-                    className="input py-1.5 text-xs text-right tabular-nums"
-                  />
-
-                  {/* Discount % */}
-                  <input
-                    type="number"
-                    value={li.discountPercent}
-                    onChange={(e) =>
-                      updateItem(li.id, "discountPercent", e.target.value)
-                    }
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    className="input py-1.5 text-xs text-right tabular-nums"
-                  />
-
-                  {/* Line total */}
-                  <div className="text-right text-xs font-semibold tabular-nums text-text-primary">
-                    {li.unitPrice ? formatCurrency(calc.total) : "—"}
+          {items.map((li) => {
+            const calc = calcLine(li);
+            return (
+              <div key={li.id} className="rounded-xl border border-border-light bg-surface-1/50 px-4 py-3 space-y-2">
+                {/* Row 1: Product + unit selector + delete */}
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <select
+                      value={li.itemId || ""}
+                      onChange={(e) => selectProduct(li.id, e.target.value)}
+                      className="input py-1.5 text-sm"
+                    >
+                      <option value="">Select product or custom item</option>
+                      {itemsData?.data.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                    {/* Unit variant selector - only if item has variants */}
+                    {li.availableUnits && li.availableUnits.length > 1 && (
+                      <select
+                        value={li.selectedUnit || ""}
+                        onChange={(e) => {
+                          const selected = li.availableUnits?.find((u) => u.unit === e.target.value);
+                          if (selected) {
+                            updateItem(li.id, "unitPrice", selected.salePrice);
+                            setItems((prev) => prev.map((item) =>
+                              item.id === li.id ? { ...item, selectedUnit: selected.unit } : item
+                            ));
+                          }
+                        }}
+                        className="input py-1 text-[11px] mt-1.5"
+                      >
+                        {li.availableUnits.map((u) => (
+                          <option key={u.unit} value={u.unit}>
+                            {u.unit.toUpperCase()} {u.conversionFactor > 1 ? `(${u.conversionFactor} base)` : ""} — ₹{u.salePrice}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
-
-                  {/* Delete row */}
                   <button
                     type="button"
                     onClick={() => removeLine(li.id)}
                     disabled={items.length <= 1}
-                    className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                    className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 disabled:opacity-20 disabled:cursor-not-allowed transition-colors shrink-0"
                     aria-label="Remove line"
                   >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                       <path d="M4 4l8 8M12 4l-8 8" />
                     </svg>
                   </button>
                 </div>
-              );
-            })}
-          </div>
 
-          {/* Add row button */}
-          <div className="px-3 py-2 bg-surface-1">
-            <button
-              type="button"
-              onClick={addLine}
-              className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
-            >
-              + Add line item
-            </button>
-          </div>
+                {/* Row 2: Description */}
+                <input
+                  value={li.description}
+                  onChange={(e) => updateItem(li.id, "description", e.target.value)}
+                  placeholder="Description *"
+                  required
+                  className="input py-1.5 text-sm"
+                />
+
+                {/* Row 3: Numbers grid + total */}
+                <div className="flex items-end gap-2">
+                  <div className="grid grid-cols-4 gap-2 flex-1">
+                    <div>
+                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Qty</label>
+                      <input
+                        type="number"
+                        value={li.quantity}
+                        onChange={(e) => updateItem(li.id, "quantity", e.target.value)}
+                        min="0.001"
+                        step="any"
+                        className="input py-1.5 text-sm tabular-nums"
+                        placeholder="1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Price</label>
+                      <input
+                        type="number"
+                        value={li.unitPrice}
+                        onChange={(e) => updateItem(li.id, "unitPrice", e.target.value)}
+                        min="0"
+                        step="0.01"
+                        className="input py-1.5 text-sm tabular-nums"
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Tax %</label>
+                      <input
+                        type="number"
+                        value={li.taxPercent}
+                        onChange={(e) => updateItem(li.id, "taxPercent", e.target.value)}
+                        min="0"
+                        step="0.01"
+                        className="input py-1.5 text-sm tabular-nums"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Disc %</label>
+                      <input
+                        type="number"
+                        value={li.discountPercent}
+                        onChange={(e) => updateItem(li.id, "discountPercent", e.target.value)}
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        className="input py-1.5 text-sm tabular-nums"
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 pb-1">
+                    <p className="text-[10px] text-text-tertiary mb-0.5">Amount</p>
+                    <p className="text-sm font-semibold tabular-nums text-text-primary">
+                      {li.unitPrice ? formatCurrency(calc.total) : "—"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Add line button */}
+          <button
+            type="button"
+            onClick={addLine}
+            className="w-full py-2.5 rounded-xl border border-dashed border-border-light text-sm font-medium text-brand-600 hover:bg-brand-600/5 hover:border-brand-400 transition-colors"
+          >
+            + Add line item
+          </button>
         </div>
 
         {/* Totals summary */}
         <div className="flex justify-end">
-          <div className="w-72 space-y-2">
+          <div className="w-80 space-y-2.5">
             <div className="flex justify-between text-sm">
               <span className="text-text-secondary">Subtotal</span>
               <span className="tabular-nums font-medium text-text-primary">
                 {formatCurrency(totals.subtotal)}
               </span>
             </div>
-            {totals.discountTotal > 0 && (
+            {totals.lineDiscountTotal > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-text-secondary">Discount</span>
+                <span className="text-text-secondary">Line Discounts</span>
                 <span className="tabular-nums text-emerald-600">
-                  -{formatCurrency(totals.discountTotal)}
+                  -{formatCurrency(totals.lineDiscountTotal)}
                 </span>
               </div>
             )}
@@ -565,6 +591,45 @@ export function DocumentCreator({
                 {formatCurrency(totals.taxTotal)}
               </span>
             </div>
+
+            {/* Invoice-level discount */}
+            <div className="flex justify-between items-center text-sm">
+              <div className="flex items-center gap-1.5">
+                <span className="text-text-secondary">Discount</span>
+                <div className="inline-flex rounded-md border border-border-light overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setInvoiceDiscountType("amount")}
+                    className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${invoiceDiscountType === "amount" ? "bg-brand-600/[0.1] text-brand-700 dark:text-brand-400" : "text-text-tertiary hover:text-text-secondary"}`}
+                  >
+                    ₹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInvoiceDiscountType("percent")}
+                    className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${invoiceDiscountType === "percent" ? "bg-brand-600/[0.1] text-brand-700 dark:text-brand-400" : "text-text-tertiary hover:text-text-secondary"}`}
+                  >
+                    %
+                  </button>
+                </div>
+              </div>
+              <input
+                type="number"
+                className="input w-28 text-right tabular-nums text-sm py-1"
+                value={invoiceDiscount}
+                onChange={(e) => setInvoiceDiscount(e.target.value)}
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+              />
+            </div>
+            {totals.invoiceDiscountAmount > 0 && invoiceDiscountType === "percent" && (
+              <div className="flex justify-end">
+                <span className="text-xs tabular-nums text-emerald-600">
+                  -{formatCurrency(totals.invoiceDiscountAmount)}
+                </span>
+              </div>
+            )}
 
             {/* Charges section */}
             <div className="pt-1">
@@ -674,7 +739,7 @@ export function DocumentCreator({
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              rows={3}
+              rows={4}
               placeholder="Additional notes for the customer…"
               className="input resize-none"
             />
@@ -684,7 +749,7 @@ export function DocumentCreator({
             <textarea
               value={terms}
               onChange={(e) => setTerms(e.target.value)}
-              rows={3}
+              rows={4}
               placeholder="Payment terms, warranty, etc…"
               className="input resize-none"
             />

@@ -8,9 +8,9 @@ import { TRPCError } from "@trpc/server";
 export const partyRouter = router({
   list: businessProcedure
     .input(z.object({
-      type: z.enum(["customer", "supplier"]).optional(),
-      search: z.string().optional(),
-      category: z.string().optional(),
+      type: z.enum(["customer", "supplier"]).nullish(),
+      search: z.string().nullish(),
+      category: z.string().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {

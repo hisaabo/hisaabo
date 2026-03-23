@@ -8,14 +8,14 @@ import { TRPCError } from "@trpc/server";
 export const invoiceRouter = router({
   list: businessProcedure
     .input(z.object({
-      type: z.enum(["sale", "purchase"]).optional(),
-      status: z.enum(["draft", "sent", "paid", "partial", "overdue", "cancelled"]).optional(),
-      partyId: z.string().uuid().optional(),
+      type: z.enum(["sale", "purchase"]).nullish(),
+      status: z.enum(["draft", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
+      partyId: z.string().uuid().nullish(),
       documentType: z.enum(documentTypes).default("invoice"),
-      fromDate: z.string().datetime().optional(),
-      toDate: z.string().datetime().optional(),
-      itemId: z.string().uuid().optional(),
-      search: z.string().optional(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
+      itemId: z.string().uuid().nullish(),
+      search: z.string().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -132,6 +132,8 @@ export const invoiceRouter = router({
           discountPercent: li.discountPercent || "0",
           totalAmount: calc.total,
           sortOrder: idx,
+          selectedUnit: li.selectedUnit || null,
+          conversionFactor: li.conversionFactor || "1",
         };
       });
 
@@ -144,7 +146,9 @@ export const invoiceRouter = router({
           discountPercent: li.discountPercent || "0",
         })),
         charges: charges.length > 0 ? charges : undefined,
-        roundOff: charges.length > 0 ? (input.roundOff || "0") : undefined,
+        invoiceDiscount: input.invoiceDiscount || "0",
+        invoiceDiscountType: input.invoiceDiscountType || "amount",
+        roundOff: input.roundOff || "0",
       });
       const additionalCharges = charges.length > 0
         ? totals.chargesTotal
@@ -161,7 +165,7 @@ export const invoiceRouter = router({
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
         subtotal: totals.subtotal,
         taxAmount: totals.taxTotal,
-        discountAmount: "0.00",
+        discountAmount: totals.invoiceDiscountAmount,
         charges: charges.length > 0 ? charges : null,
         additionalCharges,
         roundOff,
@@ -177,13 +181,14 @@ export const invoiceRouter = router({
         );
       }
 
-      // Update stock quantities for sale invoices
+      // Update stock quantities for sale/purchase invoices (adjusted for unit conversion)
       if (input.type === "sale") {
         for (const li of input.lineItems) {
           if (li.itemId) {
+            const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
             await tx.update(items)
               .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
                 updatedAt: new Date(),
               })
               .where(eq(items.id, li.itemId));
@@ -192,9 +197,10 @@ export const invoiceRouter = router({
       } else if (input.type === "purchase") {
         for (const li of input.lineItems) {
           if (li.itemId) {
+            const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
             await tx.update(items)
               .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
                 updatedAt: new Date(),
               })
               .where(eq(items.id, li.itemId));
@@ -225,6 +231,8 @@ export const invoiceRouter = router({
       notes: z.string().max(2000).optional().nullable(),
       termsAndConditions: z.string().max(2000).optional().nullable(),
       charges: z.array(invoiceChargeSchema).optional(),
+      invoiceDiscount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      invoiceDiscountType: z.enum(["amount", "percent"]).optional(),
       roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
       lineItems: z.array(invoiceLineItemSchema).min(1).optional(),
     }))
@@ -280,6 +288,8 @@ export const invoiceRouter = router({
               discountPercent: li.discountPercent || "0",
               totalAmount: calc.total,
               sortOrder: idx,
+              selectedUnit: li.selectedUnit || null,
+              conversionFactor: li.conversionFactor || "1",
             };
           });
 

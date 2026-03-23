@@ -61,6 +61,7 @@ function ItemsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [editItemId, setEditItemId] = useState<string | null>(null);
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -282,6 +283,18 @@ function ItemsPage() {
         <ItemDetailPanel
           itemId={selectedItemId}
           onClose={() => setSelectedItemId(null)}
+          onEdit={(id) => {
+            setSelectedItemId(null);
+            setEditItemId(id);
+          }}
+        />
+      )}
+
+      {/* Edit Item Modal */}
+      {editItemId && (
+        <EditItemModal
+          itemId={editItemId}
+          onClose={() => setEditItemId(null)}
         />
       )}
     </div>
@@ -301,6 +314,19 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [stockQuantity, setStockQuantity] = useState("0");
   const [lowStockAlert, setLowStockAlert] = useState("");
   const [unit, setUnit] = useState("pcs");
+  const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+
+  function updateVariant(idx: number, field: string, value: string) {
+    setUnitVariants((prev) =>
+      prev.map((v, i) =>
+        i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
+      )
+    );
+  }
+
+  function removeVariant(idx: number) {
+    setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   const utils = trpc.useUtils();
 
@@ -328,6 +354,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
     setStockQuantity("0");
     setLowStockAlert("");
     setUnit("pcs");
+    setUnitVariants([]);
   }
 
   function handleClose() {
@@ -336,6 +363,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   }
 
   function handleCreate() {
+    const validVariants = unitVariants.filter((v) => v.unit && v.salePrice);
     createMutation.mutate({
       itemType,
       name,
@@ -349,6 +377,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
       stockQuantity,
       lowStockAlert: lowStockAlert || undefined,
       unit: unit as any,
+      unitVariants: validVariants.length > 0 ? validVariants : undefined,
     });
   }
 
@@ -493,6 +522,67 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
               </div>
             </Disclosure>
           )}
+
+          <Disclosure
+            label="Unit Variants"
+            count={unitVariants.filter((v) => v.unit && v.salePrice).length}
+          >
+            <div className="space-y-2">
+              {unitVariants.map((v, i) => (
+                <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
+                  <InputField
+                    label={i === 0 ? "Unit Name" : ""}
+                    value={v.unit}
+                    onChange={(e) => updateVariant(i, "unit", e.target.value)}
+                    placeholder="e.g. pack, box"
+                  />
+                  <InputField
+                    label={i === 0 ? `Per ${unit}` : ""}
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    value={String(v.conversionFactor)}
+                    onChange={(e) => updateVariant(i, "conversionFactor", e.target.value)}
+                    placeholder="e.g. 5"
+                  />
+                  <InputField
+                    label={i === 0 ? "Sale Price (₹)" : ""}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={v.salePrice}
+                    onChange={(e) => updateVariant(i, "salePrice", e.target.value)}
+                    placeholder="0.00"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeVariant(i)}
+                    className={cn(
+                      "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
+                      i === 0 ? "mb-0.5" : ""
+                    )}
+                    aria-label="Remove variant"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
+                className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+              >
+                + Add unit variant
+              </button>
+              {unitVariants.length > 0 && unit && (
+                <p className="text-[11px] text-text-tertiary mt-1">
+                  Base unit: {unit.toUpperCase()}. Each variant price is per that variant unit.
+                </p>
+              )}
+            </div>
+          </Disclosure>
         </div>
 
         {/* Actions */}
@@ -513,6 +603,313 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
+// ── Edit Item Modal ──────────────────────────────────────────────
+
+function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
+  const { data: item } = trpc.item.getById.useQuery({ id: itemId });
+  const utils = trpc.useUtils();
+
+  const [itemType, setItemType] = useState<ItemType>("product");
+  const [name, setName] = useState("");
+  const [sku, setSku] = useState("");
+  const [category, setCategory] = useState("");
+  const [hsn, setHsn] = useState("");
+  const [salePrice, setSalePrice] = useState("");
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [taxPercent, setTaxPercent] = useState("0");
+  const [taxInclusive, setTaxInclusive] = useState(false);
+  const [stockQuantity, setStockQuantity] = useState("0");
+  const [lowStockAlert, setLowStockAlert] = useState("");
+  const [unit, setUnit] = useState("pcs");
+  const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    if (!item || initialized) return;
+    setItemType(item.itemType ?? "product");
+    setName(item.name);
+    setSku(item.sku ?? "");
+    setCategory(item.category ?? "");
+    setHsn(item.hsn ?? "");
+    setSalePrice(item.salePrice ?? "");
+    setPurchasePrice(item.purchasePrice ?? "");
+    setTaxPercent(item.taxPercent ?? "0");
+    setTaxInclusive(item.taxInclusive ?? false);
+    setStockQuantity(item.stockQuantity ?? "0");
+    setLowStockAlert(item.lowStockAlert ?? "");
+    setUnit(item.unit ?? "pcs");
+    setUnitVariants((item.unitVariants as any[]) ?? []);
+    setInitialized(true);
+  }, [item, initialized]);
+
+  function updateVariant(idx: number, field: string, value: string) {
+    setUnitVariants((prev) =>
+      prev.map((v, i) =>
+        i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
+      )
+    );
+  }
+
+  function removeVariant(idx: number) {
+    setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  const updateMutation = trpc.item.update.useMutation({
+    onSuccess: () => {
+      utils.item.list.invalidate();
+      utils.item.getById.invalidate({ id: itemId });
+      toast.success("Item updated");
+      onClose();
+    },
+    onError: (err) => {
+      toast.error(err.message);
+    },
+  });
+
+  function handleSave() {
+    const validVariants = unitVariants.filter((v) => v.unit && v.salePrice);
+    updateMutation.mutate({
+      id: itemId,
+      data: {
+        itemType,
+        name,
+        sku: sku || undefined,
+        category: category || undefined,
+        hsn: hsn || undefined,
+        salePrice: salePrice || undefined,
+        purchasePrice: purchasePrice || undefined,
+        taxPercent,
+        taxInclusive,
+        stockQuantity,
+        lowStockAlert: lowStockAlert || undefined,
+        unit: unit as any,
+        unitVariants: validVariants.length > 0 ? validVariants : undefined,
+      },
+    });
+  }
+
+  return (
+    <Modal open={true} onClose={onClose} title="Edit Item" className="max-w-xl">
+      <div className="space-y-4">
+        {/* Item Type toggle */}
+        <SegmentedControl
+          tabs={[
+            { value: "product", label: "Product" },
+            { value: "service", label: "Service" },
+          ]}
+          value={itemType}
+          onChange={(v) => setItemType(v as ItemType)}
+        />
+
+        {/* Base fields */}
+        <InputField
+          label="Item Name"
+          required
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Item name"
+        />
+
+        <div className="grid grid-cols-2 gap-4">
+          <InputField
+            label="Sale Price (₹)"
+            type="number"
+            step="0.01"
+            min="0"
+            value={salePrice}
+            onChange={(e) => setSalePrice(e.target.value)}
+            placeholder="0.00"
+          />
+          <div className="flex flex-col gap-1">
+            <InputField
+              label="Tax %"
+              type="number"
+              step="0.01"
+              min="0"
+              value={taxPercent}
+              onChange={(e) => setTaxPercent(e.target.value)}
+              placeholder="0"
+            />
+            <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer mt-0.5">
+              <input
+                type="checkbox"
+                checked={taxInclusive}
+                onChange={(e) => setTaxInclusive(e.target.checked)}
+                className="rounded"
+              />
+              Price includes tax
+            </label>
+          </div>
+        </div>
+
+        <Listbox
+          label="Unit"
+          value={unit}
+          onChange={setUnit}
+          options={UNIT_OPTIONS}
+          placeholder="Select unit"
+        />
+
+        {/* Section divider */}
+        <div className="flex items-center gap-3 pt-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary whitespace-nowrap">
+            Additional Details
+          </span>
+          <div className="flex-1 h-px bg-border-light" />
+        </div>
+
+        {/* Disclosure sections */}
+        <div className="space-y-1">
+          <Disclosure
+            label="Identification"
+            count={countFilled(sku, hsn, category)}
+          >
+            <div className="grid grid-cols-2 gap-4">
+              <InputField
+                label="SKU"
+                value={sku}
+                onChange={(e) => setSku(e.target.value)}
+                placeholder="Stock keeping unit"
+              />
+              <InputField
+                label="HSN / SAC Code"
+                value={hsn}
+                onChange={(e) => setHsn(e.target.value)}
+                placeholder="HSN/SAC code"
+              />
+            </div>
+            <div className="mt-3">
+              <InputField
+                label="Category"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                placeholder="e.g. Electronics, Food"
+              />
+            </div>
+          </Disclosure>
+
+          <Disclosure
+            label="Purchase"
+            count={countFilled(purchasePrice)}
+          >
+            <InputField
+              label="Purchase Price (₹)"
+              type="number"
+              step="0.01"
+              min="0"
+              value={purchasePrice}
+              onChange={(e) => setPurchasePrice(e.target.value)}
+              placeholder="0.00"
+            />
+          </Disclosure>
+
+          {itemType === "product" && (
+            <Disclosure
+              label="Stock"
+              count={countFilled(stockQuantity === "0" ? "" : stockQuantity, lowStockAlert)}
+            >
+              <div className="grid grid-cols-2 gap-4">
+                <InputField
+                  label="Stock Quantity"
+                  type="number"
+                  min="0"
+                  value={stockQuantity}
+                  onChange={(e) => setStockQuantity(e.target.value)}
+                  placeholder="0"
+                />
+                <InputField
+                  label="Low Stock Alert"
+                  type="number"
+                  min="0"
+                  value={lowStockAlert}
+                  onChange={(e) => setLowStockAlert(e.target.value)}
+                  placeholder="Alert threshold"
+                />
+              </div>
+            </Disclosure>
+          )}
+
+          <Disclosure
+            label="Unit Variants"
+            count={unitVariants.filter((v) => v.unit && v.salePrice).length}
+          >
+            <div className="space-y-2">
+              {unitVariants.map((v, i) => (
+                <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
+                  <InputField
+                    label={i === 0 ? "Unit Name" : ""}
+                    value={v.unit}
+                    onChange={(e) => updateVariant(i, "unit", e.target.value)}
+                    placeholder="e.g. pack, box"
+                  />
+                  <InputField
+                    label={i === 0 ? `Per ${unit}` : ""}
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    value={String(v.conversionFactor)}
+                    onChange={(e) => updateVariant(i, "conversionFactor", e.target.value)}
+                    placeholder="e.g. 5"
+                  />
+                  <InputField
+                    label={i === 0 ? "Sale Price (₹)" : ""}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={v.salePrice}
+                    onChange={(e) => updateVariant(i, "salePrice", e.target.value)}
+                    placeholder="0.00"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeVariant(i)}
+                    className={cn(
+                      "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
+                      i === 0 ? "mb-0.5" : ""
+                    )}
+                    aria-label="Remove variant"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
+                className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+              >
+                + Add unit variant
+              </button>
+              {unitVariants.length > 0 && unit && (
+                <p className="text-[11px] text-text-tertiary mt-1">
+                  Base unit: {unit.toUpperCase()}. Each variant price is per that variant unit.
+                </p>
+              )}
+            </div>
+          </Disclosure>
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-4 border-t border-border-light">
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={updateMutation.isPending || !name.trim()}
+          >
+            {updateMutation.isPending ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Item Detail Panel ────────────────────────────────────────────
 
 const DETAIL_TABS = [
@@ -523,7 +920,7 @@ const DETAIL_TABS = [
   { value: "buyers", label: "Top Buyers" },
 ];
 
-function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => void }) {
+function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose: () => void; onEdit: (id: string) => void }) {
   const [tab, setTab] = useState("overview");
   const navigate = useNavigate();
 
@@ -561,6 +958,19 @@ function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => v
           item.sku ? `SKU: ${item.sku}` : null,
           item.hsn ? `HSN: ${item.hsn}` : null,
         ].filter(Boolean).join(" · ")
+      }
+      footer={
+        <div className="flex justify-end">
+          <button
+            onClick={() => {
+              onClose();
+              onEdit(item.id);
+            }}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+          >
+            Edit Item
+          </button>
+        </div>
       }
     >
       <div className="space-y-4">
@@ -620,6 +1030,33 @@ function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => v
                 </tbody>
               </table>
             </div>
+
+            {/* Unit Variants */}
+            {item.unitVariants && Array.isArray(item.unitVariants) && item.unitVariants.length > 0 && (
+              <div>
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-2">Unit Variants</p>
+                <div className="rounded-xl border border-border-light overflow-hidden">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Unit</th>
+                        <th className="text-right">Per {item.unit.toUpperCase()}</th>
+                        <th className="text-right">Sale Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(item.unitVariants as any[]).map((v: any, i: number) => (
+                        <tr key={i}>
+                          <td className="font-medium">{v.unit}</td>
+                          <td className="text-right tabular-nums text-text-secondary">{v.conversionFactor}</td>
+                          <td className="text-right tabular-nums font-medium">{formatCurrency(v.salePrice)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Recent price history preview */}
             {priceHistory && priceHistory.length > 0 && (
@@ -713,7 +1150,9 @@ function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => v
                       <th>Type</th>
                       <th>Party</th>
                       <th className="text-right">Qty</th>
+                      <th className="text-right">Unit</th>
                       <th className="text-right">Unit Price</th>
+                      <th className="text-right">Base Price</th>
                       <th className="text-right">Tax %</th>
                       <th className="text-right">Total</th>
                     </tr>
@@ -735,7 +1174,15 @@ function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => v
                         </td>
                         <td className="text-xs">{h.partyName}</td>
                         <td className="text-right tabular-nums text-text-secondary">{h.quantity}</td>
+                        <td className="text-right text-text-secondary text-xs">
+                          {h.selectedUnit?.toUpperCase() || item.unit.toUpperCase()}
+                        </td>
                         <td className="text-right tabular-nums font-medium">{formatCurrency(h.unitPrice)}</td>
+                        <td className="text-right tabular-nums text-text-tertiary text-xs">
+                          {h.conversionFactor && parseFloat(h.conversionFactor) > 1
+                            ? `₹${(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor)).toFixed(2)}/${item.unit}`
+                            : "—"}
+                        </td>
                         <td className="text-right tabular-nums text-text-secondary">{h.taxPercent}%</td>
                         <td className="text-right tabular-nums font-medium">{formatCurrency(h.totalAmount)}</td>
                       </tr>
@@ -794,6 +1241,11 @@ function ItemDetailPanel({ itemId, onClose }: { itemId: string; onClose: () => v
                           m.direction === "out" ? "text-red-600" : "text-emerald-600"
                         )}>
                           {m.direction === "out" ? "-" : "+"}{m.quantity}
+                          {m.selectedUnit && m.selectedUnit !== item.unit && (
+                            <span className="text-text-tertiary text-[10px] ml-1">
+                              ({m.selectedUnit})
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}

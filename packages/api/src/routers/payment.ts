@@ -8,10 +8,10 @@ import { router, businessProcedure } from "../trpc.js";
 export const paymentRouter = router({
   list: businessProcedure
     .input(z.object({
-      partyId: z.string().uuid().optional(),
-      invoiceId: z.string().uuid().optional(),
-      fromDate: z.string().datetime().optional(),
-      toDate: z.string().datetime().optional(),
+      partyId: z.string().uuid().nullish(),
+      invoiceId: z.string().uuid().nullish(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -554,6 +554,130 @@ export const paymentRouter = router({
 
         await tx.delete(payments).where(eq(payments.id, input.id));
         return { success: true };
+      });
+    }),
+
+  // Payments with no bank account assigned
+  untrackedPayments: businessProcedure
+    .input(z.object({ ...paginationSchema.shape }))
+    .query(async ({ input, ctx }) => {
+      const offset = (input.page - 1) * input.limit;
+
+      const conditions = [
+        eq(payments.businessId, ctx.businessId),
+        sql`${payments.bankAccountId} IS NULL`,
+      ];
+
+      const [data, [{ count }]] = await Promise.all([
+        ctx.db.select({
+          id: payments.id,
+          paymentNumber: payments.paymentNumber,
+          amount: payments.amount,
+          mode: payments.mode,
+          paymentDate: payments.paymentDate,
+          referenceNumber: payments.referenceNumber,
+          partyName: parties.name,
+          partyId: parties.id,
+        }).from(payments)
+          .innerJoin(parties, eq(parties.id, payments.partyId))
+          .where(and(...conditions))
+          .orderBy(desc(payments.paymentDate))
+          .limit(input.limit)
+          .offset(offset),
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
+          .where(and(...conditions)),
+      ]);
+
+      return { data, total: count, page: input.page, limit: input.limit };
+    }),
+
+  // Assign a bank account to one or more untracked payments
+  assignAccount: businessProcedure
+    .input(z.object({
+      paymentIds: z.array(z.string().uuid()).min(1),
+      bankAccountId: z.string().uuid(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      return ctx.db.transaction(async (tx) => {
+        // Verify bank account exists and belongs to this business
+        const [account] = await tx.select({
+          id: bankAccounts.id,
+          currentBalance: bankAccounts.currentBalance,
+        })
+          .from(bankAccounts)
+          .where(and(
+            eq(bankAccounts.id, input.bankAccountId),
+            eq(bankAccounts.businessId, ctx.businessId),
+          ))
+          .for("update")
+          .limit(1);
+
+        if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+
+        let totalDeposited = 0;
+
+        for (const paymentId of input.paymentIds) {
+          // Get the payment (only if untracked and owned by this business)
+          const [pmt] = await tx.select({
+            id: payments.id,
+            amount: payments.amount,
+            paymentDate: payments.paymentDate,
+            paymentNumber: payments.paymentNumber,
+            invoiceId: payments.invoiceId,
+          }).from(payments)
+            .where(and(
+              eq(payments.id, paymentId),
+              eq(payments.businessId, ctx.businessId),
+              sql`${payments.bankAccountId} IS NULL`,
+            ))
+            .limit(1);
+
+          if (!pmt) continue; // already assigned or not found
+
+          // Update payment with bank account
+          await tx.update(payments)
+            .set({ bankAccountId: input.bankAccountId })
+            .where(eq(payments.id, paymentId));
+
+          // Determine deposit/withdrawal based on linked invoice type
+          let txType: "deposit" | "withdrawal" = "deposit";
+          if (pmt.invoiceId) {
+            const [inv] = await tx.select({ type: invoices.type })
+              .from(invoices)
+              .where(eq(invoices.id, pmt.invoiceId))
+              .limit(1);
+            if (inv?.type === "purchase") txType = "withdrawal";
+          }
+
+          const amount = parseFloat(pmt.amount);
+          totalDeposited += txType === "deposit" ? amount : -amount;
+
+          // Calculate running balance after this transaction
+          const currentBal = parseFloat(account.currentBalance) + totalDeposited;
+
+          // Create bank transaction
+          await tx.insert(bankTransactions).values({
+            businessId: ctx.businessId,
+            bankAccountId: input.bankAccountId,
+            type: txType,
+            amount: pmt.amount,
+            description: `Payment ${pmt.paymentNumber || pmt.id} (assigned)`,
+            referenceType: "payment",
+            referenceId: pmt.id,
+            balanceAfter: currentBal.toFixed(2),
+            transactionDate: pmt.paymentDate,
+          });
+        }
+
+        // Update account balance once with net change
+        await tx.update(bankAccounts)
+          .set({
+            currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${totalDeposited.toFixed(2)}::numeric`,
+            updatedAt: new Date(),
+          })
+          .where(eq(bankAccounts.id, input.bankAccountId));
+
+        return { assigned: input.paymentIds.length };
       });
     }),
 });

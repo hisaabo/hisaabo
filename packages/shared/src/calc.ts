@@ -29,11 +29,14 @@ export interface InvoiceTotalsInput {
   lineItems: LineItemInput[];
   charges?: Array<{ amount: string }>;
   roundOff?: string;
+  invoiceDiscount?: string;
+  invoiceDiscountType?: "amount" | "percent";
 }
 
 export interface InvoiceTotals {
   subtotal: string;
-  discountTotal: string;
+  lineDiscountTotal: string;
+  invoiceDiscountAmount: string;
   taxTotal: string;
   chargesTotal: string;
   roundOff: string;
@@ -44,17 +47,26 @@ export function calcInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals {
   const results = input.lineItems.map((li) => calcLineItem(li));
 
   const subtotal = money.sum(results.map((r) => r.afterDiscount));
-  const discountTotal = money.sum(results.map((r) => r.discountAmount));
+  const lineDiscountTotal = money.sum(results.map((r) => r.discountAmount));
   const taxTotal = money.sum(results.map((r) => r.taxAmount));
+
+  // Invoice-level discount (applied after line items, before charges)
+  const discountInput = input.invoiceDiscount || "0";
+  const discountType = input.invoiceDiscountType || "amount";
+  const invoiceDiscountAmount = discountType === "percent"
+    ? money.percent(subtotal, discountInput)
+    : discountInput;
+
   const chargesTotal = input.charges
     ? money.sum(input.charges.map((c) => c.amount))
     : "0.00";
   const roundOff = input.roundOff || "0.00";
 
+  // total = subtotal + tax - invoiceDiscount + charges + roundOff
   const total = money.add(
-    money.add(subtotal, taxTotal),
+    money.sub(money.add(subtotal, taxTotal), invoiceDiscountAmount),
     money.add(chargesTotal, roundOff)
   );
 
-  return { subtotal, discountTotal, taxTotal, chargesTotal, roundOff, total };
+  return { subtotal, lineDiscountTotal, invoiceDiscountAmount, taxTotal, chargesTotal, roundOff, total };
 }

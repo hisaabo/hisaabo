@@ -93,6 +93,12 @@ export const items = pgTable("items", {
   hsn: text("hsn"),
   sku: text("sku"),
   unit: unitEnum("unit").default("pcs").notNull(),
+  unitVariants: jsonb("unit_variants").$type<Array<{
+    unit: string;
+    conversionFactor: number;
+    salePrice: string;
+    purchasePrice?: string;
+  }>>(),
   salePrice: numeric("sale_price", { precision: 15, scale: 2 }),
   purchasePrice: numeric("purchase_price", { precision: 15, scale: 2 }),
   taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
@@ -162,6 +168,8 @@ export const invoiceItems = pgTable("invoice_items", {
   discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).default("0").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
+  selectedUnit: text("selected_unit"), // which unit was used (null = base unit)
+  conversionFactor: numeric("conversion_factor", { precision: 10, scale: 4 }).default("1"), // how many base units per selected unit
 }, (t) => [
   index("invoice_items_invoice_idx").on(t.invoiceId),
   index("invoice_items_item_idx").on(t.itemId),

@@ -244,6 +244,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               discountPercent: li.discountPercent || "0",
               totalAmount: calc.total,
               sortOrder: idx,
+              selectedUnit: li.selectedUnit || null,
+              conversionFactor: li.conversionFactor || "1",
             };
           });
 
@@ -293,14 +295,15 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .values(processedItems.map((li) => ({ ...li, invoiceId: doc.id })));
           }
 
-          // Stock effects
+          // Stock effects (adjusted for unit conversion)
           if (config.stockEffect === "decrement") {
             for (const li of input.lineItems) {
               if (li.itemId) {
+                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
                 await tx
                   .update(items)
                   .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                    stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
                     updatedAt: new Date(),
                   })
                   .where(eq(items.id, li.itemId));
@@ -309,10 +312,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           } else if (config.stockEffect === "increment") {
             for (const li of input.lineItems) {
               if (li.itemId) {
+                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
                 await tx
                   .update(items)
                   .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                    stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
                     updatedAt: new Date(),
                   })
                   .where(eq(items.id, li.itemId));
@@ -374,7 +378,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
           }
 
-          // Reverse stock effects on delete
+          // Reverse stock effects on delete (using stored conversionFactor)
           if (config.stockEffect !== "none") {
             const lineItems = await tx
               .select()
@@ -383,12 +387,13 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
             for (const li of lineItems) {
               if (li.itemId) {
+                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1")).toFixed(3);
                 if (config.stockEffect === "decrement") {
                   // was decremented on create → add back on delete
                   await tx
                     .update(items)
                     .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                      stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
                     .where(eq(items.id, li.itemId));
@@ -397,7 +402,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                   await tx
                     .update(items)
                     .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                      stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
                     .where(eq(items.id, li.itemId));

@@ -255,6 +255,7 @@ function InvoiceDetailPanel({
                   <tr className="bg-surface-1 border-b border-border-light">
                     <th className="px-3 py-2 text-left font-medium text-text-tertiary">Description</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Qty</th>
+                    <th className="px-3 py-2 text-left font-medium text-text-tertiary">Unit</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Price</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Tax%</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Disc%</th>
@@ -266,6 +267,12 @@ function InvoiceDetailPanel({
                     <tr key={li.id}>
                       <td className="px-3 py-2 text-text-primary">{li.description}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
+                      <td className="px-3 py-2 text-text-secondary text-xs">
+                        {li.selectedUnit?.toUpperCase() || "—"}
+                        {li.conversionFactor && parseFloat(li.conversionFactor) > 1 && (
+                          <span className="text-text-tertiary"> (×{li.conversionFactor})</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.discountPercent}%</td>

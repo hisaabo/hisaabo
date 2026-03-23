@@ -7,10 +7,10 @@ import { router, businessProcedure } from "../trpc.js";
 export const itemRouter = router({
   list: businessProcedure
     .input(z.object({
-      search: z.string().optional(),
-      lowStock: z.boolean().optional(),
-      itemType: z.enum(itemTypes).optional(),
-      category: z.string().optional(),
+      search: z.string().nullish(),
+      lowStock: z.boolean().nullish(),
+      itemType: z.enum(itemTypes).nullish(),
+      category: z.string().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -93,6 +93,8 @@ export const itemRouter = router({
         taxPercent: invoiceItems.taxPercent,
         totalAmount: invoiceItems.totalAmount,
         partyName: parties.name,
+        selectedUnit: invoiceItems.selectedUnit,
+        conversionFactor: invoiceItems.conversionFactor,
       })
         .from(invoiceItems)
         .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
@@ -122,6 +124,8 @@ export const itemRouter = router({
         quantity: invoiceItems.quantity,
         partyName: parties.name,
         invoiceId: invoices.id,
+        selectedUnit: invoiceItems.selectedUnit,
+        conversionFactor: invoiceItems.conversionFactor,
       })
         .from(invoiceItems)
         .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))

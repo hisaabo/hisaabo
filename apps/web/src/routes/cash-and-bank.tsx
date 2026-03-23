@@ -1,18 +1,49 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { InputField, SelectField } from "@/components/ui/FormField";
 import { SegmentedControl } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
 
 export const Route = createFileRoute("/cash-and-bank")({
   component: CashAndBankPage,
 });
+
+function getDatePreset(preset: string): { fromDate: string; toDate: string } {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = now.getMonth();
+
+  switch (preset) {
+    case "this-month": {
+      const from = new Date(yyyy, mm, 1);
+      const to = new Date(yyyy, mm + 1, 0);
+      return { fromDate: from.toISOString(), toDate: to.toISOString() };
+    }
+    case "last-month": {
+      const from = new Date(yyyy, mm - 1, 1);
+      const to = new Date(yyyy, mm, 0);
+      return { fromDate: from.toISOString(), toDate: to.toISOString() };
+    }
+    case "last-30": {
+      const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      return { fromDate: from.toISOString(), toDate: now.toISOString() };
+    }
+    case "this-fy": {
+      // Indian FY: April 1 to March 31
+      const fyStart = mm >= 3 ? new Date(yyyy, 3, 1) : new Date(yyyy - 1, 3, 1);
+      return { fromDate: fyStart.toISOString(), toDate: now.toISOString() };
+    }
+    default:
+      return { fromDate: "", toDate: "" };
+  }
+}
 
 function CashAndBankPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -20,13 +51,27 @@ function CashAndBankPage() {
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [selectedUntracked, setSelectedUntracked] = useState<Set<string>>(new Set());
+  const [assignAccountId, setAssignAccountId] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<{ fromDate: string; toDate: string }>({
+    fromDate: "",
+    toDate: "",
+  });
+  const [datePreset, setDatePreset] = useState("all");
 
   const { data: accounts, isLoading } = trpc.bankAccount.list.useQuery();
   const { data: summary } = trpc.bankAccount.summary.useQuery();
   const { data: transactions } = trpc.bankAccount.listTransactions.useQuery(
-    { bankAccountId: selectedAccountId!, page: 1, limit: 50 },
+    {
+      bankAccountId: selectedAccountId!,
+      page: 1,
+      limit: 50,
+      fromDate: dateRange.fromDate || undefined,
+      toDate: dateRange.toDate || undefined,
+    },
     { enabled: !!selectedAccountId }
   );
+  const { data: untrackedData } = trpc.payment.untrackedPayments.useQuery({ page: 1, limit: 50 });
 
   const utils = trpc.useUtils();
 
@@ -37,6 +82,17 @@ function CashAndBankPage() {
       if (selectedAccountId === deleteConfirm) setSelectedAccountId(null);
       utils.bankAccount.list.invalidate();
       utils.bankAccount.summary.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const assignMutation = trpc.payment.assignAccount.useMutation({
+    onSuccess: (result) => {
+      utils.payment.untrackedPayments.invalidate();
+      utils.bankAccount.list.invalidate();
+      utils.bankAccount.summary.invalidate();
+      setSelectedUntracked(new Set());
+      toast.success(`${result.assigned} payment(s) assigned`);
     },
     onError: (err) => toast.error(err.message),
   });
@@ -110,11 +166,12 @@ function CashAndBankPage() {
                 {accounts.map((account) => (
                   <div key={account.id} className="relative group">
                     <button
-                      className={`w-full px-4 py-3 text-left transition-colors ${
+                      className={cn(
+                        "w-full px-4 py-3 text-left transition-colors",
                         selectedAccountId === account.id
-                          ? "bg-brand-50 border-l-2 border-brand-600"
+                          ? "bg-brand-600/[0.08] border-l-2 border-brand-600"
                           : "hover:bg-surface-1"
-                      }`}
+                      )}
                       onClick={() => setSelectedAccountId(account.id)}
                     >
                       <div className="flex items-center justify-between">
@@ -175,6 +232,71 @@ function CashAndBankPage() {
                 </div>
               </div>
 
+              {/* Date range filter bar */}
+              <div
+                className="px-4 py-2 flex items-center gap-1 flex-wrap"
+                style={{ borderBottom: "1px solid var(--border-light)" }}
+              >
+                {[
+                  { value: "all", label: "All" },
+                  { value: "this-month", label: "This Month" },
+                  { value: "last-month", label: "Last Month" },
+                  { value: "last-30", label: "Last 30 Days" },
+                  { value: "this-fy", label: "This FY" },
+                  { value: "custom", label: "Custom" },
+                ].map((p) => (
+                  <button
+                    key={p.value}
+                    onClick={() => {
+                      setDatePreset(p.value);
+                      if (p.value !== "custom") {
+                        setDateRange(getDatePreset(p.value));
+                      }
+                    }}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                      datePreset === p.value
+                        ? "bg-brand-600/[0.1] text-brand-700 dark:text-brand-400"
+                        : "text-text-tertiary hover:text-text-secondary hover:bg-surface-2"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+
+                {datePreset === "custom" && (
+                  <div className="flex items-center gap-2 ml-2">
+                    <input
+                      type="date"
+                      value={dateRange.fromDate ? dateRange.fromDate.split("T")[0] : ""}
+                      onChange={(e) =>
+                        setDateRange((prev) => ({
+                          ...prev,
+                          fromDate: e.target.value
+                            ? new Date(e.target.value).toISOString()
+                            : "",
+                        }))
+                      }
+                      className="input py-1 text-xs w-32"
+                    />
+                    <span className="text-text-tertiary text-xs">to</span>
+                    <input
+                      type="date"
+                      value={dateRange.toDate ? dateRange.toDate.split("T")[0] : ""}
+                      onChange={(e) =>
+                        setDateRange((prev) => ({
+                          ...prev,
+                          toDate: e.target.value
+                            ? new Date(e.target.value + "T23:59:59").toISOString()
+                            : "",
+                        }))
+                      }
+                      className="input py-1 text-xs w-32"
+                    />
+                  </div>
+                )}
+              </div>
+
               {!transactions ? (
                 <TransactionTableSkeleton />
               ) : transactions.data?.length === 0 ? (
@@ -202,13 +324,14 @@ function CashAndBankPage() {
                         <td className="text-text-primary">{txn.description || "—"}</td>
                         <td>
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                            className={cn(
+                              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium",
                               txn.type === "deposit"
-                                ? "bg-emerald-50 text-emerald-700"
+                                ? "bg-emerald-600/[0.08] text-emerald-600 dark:text-emerald-400"
                                 : txn.type === "withdrawal"
-                                ? "bg-red-50 text-red-700"
-                                : "bg-blue-50 text-blue-700"
-                            }`}
+                                ? "bg-red-600/[0.08] text-red-600 dark:text-red-400"
+                                : "bg-blue-600/[0.08] text-blue-600 dark:text-blue-400"
+                            )}
                           >
                             {txn.type}
                           </span>
@@ -242,6 +365,114 @@ function CashAndBankPage() {
           )}
         </div>
       </div>
+
+      {/* Untracked Payments */}
+      {untrackedData && untrackedData.total > 0 && (
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">
+                Untracked Payments
+                <span className="ml-2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 text-[11px] font-bold">
+                  {untrackedData.total}
+                </span>
+              </h3>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Payments not assigned to any account
+              </p>
+            </div>
+            {selectedUntracked.size > 0 && accounts && accounts.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-text-secondary">
+                  {selectedUntracked.size} selected — assign to:
+                </span>
+                <Listbox
+                  value={assignAccountId || ""}
+                  onChange={setAssignAccountId}
+                  options={accounts.map((a) => ({
+                    value: a.id,
+                    label: `${a.accountName} (${a.accountType})`,
+                  }))}
+                  placeholder="Select account"
+                  className="w-48"
+                />
+                <button
+                  className="btn-primary text-xs px-3 py-1.5"
+                  disabled={!assignAccountId || assignMutation.isPending}
+                  onClick={() => {
+                    if (assignAccountId) {
+                      assignMutation.mutate({
+                        paymentIds: Array.from(selectedUntracked),
+                        bankAccountId: assignAccountId,
+                      });
+                    }
+                  }}
+                >
+                  {assignMutation.isPending ? "Assigning..." : "Assign"}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="card overflow-hidden">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th className="w-10">
+                    <input
+                      type="checkbox"
+                      checked={
+                        untrackedData.data.length > 0 &&
+                        selectedUntracked.size === untrackedData.data.length
+                      }
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedUntracked(new Set(untrackedData.data.map((p) => p.id)));
+                        } else {
+                          setSelectedUntracked(new Set());
+                        }
+                      }}
+                      className="w-4 h-4 rounded"
+                    />
+                  </th>
+                  <th>Payment #</th>
+                  <th>Party</th>
+                  <th>Date</th>
+                  <th>Mode</th>
+                  <th className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {untrackedData.data.map((pmt) => (
+                  <tr key={pmt.id} className="group">
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedUntracked.has(pmt.id)}
+                        onChange={(e) => {
+                          const next = new Set(selectedUntracked);
+                          if (e.target.checked) next.add(pmt.id);
+                          else next.delete(pmt.id);
+                          setSelectedUntracked(next);
+                        }}
+                        className="w-4 h-4 rounded"
+                      />
+                    </td>
+                    <td className="font-mono text-[13px] text-text-secondary">
+                      {pmt.paymentNumber || "—"}
+                    </td>
+                    <td className="font-medium">{pmt.partyName}</td>
+                    <td className="text-text-secondary">{formatDate(pmt.paymentDate)}</td>
+                    <td className="text-text-secondary capitalize">{pmt.mode}</td>
+                    <td className="text-right tabular-nums font-semibold text-emerald-600">
+                      {formatCurrency(pmt.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Add Account Modal */}
       {showAddAccount && (
@@ -311,7 +542,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
     if (!accountName.trim()) return;
     createAccountMutation.mutate({
       accountName: accountName.trim(),
-      accountType: accountType as "savings" | "current" | "cash",
+      accountType: accountType as "savings" | "current" | "cash" | "upi" | "credit_card",
       accountNumber: accountNumber || undefined,
       ifscCode: ifsc || undefined,
       bankName: bankName || undefined,
@@ -338,6 +569,8 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
           <option value="savings">Savings</option>
           <option value="current">Current</option>
           <option value="cash">Cash</option>
+          <option value="upi">UPI</option>
+          <option value="credit_card">Credit Card</option>
         </SelectField>
         <div className="grid grid-cols-2 gap-4">
           <InputField

@@ -54,7 +54,7 @@ function LoginPage() {
         {/* Logo */}
         <div className="flex items-center gap-2.5 mb-8">
           <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
-            <span className="text-white font-bold text-base">B</span>
+            <span className="text-white font-bold text-base">H</span>
           </div>
           <span className="font-semibold text-lg tracking-tight text-text-primary">
             Hisaabo

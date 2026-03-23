@@ -104,6 +104,15 @@ export const updatePartySchema = createPartySchema.partial().omit({ type: true }
 export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
 export type Unit = (typeof units)[number];
 
+export const unitVariantSchema = z.object({
+  unit: z.string().min(1).max(50),
+  conversionFactor: z.number().positive(),
+  salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+});
+
+export type UnitVariant = z.infer<typeof unitVariantSchema>;
+
 export const createItemSchema = z.object({
   name: z.string().min(1).max(200),
   hsn: z.string().max(20).optional(),
@@ -118,6 +127,7 @@ export const createItemSchema = z.object({
   itemType: z.enum(itemTypes).default("product"),
   category: z.string().max(100).optional(),
   taxInclusive: z.boolean().default(false),
+  unitVariants: z.array(unitVariantSchema).optional(),
 });
 
 export const updateItemSchema = createItemSchema.partial();
@@ -139,6 +149,8 @@ export const invoiceLineItemSchema = z.object({
   unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
   taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
   discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  selectedUnit: z.string().nullish(),
+  conversionFactor: z.string().nullish(), // stored as string like all numerics
 });
 
 export const createInvoiceSchema = z.object({
@@ -151,6 +163,8 @@ export const createInvoiceSchema = z.object({
   termsAndConditions: z.string().max(2000).optional(),
   additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
   charges: z.array(invoiceChargeSchema).optional(),
+  invoiceDiscount: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  invoiceDiscountType: z.enum(["amount", "percent"]).default("amount"),
   roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   referenceDocumentId: z.string().uuid().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1),
