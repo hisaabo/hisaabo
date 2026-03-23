@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.turbo/
+.env
+.env.local
+*.log
+
+# Database
+packages/db/drizzle/
+
+# Tauri
+apps/desktop/src-tauri/target/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+.claude
+CLAUDE.md
+SAAS.md
+screens/

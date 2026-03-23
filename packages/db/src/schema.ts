@@ -1,0 +1,355 @@
+import { pgTable, text, timestamp, numeric, integer, boolean, uuid, pgEnum, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+
+// ── Enums ──────────────────────────────────────────────────────
+
+export const partyTypeEnum = pgEnum("party_type", ["customer", "supplier"]);
+export const invoiceTypeEnum = pgEnum("invoice_type", ["sale", "purchase"]);
+export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "sent", "paid", "partial", "overdue", "cancelled"]);
+export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other"]);
+export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"]);
+export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
+export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"]);
+export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash"]);
+export const bankTransactionTypeEnum = pgEnum("bank_transaction_type", ["deposit", "withdrawal", "transfer"]);
+
+// ── Users & Auth ───────────────────────────────────────────────
+
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  emailVerified: boolean("email_verified").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("users_email_idx").on(t.email),
+]);
+
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("sessions_user_idx").on(t.userId),
+]);
+
+// ── Business ───────────────────────────────────────────────────
+
+export const businesses = pgTable("businesses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  legalName: text("legal_name"),
+  gstin: text("gstin"),
+  pan: text("pan"),
+  phone: text("phone"),
+  email: text("email"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  pincode: text("pincode"),
+  logoUrl: text("logo_url"),
+  invoicePrefix: text("invoice_prefix").default("INV").notNull(),
+  nextInvoiceNumber: integer("next_invoice_number").default(1).notNull(),
+  paymentPrefix: text("payment_prefix").default("PAY").notNull(),
+  nextPaymentNumber: integer("next_payment_number").default(1).notNull(),
+  quotationPrefix: text("quotation_prefix").default("QTN").notNull(),
+  nextQuotationNumber: integer("next_quotation_number").default(1).notNull(),
+  creditNotePrefix: text("credit_note_prefix").default("CN").notNull(),
+  nextCreditNoteNumber: integer("next_credit_note_number").default(1).notNull(),
+  deliveryChallanPrefix: text("delivery_challan_prefix").default("DC").notNull(),
+  nextDeliveryChallanNumber: integer("next_delivery_challan_number").default(1).notNull(),
+  proformaPrefix: text("proforma_prefix").default("PI").notNull(),
+  nextProformaNumber: integer("next_proforma_number").default(1).notNull(),
+  financialYearStart: integer("financial_year_start_month").default(4).notNull(), // April
+  currency: text("currency").default("INR").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("businesses_owner_idx").on(t.ownerId),
+]);
+
+// ── Parties (Customers / Suppliers) ────────────────────────────
+
+export const parties = pgTable("parties", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  type: partyTypeEnum("type").notNull(),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  email: text("email"),
+  gstin: text("gstin"),
+  pan: text("pan"),
+  billingAddress: text("billing_address"),
+  shippingAddress: text("shipping_address"),
+  city: text("city"),
+  state: text("state"),
+  pincode: text("pincode"),
+  openingBalance: numeric("opening_balance", { precision: 15, scale: 2 }).default("0").notNull(),
+  category: text("category"),
+  creditPeriodDays: integer("credit_period_days"),
+  creditLimit: numeric("credit_limit", { precision: 15, scale: 2 }),
+  contactPersonName: text("contact_person_name"),
+  contactPersonDob: timestamp("contact_person_dob", { withTimezone: true }),
+  bankAccountNumber: text("bank_account_number"),
+  bankIfsc: text("bank_ifsc"),
+  bankName: text("bank_name"),
+  source: text("source"), // null = manual, "mybillbook", "tally", etc.
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("parties_business_idx").on(t.businessId),
+  index("parties_type_idx").on(t.businessId, t.type),
+  index("parties_name_idx").on(t.businessId, t.name),
+]);
+
+// ── Items / Products ───────────────────────────────────────────
+
+export const items = pgTable("items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  hsn: text("hsn"),
+  sku: text("sku"),
+  unit: unitEnum("unit").default("pcs").notNull(),
+  salePrice: numeric("sale_price", { precision: 15, scale: 2 }),
+  purchasePrice: numeric("purchase_price", { precision: 15, scale: 2 }),
+  taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
+  stockQuantity: numeric("stock_quantity", { precision: 15, scale: 3 }).default("0").notNull(),
+  lowStockAlert: numeric("low_stock_alert", { precision: 15, scale: 3 }),
+  description: text("description"),
+  itemType: itemTypeEnum("item_type").default("product").notNull(),
+  category: text("category"),
+  taxInclusive: boolean("tax_inclusive").default(false).notNull(),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("items_business_idx").on(t.businessId),
+  index("items_name_idx").on(t.businessId, t.name),
+  index("items_sku_idx").on(t.businessId, t.sku),
+]);
+
+// ── Invoices ───────────────────────────────────────────────────
+
+export const invoices = pgTable("invoices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  partyId: uuid("party_id").notNull().references(() => parties.id, { onDelete: "restrict" }),
+  type: invoiceTypeEnum("type").notNull(),
+  status: invoiceStatusEnum("status").default("draft").notNull(),
+  documentType: documentTypeEnum("document_type").default("invoice").notNull(),
+  invoiceNumber: text("invoice_number").notNull(),
+  invoiceDate: timestamp("invoice_date", { withTimezone: true }).defaultNow().notNull(),
+  dueDate: timestamp("due_date", { withTimezone: true }),
+  subtotal: numeric("subtotal", { precision: 15, scale: 2 }).default("0").notNull(),
+  taxAmount: numeric("tax_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  discountAmount: numeric("discount_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  charges: jsonb("charges").$type<Array<{ label: string; amount: string }>>(),
+  additionalCharges: numeric("additional_charges", { precision: 15, scale: 2 }).default("0").notNull(),
+  roundOff: numeric("round_off", { precision: 15, scale: 2 }).default("0").notNull(),
+  totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  amountPaid: numeric("amount_paid", { precision: 15, scale: 2 }).default("0").notNull(),
+  notes: text("notes"),
+  termsAndConditions: text("terms_and_conditions"),
+  referenceDocumentId: uuid("reference_document_id"),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("invoices_business_idx").on(t.businessId),
+  index("invoices_party_idx").on(t.partyId),
+  index("invoices_status_idx").on(t.businessId, t.status),
+  index("invoices_date_idx").on(t.businessId, t.invoiceDate),
+  uniqueIndex("invoices_number_idx").on(t.businessId, t.invoiceNumber),
+  index("invoices_doc_type_idx").on(t.businessId, t.documentType),
+]);
+
+// ── Invoice Line Items ─────────────────────────────────────────
+
+export const invoiceItems = pgTable("invoice_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
+  itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
+  description: text("description").notNull(),
+  quantity: numeric("quantity", { precision: 15, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).notNull(),
+  taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
+  taxAmount: numeric("tax_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).default("0").notNull(),
+  totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+}, (t) => [
+  index("invoice_items_invoice_idx").on(t.invoiceId),
+]);
+
+// ── Payments ───────────────────────────────────────────────────
+
+export const payments = pgTable("payments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  paymentNumber: text("payment_number"),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  partyId: uuid("party_id").notNull().references(() => parties.id, { onDelete: "restrict" }),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  discount: numeric("discount", { precision: 15, scale: 2 }).default("0").notNull(),
+  mode: paymentModeEnum("mode").notNull(),
+  referenceNumber: text("reference_number"),
+  paymentDate: timestamp("payment_date", { withTimezone: true }).defaultNow().notNull(),
+  notes: text("notes"),
+  bankAccountId: uuid("bank_account_id"),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("payments_business_idx").on(t.businessId),
+  index("payments_invoice_idx").on(t.invoiceId),
+  index("payments_party_idx").on(t.partyId),
+  index("payments_date_idx").on(t.businessId, t.paymentDate),
+]);
+
+// ── Expenses ───────────────────────────────────────────────────
+
+export const expenses = pgTable("expenses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  category: text("category").notNull(),
+  description: text("description"),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  mode: paymentModeEnum("mode").notNull(),
+  expenseDate: timestamp("expense_date", { withTimezone: true }).defaultNow().notNull(),
+  referenceNumber: text("reference_number"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("expenses_business_idx").on(t.businessId),
+  index("expenses_date_idx").on(t.businessId, t.expenseDate),
+  index("expenses_category_idx").on(t.businessId, t.category),
+]);
+
+// ── Bank Accounts ──────────────────────────────────────────────
+
+export const bankAccounts = pgTable("bank_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  accountName: text("account_name").notNull(),
+  accountNumber: text("account_number"),
+  ifsc: text("ifsc"),
+  bankName: text("bank_name"),
+  accountType: bankAccountTypeEnum("account_type").default("savings").notNull(),
+  openingBalance: numeric("opening_balance", { precision: 15, scale: 2 }).default("0").notNull(),
+  currentBalance: numeric("current_balance", { precision: 15, scale: 2 }).default("0").notNull(),
+  isDefault: boolean("is_default").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bank_accounts_business_idx").on(t.businessId),
+]);
+
+// ── Bank Transactions ───────────────────────────────────────────
+
+export const bankTransactions = pgTable("bank_transactions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  bankAccountId: uuid("bank_account_id").notNull().references(() => bankAccounts.id, { onDelete: "cascade" }),
+  type: bankTransactionTypeEnum("type").notNull(),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  description: text("description"),
+  referenceType: text("reference_type"),
+  referenceId: uuid("reference_id"),
+  balanceAfter: numeric("balance_after", { precision: 15, scale: 2 }).notNull(),
+  transactionDate: timestamp("transaction_date", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bank_txn_business_idx").on(t.businessId),
+  index("bank_txn_account_idx").on(t.bankAccountId),
+  index("bank_txn_date_idx").on(t.bankAccountId, t.transactionDate),
+  index("bank_txn_ref_idx").on(t.referenceType, t.referenceId),
+]);
+
+// ── Audit Log ──────────────────────────────────────────────────
+
+export const auditLog = pgTable("audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  action: text("action").notNull(), // e.g., "invoice.create", "payment.delete"
+  entityType: text("entity_type").notNull(),
+  entityId: uuid("entity_id"),
+  metadata: text("metadata"), // JSON string of changes
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("audit_log_business_idx").on(t.businessId),
+  index("audit_log_entity_idx").on(t.entityType, t.entityId),
+  index("audit_log_date_idx").on(t.businessId, t.createdAt),
+]);
+
+// ── Relations ──────────────────────────────────────────────────
+
+export const usersRelations = relations(users, ({ many }) => ({
+  businesses: many(businesses),
+  sessions: many(sessions),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, { fields: [sessions.userId], references: [users.id] }),
+}));
+
+export const businessesRelations = relations(businesses, ({ one, many }) => ({
+  owner: one(users, { fields: [businesses.ownerId], references: [users.id] }),
+  parties: many(parties),
+  items: many(items),
+  invoices: many(invoices),
+  payments: many(payments),
+  expenses: many(expenses),
+  bankAccounts: many(bankAccounts),
+}));
+
+export const partiesRelations = relations(parties, ({ one, many }) => ({
+  business: one(businesses, { fields: [parties.businessId], references: [businesses.id] }),
+  invoices: many(invoices),
+  payments: many(payments),
+}));
+
+export const itemsRelations = relations(items, ({ one }) => ({
+  business: one(businesses, { fields: [items.businessId], references: [businesses.id] }),
+}));
+
+export const invoicesRelations = relations(invoices, ({ one, many }) => ({
+  business: one(businesses, { fields: [invoices.businessId], references: [businesses.id] }),
+  party: one(parties, { fields: [invoices.partyId], references: [parties.id] }),
+  lineItems: many(invoiceItems),
+  payments: many(payments),
+  referenceDocument: one(invoices, { fields: [invoices.referenceDocumentId], references: [invoices.id], relationName: "referenceDoc" }),
+  linkedDocuments: many(invoices, { relationName: "referenceDoc" }),
+}));
+
+export const invoiceItemsRelations = relations(invoiceItems, ({ one }) => ({
+  invoice: one(invoices, { fields: [invoiceItems.invoiceId], references: [invoices.id] }),
+  item: one(items, { fields: [invoiceItems.itemId], references: [items.id] }),
+}));
+
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  business: one(businesses, { fields: [payments.businessId], references: [businesses.id] }),
+  invoice: one(invoices, { fields: [payments.invoiceId], references: [invoices.id] }),
+  party: one(parties, { fields: [payments.partyId], references: [parties.id] }),
+  bankAccount: one(bankAccounts, { fields: [payments.bankAccountId], references: [bankAccounts.id] }),
+}));
+
+export const expensesRelations = relations(expenses, ({ one }) => ({
+  business: one(businesses, { fields: [expenses.businessId], references: [businesses.id] }),
+}));
+
+export const bankAccountsRelations = relations(bankAccounts, ({ one, many }) => ({
+  business: one(businesses, { fields: [bankAccounts.businessId], references: [businesses.id] }),
+  transactions: many(bankTransactions),
+}));
+
+export const bankTransactionsRelations = relations(bankTransactions, ({ one }) => ({
+  business: one(businesses, { fields: [bankTransactions.businessId], references: [businesses.id] }),
+  bankAccount: one(bankAccounts, { fields: [bankTransactions.bankAccountId], references: [bankAccounts.id] }),
+}));

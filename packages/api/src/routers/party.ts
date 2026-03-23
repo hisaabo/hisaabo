@@ -1,0 +1,258 @@
+import { eq, and, ilike, sql, desc } from "drizzle-orm";
+import { z } from "zod";
+import { db, parties, invoices, payments, items, invoiceItems } from "@billbook/db";
+import { createPartySchema, updatePartySchema, paginationSchema } from "@billbook/shared";
+import { router, businessProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+
+export const partyRouter = router({
+  list: businessProcedure
+    .input(z.object({
+      type: z.enum(["customer", "supplier"]).optional(),
+      search: z.string().optional(),
+      category: z.string().optional(),
+      ...paginationSchema.shape,
+    }))
+    .query(async ({ input, ctx }) => {
+      const conditions = [eq(parties.businessId, ctx.businessId)];
+      if (input.type) conditions.push(eq(parties.type, input.type));
+      if (input.search) conditions.push(ilike(parties.name, `%${input.search}%`));
+      if (input.category) conditions.push(eq(parties.category, input.category));
+
+      const offset = (input.page - 1) * input.limit;
+
+      const [data, [{ count }]] = await Promise.all([
+        db.select().from(parties)
+          .where(and(...conditions))
+          .orderBy(desc(parties.updatedAt))
+          .limit(input.limit)
+          .offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(parties)
+          .where(and(...conditions)),
+      ]);
+
+      return { data, total: count, page: input.page, limit: input.limit };
+    }),
+
+  getById: businessProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const [party] = await db.select().from(parties)
+        .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+
+      if (!party) return null;
+
+      // Calculate balance from invoices and payments
+      const [balanceResult] = await db.select({
+        totalInvoiced: sql<string>`coalesce(sum(${invoices.totalAmount}), '0')`,
+        totalPaid: sql<string>`coalesce(sum(${invoices.amountPaid}), '0')`,
+      }).from(invoices)
+        .where(and(eq(invoices.partyId, input.id), eq(invoices.businessId, ctx.businessId)));
+
+      return {
+        ...party,
+        balance: (
+          parseFloat(party.openingBalance) +
+          parseFloat(balanceResult.totalInvoiced) -
+          parseFloat(balanceResult.totalPaid)
+        ).toFixed(2),
+      };
+    }),
+
+  create: businessProcedure.input(createPartySchema).mutation(async ({ input, ctx }) => {
+    const [party] = await db.insert(parties).values({
+      ...input,
+      businessId: ctx.businessId,
+      // Handle optional date fields
+      contactPersonDob: input.contactPersonDob ? new Date(input.contactPersonDob) : null,
+    }).returning();
+    return party;
+  }),
+
+  update: businessProcedure
+    .input(z.object({ id: z.string().uuid(), data: updatePartySchema }))
+    .mutation(async ({ input, ctx }) => {
+      const { contactPersonDob, ...rest } = input.data;
+      const [party] = await db.update(parties)
+        .set({
+          ...rest,
+          ...(contactPersonDob ? { contactPersonDob: new Date(contactPersonDob) } : {}),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
+        .returning();
+      return party;
+    }),
+
+  delete: businessProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await db.delete(parties)
+        .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)));
+      return { success: true };
+    }),
+
+  topItems: businessProcedure
+    .input(z.object({ partyId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const rows = await db.select({
+        itemId: invoiceItems.itemId,
+        itemName: items.name,
+        totalQuantity: sql<string>`SUM(${invoiceItems.quantity}::numeric)::text`,
+        totalAmount: sql<string>`SUM(${invoiceItems.totalAmount}::numeric)::text`,
+        invoiceCount: sql<number>`COUNT(DISTINCT ${invoices.id})::int`,
+      })
+        .from(invoiceItems)
+        .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+        .innerJoin(items, eq(items.id, invoiceItems.itemId))
+        .where(
+          and(
+            eq(invoices.partyId, input.partyId),
+            eq(invoices.businessId, ctx.businessId),
+            eq(invoices.documentType, "invoice"),
+            sql`${invoiceItems.itemId} IS NOT NULL`,
+            sql`${invoices.status} != 'cancelled'`,
+          )
+        )
+        .groupBy(invoiceItems.itemId, items.name)
+        .orderBy(sql`SUM(${invoiceItems.quantity}::numeric) DESC`)
+        .limit(5);
+
+      return rows;
+    }),
+
+  /**
+   * Party ledger — chronological UNION ALL of invoices and payments for a party.
+   * Each row: date, type, documentNumber, amount, runningBalance.
+   */
+  ledger: businessProcedure
+    .input(z.object({
+      partyId: z.string().uuid(),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+      page: z.number().int().min(1).default(1),
+      limit: z.number().int().min(1).max(100).default(50),
+    }))
+    .query(async ({ input, ctx }) => {
+      // Verify party belongs to this business
+      const [party] = await db
+        .select({ id: parties.id, openingBalance: parties.openingBalance })
+        .from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+
+      if (!party) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Party not found" });
+      }
+
+      const offset = (input.page - 1) * input.limit;
+
+      const openingBalanceNum = parseFloat(party.openingBalance);
+
+      // Build date filter conditions inline
+      const fromDate = input.fromDate ? new Date(input.fromDate) : null;
+      const toDate = input.toDate ? new Date(input.toDate) : null;
+
+      // UNION ALL: invoices (debit for sales, credit for purchases) + payments
+      // Uses raw SQL with parameterised values — column names are safe literals.
+      const ledgerRows = await db.execute(sql`
+        WITH ledger AS (
+          SELECT
+            invoice_date AS entry_date,
+            'invoice'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            total_amount::numeric AS debit,
+            0::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type = 'invoice'
+
+          UNION ALL
+
+          SELECT
+            invoice_date AS entry_date,
+            'purchase'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            total_amount::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'purchase'
+            AND document_type = 'invoice'
+
+          UNION ALL
+
+          SELECT
+            payment_date AS entry_date,
+            'payment'::text AS entry_type,
+            coalesce(payment_number, id::text) AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            amount::numeric AS credit,
+            NULL AS status
+          FROM payments
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+        ),
+        filtered AS (
+          SELECT * FROM ledger
+          WHERE (${fromDate}::timestamptz IS NULL OR entry_date >= ${fromDate}::timestamptz)
+            AND (${toDate}::timestamptz IS NULL OR entry_date <= ${toDate}::timestamptz)
+        ),
+        with_balance AS (
+          SELECT
+            *,
+            ${openingBalanceNum}::numeric
+              + SUM(debit - credit) OVER (
+                  ORDER BY entry_date ASC, document_number ASC
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                )
+            AS running_balance
+          FROM filtered
+        )
+        SELECT *, count(*) OVER () AS total_count
+        FROM with_balance
+        ORDER BY entry_date ASC, document_number ASC
+        LIMIT ${input.limit} OFFSET ${offset}
+      `);
+
+      const rows = (ledgerRows as unknown) as Array<{
+        entry_date: Date;
+        entry_type: string;
+        document_number: string;
+        document_id: string;
+        debit: string;
+        credit: string;
+        status: string | null;
+        running_balance: string;
+        total_count: string;
+      }>;
+
+      const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
+
+      return {
+        openingBalance: party.openingBalance,
+        data: rows.map((r) => ({
+          date: r.entry_date,
+          type: r.entry_type,
+          documentNumber: r.document_number,
+          documentId: r.document_id,
+          debit: r.debit,
+          credit: r.credit,
+          status: r.status,
+          runningBalance: r.running_balance,
+        })),
+        total,
+        page: input.page,
+        limit: input.limit,
+      };
+    }),
+});

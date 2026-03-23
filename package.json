@@ -1,0 +1,24 @@
+{
+  "name": "billbook",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "db:generate": "turbo db:generate",
+    "db:migrate": "turbo db:migrate",
+    "db:push": "pnpm --filter @billbook/db db:push",
+    "db:reset": "pnpm --filter @billbook/db db:reset",
+    "db:studio": "pnpm --filter @billbook/db studio",
+    "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
+    "typecheck": "turbo typecheck"
+  },
+  "devDependencies": {
+    "oxlint": "^1.56.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

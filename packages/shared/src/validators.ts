@@ -1,0 +1,264 @@
+import { z } from "zod";
+
+// ── Common ─────────────────────────────────────────────────────
+
+export const paginationSchema = z.object({
+  page: z.number().int().min(1).default(1),
+  limit: z.number().int().min(1).max(100).default(20),
+});
+
+export const dateRangeSchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+});
+
+export const searchSchema = z.object({
+  query: z.string().min(1).max(200),
+});
+
+// ── Auth ───────────────────────────────────────────────────────
+
+export const loginSchema = z.object({
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(128),
+});
+
+export const registerSchema = z.object({
+  email: z.string().email().max(255),
+  name: z.string().min(2).max(100),
+  password: z.string().min(8).max(128),
+  confirmPassword: z.string(),
+}).refine((d) => d.password === d.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
+// ── Business ───────────────────────────────────────────────────
+
+export const createBusinessSchema = z.object({
+  name: z.string().min(1).max(200),
+  legalName: z.string().max(200).optional(),
+  gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
+  pan: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).optional().or(z.literal("")),
+  phone: z.string().max(15).optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  address: z.string().max(500).optional(),
+  city: z.string().max(100).optional(),
+  state: z.string().max(100).optional(),
+  pincode: z.string().max(10).optional(),
+  invoicePrefix: z.string().min(1).max(10).default("INV"),
+  currency: z.string().length(3).default("INR"),
+  paymentPrefix: z.string().min(1).max(10).default("PAY"),
+  quotationPrefix: z.string().min(1).max(10).default("QTN"),
+  creditNotePrefix: z.string().min(1).max(10).default("CN"),
+  deliveryChallanPrefix: z.string().min(1).max(10).default("DC"),
+  proformaPrefix: z.string().min(1).max(10).default("PI"),
+});
+
+export const updateBusinessSchema = createBusinessSchema.partial();
+
+// ── Party ──────────────────────────────────────────────────────
+
+export const itemTypes = ["product", "service"] as const;
+export type ItemType = (typeof itemTypes)[number];
+
+export const documentTypes = ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] as const;
+export type DocumentType = (typeof documentTypes)[number];
+
+export const bankAccountTypes = ["savings", "current", "cash"] as const;
+export type BankAccountType = (typeof bankAccountTypes)[number];
+
+export const bankTransactionTypes = ["deposit", "withdrawal", "transfer"] as const;
+export type BankTransactionType = (typeof bankTransactionTypes)[number];
+
+export const partyTypes = ["customer", "supplier"] as const;
+export type PartyType = (typeof partyTypes)[number];
+
+export const createPartySchema = z.object({
+  type: z.enum(partyTypes),
+  name: z.string().min(1).max(200),
+  phone: z.string().max(15).optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  gstin: z.string().optional().or(z.literal("")),
+  pan: z.string().optional().or(z.literal("")),
+  billingAddress: z.string().max(500).optional(),
+  shippingAddress: z.string().max(500).optional(),
+  city: z.string().max(100).optional(),
+  state: z.string().max(100).optional(),
+  pincode: z.string().max(10).optional(),
+  openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  category: z.string().max(100).optional(),
+  creditPeriodDays: z.number().int().min(0).max(365).optional(),
+  creditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  contactPersonName: z.string().max(200).optional(),
+  contactPersonDob: z.string().datetime().optional(),
+  bankAccountNumber: z.string().max(34).optional(),
+  bankIfsc: z.string().max(11).optional(),
+  bankName: z.string().max(200).optional(),
+});
+
+export const updatePartySchema = createPartySchema.partial().omit({ type: true });
+
+// ── Item ───────────────────────────────────────────────────────
+
+export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+export type Unit = (typeof units)[number];
+
+export const createItemSchema = z.object({
+  name: z.string().min(1).max(200),
+  hsn: z.string().max(20).optional(),
+  sku: z.string().max(50).optional(),
+  unit: z.enum(units).default("pcs"),
+  salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  stockQuantity: z.string().regex(/^-?\d+(\.\d{1,3})?$/).default("0"),
+  lowStockAlert: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
+  description: z.string().max(1000).optional(),
+  itemType: z.enum(itemTypes).default("product"),
+  category: z.string().max(100).optional(),
+  taxInclusive: z.boolean().default(false),
+});
+
+export const updateItemSchema = createItemSchema.partial();
+
+// ── Invoice ────────────────────────────────────────────────────
+
+export const invoiceTypes = ["sale", "purchase"] as const;
+export const invoiceStatuses = ["draft", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+
+export const invoiceChargeSchema = z.object({
+  label: z.string().min(1).max(100),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+});
+
+export const invoiceLineItemSchema = z.object({
+  itemId: z.string().uuid().optional(),
+  description: z.string().min(1).max(500),
+  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/),
+  unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+});
+
+export const createInvoiceSchema = z.object({
+  partyId: z.string().uuid(),
+  type: z.enum(invoiceTypes),
+  documentType: z.enum(documentTypes).default("invoice"),
+  invoiceDate: z.string().datetime().optional(),
+  dueDate: z.string().datetime().optional(),
+  notes: z.string().max(2000).optional(),
+  termsAndConditions: z.string().max(2000).optional(),
+  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  charges: z.array(invoiceChargeSchema).optional(),
+  roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  referenceDocumentId: z.string().uuid().optional(),
+  lineItems: z.array(invoiceLineItemSchema).min(1),
+});
+
+export const updateInvoiceStatusSchema = z.object({
+  status: z.enum(invoiceStatuses),
+});
+
+// ── Payment ────────────────────────────────────────────────────
+
+export const paymentModes = ["cash", "bank", "upi", "cheque", "other"] as const;
+
+export const paymentAllocationSchema = z.object({
+  invoiceId: z.string().uuid(),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+});
+
+export const createPaymentSchema = z.object({
+  invoiceId: z.string().uuid().optional(),
+  partyId: z.string().uuid(),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  discount: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  mode: z.enum(paymentModes),
+  referenceNumber: z.string().max(100).optional(),
+  paymentDate: z.string().datetime().optional(),
+  notes: z.string().max(500).optional(),
+  bankAccountId: z.string().uuid().optional(),
+  // Multi-invoice allocation: allocate a single payment across multiple invoices
+  allocations: z.array(paymentAllocationSchema).optional(),
+});
+
+export const updatePaymentSchema = z.object({
+  id: z.string().uuid(),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  discount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  mode: z.enum(paymentModes).optional(),
+  referenceNumber: z.string().max(100).optional().nullable(),
+  paymentDate: z.string().datetime().optional(),
+  notes: z.string().max(500).optional().nullable(),
+  bankAccountId: z.string().uuid().optional().nullable(),
+  // Replace all allocations (reverse old, apply new)
+  allocations: z.array(paymentAllocationSchema).optional(),
+});
+
+// ── Expense ────────────────────────────────────────────────────
+
+export const createExpenseSchema = z.object({
+  category: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  mode: z.enum(paymentModes),
+  expenseDate: z.string().datetime().optional(),
+  referenceNumber: z.string().max(100).optional(),
+});
+
+// ── Bank Accounts ──────────────────────────────────────────────
+
+export const createBankAccountSchema = z.object({
+  accountName: z.string().min(1).max(200),
+  accountNumber: z.string().max(34).optional(),
+  ifsc: z.string().max(11).optional(),
+  bankName: z.string().max(200).optional(),
+  accountType: z.enum(bankAccountTypes).default("savings"),
+  openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  isDefault: z.boolean().default(false),
+});
+
+export const updateBankAccountSchema = createBankAccountSchema.partial();
+
+export const createBankTransactionSchema = z.object({
+  bankAccountId: z.string().uuid(),
+  type: z.enum(bankTransactionTypes),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  description: z.string().max(500).optional(),
+  referenceType: z.string().max(50).optional(),
+  referenceId: z.string().uuid().optional(),
+  transactionDate: z.string().datetime().optional(),
+});
+
+export const bankTransferSchema = z.object({
+  fromAccountId: z.string().uuid(),
+  toAccountId: z.string().uuid(),
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  description: z.string().max(500).optional(),
+  transactionDate: z.string().datetime().optional(),
+});
+
+export const convertDocumentSchema = z.object({
+  sourceDocumentId: z.string().uuid(),
+  targetDocumentType: z.enum(documentTypes),
+});
+
+// ── Dashboard ──────────────────────────────────────────────────
+
+export type DashboardSummary = {
+  totalSales: string;
+  totalPurchases: string;
+  totalExpenses: string;
+  receivable: string;
+  payable: string;
+  cashInHand: string;
+  recentInvoices: Array<{
+    id: string;
+    invoiceNumber: string;
+    partyName: string;
+    totalAmount: string;
+    status: string;
+    invoiceDate: string;
+  }>;
+};

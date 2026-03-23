@@ -1,0 +1,26 @@
+{
+  "name": "billbook",
+  "build": {
+    "command": "cd apps/web && pnpm build",
+    "output": "apps/web/dist"
+  },
+  "routes": {
+    "include": ["/*"],
+    "exclude": ["/api/*"]
+  },
+  "headers": {
+    "/*": {
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "X-XSS-Protection": "1; mode=block",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+    },
+    "/assets/*": {
+      "Cache-Control": "public, max-age=31536000, immutable"
+    }
+  },
+  "redirects": [
+    { "source": "/api/:path*", "destination": "https://api.yourdomain.com/api/:path*", "status": 200 }
+  ]
+}
