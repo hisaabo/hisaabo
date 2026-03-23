@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { db, invoices, invoiceItems, items, businesses, parties } from "@billbook/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema } from "@billbook/shared";
+import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
+import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
@@ -15,6 +15,7 @@ export const invoiceRouter = router({
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),
       itemId: z.string().uuid().optional(),
+      search: z.string().optional(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -27,10 +28,18 @@ export const invoiceRouter = router({
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
       if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      if (input.search) {
+        const term = `%${input.search}%`;
+        conditions.push(
+          sql`(${invoices.invoiceNumber} ILIKE ${term} OR EXISTS (
+            SELECT 1 FROM ${parties} WHERE ${parties.id} = ${invoices.partyId} AND ${parties.name} ILIKE ${term}
+          ))`
+        );
+      }
 
       // itemId filter: find invoices that contain this item
       if (input.itemId) {
-        const rows = await db
+        const rows = await ctx.db
           .select({ invoiceId: invoiceItems.invoiceId })
           .from(invoiceItems)
           .where(eq(invoiceItems.itemId, input.itemId));
@@ -44,7 +53,7 @@ export const invoiceRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.select({
+        ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
           type: invoices.type,
@@ -62,7 +71,7 @@ export const invoiceRouter = router({
           .orderBy(desc(invoices.invoiceDate))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(invoices)
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(invoices)
           .where(and(...conditions)),
       ]);
 
@@ -72,17 +81,17 @@ export const invoiceRouter = router({
   getById: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const [invoice] = await db.select().from(invoices)
+      const [invoice] = await ctx.db.select().from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
 
       if (!invoice) return null;
 
       const [lineItems, [party]] = await Promise.all([
-        db.select().from(invoiceItems)
+        ctx.db.select().from(invoiceItems)
           .where(eq(invoiceItems.invoiceId, input.id))
           .orderBy(invoiceItems.sortOrder),
-        db.select().from(parties)
+        ctx.db.select().from(parties)
           .where(eq(parties.id, invoice.partyId)).limit(1),
       ]);
 
@@ -90,7 +99,7 @@ export const invoiceRouter = router({
     }),
 
   create: businessProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
-    return db.transaction(async (tx) => {
+    return ctx.db.transaction(async (tx) => {
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
         prefix: businesses.invoicePrefix,
@@ -105,39 +114,42 @@ export const invoiceRouter = router({
         .set({ nextInvoiceNumber: biz.nextNum + 1 })
         .where(eq(businesses.id, ctx.businessId));
 
-      // Calculate line item totals
+      // Calculate line item totals using fixed-point arithmetic
       const processedItems = input.lineItems.map((li, idx) => {
-        const qty = parseFloat(li.quantity);
-        const price = parseFloat(li.unitPrice);
-        const disc = parseFloat(li.discountPercent || "0");
-        const tax = parseFloat(li.taxPercent || "0");
-
-        const subtotal = qty * price;
-        const discounted = subtotal * (1 - disc / 100);
-        const taxAmt = discounted * (tax / 100);
-        const total = discounted + taxAmt;
-
+        const calc = calcLineItem({
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent || "0",
+          discountPercent: li.discountPercent || "0",
+        });
         return {
           itemId: li.itemId || null,
           description: li.description,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent || "0",
-          taxAmount: taxAmt.toFixed(2),
+          taxAmount: calc.taxAmount,
           discountPercent: li.discountPercent || "0",
-          totalAmount: total.toFixed(2),
+          totalAmount: calc.total,
           sortOrder: idx,
         };
       });
 
-      const subtotal = processedItems.reduce((s, i) => s + parseFloat(i.totalAmount) - parseFloat(i.taxAmount), 0);
-      const taxAmount = processedItems.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
       const charges = input.charges ?? [];
+      const totals = calcInvoiceTotals({
+        lineItems: input.lineItems.map((li) => ({
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent || "0",
+          discountPercent: li.discountPercent || "0",
+        })),
+        charges: charges.length > 0 ? charges : undefined,
+        roundOff: charges.length > 0 ? (input.roundOff || "0") : undefined,
+      });
       const additionalCharges = charges.length > 0
-        ? charges.reduce((sum, c) => sum + parseFloat(c.amount), 0)
-        : parseFloat(input.additionalCharges || "0");
-      const roundOff = parseFloat(input.roundOff || "0");
-      const totalAmount = subtotal + taxAmount + additionalCharges + roundOff;
+        ? totals.chargesTotal
+        : (input.additionalCharges || "0");
+      const roundOff = input.roundOff || "0";
 
       const [invoice] = await tx.insert(invoices).values({
         businessId: ctx.businessId,
@@ -147,13 +159,13 @@ export const invoiceRouter = router({
         invoiceNumber,
         invoiceDate: input.invoiceDate ? new Date(input.invoiceDate) : new Date(),
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
+        subtotal: totals.subtotal,
+        taxAmount: totals.taxTotal,
         discountAmount: "0.00",
         charges: charges.length > 0 ? charges : null,
-        additionalCharges: additionalCharges.toFixed(2),
-        roundOff: roundOff.toFixed(2),
-        totalAmount: totalAmount.toFixed(2),
+        additionalCharges,
+        roundOff,
+        totalAmount: totals.total,
         notes: input.notes,
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
@@ -197,7 +209,7 @@ export const invoiceRouter = router({
   updateStatus: businessProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
-      const [invoice] = await db.update(invoices)
+      const [invoice] = await ctx.db.update(invoices)
         .set({ status: input.status, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .returning();
@@ -217,7 +229,7 @@ export const invoiceRouter = router({
       lineItems: z.array(invoiceLineItemSchema).min(1).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         // 1. Fetch existing invoice
         const [existing] = await tx.select()
           .from(invoices)
@@ -240,9 +252,7 @@ export const invoiceRouter = router({
         // 3. Handle charges
         if (input.charges) {
           updates.charges = input.charges;
-          updates.additionalCharges = input.charges
-            .reduce((sum, c) => sum + parseFloat(c.amount), 0)
-            .toFixed(2);
+          updates.additionalCharges = money.sum(input.charges.map((c) => c.amount));
         }
         if (input.roundOff !== undefined) updates.roundOff = input.roundOff;
 
@@ -251,17 +261,14 @@ export const invoiceRouter = router({
           // Delete existing line items
           await tx.delete(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Process and insert new line items (same logic as create)
+          // Process and insert new line items using fixed-point arithmetic
           const processedItems = input.lineItems.map((li, idx) => {
-            const qty = parseFloat(li.quantity) || 0;
-            const price = parseFloat(li.unitPrice) || 0;
-            const disc = parseFloat(li.discountPercent || "0");
-            const tax = parseFloat(li.taxPercent || "0");
-            const subtotal = qty * price;
-            const afterDiscount = subtotal * (1 - disc / 100);
-            const taxAmt = afterDiscount * (tax / 100);
-            const total = afterDiscount + taxAmt;
-
+            const calc = calcLineItem({
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            });
             return {
               invoiceId: input.id,
               itemId: li.itemId || null,
@@ -269,9 +276,9 @@ export const invoiceRouter = router({
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
-              taxAmount: taxAmt.toFixed(2),
+              taxAmount: calc.taxAmount,
               discountPercent: li.discountPercent || "0",
-              totalAmount: total.toFixed(2),
+              totalAmount: calc.total,
               sortOrder: idx,
             };
           });
@@ -280,18 +287,28 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
-          // Recalculate totals
-          const subtotal = processedItems.reduce((s, i) => s + parseFloat(i.totalAmount) - parseFloat(i.taxAmount), 0);
-          const taxAmount = processedItems.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
-          const additionalCharges = input.charges
-            ? input.charges.reduce((sum, c) => sum + parseFloat(c.amount), 0)
-            : parseFloat(existing.additionalCharges);
-          const roundOff = input.roundOff !== undefined ? parseFloat(input.roundOff) : parseFloat(existing.roundOff);
-          const totalAmount = subtotal + taxAmount + additionalCharges + roundOff;
+          // Recalculate totals using fixed-point arithmetic
+          const additionalChargesStr = input.charges
+            ? money.sum(input.charges.map((c) => c.amount))
+            : existing.additionalCharges;
+          const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
+          const totals = calcInvoiceTotals({
+            lineItems: input.lineItems.map((li) => ({
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            })),
+            charges: input.charges ? input.charges : undefined,
+            roundOff: roundOffStr,
+          });
 
-          updates.subtotal = subtotal.toFixed(2);
-          updates.taxAmount = taxAmount.toFixed(2);
-          updates.totalAmount = totalAmount.toFixed(2);
+          updates.subtotal = totals.subtotal;
+          updates.taxAmount = totals.taxTotal;
+          updates.totalAmount = money.add(
+            money.add(totals.subtotal, totals.taxTotal),
+            money.add(additionalChargesStr, roundOffStr)
+          );
         }
 
         // 5. Apply update
@@ -307,7 +324,7 @@ export const invoiceRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const [inv] = await db.select({ status: invoices.status })
+      const [inv] = await ctx.db.select({ status: invoices.status })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
@@ -316,7 +333,7 @@ export const invoiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only draft invoices can be deleted" });
       }
 
-      await db.delete(invoices)
+      await ctx.db.delete(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
       return { success: true };
     }),

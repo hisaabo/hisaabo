@@ -1,21 +1,21 @@
 import { eq, and, sql, desc, gte, lte, asc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, bankAccounts, bankTransactions } from "@billbook/db";
+import { bankAccounts, bankTransactions } from "@hisaabo/db";
 import {
   createBankAccountSchema,
   updateBankAccountSchema,
   createBankTransactionSchema,
   bankTransferSchema,
   paginationSchema,
-} from "@billbook/shared";
+} from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 
 export const bankAccountRouter = router({
   // ── Accounts ────────────────────────────────────────────────
 
   list: businessProcedure.query(async ({ ctx }) => {
-    return db
+    return ctx.db
       .select()
       .from(bankAccounts)
       .where(eq(bankAccounts.businessId, ctx.businessId))
@@ -25,7 +25,7 @@ export const bankAccountRouter = router({
   getById: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const [account] = await db
+      const [account] = await ctx.db
         .select()
         .from(bankAccounts)
         .where(
@@ -38,7 +38,7 @@ export const bankAccountRouter = router({
 
       if (!account) return null;
 
-      const recentTransactions = await db
+      const recentTransactions = await ctx.db
         .select()
         .from(bankTransactions)
         .where(eq(bankTransactions.bankAccountId, input.id))
@@ -51,7 +51,7 @@ export const bankAccountRouter = router({
   create: businessProcedure
     .input(createBankAccountSchema)
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         // If new account is default, clear existing defaults
         if (input.isDefault) {
           await tx
@@ -83,7 +83,7 @@ export const bankAccountRouter = router({
   update: businessProcedure
     .input(z.object({ id: z.string().uuid(), data: updateBankAccountSchema }))
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         // Verify ownership
         const [existing] = await tx
           .select({ id: bankAccounts.id })
@@ -131,7 +131,7 @@ export const bankAccountRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         const [account] = await tx
           .select({ id: bankAccounts.id })
           .from(bankAccounts)
@@ -187,7 +187,7 @@ export const bankAccountRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Verify account belongs to business
-      const [account] = await db
+      const [account] = await ctx.db
         .select({ id: bankAccounts.id })
         .from(bankAccounts)
         .where(
@@ -215,14 +215,14 @@ export const bankAccountRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db
+        ctx.db
           .select()
           .from(bankTransactions)
           .where(and(...conditions))
           .orderBy(desc(bankTransactions.transactionDate))
           .limit(input.limit)
           .offset(offset),
-        db
+        ctx.db
           .select({ count: sql<number>`count(*)::int` })
           .from(bankTransactions)
           .where(and(...conditions)),
@@ -234,7 +234,7 @@ export const bankAccountRouter = router({
   addTransaction: businessProcedure
     .input(createBankTransactionSchema)
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         // Lock account row for atomic balance update
         const [account] = await tx
           .select({
@@ -299,7 +299,7 @@ export const bankAccountRouter = router({
         });
       }
 
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         // Lock both accounts in a consistent order to prevent deadlocks
         const firstId =
           input.fromAccountId < input.toAccountId
@@ -398,7 +398,7 @@ export const bankAccountRouter = router({
     }),
 
   summary: businessProcedure.query(async ({ ctx }) => {
-    const [result] = await db
+    const [result] = await ctx.db
       .select({
         totalBalance: sql<string>`coalesce(sum(${bankAccounts.currentBalance}::numeric), 0)::text`,
         cashInHand: sql<string>`coalesce(sum(${bankAccounts.currentBalance}::numeric) filter (where ${bankAccounts.accountType} = 'cash'), 0)::text`,

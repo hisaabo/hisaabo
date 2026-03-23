@@ -18,20 +18,6 @@
   --info: #1971c2;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface-0: #141417;
-    --surface-1: #1a1a1f;
-    --surface-2: #232329;
-    --surface-3: #2c2c35;
-    --text-primary: #e4e4e8;
-    --text-secondary: #a1a1aa;
-    --text-tertiary: #71717a;
-    --border-color: #2c2c35;
-    --border-light: #232329;
-  }
-}
-
 .dark {
   --surface-0: #141417;
   --surface-1: #1a1a1f;

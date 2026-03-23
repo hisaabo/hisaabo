@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -11,7 +11,10 @@ import { SegmentedControl } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator } from "@/components/DocumentCreator";
+import { SearchInput } from "@/components/ui/SearchInput";
+import { Pagination } from "@/components/ui/Pagination";
 import { toast } from "@/hooks/useToast";
+import { useDebounce } from "@/hooks/useDebounce";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
 export const Route = createFileRoute("/invoices")({
@@ -112,8 +115,14 @@ function InvoiceDetailPanel({
   onStatusChange,
   onEdit,
 }: InvoiceDetailPanelProps) {
+  const navigate = useNavigate();
   const { data: invoice, isLoading } = trpc.invoice.getById.useQuery(
     { id: invoiceId! },
+    { enabled: !!invoiceId }
+  );
+
+  const { data: invoicePayments } = trpc.payment.list.useQuery(
+    { invoiceId: invoiceId!, page: 1, limit: 50 },
     { enabled: !!invoiceId }
   );
 
@@ -333,6 +342,75 @@ function InvoiceDetailPanel({
               )}
             </div>
           )}
+
+          {/* Payments linked to this invoice */}
+          {invoicePayments && invoicePayments.data.length > 0 && (
+            <div>
+              <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-2">
+                Payments ({invoicePayments.data.length})
+              </p>
+              <div className="card overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-surface-1 border-b border-border-light">
+                      <th className="px-3 py-2 text-left font-medium text-text-tertiary">Payment #</th>
+                      <th className="px-3 py-2 text-left font-medium text-text-tertiary">Date</th>
+                      <th className="px-3 py-2 text-left font-medium text-text-tertiary">Mode</th>
+                      <th className="px-3 py-2 text-left font-medium text-text-tertiary">Reference</th>
+                      <th className="px-3 py-2 text-right font-medium text-text-tertiary">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-light">
+                    {invoicePayments.data.map((pmt) => (
+                      <tr
+                        key={pmt.id}
+                        className="cursor-pointer hover:bg-surface-1 transition-colors"
+                        onClick={() => {
+                          onClose();
+                          navigate({ to: "/payments", search: { selected: pmt.id } });
+                        }}
+                      >
+                        <td className="px-3 py-2">
+                          <span className="font-mono text-[12px] font-medium text-brand-600 hover:underline">
+                            {pmt.paymentNumber || "—"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-text-secondary">
+                          {formatDate(pmt.paymentDate)}
+                        </td>
+                        <td className="px-3 py-2 text-text-secondary capitalize">
+                          {pmt.mode}
+                        </td>
+                        <td className="px-3 py-2 text-text-tertiary">
+                          {pmt.referenceNumber || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-600">
+                          {formatCurrency(pmt.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-surface-1 border-t border-border-light">
+                      <td colSpan={4} className="px-3 py-2 text-right text-[11px] font-medium text-text-secondary">
+                        Total Paid
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-emerald-600">
+                        {formatCurrency(invoice.amountPaid)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* No payments yet message for unpaid invoices */}
+          {invoicePayments && invoicePayments.data.length === 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && (
+            <div className="text-center py-4">
+              <p className="text-xs text-text-tertiary">No payments recorded for this invoice</p>
+            </div>
+          )}
         </div>
       )}
     </SlideOver>
@@ -347,9 +425,13 @@ interface PaymentPanelState {
   balance: string;
 }
 
+const PAGE_SIZE = 20;
+
 function InvoicesPage() {
   const [type, setType] = useState<"sale" | "purchase">("sale");
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
@@ -357,11 +439,17 @@ function InvoicesPage() {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
 
+  const debouncedSearch = useDebounce(search, 300);
+
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [type, status, debouncedSearch]);
+
   const { data, isLoading } = trpc.invoice.list.useQuery({
     type,
     status: (status || undefined) as any,
-    page: 1,
-    limit: 50,
+    search: debouncedSearch || undefined,
+    page,
+    limit: PAGE_SIZE,
   });
 
   const utils = trpc.useUtils();
@@ -415,6 +503,12 @@ function InvoicesPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search invoices..."
+          className="max-w-xs"
+        />
         <SegmentedControl
           tabs={typeOptions}
           value={type}
@@ -574,6 +668,15 @@ function InvoicesPage() {
               })}
             </tbody>
           </table>
+          {data && (
+            <Pagination
+              page={page}
+              totalPages={Math.ceil(data.total / PAGE_SIZE)}
+              onPageChange={setPage}
+              total={data.total}
+              pageSize={PAGE_SIZE}
+            />
+          )}
         </div>
       )}
 

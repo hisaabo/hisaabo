@@ -4,11 +4,11 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gt, lt } from "drizzle-orm";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { generateInvoicePDF, type InvoicePDFData } from "./lib/invoice-pdf.js";
-import { db, invoices, invoiceItems, parties, businesses, sessions, users } from "@billbook/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, users, tenants } from "@hisaabo/db";
 
 const app = new Hono();
 
@@ -50,17 +50,32 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
   const format = (c.req.query("format") || "a4") as "a4" | "thermal";
 
-  // Auth check
+  // Auth check — look up session in control DB
   const cookies = c.req.header("cookie") || "";
   const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
   if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
 
-  const [session] = await db.select({ userId: sessions.userId })
-    .from(sessions).where(eq(sessions.id, decodeURIComponent(sessionMatch[1]))).limit(1);
-  if (!session) return c.json({ error: "Unauthorized" }, 401);
+  const sessionId = decodeURIComponent(sessionMatch[1]);
+
+  const [sessionRow] = await controlDb
+    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+
+  if (!sessionRow) return c.json({ error: "Unauthorized" }, 401);
+  if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
+
+  // Verify tenant is active
+  const [tenant] = await controlDb.select({ status: tenants.status })
+    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
+  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
 
   const businessId = c.req.header("x-business-id");
   if (!businessId) return c.json({ error: "No business selected" }, 400);
+
+  // Get tenant DB for invoice data
+  const db = await getTenantDb(sessionRow.tenantId);
 
   // Fetch invoice with party and business
   const [invoice] = await db.select().from(invoices)
@@ -150,10 +165,20 @@ app.use("/api/trpc/*", async (c) => {
   return response;
 });
 
+// ── Session cleanup (FINDING 7) ────────────────────────────────
+// Clean up expired sessions every hour
+setInterval(async () => {
+  try {
+    await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+  } catch (e) {
+    console.error("[session-cleanup] Failed:", e);
+  }
+}, 60 * 60 * 1000);
+
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`🚀 Billbook API running on http://localhost:${info.port}`);
+  console.log(`🚀 Hisaabo API running on http://localhost:${info.port}`);
   console.log(`   tRPC endpoint: http://localhost:${info.port}/api/trpc`);
 });

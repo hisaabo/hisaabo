@@ -1,5 +1,5 @@
 {
-  "name": "@billbook/api",
+  "name": "@hisaabo/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@billbook/db": "workspace:*",
-    "@billbook/shared": "workspace:*",
+    "@hisaabo/db": "workspace:*",
+    "@hisaabo/shared": "workspace:*",
     "@hono/node-server": "^1.13.0",
     "@trpc/server": "^11.0.0",
     "argon2": "^0.41.0",

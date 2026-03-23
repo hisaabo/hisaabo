@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { z } from "zod";
-import { db, parties, invoices, payments, items, invoiceItems } from "@billbook/db";
-import { createPartySchema, updatePartySchema, paginationSchema } from "@billbook/shared";
+import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
+import { createPartySchema, updatePartySchema, paginationSchema } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
@@ -22,12 +22,12 @@ export const partyRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.select().from(parties)
+        ctx.db.select().from(parties)
           .where(and(...conditions))
           .orderBy(desc(parties.updatedAt))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(parties)
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(parties)
           .where(and(...conditions)),
       ]);
 
@@ -37,14 +37,14 @@ export const partyRouter = router({
   getById: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const [party] = await db.select().from(parties)
+      const [party] = await ctx.db.select().from(parties)
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
         .limit(1);
 
       if (!party) return null;
 
       // Calculate balance from invoices and payments
-      const [balanceResult] = await db.select({
+      const [balanceResult] = await ctx.db.select({
         totalInvoiced: sql<string>`coalesce(sum(${invoices.totalAmount}), '0')`,
         totalPaid: sql<string>`coalesce(sum(${invoices.amountPaid}), '0')`,
       }).from(invoices)
@@ -61,7 +61,7 @@ export const partyRouter = router({
     }),
 
   create: businessProcedure.input(createPartySchema).mutation(async ({ input, ctx }) => {
-    const [party] = await db.insert(parties).values({
+    const [party] = await ctx.db.insert(parties).values({
       ...input,
       businessId: ctx.businessId,
       // Handle optional date fields
@@ -74,7 +74,7 @@ export const partyRouter = router({
     .input(z.object({ id: z.string().uuid(), data: updatePartySchema }))
     .mutation(async ({ input, ctx }) => {
       const { contactPersonDob, ...rest } = input.data;
-      const [party] = await db.update(parties)
+      const [party] = await ctx.db.update(parties)
         .set({
           ...rest,
           ...(contactPersonDob ? { contactPersonDob: new Date(contactPersonDob) } : {}),
@@ -88,7 +88,7 @@ export const partyRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await db.delete(parties)
+      await ctx.db.delete(parties)
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)));
       return { success: true };
     }),
@@ -96,7 +96,7 @@ export const partyRouter = router({
   topItems: businessProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const rows = await db.select({
+      const rows = await ctx.db.select({
         itemId: invoiceItems.itemId,
         itemName: items.name,
         totalQuantity: sql<string>`SUM(${invoiceItems.quantity}::numeric)::text`,
@@ -136,7 +136,7 @@ export const partyRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       // Verify party belongs to this business
-      const [party] = await db
+      const [party] = await ctx.db
         .select({ id: parties.id, openingBalance: parties.openingBalance })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
@@ -156,7 +156,7 @@ export const partyRouter = router({
 
       // UNION ALL: invoices (debit for sales, credit for purchases) + payments
       // Uses raw SQL with parameterised values — column names are safe literals.
-      const ledgerRows = await db.execute(sql`
+      const ledgerRows = await ctx.db.execute(sql`
         WITH ledger AS (
           SELECT
             invoice_date AS entry_date,

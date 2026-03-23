@@ -18,7 +18,7 @@ function DashboardPage() {
   if (!data) {
     return (
       <EmptyState
-        title="Welcome to Billbook"
+        title="Welcome to Hisaabo"
         description="Set up your business to start creating invoices and tracking payments."
         action={
           <Link to="/settings" className="btn-primary">

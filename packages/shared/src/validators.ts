@@ -65,7 +65,7 @@ export type ItemType = (typeof itemTypes)[number];
 export const documentTypes = ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] as const;
 export type DocumentType = (typeof documentTypes)[number];
 
-export const bankAccountTypes = ["savings", "current", "cash"] as const;
+export const bankAccountTypes = ["savings", "current", "cash", "upi", "credit_card"] as const;
 export type BankAccountType = (typeof bankAccountTypes)[number];
 
 export const bankTransactionTypes = ["deposit", "withdrawal", "transfer"] as const;

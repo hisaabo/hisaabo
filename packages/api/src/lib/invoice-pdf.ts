@@ -1,5 +1,10 @@
 import PDFDocument from "pdfkit";
-import type { Readable } from "stream";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FONT_REGULAR = resolve(__dirname, "../../fonts/NotoSans-Regular.ttf");
+const FONT_BOLD = resolve(__dirname, "../../fonts/NotoSans-Bold.ttf");
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -123,12 +128,12 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // ── Header ───────────────────────────────────────────────────
   // Business name
-  doc.fontSize(18).fillColor(colorPrimary).font("Helvetica-Bold")
+  doc.fontSize(18).fillColor(colorPrimary).font("NotoSans-Bold")
     .text(data.businessName, margin, y, { width: contentW * 0.6 });
   y += 24;
 
   if (data.businessLegalName) {
-    doc.fontSize(9).fillColor(colorSecondary).font("Helvetica")
+    doc.fontSize(9).fillColor(colorSecondary).font("NotoSans")
       .text(data.businessLegalName, margin, y);
     y += 14;
   }
@@ -141,7 +146,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   if (data.businessPhone) bizDetails.push(`Ph: ${data.businessPhone}`);
   if (data.businessEmail) bizDetails.push(data.businessEmail);
 
-  doc.fontSize(8).fillColor(colorMuted).font("Helvetica");
+  doc.fontSize(8).fillColor(colorMuted).font("NotoSans");
   for (const line of bizDetails) {
     doc.text(line, margin, y);
     y += 11;
@@ -149,25 +154,25 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // GSTIN / PAN (left)
   if (data.businessGstin) {
-    doc.fontSize(8).fillColor(colorSecondary).font("Helvetica-Bold")
+    doc.fontSize(8).fillColor(colorSecondary).font("NotoSans-Bold")
       .text(`GSTIN: ${data.businessGstin}`, margin, y);
     y += 11;
   }
   if (data.businessPan) {
-    doc.fontSize(8).fillColor(colorSecondary).font("Helvetica-Bold")
+    doc.fontSize(8).fillColor(colorSecondary).font("NotoSans-Bold")
       .text(`PAN: ${data.businessPan}`, margin, y);
     y += 11;
   }
 
   // Invoice title + number (right side, at top)
   const titleLabel = data.type === "sale" ? "TAX INVOICE" : "PURCHASE INVOICE";
-  doc.fontSize(11).fillColor(colorAccent).font("Helvetica-Bold")
+  doc.fontSize(11).fillColor(colorAccent).font("NotoSans-Bold")
     .text(titleLabel, margin + contentW * 0.6, margin, { width: contentW * 0.4, align: "right" });
 
-  doc.fontSize(9).fillColor(colorPrimary).font("Helvetica-Bold")
+  doc.fontSize(9).fillColor(colorPrimary).font("NotoSans-Bold")
     .text(`# ${data.invoiceNumber}`, margin + contentW * 0.6, margin + 18, { width: contentW * 0.4, align: "right" });
 
-  doc.fontSize(8).fillColor(colorSecondary).font("Helvetica")
+  doc.fontSize(8).fillColor(colorSecondary).font("NotoSans")
     .text(`Date: ${fmtDate(data.invoiceDate)}`, margin + contentW * 0.6, margin + 32, { width: contentW * 0.4, align: "right" });
 
   if (data.dueDate) {
@@ -182,21 +187,21 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 16;
 
   // ── Bill To ──────────────────────────────────────────────────
-  doc.fontSize(8).fillColor(colorMuted).font("Helvetica-Bold")
+  doc.fontSize(8).fillColor(colorMuted).font("NotoSans-Bold")
     .text("BILL TO", margin, y);
   y += 14;
 
-  doc.fontSize(10).fillColor(colorPrimary).font("Helvetica-Bold")
+  doc.fontSize(10).fillColor(colorPrimary).font("NotoSans-Bold")
     .text(data.partyName, margin, y);
   y += 15;
 
-  doc.fontSize(8).fillColor(colorSecondary).font("Helvetica");
+  doc.fontSize(8).fillColor(colorSecondary).font("NotoSans");
   if (data.partyBillingAddress) { doc.text(data.partyBillingAddress, margin, y); y += 11; }
   const partyCityLine = [data.partyCity, data.partyState].filter(Boolean).join(", ");
   if (partyCityLine) { doc.text(partyCityLine, margin, y); y += 11; }
   if (data.partyPhone) { doc.text(`Ph: ${data.partyPhone}`, margin, y); y += 11; }
   if (data.partyGstin) {
-    doc.font("Helvetica-Bold").text(`GSTIN: ${data.partyGstin}`, margin, y);
+    doc.font("NotoSans-Bold").text(`GSTIN: ${data.partyGstin}`, margin, y);
     y += 11;
   }
 
@@ -214,7 +219,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // Table header
   doc.rect(margin, y, contentW, 22).fill(colorBg);
-  doc.fontSize(7.5).fillColor(colorSecondary).font("Helvetica-Bold");
+  doc.fontSize(7.5).fillColor(colorSecondary).font("NotoSans-Bold");
   doc.text("#", colX.idx + 4, y + 7);
   doc.text("DESCRIPTION", colX.desc, y + 7);
   doc.text("QTY", colX.qty, y + 7, { width: contentW * 0.1, align: "right" });
@@ -224,7 +229,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 22;
 
   // Table rows
-  doc.font("Helvetica").fontSize(8).fillColor(colorPrimary);
+  doc.font("NotoSans").fontSize(8).fillColor(colorPrimary);
   data.lineItems.forEach((item, i) => {
     const rowH = 20;
 
@@ -239,8 +244,8 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), colX.qty, rowY, { width: contentW * 0.1, align: "right" });
     doc.text(fmt(item.unitPrice), colX.rate, rowY, { width: contentW * 0.12, align: "right" });
     doc.text(`${item.taxPercent}%`, colX.tax, rowY, { width: contentW * 0.1, align: "right" });
-    doc.font("Helvetica-Bold").text(fmt(item.totalAmount), colX.amount, rowY, { width: contentW * 0.12, align: "right" });
-    doc.font("Helvetica");
+    doc.font("NotoSans-Bold").text(fmt(item.totalAmount), colX.amount, rowY, { width: contentW * 0.12, align: "right" });
+    doc.font("NotoSans");
 
     y += rowH;
   });
@@ -284,10 +289,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // Amount in words
   y += 4;
-  doc.fontSize(7.5).fillColor(colorMuted).font("Helvetica-Bold")
+  doc.fontSize(7.5).fillColor(colorMuted).font("NotoSans-Bold")
     .text("Amount in words:", margin, y);
   y += 11;
-  doc.fontSize(8).fillColor(colorSecondary).font("Helvetica")
+  doc.fontSize(8).fillColor(colorSecondary).font("NotoSans")
     .text(numberToWords(parseFloat(data.totalAmount)), margin, y, { width: contentW });
   y += 20;
 
@@ -318,13 +323,13 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   if (gstRates.size > 0 && parseFloat(data.taxAmount) > 0) {
     y += 8;
-    doc.fontSize(8).fillColor(colorMuted).font("Helvetica-Bold")
+    doc.fontSize(8).fillColor(colorMuted).font("NotoSans-Bold")
       .text("TAX BREAKDOWN", margin, y);
     y += 14;
 
     // Header
     doc.rect(margin, y, contentW, 18).fill(colorBg);
-    doc.fontSize(7).fillColor(colorSecondary).font("Helvetica-Bold");
+    doc.fontSize(7).fillColor(colorSecondary).font("NotoSans-Bold");
     doc.text("TAX RATE", margin + 4, y + 5);
     doc.text("TAXABLE", margin + 100, y + 5, { width: 80, align: "right" });
     if (isSameState) {
@@ -336,7 +341,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     doc.text("TOTAL TAX", margin + 380, y + 5, { width: 80, align: "right" });
     y += 18;
 
-    doc.font("Helvetica").fontSize(7.5).fillColor(colorPrimary);
+    doc.font("NotoSans").fontSize(7.5).fillColor(colorPrimary);
     for (const [rate, amounts] of gstRates) {
       const totalTax = amounts.cgst + amounts.sgst + amounts.igst;
       doc.text(`${rate}%`, margin + 4, y + 4);
@@ -356,17 +361,17 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // ── Notes / Terms ────────────────────────────────────────────
   if (data.notes) {
-    doc.fontSize(7.5).fillColor(colorMuted).font("Helvetica-Bold").text("Notes", margin, y);
+    doc.fontSize(7.5).fillColor(colorMuted).font("NotoSans-Bold").text("Notes", margin, y);
     y += 12;
-    doc.fontSize(8).fillColor(colorSecondary).font("Helvetica")
+    doc.fontSize(8).fillColor(colorSecondary).font("NotoSans")
       .text(data.notes, margin, y, { width: contentW * 0.6 });
     y += doc.heightOfString(data.notes, { width: contentW * 0.6 }) + 12;
   }
 
   if (data.termsAndConditions) {
-    doc.fontSize(7.5).fillColor(colorMuted).font("Helvetica-Bold").text("Terms & Conditions", margin, y);
+    doc.fontSize(7.5).fillColor(colorMuted).font("NotoSans-Bold").text("Terms & Conditions", margin, y);
     y += 12;
-    doc.fontSize(7.5).fillColor(colorMuted).font("Helvetica")
+    doc.fontSize(7.5).fillColor(colorMuted).font("NotoSans")
       .text(data.termsAndConditions, margin, y, { width: contentW * 0.6 });
     y += doc.heightOfString(data.termsAndConditions, { width: contentW * 0.6 }) + 12;
   }
@@ -376,11 +381,11 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   doc.strokeColor(colorBorder).lineWidth(0.5)
     .moveTo(margin, footerY).lineTo(margin + contentW, footerY).stroke();
 
-  doc.fontSize(7).fillColor(colorMuted).font("Helvetica")
+  doc.fontSize(7).fillColor(colorMuted).font("NotoSans")
     .text("This is a computer-generated invoice.", margin, footerY + 8, { width: contentW, align: "center" });
 
   // Authorized signatory
-  doc.fontSize(7.5).fillColor(colorSecondary).font("Helvetica")
+  doc.fontSize(7.5).fillColor(colorSecondary).font("NotoSans")
     .text("Authorized Signatory", margin + contentW - 120, footerY - 30, { width: 120, align: "right" });
   doc.strokeColor(colorBorder).lineWidth(0.5)
     .moveTo(margin + contentW - 120, footerY - 8).lineTo(margin + contentW, footerY - 8).stroke();
@@ -399,7 +404,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
 
   function separator() {
     const dashes = "─".repeat(35);
-    doc.fontSize(6).fillColor(colorGray).font("Courier")
+    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
       .text(dashes, margin, y, { width: contentW, align: "center" });
     y += 10;
   }
@@ -410,7 +415,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   y += 14;
 
   if (data.businessAddress) {
-    doc.fontSize(6).fillColor(colorGray).font("Courier")
+    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
       .text(data.businessAddress, margin, y, { width: contentW, align: "center" });
     y += 9;
   }
@@ -440,7 +445,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
     .text(data.type === "sale" ? "TAX INVOICE" : "PURCHASE", margin, y, { width: contentW, align: "center" });
   y += 12;
 
-  doc.fontSize(6).font("Courier").fillColor(colorBlack);
+  doc.fontSize(6).font("NotoSans").fillColor(colorBlack);
   doc.text(`No: ${data.invoiceNumber}`, margin, y);
   doc.text(fmtDate(data.invoiceDate), margin, y, { width: contentW, align: "right" });
   y += 9;
@@ -462,7 +467,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   doc.text("AMT", margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
   y += 10;
 
-  doc.font("Courier").fontSize(6);
+  doc.font("NotoSans").fontSize(6);
   for (const item of data.lineItems) {
     // Item name (may wrap)
     const nameW = contentW * 0.48;
@@ -506,7 +511,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   separator();
 
   // Footer
-  doc.fontSize(5).fillColor(colorGray).font("Courier")
+  doc.fontSize(5).fillColor(colorGray).font("NotoSans")
     .text("Thank you for your business!", margin, y, { width: contentW, align: "center" });
   y += 8;
   doc.text("Computer generated invoice", margin, y, { width: contentW, align: "center" });
@@ -515,7 +520,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
 
 // ── Public API ─────────────────────────────────────────────────
 
-export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a4"): PDFDocument {
+export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a4"): InstanceType<typeof PDFDocument> {
   const isA4 = format === "a4";
 
   const doc = new PDFDocument({
@@ -526,9 +531,13 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a4
       Title: `Invoice ${data.invoiceNumber}`,
       Author: data.businessName,
       Subject: `Invoice for ${data.partyName}`,
-      Creator: "Billbook",
+      Creator: "Hisaabo",
     },
   });
+
+  // Register Noto Sans (supports ₹ and all Indic scripts)
+  doc.registerFont("NotoSans", FONT_REGULAR);
+  doc.registerFont("NotoSans-Bold", FONT_BOLD);
 
   if (isA4) {
     generateA4Invoice(doc, data);

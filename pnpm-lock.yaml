@@ -20,7 +20,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@billbook/shared':
+      '@hisaabo/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@tanstack/react-query':
@@ -48,7 +48,7 @@ importers:
         specifier: ^2.2.0
         version: 2.2.6
     devDependencies:
-      '@billbook/api':
+      '@hisaabo/api':
         specifier: workspace:*
         version: link:../../packages/api
       '@tanstack/router-devtools':
@@ -87,10 +87,10 @@ importers:
 
   packages/api:
     dependencies:
-      '@billbook/db':
+      '@hisaabo/db':
         specifier: workspace:*
         version: link:../db
-      '@billbook/shared':
+      '@hisaabo/shared':
         specifier: workspace:*
         version: link:../shared
       '@hono/node-server':
@@ -152,6 +152,9 @@ importers:
       drizzle-kit:
         specifier: ^0.30.0
         version: 0.30.6
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

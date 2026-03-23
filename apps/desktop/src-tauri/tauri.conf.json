@@ -1,19 +1,19 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/dev/tooling/cli/schema.json",
-  "productName": "Billbook",
+  "productName": "Hisaabo",
   "version": "0.1.0",
-  "identifier": "com.billbook.app",
+  "identifier": "in.hisaabo.app",
   "build": {
     "frontendDist": "../web/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm --filter @billbook/web dev",
-    "beforeBuildCommand": "pnpm --filter @billbook/web build"
+    "beforeDevCommand": "pnpm --filter @hisaabo/web dev",
+    "beforeBuildCommand": "pnpm --filter @hisaabo/web build"
   },
   "app": {
-    "title": "Billbook",
+    "title": "Hisaabo",
     "windows": [
       {
-        "title": "Billbook",
+        "title": "Hisaabo",
         "width": 1200,
         "height": 800,
         "minWidth": 900,

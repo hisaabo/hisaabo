@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { z } from "zod";
-import { db, items, invoiceItems, invoices, parties } from "@billbook/db";
-import { createItemSchema, updateItemSchema, paginationSchema, itemTypes } from "@billbook/shared";
+import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
+import { createItemSchema, updateItemSchema, paginationSchema, itemTypes } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 
 export const itemRouter = router({
@@ -33,12 +33,12 @@ export const itemRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.select().from(items)
+        ctx.db.select().from(items)
           .where(and(...conditions))
           .orderBy(desc(items.updatedAt))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(items)
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(items)
           .where(and(...conditions)),
       ]);
 
@@ -48,14 +48,14 @@ export const itemRouter = router({
   getById: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const [item] = await db.select().from(items)
+      const [item] = await ctx.db.select().from(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
         .limit(1);
       return item ?? null;
     }),
 
   create: businessProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
-    const [item] = await db.insert(items).values({
+    const [item] = await ctx.db.insert(items).values({
       ...input,
       businessId: ctx.businessId,
     }).returning();
@@ -65,7 +65,7 @@ export const itemRouter = router({
   update: businessProcedure
     .input(z.object({ id: z.string().uuid(), data: updateItemSchema }))
     .mutation(async ({ input, ctx }) => {
-      const [item] = await db.update(items)
+      const [item] = await ctx.db.update(items)
         .set({ ...input.data, updatedAt: new Date() })
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
         .returning();
@@ -75,7 +75,7 @@ export const itemRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await db.delete(items)
+      await ctx.db.delete(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
       return { success: true };
     }),
@@ -84,7 +84,7 @@ export const itemRouter = router({
   priceHistory: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const rows = await db.select({
+      const rows = await ctx.db.select({
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
         invoiceType: invoices.type,
@@ -114,7 +114,7 @@ export const itemRouter = router({
   stockMovements: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const rows = await db.select({
+      const rows = await ctx.db.select({
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
         invoiceType: invoices.type,
@@ -153,7 +153,7 @@ export const itemRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.selectDistinctOn([invoices.id], {
+        ctx.db.selectDistinctOn([invoices.id], {
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
           invoiceDate: invoices.invoiceDate,
@@ -175,7 +175,7 @@ export const itemRouter = router({
           .orderBy(invoices.id, desc(invoices.invoiceDate))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(DISTINCT ${invoices.id})::int` })
+        ctx.db.select({ count: sql<number>`count(DISTINCT ${invoices.id})::int` })
           .from(invoiceItems)
           .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
           .where(
@@ -193,7 +193,7 @@ export const itemRouter = router({
   topBuyers: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const rows = await db.select({
+      const rows = await ctx.db.select({
         partyId: invoices.partyId,
         partyName: parties.name,
         partyType: parties.type,
@@ -220,7 +220,7 @@ export const itemRouter = router({
     }),
 
   lowStockCount: businessProcedure.query(async ({ ctx }) => {
-    const [result] = await db.select({
+    const [result] = await ctx.db.select({
       count: sql<number>`count(*)::int`,
     }).from(items)
       .where(and(

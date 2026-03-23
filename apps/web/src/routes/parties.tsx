@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, getInitials, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import type { PartyType } from "@billbook/shared";
+import type { PartyType } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { InputField, TextareaField } from "@/components/ui/FormField";
@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
+import { Pagination } from "@/components/ui/Pagination";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
@@ -29,6 +30,8 @@ const TYPE_TABS = [
   { value: "supplier", label: "Suppliers" },
 ];
 
+const PARTIES_PAGE_SIZE = 20;
+
 function countFilled(...values: string[]): number {
   return values.filter((v) => v.trim() !== "").length;
 }
@@ -36,17 +39,21 @@ function countFilled(...values: string[]): number {
 function PartiesPage() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
 
   const debouncedSearch = useDebounce(search, 300);
 
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter]);
+
   const { data, isLoading } = trpc.party.list.useQuery({
     search: debouncedSearch || undefined,
     type: typeFilter !== "all" ? (typeFilter as PartyType) : undefined,
-    page: 1,
-    limit: 50,
+    page,
+    limit: PARTIES_PAGE_SIZE,
   });
 
   const utils = trpc.useUtils();
@@ -188,11 +195,13 @@ function PartiesPage() {
               ))}
             </tbody>
           </table>
-          {data.total > data.data.length && (
-            <div className="px-4 py-2.5 text-xs text-center text-text-tertiary bg-surface-1">
-              Showing {data.data.length} of {data.total}
-            </div>
-          )}
+          <Pagination
+            page={page}
+            totalPages={Math.ceil(data.total / PARTIES_PAGE_SIZE)}
+            onPageChange={setPage}
+            total={data.total}
+            pageSize={PARTIES_PAGE_SIZE}
+          />
         </div>
       )}
 

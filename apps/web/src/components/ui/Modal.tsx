@@ -1,6 +1,7 @@
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 interface ModalProps {
   open: boolean;
@@ -11,6 +12,10 @@ interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, children, className }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(dialogRef, open);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -23,12 +28,18 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={title ? "modal-title" : undefined}
+    >
       <div
         className="fixed inset-0 bg-black/40 animate-fade-in"
         onClick={onClose}
       />
       <div
+        ref={dialogRef}
         className={cn(
           "relative z-10 w-full max-w-lg rounded-xl animate-scale-in shadow-modal",
           className
@@ -41,7 +52,11 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
             className="flex items-center justify-between px-6 py-4"
             style={{ borderBottom: "1px solid var(--border-light)" }}
           >
-            <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+            <h2
+              id="modal-title"
+              className="text-base font-semibold"
+              style={{ color: "var(--text-primary)" }}
+            >
               {title}
             </h2>
             <button

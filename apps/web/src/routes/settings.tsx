@@ -4,8 +4,12 @@ import { trpc } from "@/lib/trpc";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { InputField } from "@/components/ui/FormField";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Modal } from "@/components/ui/Modal";
+import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
 import { ImportWizard } from "@/components/ImportWizard";
+import { useTheme } from "@/hooks/useTheme";
+import { cn, formatDate } from "@/lib/utils";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -38,6 +42,12 @@ function SettingsPage() {
       ) : (
         <BusinessForm existing={biz} onDone={() => setEditing(false)} />
       )}
+
+      {/* Appearance */}
+      <ThemeSection />
+
+      {/* Team Management */}
+      <TeamSection />
 
       {/* Import Data */}
       <div className="card px-6 py-5 mt-6">
@@ -79,6 +89,288 @@ function SettingsPage() {
     </div>
   );
 }
+
+// ── Appearance / Theme ─────────────────────────────────────────
+
+type ThemeOption = { value: "light" | "dark" | "system"; label: string; description: string };
+
+const themeOptions: ThemeOption[] = [
+  { value: "system", label: "System", description: "Follows your OS preference" },
+  { value: "light", label: "Light", description: "Always use the light theme" },
+  { value: "dark", label: "Dark", description: "Always use the dark theme" },
+];
+
+function ThemeSection() {
+  const { theme, setTheme } = useTheme();
+
+  return (
+    <div className="card px-6 py-5 mt-6">
+      <h3 className="text-sm font-semibold text-text-primary mb-1">Appearance</h3>
+      <p className="text-sm text-text-tertiary mb-4">Choose how Hisaabo looks on this device</p>
+      <div className="flex gap-3">
+        {themeOptions.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => setTheme(opt.value)}
+            className={cn(
+              "flex-1 flex flex-col items-start px-4 py-3 rounded-lg border text-left transition-colors",
+              theme === opt.value
+                ? "border-brand-500 bg-brand-600/5 text-brand-700"
+                : "border-border-light hover:border-border-color hover:bg-surface-1 text-text-secondary",
+            )}
+          >
+            <span className="text-sm font-medium">{opt.label}</span>
+            <span className="text-xs mt-0.5 text-text-tertiary">{opt.description}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Team Management ────────────────────────────────────────────
+
+const roleOptions = [
+  { value: "admin", label: "Admin" },
+  { value: "member", label: "Member" },
+  { value: "viewer", label: "Viewer" },
+];
+
+function TeamSection() {
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: members, isLoading } = trpc.tenant.members.useQuery(undefined, {
+    enabled: !!session?.tenantId,
+  });
+  const utils = trpc.useUtils();
+  const [showInvite, setShowInvite] = useState(false);
+
+  const removeMember = trpc.tenant.removeMember.useMutation({
+    onSuccess: () => {
+      toast.success("Member removed");
+      utils.tenant.members.invalidate();
+    },
+    onError: (err) => toast.error("Failed to remove member", err.message),
+  });
+
+  const updateRole = trpc.tenant.updateMemberRole.useMutation({
+    onSuccess: () => {
+      toast.success("Role updated");
+      utils.tenant.members.invalidate();
+    },
+    onError: (err) => toast.error("Failed to update role", err.message),
+  });
+
+  // Determine caller's role
+  const { data: me } = trpc.auth.me.useQuery();
+  const callerMember = members?.find((m) => m.userEmail === me?.user?.email);
+  const canManage = callerMember?.role === "owner" || callerMember?.role === "admin";
+
+  if (!session?.tenantId) return null;
+
+  return (
+    <>
+      <div className="card overflow-hidden mt-6">
+        <div className="px-6 py-4 flex items-center justify-between border-b border-border-light">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Team Members</h3>
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Manage who has access to this organization
+            </p>
+          </div>
+          {canManage && (
+            <button className="btn-primary btn-sm" onClick={() => setShowInvite(true)}>
+              + Invite
+            </button>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="px-6 py-8 space-y-3">
+            <div className="skeleton h-5 rounded" />
+            <div className="skeleton h-5 rounded" />
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Joined</th>
+                {canManage && <th />}
+              </tr>
+            </thead>
+            <tbody>
+              {members?.map((m) => (
+                <tr key={m.id}>
+                  <td className="font-medium">{m.userName}</td>
+                  <td className="text-text-secondary">{m.userEmail}</td>
+                  <td>
+                    <span
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[11px] font-medium",
+                        m.role === "owner"
+                          ? "bg-brand-50 text-brand-700"
+                          : m.role === "admin"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-surface-2 text-text-secondary",
+                      )}
+                    >
+                      {m.role}
+                    </span>
+                  </td>
+                  <td className="text-text-secondary text-xs">
+                    {m.acceptedAt ? formatDate(m.acceptedAt) : "Pending"}
+                  </td>
+                  {canManage && (
+                    <td className="text-right">
+                      {m.role !== "owner" && m.userEmail !== me?.user?.email && (
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Role change dropdown */}
+                          <div className="w-28">
+                            <Listbox
+                              value={m.role === "owner" ? "member" : m.role}
+                              onChange={(role) =>
+                                updateRole.mutate({ userId: m.userId, role: role as "admin" | "member" | "viewer" })
+                              }
+                              options={roleOptions}
+                            />
+                          </div>
+                          {/* Remove button */}
+                          <button
+                            onClick={() => removeMember.mutate({ userId: m.userId })}
+                            disabled={removeMember.isPending}
+                            className="btn-ghost text-red-600 hover:text-red-700 text-xs px-2 py-1"
+                            title="Remove member"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <InviteModal
+        open={showInvite}
+        onClose={() => setShowInvite(false)}
+      />
+    </>
+  );
+}
+
+// ── Invite Modal ───────────────────────────────────────────────
+
+function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [inviteResult, setInviteResult] = useState<{ token: string; inviteLink: string } | null>(null);
+  const utils = trpc.useUtils();
+
+  const inviteMutation = trpc.tenant.inviteMember.useMutation({
+    onSuccess: (data) => {
+      const inviteLink = `/invite/${data.token}`;
+      setInviteResult({ token: data.token, inviteLink });
+      toast.success("Invitation created");
+      utils.tenant.members.invalidate();
+    },
+    onError: (err) => toast.error("Failed to send invite", err.message),
+  });
+
+  function handleClose() {
+    setEmail("");
+    setRole("member");
+    setInviteResult(null);
+    onClose();
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    inviteMutation.mutate({ email, role: role as "admin" | "member" | "viewer" });
+  }
+
+  return (
+    <Modal open={open} onClose={handleClose} title="Invite Team Member">
+      {inviteResult ? (
+        <div className="space-y-4 py-2">
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3">
+            <p className="text-sm font-medium text-emerald-800">Invitation created!</p>
+            <p className="text-xs text-emerald-700 mt-0.5">
+              Share this link with {email} to give them access.
+            </p>
+          </div>
+          <div>
+            <label className="label">Invite Link</label>
+            <div className="flex gap-2">
+              <input
+                readOnly
+                value={`${window.location.origin}${inviteResult.inviteLink}`}
+                className="input flex-1 font-mono text-xs"
+              />
+              <button
+                type="button"
+                className="btn-secondary shrink-0"
+                onClick={() => {
+                  navigator.clipboard.writeText(
+                    `${window.location.origin}${inviteResult.inviteLink}`,
+                  );
+                  toast.success("Copied to clipboard");
+                }}
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+          <button className="btn-primary w-full" onClick={handleClose}>
+            Done
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4 py-2">
+          <div>
+            <label className="label">Email address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="input"
+              placeholder="colleague@example.com"
+              autoFocus
+            />
+          </div>
+          <div>
+            <Listbox
+              label="Role"
+              value={role}
+              onChange={setRole}
+              options={roleOptions}
+            />
+          </div>
+          <div className="pt-1 flex gap-3">
+            <button type="button" className="btn-secondary flex-1" onClick={handleClose}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={inviteMutation.isPending}
+              className="btn-primary flex-1"
+            >
+              {inviteMutation.isPending ? "Sending..." : "Send Invite"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+// ── Business Card / Form ───────────────────────────────────────
 
 function BusinessCard({ biz, onEdit }: { biz: any; onEdit: () => void }) {
   const fields: [string, string | undefined | null][] = [

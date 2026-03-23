@@ -1,11 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import type { ItemType } from "@billbook/shared";
+import type { ItemType } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -18,6 +18,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Listbox } from "@/components/ui/Listbox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
+import { Pagination } from "@/components/ui/Pagination";
 
 export const Route = createFileRoute("/items")({
   component: ItemsPage,
@@ -46,6 +47,8 @@ const UNIT_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
+const ITEMS_PAGE_SIZE = 20;
+
 function countFilled(...values: string[]): number {
   return values.filter((v) => v.trim() !== "").length;
 }
@@ -54,17 +57,21 @@ function ItemsPage() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [showLowStock, setShowLowStock] = useState(false);
+  const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 
   const debouncedSearch = useDebounce(search, 300);
 
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter, showLowStock]);
+
   const { data, isLoading } = trpc.item.list.useQuery({
     search: debouncedSearch || undefined,
     lowStock: showLowStock || undefined,
-    page: 1,
-    limit: 50,
+    page,
+    limit: ITEMS_PAGE_SIZE,
   });
 
   const { data: lowStockCount } = trpc.item.lowStockCount.useQuery();
@@ -241,10 +248,14 @@ function ItemsPage() {
               })}
             </tbody>
           </table>
-          {data && data.total > data.data.length && (
-            <div className="px-4 py-2.5 text-xs text-center text-text-tertiary bg-surface-1">
-              Showing {data.data.length} of {data.total}
-            </div>
+          {data && (
+            <Pagination
+              page={page}
+              totalPages={Math.ceil(data.total / ITEMS_PAGE_SIZE)}
+              onPageChange={setPage}
+              total={data.total}
+              pageSize={ITEMS_PAGE_SIZE}
+            />
           )}
         </div>
       )}

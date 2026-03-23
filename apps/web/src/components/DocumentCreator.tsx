@@ -4,6 +4,7 @@ import { formatCurrency } from "@/lib/utils";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
 import { toast } from "@/hooks/useToast";
+import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -66,14 +67,18 @@ function newLineItem(): LineItem {
 }
 
 function calcLine(li: LineItem) {
-  const qty = parseFloat(li.quantity) || 0;
-  const price = parseFloat(li.unitPrice) || 0;
-  const disc = parseFloat(li.discountPercent) || 0;
-  const tax = parseFloat(li.taxPercent) || 0;
-  const subtotal = qty * price;
-  const afterDiscount = subtotal * (1 - disc / 100);
-  const taxAmt = afterDiscount * (tax / 100);
-  return { subtotal, afterDiscount, taxAmt, total: afterDiscount + taxAmt };
+  const result = calcLineItem({
+    quantity: li.quantity || "0",
+    unitPrice: li.unitPrice || "0",
+    taxPercent: li.taxPercent || "0",
+    discountPercent: li.discountPercent || "0",
+  });
+  return {
+    subtotal: money.toNumber(result.subtotal),
+    afterDiscount: money.toNumber(result.afterDiscount),
+    taxAmt: money.toNumber(result.taxAmount),
+    total: money.toNumber(result.total),
+  };
 }
 
 // ── Component ────────────────────────────────────────────────────
@@ -218,24 +223,26 @@ export function DocumentCreator({
   const createMutation = mutationMap[documentType];
   const activeMutation = isEditing ? updateMutation : createMutation;
 
-  // Computed totals
+  // Computed totals using fixed-point arithmetic
   const totals = useMemo(() => {
-    let subtotal = 0;
-    let taxTotal = 0;
-    let discountTotal = 0;
-    for (const li of items) {
-      const c = calcLine(li);
-      subtotal += c.afterDiscount;
-      taxTotal += c.taxAmt;
-      const disc =
-        (parseFloat(li.quantity) || 0) * (parseFloat(li.unitPrice) || 0) -
-        c.afterDiscount;
-      discountTotal += disc;
-    }
-    const chargesTotal = charges.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
-    const roundOffAmt = parseFloat(roundOff) || 0;
-    const total = subtotal + taxTotal + chargesTotal + roundOffAmt;
-    return { subtotal, taxTotal, discountTotal, chargesTotal, total };
+    const activeCharges = charges.filter((c) => c.amount && parseFloat(c.amount) > 0);
+    const result = calcInvoiceTotals({
+      lineItems: items.map((li) => ({
+        quantity: li.quantity || "0",
+        unitPrice: li.unitPrice || "0",
+        taxPercent: li.taxPercent || "0",
+        discountPercent: li.discountPercent || "0",
+      })),
+      charges: activeCharges.map((c) => ({ amount: c.amount })),
+      roundOff: roundOff || "0",
+    });
+    return {
+      subtotal: money.toNumber(result.subtotal),
+      taxTotal: money.toNumber(result.taxTotal),
+      discountTotal: money.toNumber(result.discountTotal),
+      chargesTotal: money.toNumber(result.chargesTotal),
+      total: money.toNumber(result.total),
+    };
   }, [items, charges, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {

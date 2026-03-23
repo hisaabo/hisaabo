@@ -1,4 +1,4 @@
-# Billbook
+# Hisaabo
 
 A modern, self-hosted invoicing and business management app — a lightweight, privacy-first replacement for Vyaapaar/Khatabook. Built for speed, type-safety, and reliability.
 
@@ -30,7 +30,7 @@ A modern, self-hosted invoicing and business management app — a lightweight, p
 ```bash
 # Clone and install
 git clone <your-repo>
-cd billbook
+cd hisaabo
 pnpm install
 
 # Start PostgreSQL
@@ -53,7 +53,7 @@ The web app runs at `http://localhost:5173` with the API proxied through Vite at
 ## Project structure
 
 ```
-billbook/
+hisaabo/
 ├── apps/
 │   ├── web/                 # React SPA (Cloudflare Pages)
 │   │   ├── src/
@@ -105,7 +105,7 @@ All monetary values use PostgreSQL `NUMERIC(15,2)` — no floating point roundin
 - **CSRF protection** via SameSite cookies + origin checking
 - **Rate limiting** — 120 req/min per IP via Hono middleware
 - **Secure headers** — CSP, X-Frame-Options, HSTS
-- **Input validation** — Every tRPC procedure uses Zod schemas from `@billbook/shared`
+- **Input validation** — Every tRPC procedure uses Zod schemas from `@hisaabo/shared`
 - **Business isolation** — All queries scoped to authenticated user's business via middleware
 
 ### VPS hardening checklist
@@ -146,7 +146,7 @@ sudo apt install caddy
 
 ```bash
 # Daily at 2 AM
-0 2 * * * /opt/billbook/scripts/backup.sh >> /var/log/billbook-backup.log 2>&1
+0 2 * * * /opt/hisaabo/scripts/backup.sh >> /var/log/hisaabo-backup.log 2>&1
 ```
 
 The backup script:
@@ -164,10 +164,10 @@ Apply `scripts/postgresql-wal.conf` to your PostgreSQL config. This enables cont
 
 ```bash
 # From SQL dump (portable)
-gunzip -c dump_20240101_020000.sql.gz | psql -U billbook -d billbook
+gunzip -c dump_20240101_020000.sql.gz | psql -U hisaabo -d hisaabo
 
 # From base backup (full PITR)
-pg_restore -U billbook -d billbook base_20240101_020000.tar.gz
+pg_restore -U hisaabo -d hisaabo base_20240101_020000.tar.gz
 ```
 
 ## Deployment
@@ -188,10 +188,10 @@ pg_restore -U billbook -d billbook base_20240101_020000.tar.gz
 git pull
 pnpm install
 pnpm db:migrate
-pnpm --filter @billbook/api build
+pnpm --filter @hisaabo/api build
 
 # Run with systemd or PM2
-pm2 start packages/api/dist/server.js --name billbook-api
+pm2 start packages/api/dist/server.js --name hisaabo-api
 ```
 
 ### Desktop → Tauri
@@ -215,4 +215,4 @@ cargo tauri build
 
 ## License
 
-Private — All rights reserved.
+O'Saasy License (v1.0) — See [LICENSE](LICENSE) for details.

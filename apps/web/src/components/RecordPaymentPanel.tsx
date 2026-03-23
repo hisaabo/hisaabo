@@ -260,7 +260,10 @@ export function RecordPaymentPanel({
   const invalidateAll = () => {
     utils.payment.list.invalidate();
     utils.payment.getById.invalidate();
+    utils.payment.unpaidInvoices.invalidate();
+    utils.payment.defaultAccount.invalidate();
     utils.invoice.list.invalidate();
+    utils.invoice.getById.invalidate();
     utils.dashboard.summary.invalidate();
     utils.bankAccount.list.invalidate();
     utils.bankAccount.summary.invalidate();

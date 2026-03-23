@@ -1,16 +1,44 @@
 import { createRootRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
-import { trpc, setBusinessId } from "@/lib/trpc";
+import { useState, useEffect } from "react";
+import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useTheme } from "@/hooks/useTheme";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
 import { Modal } from "@/components/ui/Modal";
+import { Listbox } from "@/components/ui/Listbox";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
+import { cn } from "@/lib/utils";
 
 export const Route = createRootRoute({
   component: RootLayout,
+  errorComponent: RootError,
 });
+
+function RootError({ error }: { error: Error }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-surface-1 p-8">
+      <div className="max-w-md text-center">
+        <div className="w-12 h-12 rounded-xl bg-red-100 dark:bg-red-950 flex items-center justify-center mx-auto mb-4">
+          <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+          </svg>
+        </div>
+        <h1 className="text-lg font-semibold text-text-primary mb-2">Something went wrong</h1>
+        <p className="text-sm text-text-tertiary mb-6">
+          {error?.message || "An unexpected error occurred. Please try again."}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="btn-primary"
+        >
+          Reload Page
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Sidebar nav structure ──────────────────────────────────────
 
@@ -59,14 +87,91 @@ const navSections = [
   },
 ] as const;
 
+// ── TenantPicker ───────────────────────────────────────────────
+
+type TenantMembership = {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  role: string;
+};
+
+function TenantPicker({
+  tenants,
+  onSelect,
+}: {
+  tenants: TenantMembership[];
+  onSelect: (tenantId: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+      <div className="w-full max-w-sm rounded-xl bg-surface-0 border border-border-light shadow-modal p-6 animate-scale-in">
+        <h2 className="text-base font-semibold text-text-primary mb-1">
+          Select Organization
+        </h2>
+        <p className="text-xs text-text-tertiary mb-5">
+          Choose which organization to work in
+        </p>
+        <div className="space-y-2">
+          {tenants.map((t) => (
+            <button
+              key={t.tenantId}
+              onClick={() => onSelect(t.tenantId)}
+              className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-border-light hover:border-brand-400 hover:bg-brand-600/5 transition-colors text-left group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-brand-100 flex items-center justify-center text-brand-700 text-sm font-semibold shrink-0">
+                  {t.tenantName.charAt(0).toUpperCase()}
+                </div>
+                <span className="text-sm font-medium text-text-primary group-hover:text-brand-700 transition-colors">
+                  {t.tenantName}
+                </span>
+              </div>
+              <span
+                className={cn(
+                  "text-[11px] font-medium px-2 py-0.5 rounded",
+                  t.role === "owner"
+                    ? "bg-brand-50 text-brand-700"
+                    : t.role === "admin"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-surface-2 text-text-secondary",
+                )}
+              >
+                {t.role}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── RootLayout ─────────────────────────────────────────────────
+
 function RootLayout() {
+  const utils = trpc.useUtils();
   const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
-  const { data: businesses } = trpc.business.list.useQuery(undefined, {
-    enabled: !!session?.user,
+  const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
+    enabled: !!session?.user && !session?.tenantId,
   });
+  const { data: businesses } = trpc.business.list.useQuery(undefined, {
+    enabled: !!session?.user && !!session?.tenantId,
+  });
+
   const navigate = useNavigate();
+  useTheme();
   const [showPalette, setShowPalette] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showTenantPicker, setShowTenantPicker] = useState(false);
+  const [currentBusinessId, setCurrentBusinessId] = useState<string | null>(null);
+
+  const selectTenantMutation = trpc.tenant.select.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      queryClient.invalidateQueries();
+    },
+  });
 
   useHotkeys([
     {
@@ -102,23 +207,87 @@ function RootLayout() {
     { key: "s", alt: true, shift: true, handler: () => navigate({ to: "/settings" }), description: "Settings", scope: "navigation" },
   ]);
 
-  // Set business ID when businesses load
-  if (businesses && businesses.length > 0) {
-    setBusinessId(businesses[0].id);
-  }
-
-  // While checking auth, show nothing (prevents login flash)
-  if (sessionLoading) {
-    return null;
-  }
-
-  // Not authenticated — show login page without sidebar
-  if (!session?.user) {
-    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-      navigate({ to: "/login" });
-      return null;
+  // Set business ID when businesses load — auto-select first
+  useEffect(() => {
+    if (businesses && businesses.length > 0 && !currentBusinessId) {
+      setBusinessId(businesses[0].id);
+      setCurrentBusinessId(businesses[0].id);
     }
+  }, [businesses, currentBusinessId]);
+
+  // Redirect to login if not authenticated
+  const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && window.location.pathname !== "/login";
+  useEffect(() => {
+    if (needsRedirect) navigate({ to: "/login" });
+  }, [needsRedirect, navigate]);
+
+  // Auto-select single tenant
+  const shouldAutoSelectTenant = !!(session?.user && !session?.tenantId && tenantList?.length === 1 && !selectTenantMutation.isPending && !selectTenantMutation.isSuccess);
+  useEffect(() => {
+    if (shouldAutoSelectTenant && tenantList) {
+      selectTenantMutation.mutate({ tenantId: tenantList[0].tenantId });
+    }
+  }, [shouldAutoSelectTenant]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Render logic (NO early returns before here — all hooks are above) ──
+
+  const loadingSpinner = (
+    <div className="min-h-screen flex items-center justify-center bg-surface-0">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
+          <span className="text-white font-semibold text-lg">H</span>
+        </div>
+        <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    </div>
+  );
+
+  // Loading session
+  if (sessionLoading) return loadingSpinner;
+
+  // Not authenticated
+  if (!session?.user) {
+    if (needsRedirect) return null;
     return <Outlet />;
+  }
+
+  // Authenticated but no tenant selected
+  if (!session.tenantId) {
+    if (!tenantList) return loadingSpinner;
+
+    if (tenantList.length === 0) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-surface-1">
+          <div className="text-center">
+            <p className="text-text-primary font-medium">No organization found</p>
+            <p className="text-text-tertiary text-sm mt-1">
+              Please contact support or try logging in again.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (tenantList.length === 1) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-surface-0">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
+              <span className="text-white font-semibold text-lg">H</span>
+            </div>
+            <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>
+      );
+    }
+
+    // Multiple tenants — show picker
+    return (
+      <TenantPicker
+        tenants={tenantList}
+        onSelect={(tenantId) => selectTenantMutation.mutate({ tenantId })}
+      />
+    );
   }
 
   const initials = session.user.name
@@ -128,6 +297,15 @@ function RootLayout() {
     .join("")
     .toUpperCase();
 
+  const hasMultipleTenants = (tenantList?.length ?? 0) > 1;
+  const tenantName = session.tenantName ?? "Organization";
+
+  function handleBusinessSwitch(id: string) {
+    setBusinessId(id);
+    setCurrentBusinessId(id);
+    queryClient.invalidateQueries();
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
       {/* Sidebar */}
@@ -135,12 +313,44 @@ function RootLayout() {
         {/* Logo */}
         <div className="px-4 py-4 flex items-center gap-2.5 shrink-0">
           <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
-            <span className="text-white font-semibold text-sm">B</span>
+            <span className="text-white font-semibold text-sm">H</span>
           </div>
           <span className="font-semibold text-[15px] tracking-tight text-text-primary">
-            Billbook
+            Hisaabo
           </span>
         </div>
+
+        {/* Tenant name */}
+        <div className="px-4 py-2 border-b border-border-light shrink-0">
+          <button
+            onClick={() => hasMultipleTenants && setShowTenantPicker(true)}
+            className={cn(
+              "text-[11px] font-semibold uppercase tracking-widest text-text-tertiary transition-colors w-full text-left truncate",
+              hasMultipleTenants
+                ? "hover:text-text-secondary cursor-pointer"
+                : "cursor-default",
+            )}
+            disabled={!hasMultipleTenants}
+            aria-label={hasMultipleTenants ? "Switch organization" : undefined}
+          >
+            {tenantName}
+            {hasMultipleTenants && (
+              <span className="ml-1 text-text-tertiary">▾</span>
+            )}
+          </button>
+        </div>
+
+        {/* Business switcher — only shown if multiple businesses */}
+        {businesses && businesses.length > 1 && (
+          <div className="px-3 py-2 border-b border-border-light shrink-0">
+            <Listbox
+              value={currentBusinessId ?? businesses[0].id}
+              onChange={handleBusinessSwitch}
+              options={businesses.map((b) => ({ value: b.id, label: b.name }))}
+              placeholder="Select business"
+            />
+          </div>
+        )}
 
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2">
@@ -233,6 +443,7 @@ function RootLayout() {
               Search...
               <KbdShortcut keys={["⌘", "K"]} />
             </button>
+            <ThemeToggle />
             <button
               onClick={() => setShowShortcuts(true)}
               className="flex items-center justify-center w-8 h-8 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
@@ -255,7 +466,49 @@ function RootLayout() {
       <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} />
       <ShortcutsDialog open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ShortcutIndicator />
+
+      {/* Tenant picker overlay — shown when user clicks the tenant name */}
+      {showTenantPicker && tenantList && tenantList.length > 1 && (
+        <TenantPicker
+          tenants={tenantList}
+          onSelect={(tenantId) => {
+            setShowTenantPicker(false);
+            selectTenantMutation.mutate({ tenantId });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ── Theme Toggle ───────────────────────────────────────────────
+
+type Theme = "light" | "dark" | "system";
+
+function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+
+  const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+  const icons: Record<Theme, JSX.Element> = {
+    system: <MonitorIcon />,
+    light: <SunIcon />,
+    dark: <MoonIcon />,
+  };
+  const labels: Record<Theme, string> = {
+    system: "System theme",
+    light: "Light mode",
+    dark: "Dark mode",
+  };
+
+  return (
+    <button
+      onClick={() => setTheme(next[theme])}
+      className="flex items-center justify-center w-8 h-8 rounded-lg text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
+      aria-label={labels[theme]}
+      title={labels[theme]}
+    >
+      {icons[theme]}
+    </button>
   );
 }
 
@@ -455,6 +708,32 @@ function SettingsIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="2" />
       <path d="M8 1.5v2M8 12.5v2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M1.5 8h2M12.5 8h2M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5v2M8 12.5v2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M1.5 8h2M12.5 8h2M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M13.5 8.5a5.5 5.5 0 01-7-7 5.5 5.5 0 107 7z" />
+    </svg>
+  );
+}
+
+function MonitorIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" />
+      <path d="M5.5 14h5M8 11.5v2.5" />
     </svg>
   );
 }

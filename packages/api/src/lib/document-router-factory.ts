@@ -2,18 +2,20 @@ import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
-  db,
   invoices,
   invoiceItems,
   items,
   businesses,
   parties,
-} from "@billbook/db";
+} from "@hisaabo/db";
 import {
   createInvoiceSchema,
   paginationSchema,
   type DocumentType,
-} from "@billbook/shared";
+  calcLineItem,
+  calcInvoiceTotals,
+  money,
+} from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
@@ -109,7 +111,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         // If itemId filter: find invoice IDs that have that item, then filter
         let invoiceIdFilter: string[] | null = null;
         if (input.itemId) {
-          const rows = await db
+          const rows = await ctx.db
             .select({ invoiceId: invoiceItems.invoiceId })
             .from(invoiceItems)
             .where(eq(invoiceItems.itemId, input.itemId));
@@ -121,7 +123,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         }
 
         const [data, [{ count }]] = await Promise.all([
-          db
+          ctx.db
             .select({
               id: invoices.id,
               invoiceNumber: invoices.invoiceNumber,
@@ -142,7 +144,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             .orderBy(desc(invoices.createdAt))
             .limit(input.limit)
             .offset(offset),
-          db
+          ctx.db
             .select({ count: sql<number>`count(*)::int` })
             .from(invoices)
             .where(and(...conditions)),
@@ -154,7 +156,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     getById: businessProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input, ctx }) => {
-        const [invoice] = await db
+        const [invoice] = await ctx.db
           .select()
           .from(invoices)
           .where(
@@ -169,12 +171,12 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         if (!invoice) return null;
 
         const [lineItems, [party]] = await Promise.all([
-          db
+          ctx.db
             .select()
             .from(invoiceItems)
             .where(eq(invoiceItems.invoiceId, input.id))
             .orderBy(invoiceItems.sortOrder),
-          db.select().from(parties).where(eq(parties.id, invoice.partyId)).limit(1),
+          ctx.db.select().from(parties).where(eq(parties.id, invoice.partyId)).limit(1),
         ]);
 
         return { ...invoice, lineItems, party: party ?? null };
@@ -183,7 +185,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     create: businessProcedure
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
-        return db.transaction(async (tx) => {
+        return ctx.db.transaction(async (tx) => {
           // Determine prefix/counter columns for this document type
           const cols = bizColumns[docType as KnownDocType];
 
@@ -224,44 +226,42 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             docNumber = `${prefix}-${String(nextNum).padStart(5, "0")}`;
           }
 
-          // Calculate line item totals (JS arithmetic only for deriving DB-stored strings)
+          // Calculate line item totals using fixed-point arithmetic
           const processedItems = input.lineItems.map((li, idx) => {
-            const qty = parseFloat(li.quantity);
-            const price = parseFloat(li.unitPrice);
-            const disc = parseFloat(li.discountPercent || "0");
-            const tax = parseFloat(li.taxPercent || "0");
-
-            const subtotal = qty * price;
-            const discounted = subtotal * (1 - disc / 100);
-            const taxAmt = discounted * (tax / 100);
-            const total = discounted + taxAmt;
-
+            const calc = calcLineItem({
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            });
             return {
               itemId: li.itemId || null,
               description: li.description,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
-              taxAmount: taxAmt.toFixed(2),
+              taxAmount: calc.taxAmount,
               discountPercent: li.discountPercent || "0",
-              totalAmount: total.toFixed(2),
+              totalAmount: calc.total,
               sortOrder: idx,
             };
           });
 
-          const subtotal = processedItems.reduce(
-            (s, i) => s + parseFloat(i.totalAmount) - parseFloat(i.taxAmount),
-            0
-          );
-          const taxAmount = processedItems.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
-          const discountAmount = 0; // line-item level discounts already factored in
           const charges = input.charges ?? [];
+          const totals = calcInvoiceTotals({
+            lineItems: input.lineItems.map((li) => ({
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            })),
+            charges: charges.length > 0 ? charges : undefined,
+            roundOff: charges.length > 0 ? (input.roundOff || "0") : undefined,
+          });
           const additionalCharges = charges.length > 0
-            ? charges.reduce((sum, c) => sum + parseFloat(c.amount), 0)
-            : parseFloat(input.additionalCharges || "0");
-          const roundOff = parseFloat(input.roundOff || "0");
-          const totalAmount =
-            subtotal + taxAmount + additionalCharges + roundOff - discountAmount;
+            ? totals.chargesTotal
+            : (input.additionalCharges || "0");
+          const roundOff = input.roundOff || "0";
 
           const [doc] = await tx
             .insert(invoices)
@@ -274,13 +274,13 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               invoiceNumber: docNumber,
               invoiceDate: input.invoiceDate ? new Date(input.invoiceDate) : new Date(),
               dueDate: input.dueDate ? new Date(input.dueDate) : null,
-              subtotal: subtotal.toFixed(2),
-              taxAmount: taxAmount.toFixed(2),
-              discountAmount: discountAmount.toFixed(2),
+              subtotal: totals.subtotal,
+              taxAmount: totals.taxTotal,
+              discountAmount: "0.00",
               charges: charges.length > 0 ? charges : null,
-              additionalCharges: additionalCharges.toFixed(2),
-              roundOff: roundOff.toFixed(2),
-              totalAmount: totalAmount.toFixed(2),
+              additionalCharges,
+              roundOff,
+              totalAmount: totals.total,
               notes: input.notes,
               termsAndConditions: input.termsAndConditions,
               referenceDocumentId: input.referenceDocumentId || null,
@@ -332,7 +332,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const [doc] = await db
+        const [doc] = await ctx.db
           .update(invoices)
           .set({
             status: input.status as InvoiceStatus,
@@ -357,7 +357,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     delete: businessProcedure
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
-        return db.transaction(async (tx) => {
+        return ctx.db.transaction(async (tx) => {
           const [doc] = await tx
             .select()
             .from(invoices)

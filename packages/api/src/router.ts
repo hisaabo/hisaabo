@@ -1,5 +1,6 @@
 import { router } from "./trpc.js";
 import { authRouter } from "./routers/auth.js";
+import { tenantRouter } from "./routers/tenant.js";
 import { businessRouter } from "./routers/business.js";
 import { partyRouter } from "./routers/party.js";
 import { itemRouter } from "./routers/item.js";
@@ -23,6 +24,7 @@ import { importRouter } from "./routers/import.js";
 
 export const appRouter = router({
   auth: authRouter,
+  tenant: tenantRouter,
   business: businessRouter,
   party: partyRouter,
   item: itemRouter,

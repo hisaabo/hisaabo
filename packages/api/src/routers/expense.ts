@@ -1,7 +1,7 @@
 import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod";
-import { db, expenses } from "@billbook/db";
-import { createExpenseSchema, paginationSchema } from "@billbook/shared";
+import { expenses } from "@hisaabo/db";
+import { createExpenseSchema, paginationSchema } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 
 export const expenseRouter = router({
@@ -17,12 +17,12 @@ export const expenseRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.select().from(expenses)
+        ctx.db.select().from(expenses)
           .where(and(...conditions))
           .orderBy(desc(expenses.expenseDate))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(expenses)
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(expenses)
           .where(and(...conditions)),
       ]);
 
@@ -30,7 +30,7 @@ export const expenseRouter = router({
     }),
 
   create: businessProcedure.input(createExpenseSchema).mutation(async ({ input, ctx }) => {
-    const [expense] = await db.insert(expenses).values({
+    const [expense] = await ctx.db.insert(expenses).values({
       ...input,
       businessId: ctx.businessId,
       expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
@@ -41,13 +41,13 @@ export const expenseRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await db.delete(expenses)
+      await ctx.db.delete(expenses)
         .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)));
       return { success: true };
     }),
 
   categories: businessProcedure.query(async ({ ctx }) => {
-    const result = await db.selectDistinct({ category: expenses.category })
+    const result = await ctx.db.selectDistinct({ category: expenses.category })
       .from(expenses)
       .where(eq(expenses.businessId, ctx.businessId))
       .orderBy(expenses.category);
@@ -64,7 +64,7 @@ export const expenseRouter = router({
       if (input.from) conditions.push(sql`${expenses.expenseDate} >= ${input.from}`);
       if (input.to) conditions.push(sql`${expenses.expenseDate} <= ${input.to}`);
 
-      const result = await db.select({
+      const result = await ctx.db.select({
         category: expenses.category,
         total: sql<string>`coalesce(sum(${expenses.amount}::numeric), 0)::text`,
         count: sql<number>`count(*)::int`,

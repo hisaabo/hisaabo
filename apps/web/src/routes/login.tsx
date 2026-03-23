@@ -57,7 +57,7 @@ function LoginPage() {
             <span className="text-white font-bold text-base">B</span>
           </div>
           <span className="font-semibold text-lg tracking-tight text-text-primary">
-            Billbook
+            Hisaabo
           </span>
         </div>
 
@@ -67,7 +67,7 @@ function LoginPage() {
         <p className="text-sm mb-6 text-text-tertiary">
           {mode === "login"
             ? "Sign in to manage your business"
-            : "Get started with Billbook"}
+            : "Get started with Hisaabo"}
         </p>
 
         {error && (
@@ -138,6 +138,12 @@ function LoginPage() {
             {isPending ? "Please wait..." : mode === "login" ? "Sign in" : "Create account"}
           </button>
         </form>
+
+        {mode === "register" && (
+          <p className="text-xs text-text-tertiary mt-2 text-center">
+            This will create your organization and you'll be its owner.
+          </p>
+        )}
 
         <p className="text-center text-sm mt-5 text-text-tertiary">
           {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}

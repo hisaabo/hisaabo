@@ -2,7 +2,7 @@ import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { QueryClient } from "@tanstack/react-query";
 import superjson from "superjson";
-import type { AppRouter } from "@billbook/api";
+import type { AppRouter } from "@hisaabo/api";
 
 export const trpc = createTRPCReact<AppRouter>();
 

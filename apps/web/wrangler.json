@@ -1,5 +1,5 @@
 {
-  "name": "billbook",
+  "name": "hisaabo",
   "build": {
     "command": "cd apps/web && pnpm build",
     "output": "apps/web/dist"

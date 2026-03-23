@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { db, invoices, invoiceItems } from "@billbook/db";
-import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@billbook/shared";
+import { invoices, invoiceItems } from "@hisaabo/db";
+import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@hisaabo/shared";
 import { router, businessProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
 
@@ -75,7 +75,7 @@ export const documentRouter = router({
     .input(convertDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       // 1. Fetch source document with line items
-      const [sourceDoc] = await db
+      const [sourceDoc] = await ctx.db
         .select()
         .from(invoices)
         .where(
@@ -90,7 +90,7 @@ export const documentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Source document not found" });
       }
 
-      const sourceLineItems = await db
+      const sourceLineItems = await ctx.db
         .select()
         .from(invoiceItems)
         .where(eq(invoiceItems.invoiceId, sourceDoc.id))
@@ -120,7 +120,7 @@ export const documentRouter = router({
 
       // 3. Determine which router to delegate to and invoke its create procedure
       const targetType = input.targetDocumentType;
-      const callerCtx = { user: ctx.user, businessId: ctx.businessId, req: ctx.req, resHeaders: ctx.resHeaders };
+      const callerCtx = { user: ctx.user, businessId: ctx.businessId, tenantId: ctx.tenantId, db: ctx.db, req: ctx.req, resHeaders: ctx.resHeaders };
 
       // For invoice target type, import dynamically to avoid circular deps
       if (targetType === "invoice") {

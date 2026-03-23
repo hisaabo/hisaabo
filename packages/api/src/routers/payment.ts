@@ -1,7 +1,8 @@
 import { eq, and, sql, desc, gte, lte, notInArray } from "drizzle-orm";
 import { z } from "zod";
-import { db, payments, invoices, parties, businesses, bankAccounts, bankTransactions } from "@billbook/db";
-import { createPaymentSchema, updatePaymentSchema, paginationSchema } from "@billbook/shared";
+import { TRPCError } from "@trpc/server";
+import { payments, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
 
 export const paymentRouter = router({
@@ -23,7 +24,7 @@ export const paymentRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        db.select({
+        ctx.db.select({
           id: payments.id,
           paymentNumber: payments.paymentNumber,
           amount: payments.amount,
@@ -42,7 +43,7 @@ export const paymentRouter = router({
           .orderBy(desc(payments.paymentDate))
           .limit(input.limit)
           .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(payments)
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
           .where(and(...conditions)),
       ]);
 
@@ -53,7 +54,7 @@ export const paymentRouter = router({
   unpaidInvoices: businessProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const rows = await db.select({
+      const rows = await ctx.db.select({
         id: invoices.id,
         invoiceNumber: invoices.invoiceNumber,
         invoiceDate: invoices.invoiceDate,
@@ -75,7 +76,7 @@ export const paymentRouter = router({
 
       return rows.map((inv) => ({
         ...inv,
-        balance: (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid)).toFixed(2),
+        balance: money.sub(inv.totalAmount, inv.amountPaid),
       }));
     }),
 
@@ -83,7 +84,7 @@ export const paymentRouter = router({
   defaultAccount: businessProcedure
     .query(async ({ ctx }) => {
       // Look at the last 5 payments that have a bankAccountId
-      const recentPayments = await db.select({ bankAccountId: payments.bankAccountId })
+      const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
         .from(payments)
         .where(
           and(
@@ -113,7 +114,7 @@ export const paymentRouter = router({
 
       // Fall back to the isDefault account
       if (!defaultAccountId) {
-        const [defAccount] = await db.select({ id: bankAccounts.id })
+        const [defAccount] = await ctx.db.select({ id: bankAccounts.id })
           .from(bankAccounts)
           .where(
             and(
@@ -127,7 +128,7 @@ export const paymentRouter = router({
 
       if (!defaultAccountId) return null;
 
-      const [account] = await db.select({
+      const [account] = await ctx.db.select({
         id: bankAccounts.id,
         accountName: bankAccounts.accountName,
         accountType: bankAccounts.accountType,
@@ -142,7 +143,7 @@ export const paymentRouter = router({
     }),
 
   create: businessProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
-    return db.transaction(async (tx) => {
+    return ctx.db.transaction(async (tx) => {
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,
@@ -190,13 +191,13 @@ export const paymentRouter = router({
             amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
             updatedAt: new Date(),
           })
-          .where(eq(invoices.id, alloc.invoiceId));
+          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
 
         // Auto-update invoice status based on new amountPaid
         const [inv] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
-        }).from(invoices).where(eq(invoices.id, alloc.invoiceId)).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
 
         if (inv) {
           const total = parseFloat(inv.totalAmount);
@@ -205,7 +206,7 @@ export const paymentRouter = router({
           if (newStatus) {
             await tx.update(invoices)
               .set({ status: newStatus })
-              .where(eq(invoices.id, alloc.invoiceId));
+              .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
           }
         }
       }
@@ -267,7 +268,7 @@ export const paymentRouter = router({
   getById: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const [payment] = await db.select({
+      const [payment] = await ctx.db.select({
         id: payments.id,
         paymentNumber: payments.paymentNumber,
         amount: payments.amount,
@@ -290,20 +291,32 @@ export const paymentRouter = router({
       // Find all invoices this payment was allocated to.
       // For now, the payment only stores one invoiceId (primary). In future we may add
       // a payment_allocations join table. For now, return the single linked invoice.
-      const linkedInvoices: Array<{ invoiceId: string; invoiceNumber: string; amount: string }> = [];
+      const linkedInvoices: Array<{
+        invoiceId: string;
+        invoiceNumber: string;
+        invoiceDate: Date;
+        totalAmount: string;
+        amountPaid: string;
+        status: string;
+        amount: string;
+      }> = [];
       if (payment.invoiceId) {
-        const [inv] = await db.select({
+        const [inv] = await ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
+          invoiceDate: invoices.invoiceDate,
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
+          status: invoices.status,
         }).from(invoices).where(eq(invoices.id, payment.invoiceId)).limit(1);
         if (inv) {
-          // The amount allocated to this invoice from this payment = payment amount
-          // (since we don't have per-allocation tracking yet)
           linkedInvoices.push({
             invoiceId: inv.id,
             invoiceNumber: inv.invoiceNumber,
+            invoiceDate: inv.invoiceDate,
+            totalAmount: inv.totalAmount,
+            amountPaid: inv.amountPaid,
+            status: inv.status,
             amount: payment.amount,
           });
         }
@@ -313,7 +326,7 @@ export const paymentRouter = router({
     }),
 
   update: businessProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
-    return db.transaction(async (tx) => {
+    return ctx.db.transaction(async (tx) => {
       // 1. Fetch the existing payment
       const [existing] = await tx.select()
         .from(payments)
@@ -322,7 +335,7 @@ export const paymentRouter = router({
         .limit(1);
 
       if (!existing) {
-        throw new Error("Payment not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
       // 2. Reverse old invoice allocation
@@ -332,18 +345,18 @@ export const paymentRouter = router({
             amountPaid: sql`GREATEST(${invoices.amountPaid}::numeric - ${existing.amount}::numeric, 0)`,
             updatedAt: new Date(),
           })
-          .where(eq(invoices.id, existing.invoiceId));
+          .where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
 
         // Recompute old invoice status
         const [oldInv] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
-        }).from(invoices).where(eq(invoices.id, existing.invoiceId)).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
         if (oldInv) {
           const paid = parseFloat(oldInv.amountPaid);
           const total = parseFloat(oldInv.totalAmount);
           const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : "sent";
-          await tx.update(invoices).set({ status: newStatus }).where(eq(invoices.id, existing.invoiceId));
+          await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
         }
       }
 
@@ -416,18 +429,18 @@ export const paymentRouter = router({
             amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
             updatedAt: new Date(),
           })
-          .where(eq(invoices.id, alloc.invoiceId));
+          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
 
         const [inv] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
-        }).from(invoices).where(eq(invoices.id, alloc.invoiceId)).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
         if (inv) {
           const total = parseFloat(inv.totalAmount);
           const paid = parseFloat(inv.amountPaid);
           const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : undefined;
           if (newStatus) {
-            await tx.update(invoices).set({ status: newStatus }).where(eq(invoices.id, alloc.invoiceId));
+            await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
           }
         }
       }
@@ -475,7 +488,7 @@ export const paymentRouter = router({
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return db.transaction(async (tx) => {
+      return ctx.db.transaction(async (tx) => {
         const [payment] = await tx.select()
           .from(payments)
           .where(and(eq(payments.id, input.id), eq(payments.businessId, ctx.businessId)))

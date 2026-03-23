@@ -1,5 +1,6 @@
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 interface SlideOverProps {
   open: boolean;
@@ -18,6 +19,10 @@ export function SlideOver({
   children,
   footer,
 }: SlideOverProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(dialogRef, open);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -30,12 +35,18 @@ export function SlideOver({
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50">
+    <div
+      className="fixed inset-0 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="slideover-title"
+    >
       <div
         className="fixed inset-0 bg-black/40 animate-fade-in"
         onClick={onClose}
       />
       <div
+        ref={dialogRef}
         className="fixed right-0 top-0 bottom-0 w-full max-w-3xl flex flex-col animate-slide-in shadow-modal"
         style={{ background: "var(--surface-0)" }}
       >
@@ -44,7 +55,11 @@ export function SlideOver({
           style={{ borderBottom: "1px solid var(--border-light)" }}
         >
           <div>
-            <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+            <h2
+              id="slideover-title"
+              className="text-base font-semibold"
+              style={{ color: "var(--text-primary)" }}
+            >
               {title}
             </h2>
             {description && (

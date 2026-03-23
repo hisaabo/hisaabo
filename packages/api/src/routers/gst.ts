@@ -9,7 +9,7 @@ export const gstRouter = router({
       month: z.number().int().min(1).max(12),
     }))
     .query(async ({ input, ctx }) => {
-      return generateGSTR1(ctx.businessId, input.year, input.month);
+      return generateGSTR1(ctx.businessId, input.year, input.month, ctx.db);
     }),
 
   gstr3b: businessProcedure
@@ -18,7 +18,7 @@ export const gstRouter = router({
       month: z.number().int().min(1).max(12),
     }))
     .query(async ({ input, ctx }) => {
-      return generateGSTR3B(ctx.businessId, input.year, input.month);
+      return generateGSTR3B(ctx.businessId, input.year, input.month, ctx.db);
     }),
 
   gstr1CSV: businessProcedure
@@ -27,7 +27,7 @@ export const gstRouter = router({
       month: z.number().int().min(1).max(12),
     }))
     .query(async ({ input, ctx }) => {
-      const report = await generateGSTR1(ctx.businessId, input.year, input.month);
+      const report = await generateGSTR1(ctx.businessId, input.year, input.month, ctx.db);
       return { csv: gstr1ToCSV(report), filename: `GSTR1_${report.period.replace(" ", "_")}.csv` };
     }),
 });

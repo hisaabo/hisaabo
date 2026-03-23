@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { db, parties, items, invoices, invoiceItems, payments, businesses } from "@billbook/db";
+import { parties, items, invoices, invoiceItems, payments, businesses } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, businessProcedure } from "../trpc.js";
+import { calcLineItem } from "@hisaabo/shared";
 
 export const importRouter = router({
   // ── Import parties in batch ─────────────────────────────────────────────
@@ -29,7 +30,7 @@ export const importRouter = router({
 
       for (const p of input.parties) {
         // Check if party with same name already exists (case-insensitive)
-        const [existing] = await db
+        const [existing] = await ctx.db
           .select({ id: parties.id })
           .from(parties)
           .where(
@@ -45,7 +46,7 @@ export const importRouter = router({
           continue;
         }
 
-        await db.insert(parties).values({
+        await ctx.db.insert(parties).values({
           businessId: ctx.businessId,
           name: p.name,
           type: p.type,
@@ -90,7 +91,7 @@ export const importRouter = router({
 
       for (const item of input.items) {
         // Check if item with same name already exists (case-insensitive)
-        const [existing] = await db
+        const [existing] = await ctx.db
           .select({ id: items.id })
           .from(items)
           .where(
@@ -113,7 +114,7 @@ export const importRouter = router({
           ? (item.unit as ValidUnit)
           : "other";
 
-        await db.insert(items).values({
+        await ctx.db.insert(items).values({
           businessId: ctx.businessId,
           name: item.name,
           itemType: item.itemType,
@@ -167,7 +168,7 @@ export const importRouter = router({
 
       for (const inv of input.invoices) {
         // Find party by name (case-insensitive)
-        const [party] = await db
+        const [party] = await ctx.db
           .select({ id: parties.id })
           .from(parties)
           .where(
@@ -185,7 +186,7 @@ export const importRouter = router({
         }
 
         // Check if invoice number already exists for this business
-        const [existing] = await db
+        const [existing] = await ctx.db
           .select({ id: invoices.id })
           .from(invoices)
           .where(
@@ -211,7 +212,7 @@ export const importRouter = router({
           continue;
         }
 
-        await db.transaction(async (tx) => {
+        await ctx.db.transaction(async (tx) => {
           const [createdInv] = await tx
             .insert(invoices)
             .values({
@@ -255,14 +256,12 @@ export const importRouter = router({
                 if (foundItem) itemId = foundItem.id;
               }
 
-              const qty = parseFloat(li.quantity) || 1;
-              const price = parseFloat(li.unitPrice) || 0;
-              const disc = parseFloat(li.discountPercent) || 0;
-              const tax = parseFloat(li.taxPercent) || 0;
-              const subtotal = qty * price;
-              const afterDiscount = subtotal * (1 - disc / 100);
-              const taxAmt = afterDiscount * (tax / 100);
-              const total = afterDiscount + taxAmt;
+              const calc = calcLineItem({
+                quantity: li.quantity || "1",
+                unitPrice: li.unitPrice || "0",
+                taxPercent: li.taxPercent || "0",
+                discountPercent: li.discountPercent || "0",
+              });
 
               await tx.insert(invoiceItems).values({
                 invoiceId: createdInv.id,
@@ -271,9 +270,9 @@ export const importRouter = router({
                 quantity: li.quantity,
                 unitPrice: li.unitPrice,
                 taxPercent: li.taxPercent || "0",
-                taxAmount: taxAmt.toFixed(2),
+                taxAmount: calc.taxAmount,
                 discountPercent: li.discountPercent || "0",
-                totalAmount: total.toFixed(2),
+                totalAmount: calc.total,
                 sortOrder: idx,
               });
             }
@@ -321,7 +320,7 @@ export const importRouter = router({
 
       for (const pmt of input.payments) {
         // Find party by name (case-insensitive)
-        const [party] = await db
+        const [party] = await ctx.db
           .select({ id: parties.id })
           .from(parties)
           .where(
@@ -345,7 +344,7 @@ export const importRouter = router({
           continue;
         }
 
-        await db.transaction(async (tx) => {
+        await ctx.db.transaction(async (tx) => {
           // Atomically get and increment payment number counter
           const [biz] = await tx
             .select({

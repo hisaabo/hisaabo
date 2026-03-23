@@ -1,5 +1,6 @@
 import { eq, and, sql, gte, lte, inArray } from "drizzle-orm";
-import { db, invoices, invoiceItems, parties, businesses } from "@billbook/db";
+import { invoices, invoiceItems, parties, businesses } from "@hisaabo/db";
+import type { TenantDatabase } from "@hisaabo/db";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -100,7 +101,8 @@ export interface GSTR3BReport {
 export async function generateGSTR1(
   businessId: string,
   year: number,
-  month: number // 1-12
+  month: number, // 1-12
+  db: TenantDatabase
 ): Promise<GSTR1Report> {
   const startDate = new Date(year, month - 1, 1);
   const endDate = new Date(year, month, 0, 23, 59, 59);
@@ -257,9 +259,10 @@ export async function generateGSTR1(
 export async function generateGSTR3B(
   businessId: string,
   year: number,
-  month: number
+  month: number,
+  db: TenantDatabase
 ): Promise<GSTR3BReport> {
-  const gstr1 = await generateGSTR1(businessId, year, month);
+  const gstr1 = await generateGSTR1(businessId, year, month, db);
 
   // Get purchase invoices for ITC
   const startDate = new Date(year, month - 1, 1);

@@ -1,14 +1,14 @@
 {
-  "name": "billbook",
+  "name": "hisaabo",
   "private": true,
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
-    "db:push": "pnpm --filter @billbook/db db:push",
-    "db:reset": "pnpm --filter @billbook/db db:reset",
-    "db:studio": "pnpm --filter @billbook/db studio",
+    "db:push": "pnpm --filter @hisaabo/db db:push",
+    "db:reset": "pnpm --filter @hisaabo/db db:reset",
+    "db:studio": "pnpm --filter @hisaabo/db studio",
     "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
     "typecheck": "turbo typecheck"
   },

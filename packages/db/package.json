@@ -1,5 +1,5 @@
 {
-  "name": "@billbook/db",
+  "name": "@hisaabo/db",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,12 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:reset": "tsx src/reset.ts && drizzle-kit push",
+    "db:push:control": "drizzle-kit push --config drizzle-control.config.ts",
+    "db:push:tenant": "drizzle-kit push --config drizzle-tenant.config.ts",
+    "db:push:all": "pnpm db:push:control && pnpm db:push:tenant",
+    "db:generate:control": "drizzle-kit generate --config drizzle-control.config.ts",
+    "db:generate:tenant": "drizzle-kit generate --config drizzle-tenant.config.ts",
+    "db:reset": "pnpm exec tsx src/reset.ts && pnpm db:push",
     "studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit"
   },
@@ -20,6 +25,7 @@
   },
   "devDependencies": {
     "drizzle-kit": "^0.30.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@billbook/web",
+  "name": "@hisaabo/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@billbook/shared": "workspace:*",
+    "@hisaabo/shared": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.91.0",
     "@trpc/client": "^11.0.0",
@@ -21,7 +21,7 @@
     "superjson": "^2.2.0"
   },
   "devDependencies": {
-    "@billbook/api": "workspace:*",
+    "@hisaabo/api": "workspace:*",
     "@tanstack/router-devtools": "^1.91.0",
     "@tanstack/router-plugin": "^1.91.0",
     "@types/papaparse": "^5.5.2",

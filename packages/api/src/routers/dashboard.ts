@@ -1,12 +1,12 @@
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
 import { z } from "zod";
-import { db, invoices, payments, expenses, parties, businesses } from "@billbook/db";
+import { invoices, payments, expenses, parties, businesses } from "@hisaabo/db";
 import { router, businessProcedure } from "../trpc.js";
 
 export const dashboardRouter = router({
   summary: businessProcedure.query(async ({ ctx }) => {
     // Fetch business to get financialYearStart (1-indexed month, e.g. 4 = April)
-    const [biz] = await db
+    const [biz] = await ctx.db
       .select({ financialYearStart: businesses.financialYearStart })
       .from(businesses)
       .where(eq(businesses.id, ctx.businessId))
@@ -21,7 +21,7 @@ export const dashboardRouter = router({
 
     const fyCondition = (dateCol: Parameters<typeof gte>[0]) => gte(dateCol, fyStart);
 
-    const [salesResult] = await db.select({
+    const [salesResult] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
     }).from(invoices)
       .where(and(
@@ -31,7 +31,7 @@ export const dashboardRouter = router({
         fyCondition(invoices.invoiceDate),
       ));
 
-    const [purchaseResult] = await db.select({
+    const [purchaseResult] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
     }).from(invoices)
       .where(and(
@@ -41,7 +41,7 @@ export const dashboardRouter = router({
         fyCondition(invoices.invoiceDate),
       ));
 
-    const [expenseResult] = await db.select({
+    const [expenseResult] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${expenses.amount}::numeric), 0)::text`,
     }).from(expenses)
       .where(and(
@@ -50,7 +50,7 @@ export const dashboardRouter = router({
       ));
 
     // Receivable = total sale invoices - amount paid on sales
-    const [receivableResult] = await db.select({
+    const [receivableResult] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
     }).from(invoices)
       .where(and(
@@ -61,7 +61,7 @@ export const dashboardRouter = router({
       ));
 
     // Payable = total purchase invoices - amount paid on purchases
-    const [payableResult] = await db.select({
+    const [payableResult] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
     }).from(invoices)
       .where(and(
@@ -72,7 +72,7 @@ export const dashboardRouter = router({
       ));
 
     // Recent invoices
-    const recentInvoices = await db.select({
+    const recentInvoices = await ctx.db.select({
       id: invoices.id,
       invoiceNumber: invoices.invoiceNumber,
       partyName: parties.name,
@@ -89,7 +89,7 @@ export const dashboardRouter = router({
       .limit(10);
 
     // Cash in hand = all payments received (in) - all payments made (out) - expenses
-    const [cashIn] = await db.select({
+    const [cashIn] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
     }).from(payments)
       .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
@@ -98,7 +98,7 @@ export const dashboardRouter = router({
         eq(invoices.type, "sale"),
       ));
 
-    const [cashOut] = await db.select({
+    const [cashOut] = await ctx.db.select({
       total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
     }).from(payments)
       .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
@@ -143,7 +143,7 @@ export const dashboardRouter = router({
       if (input?.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
       if (input?.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
 
-      const [shippingCharged] = await db.select({
+      const [shippingCharged] = await ctx.db.select({
         total: sql<string>`COALESCE(SUM(
           (SELECT COALESCE(SUM((elem->>'amount')::numeric), 0)
            FROM jsonb_array_elements(${invoices.charges}) AS elem
@@ -161,7 +161,7 @@ export const dashboardRouter = router({
       if (input?.fromDate) expenseConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
       if (input?.toDate) expenseConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
 
-      const [shippingExpenses] = await db.select({
+      const [shippingExpenses] = await ctx.db.select({
         total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
       })
         .from(expenses)
