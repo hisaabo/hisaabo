@@ -15,6 +15,8 @@ import { SearchInput } from "@/components/ui/SearchInput";
 import { Pagination } from "@/components/ui/Pagination";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
 export const Route = createFileRoute("/invoices")({
@@ -448,6 +450,11 @@ function InvoicesPage() {
 
   const debouncedSearch = useDebounce(search, 300);
 
+  // Keyboard shortcut: N to create new invoice
+  useHotkeys([
+    { key: "n", handler: () => setShowCreate(true), description: "New invoice", scope: "invoices" },
+  ]);
+
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1); }, [type, status, debouncedSearch]);
 
@@ -500,10 +507,11 @@ function InvoicesPage() {
         description="Manage sales and purchase invoices"
         actions={
           <button
-            className="btn-primary"
+            className="btn-primary inline-flex items-center gap-2"
             onClick={() => setShowCreate(true)}
           >
             + New Invoice
+            <KbdShortcut keys={["N"]} className="opacity-60" />
           </button>
         }
       />

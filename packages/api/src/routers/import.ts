@@ -138,6 +138,8 @@ export const importRouter = router({
   importInvoices: businessProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
+      autoCreatePayments: z.boolean().default(false),
+      defaultPaymentMode: z.enum(["cash", "bank", "upi", "cheque", "other"]).default("cash"),
       invoices: z.array(z.object({
         invoiceNumber: z.string().min(1),
         invoiceDate: z.string(),
@@ -150,6 +152,8 @@ export const importRouter = router({
         discountAmount: z.string().default("0"),
         totalAmount: z.string(),
         amountPaid: z.string().default("0"),
+        charges: z.array(z.object({ label: z.string(), amount: z.string() })).optional(),
+        paymentMode: z.string().optional(),
         notes: z.string().optional(),
         lineItems: z.array(z.object({
           itemName: z.string().optional(),
@@ -227,7 +231,10 @@ export const importRouter = router({
               subtotal: inv.subtotal,
               taxAmount: inv.taxAmount,
               discountAmount: inv.discountAmount,
-              additionalCharges: "0",
+              charges: inv.charges?.length ? inv.charges : null,
+              additionalCharges: inv.charges?.length
+                ? inv.charges.reduce((s, c) => s + parseFloat(c.amount), 0).toFixed(2)
+                : "0",
               roundOff: "0",
               totalAmount: inv.totalAmount,
               amountPaid: inv.amountPaid,
@@ -291,6 +298,57 @@ export const importRouter = router({
               sortOrder: 0,
             });
           }
+
+          // Adjust stock for line items that have an itemId
+          if (inv.lineItems?.length) {
+            for (const li of inv.lineItems) {
+              if (!li.itemName) continue;
+              const [foundItem] = await tx
+                .select({ id: items.id })
+                .from(items)
+                .where(
+                  and(
+                    eq(items.businessId, ctx.businessId),
+                    sql`LOWER(${items.name}) = LOWER(${li.itemName})`
+                  )
+                )
+                .limit(1);
+              if (!foundItem) continue;
+
+              const qty = parseFloat(li.quantity || "1");
+              const factor = parseFloat(li.conversionFactor || "1");
+              const baseQty = (qty * factor).toFixed(3);
+
+              if (inv.type === "sale") {
+                await tx.update(items).set({
+                  stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
+                  updatedAt: new Date(),
+                }).where(eq(items.id, foundItem.id));
+              } else if (inv.type === "purchase") {
+                await tx.update(items).set({
+                  stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
+                  updatedAt: new Date(),
+                }).where(eq(items.id, foundItem.id));
+              }
+            }
+          }
+
+          // Auto-create payment record when requested and amountPaid > 0
+          if (input.autoCreatePayments && parseFloat(inv.amountPaid) > 0) {
+            const mode = normalizeMode(inv.paymentMode || input.defaultPaymentMode);
+            await tx.insert(payments).values({
+              businessId: ctx.businessId,
+              partyId: party.id,
+              invoiceId: createdInv.id,
+              paymentNumber: `IMP-${inv.invoiceNumber}`,
+              amount: inv.amountPaid,
+              discount: "0",
+              mode,
+              paymentDate: invoiceDate,
+              notes: `Imported payment for ${inv.invoiceNumber}`,
+              source: input.source,
+            });
+          }
         });
 
         created++;
@@ -299,7 +357,7 @@ export const importRouter = router({
       return { created, skipped, total: input.invoices.length, errors };
     }),
 
-  // ── Import payments in batch — auto-allocate to invoices chronologically ─
+  // ── Import payments in batch — exact invoice linkage (CSV) or chronological (PDF) ─
   importPayments: businessProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
@@ -311,6 +369,7 @@ export const importRouter = router({
         mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).default("cash"),
         referenceNumber: z.string().optional(),
         notes: z.string().optional(),
+        invoiceNumbers: z.array(z.string()).optional(), // explicit invoice linkage from CSV
       })),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -364,57 +423,101 @@ export const importRouter = router({
             .set({ nextPaymentNumber: biz.nextNum + 1 })
             .where(eq(businesses.id, ctx.businessId));
 
-          // Find all unpaid/partial invoices for this party, oldest first
-          const unpaidInvs = await tx
-            .select({
-              id: invoices.id,
-              totalAmount: invoices.totalAmount,
-              amountPaid: invoices.amountPaid,
-            })
-            .from(invoices)
-            .where(
-              and(
-                eq(invoices.businessId, ctx.businessId),
-                eq(invoices.partyId, party.id),
-                eq(invoices.documentType, "invoice"),
-                sql`${invoices.status} NOT IN ('paid', 'cancelled')`
-              )
-            )
-            .orderBy(invoices.invoiceDate);
-
-          // Allocate payment to invoices chronologically
           let remaining = parseFloat(pmt.amount);
           let primaryInvoiceId: string | null = null;
 
-          for (const inv of unpaidInvs) {
-            if (remaining <= 0) break;
-            const balance =
-              parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
-            if (balance <= 0) continue;
+          if (pmt.invoiceNumbers?.length) {
+            // CSV path: explicit invoice linkage — allocate to named invoices directly
+            for (const invNum of pmt.invoiceNumbers) {
+              if (remaining <= 0) break;
 
-            const allocAmt = Math.min(remaining, balance);
-            if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+              const [inv] = await tx
+                .select({
+                  id: invoices.id,
+                  totalAmount: invoices.totalAmount,
+                  amountPaid: invoices.amountPaid,
+                })
+                .from(invoices)
+                .where(
+                  and(
+                    eq(invoices.businessId, ctx.businessId),
+                    eq(invoices.invoiceNumber, invNum),
+                  )
+                )
+                .limit(1);
 
-            // Update amountPaid
-            await tx
-              .update(invoices)
-              .set({
-                amountPaid: sql`${invoices.amountPaid}::numeric + ${allocAmt.toFixed(2)}::numeric`,
-                updatedAt: new Date(),
+              if (!inv) continue;
+              if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+
+              const balance = parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
+              const allocAmt = Math.min(remaining, Math.max(0, balance));
+              if (allocAmt <= 0) continue;
+
+              await tx
+                .update(invoices)
+                .set({
+                  amountPaid: sql`${invoices.amountPaid}::numeric + ${allocAmt.toFixed(2)}::numeric`,
+                  updatedAt: new Date(),
+                })
+                .where(eq(invoices.id, inv.id));
+
+              const newPaid = parseFloat(inv.amountPaid) + allocAmt;
+              const total = parseFloat(inv.totalAmount);
+              const newStatus: "paid" | "partial" = newPaid >= total ? "paid" : "partial";
+              await tx
+                .update(invoices)
+                .set({ status: newStatus })
+                .where(eq(invoices.id, inv.id));
+
+              remaining -= allocAmt;
+            }
+          } else {
+            // PDF / fallback path: allocate chronologically across all unpaid invoices for this party
+            const unpaidInvs = await tx
+              .select({
+                id: invoices.id,
+                totalAmount: invoices.totalAmount,
+                amountPaid: invoices.amountPaid,
               })
-              .where(eq(invoices.id, inv.id));
+              .from(invoices)
+              .where(
+                and(
+                  eq(invoices.businessId, ctx.businessId),
+                  eq(invoices.partyId, party.id),
+                  eq(invoices.documentType, "invoice"),
+                  sql`${invoices.status} NOT IN ('paid', 'cancelled')`
+                )
+              )
+              .orderBy(invoices.invoiceDate);
 
-            // Recompute status
-            const newPaid = parseFloat(inv.amountPaid) + allocAmt;
-            const total = parseFloat(inv.totalAmount);
-            const newStatus: "paid" | "partial" =
-              newPaid >= total ? "paid" : "partial";
-            await tx
-              .update(invoices)
-              .set({ status: newStatus })
-              .where(eq(invoices.id, inv.id));
+            for (const inv of unpaidInvs) {
+              if (remaining <= 0) break;
+              const balance =
+                parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
+              if (balance <= 0) continue;
 
-            remaining -= allocAmt;
+              const allocAmt = Math.min(remaining, balance);
+              if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+
+              await tx
+                .update(invoices)
+                .set({
+                  amountPaid: sql`${invoices.amountPaid}::numeric + ${allocAmt.toFixed(2)}::numeric`,
+                  updatedAt: new Date(),
+                })
+                .where(eq(invoices.id, inv.id));
+
+              const newPaid = parseFloat(inv.amountPaid) + allocAmt;
+              const total = parseFloat(inv.totalAmount);
+              const newStatus: "paid" | "partial" =
+                newPaid >= total ? "paid" : "partial";
+              await tx
+                .update(invoices)
+                .set({ status: newStatus })
+                .where(eq(invoices.id, inv.id));
+
+              remaining -= allocAmt;
+            }
           }
 
           await tx.insert(payments).values({
@@ -438,6 +541,16 @@ export const importRouter = router({
       return { created, skipped, total: input.payments.length, errors };
     }),
 });
+
+// ── Payment mode normaliser ──────────────────────────────────────────────────
+function normalizeMode(raw: string): "cash" | "bank" | "upi" | "cheque" | "other" {
+  const s = (raw || "").toLowerCase().trim();
+  if (s === "cash") return "cash";
+  if (s === "credit" || s === "bank" || s.includes("bank transfer") || s === "neft" || s === "rtgs" || s === "imps") return "bank";
+  if (s === "upi" || s.includes("gpay") || s.includes("phonepe") || s.includes("paytm")) return "upi";
+  if (s === "cheque" || s === "check") return "cheque";
+  return "other";
+}
 
 // ── Date parsing helper ──────────────────────────────────────────────────────
 // Handles: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, MM/DD/YYYY, "22 Mar 2026", ISO strings

@@ -5,6 +5,7 @@ import { createPartySchema, updatePartySchema, paginationSchema } from "@hisaabo
 import { router, businessProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
+
 export const partyRouter = router({
   list: businessProcedure
     .input(z.object({
@@ -120,6 +121,58 @@ export const partyRouter = router({
         .limit(5);
 
       return rows;
+    }),
+
+  merge: businessProcedure
+    .input(z.object({
+      sourceId: z.string().uuid(),
+      targetId: z.string().uuid(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (input.sourceId === input.targetId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge a party into itself" });
+      }
+
+      return ctx.db.transaction(async (tx) => {
+        const [source] = await tx.select().from(parties)
+          .where(and(eq(parties.id, input.sourceId), eq(parties.businessId, ctx.businessId))).limit(1);
+        const [target] = await tx.select().from(parties)
+          .where(and(eq(parties.id, input.targetId), eq(parties.businessId, ctx.businessId))).limit(1);
+
+        if (!source || !target) throw new TRPCError({ code: "NOT_FOUND", message: "Party not found" });
+
+        // Move all invoices from source to target
+        await tx.update(invoices)
+          .set({ partyId: input.targetId, updatedAt: new Date() })
+          .where(and(eq(invoices.partyId, input.sourceId), eq(invoices.businessId, ctx.businessId)));
+
+        // Move all payments from source to target
+        await tx.update(payments)
+          .set({ partyId: input.targetId })
+          .where(and(eq(payments.partyId, input.sourceId), eq(payments.businessId, ctx.businessId)));
+
+        // Merge opening balances
+        const mergedBalance = (parseFloat(source.openingBalance || "0") + parseFloat(target.openingBalance || "0")).toFixed(2);
+
+        // Fill missing fields on target from source (don't overwrite existing data)
+        const updates: Record<string, unknown> = { openingBalance: mergedBalance, updatedAt: new Date() };
+        if (!target.phone && source.phone) updates.phone = source.phone;
+        if (!target.email && source.email) updates.email = source.email;
+        if (!target.gstin && source.gstin) updates.gstin = source.gstin;
+        if (!target.pan && source.pan) updates.pan = source.pan;
+        if (!target.billingAddress && source.billingAddress) updates.billingAddress = source.billingAddress;
+        if (!target.city && source.city) updates.city = source.city;
+        if (!target.state && source.state) updates.state = source.state;
+        if (!target.pincode && source.pincode) updates.pincode = source.pincode;
+        if (!target.category && source.category) updates.category = source.category;
+
+        await tx.update(parties).set(updates).where(eq(parties.id, input.targetId));
+
+        // Delete the source party
+        await tx.delete(parties).where(eq(parties.id, input.sourceId));
+
+        return { success: true, mergedInto: input.targetId };
+      });
     }),
 
   /**

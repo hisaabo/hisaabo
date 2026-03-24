@@ -16,6 +16,7 @@
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "^5.5.207",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "superjson": "^2.2.0"

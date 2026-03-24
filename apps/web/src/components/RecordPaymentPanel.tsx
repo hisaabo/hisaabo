@@ -682,8 +682,7 @@ export function RecordPaymentPanel({
 
         {/* ── Reference & Notes Disclosure ───────────────────────────────── */}
         <div
-          className="rounded-xl border"
-          style={{ borderColor: "var(--border-light)" }}
+          className="rounded-xl border border-border-light"
         >
           <Disclosure
             label="Reference & Notes"

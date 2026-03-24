@@ -922,6 +922,7 @@ const DETAIL_TABS = [
 
 function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose: () => void; onEdit: (id: string) => void }) {
   const [tab, setTab] = useState("overview");
+  const [showMerge, setShowMerge] = useState(false);
   const navigate = useNavigate();
 
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
@@ -948,6 +949,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
     parseFloat(item.stockQuantity) <= parseFloat(item.lowStockAlert);
 
   return (
+    <>
     <SlideOver
       open={true}
       onClose={onClose}
@@ -960,7 +962,13 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
         ].filter(Boolean).join(" · ")
       }
       footer={
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setShowMerge(true)}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800 transition-colors"
+          >
+            Merge
+          </button>
           <button
             onClick={() => {
               onClose();
@@ -1373,5 +1381,113 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
         )}
       </div>
     </SlideOver>
+    {showMerge && (
+      <MergeItemModal
+        sourceId={itemId}
+        sourceName={item.name}
+        sourceUnit={item.unit}
+        onClose={() => {
+          setShowMerge(false);
+          onClose();
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+function MergeItemModal({
+  sourceId,
+  sourceName,
+  sourceUnit,
+  onClose,
+}: {
+  sourceId: string;
+  sourceName: string;
+  sourceUnit: string;
+  onClose: () => void;
+}) {
+  const [targetId, setTargetId] = useState("");
+  const [conversionFactor, setConversionFactor] = useState("1");
+  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 500 });
+  const utils = trpc.useUtils();
+
+  const targetItem = itemsData?.data.find((i) => i.id === targetId);
+  const needsConversion = !!targetItem && targetItem.unit !== sourceUnit;
+
+  const mergeMutation = trpc.item.merge.useMutation({
+    onSuccess: () => {
+      utils.item.list.invalidate();
+      toast.success(`"${sourceName}" merged successfully`);
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const targetOptions = (itemsData?.data || []).filter((i) => i.id !== sourceId);
+
+  return (
+    <Modal open={true} onClose={onClose} title={`Merge "${sourceName}"`} className="max-w-md">
+      <div className="space-y-4">
+        <p className="text-sm text-text-secondary">
+          All invoices and stock from <strong>{sourceName}</strong> ({sourceUnit.toUpperCase()}) will be transferred to the target item. The source item will be deleted.
+        </p>
+
+        <div>
+          <label className="text-sm font-medium text-text-primary block mb-1">
+            Merge into <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="input-field w-full"
+          >
+            <option value="">Select target item...</option>
+            {targetOptions.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.name} ({i.unit.toUpperCase()}{i.salePrice ? ` — ₹${i.salePrice}` : ""})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {needsConversion && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3">
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mb-2">
+              Units differ: {sourceName} uses {sourceUnit.toUpperCase()}, target uses {targetItem.unit.toUpperCase()}
+            </p>
+            <InputField
+              label={`1 ${sourceUnit.toUpperCase()} = ? ${targetItem.unit.toUpperCase()}`}
+              type="number"
+              step="any"
+              min="0.001"
+              value={conversionFactor}
+              onChange={(e) => setConversionFactor(e.target.value)}
+              placeholder="Conversion factor"
+            />
+            <p className="text-[11px] text-text-tertiary mt-1">
+              Stock and invoice quantities will be converted using this factor.
+            </p>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-3 border-t border-border-light">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-danger"
+            onClick={() =>
+              mergeMutation.mutate({
+                sourceId,
+                targetId,
+                stockConversionFactor: parseFloat(conversionFactor) || 1,
+              })
+            }
+            disabled={!targetId || mergeMutation.isPending}
+          >
+            {mergeMutation.isPending ? "Merging..." : "Merge & Delete"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

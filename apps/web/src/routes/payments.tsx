@@ -1,16 +1,18 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Pagination } from "@/components/ui/Pagination";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDebounce } from "@/hooks/useDebounce";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
+import { SearchInput } from "@/components/ui/SearchInput";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
 export const Route = createFileRoute("/payments")({
@@ -33,8 +35,18 @@ function PaymentsPage() {
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
 
-  const { data, isLoading } = trpc.payment.list.useQuery({ page, limit: PAYMENTS_PAGE_SIZE });
+  const debouncedSearch = useDebounce(search, 300);
+
+  // Reset to page 1 whenever search changes
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
+
+  const { data, isLoading } = trpc.payment.list.useQuery({
+    page,
+    limit: PAYMENTS_PAGE_SIZE,
+    search: debouncedSearch || undefined,
+  });
   const utils = trpc.useUtils();
 
   const deleteMutation = trpc.payment.delete.useMutation({
@@ -74,6 +86,16 @@ function PaymentsPage() {
           </button>
         }
       />
+
+      {/* Search */}
+      <div className="mb-4">
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search by party or payment #..."
+          className="max-w-xs"
+        />
+      </div>
 
       {/* Table */}
       {isLoading ? (

@@ -12,6 +12,7 @@ export const paymentRouter = router({
       invoiceId: z.string().uuid().nullish(),
       fromDate: z.string().datetime().nullish(),
       toDate: z.string().datetime().nullish(),
+      search: z.string().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -20,6 +21,13 @@ export const paymentRouter = router({
       if (input.invoiceId) conditions.push(eq(payments.invoiceId, input.invoiceId));
       if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      if (input.search) {
+        conditions.push(
+          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          ))`
+        );
+      }
 
       const offset = (input.page - 1) * input.limit;
 
@@ -559,7 +567,13 @@ export const paymentRouter = router({
 
   // Payments with no bank account assigned
   untrackedPayments: businessProcedure
-    .input(z.object({ ...paginationSchema.shape }))
+    .input(z.object({
+      search: z.string().nullish(),
+      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).nullish(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
+      ...paginationSchema.shape,
+    }))
     .query(async ({ input, ctx }) => {
       const offset = (input.page - 1) * input.limit;
 
@@ -567,6 +581,16 @@ export const paymentRouter = router({
         eq(payments.businessId, ctx.businessId),
         sql`${payments.bankAccountId} IS NULL`,
       ];
+      if (input.search) {
+        conditions.push(
+          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          ))`
+        );
+      }
+      if (input.mode) conditions.push(eq(payments.mode, input.mode));
+      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
 
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select({
@@ -591,10 +615,13 @@ export const paymentRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  // Assign a bank account to one or more untracked payments
+  // Assign a bank account to untracked payments — by specific IDs or by filter (bulk all matching)
   assignAccount: businessProcedure
     .input(z.object({
-      paymentIds: z.array(z.string().uuid()).min(1),
+      paymentIds: z.array(z.string().uuid()).optional(), // specific IDs
+      allMatching: z.boolean().optional(), // true = assign ALL untracked matching filters
+      search: z.string().nullish(),
+      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).nullish(),
       bankAccountId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -616,7 +643,31 @@ export const paymentRouter = router({
 
         let totalDeposited = 0;
 
-        for (const paymentId of input.paymentIds) {
+        // Resolve payment IDs — either from explicit list or by querying all matching untracked
+        let paymentIds = input.paymentIds || [];
+        if (input.allMatching) {
+          const matchConditions = [
+            eq(payments.businessId, ctx.businessId),
+            sql`${payments.bankAccountId} IS NULL`,
+          ];
+          if (input.search) {
+            matchConditions.push(
+              sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+                SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+              ))`
+            );
+          }
+          if (input.mode) matchConditions.push(eq(payments.mode, input.mode));
+
+          const allMatching = await tx.select({ id: payments.id })
+            .from(payments)
+            .where(and(...matchConditions));
+          paymentIds = allMatching.map(p => p.id);
+        }
+
+        if (paymentIds.length === 0) return { assigned: 0 };
+
+        for (const paymentId of paymentIds) {
           // Get the payment (only if untracked and owned by this business)
           const [pmt] = await tx.select({
             id: payments.id,
@@ -677,7 +728,7 @@ export const paymentRouter = router({
           })
           .where(eq(bankAccounts.id, input.bankAccountId));
 
-        return { assigned: input.paymentIds.length };
+        return { assigned: paymentIds.length };
       });
     }),
 });

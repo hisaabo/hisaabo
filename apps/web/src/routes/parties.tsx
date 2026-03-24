@@ -247,6 +247,7 @@ const PARTY_DETAIL_TABS = [
 
 function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () => void }) {
   const [tab, setTab] = useState("overview");
+  const [showMerge, setShowMerge] = useState(false);
   const navigate = useNavigate();
 
   const { data: party } = trpc.party.getById.useQuery({ id: partyId });
@@ -272,6 +273,7 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
   const isPositiveBalance = balanceNum > 0;
 
   return (
+    <>
     <SlideOver
       open={true}
       onClose={onClose}
@@ -281,6 +283,16 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
         party.phone,
         party.gstin,
       ].filter(Boolean).join(" · ")}
+      footer={
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowMerge(true)}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800 transition-colors"
+          >
+            Merge
+          </button>
+        </div>
+      }
     >
       <div className="space-y-4">
         {/* Tabs */}
@@ -654,6 +666,81 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
         )}
       </div>
     </SlideOver>
+    {showMerge && (
+      <MergePartyModal
+        sourceId={partyId}
+        sourceName={party.name}
+        onClose={() => {
+          setShowMerge(false);
+          onClose();
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+function MergePartyModal({
+  sourceId,
+  sourceName,
+  onClose,
+}: {
+  sourceId: string;
+  sourceName: string;
+  onClose: () => void;
+}) {
+  const [targetId, setTargetId] = useState("");
+  const { data: partiesData } = trpc.party.list.useQuery({ page: 1, limit: 500 });
+  const utils = trpc.useUtils();
+
+  const mergeMutation = trpc.party.merge.useMutation({
+    onSuccess: () => {
+      utils.party.list.invalidate();
+      toast.success(`"${sourceName}" merged successfully`);
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const targetOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
+
+  return (
+    <Modal open={true} onClose={onClose} title={`Merge "${sourceName}"`} className="max-w-md">
+      <div className="space-y-4">
+        <p className="text-sm text-text-secondary">
+          All invoices, payments, and data from <strong>{sourceName}</strong> will be transferred to the target party. The source party will be deleted.
+        </p>
+
+        <div>
+          <label className="text-sm font-medium text-text-primary block mb-1">
+            Merge into <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="input-field w-full"
+          >
+            <option value="">Select target party...</option>
+            {targetOptions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.type})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-3 border-t border-border-light">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-danger"
+            onClick={() => mergeMutation.mutate({ sourceId, targetId })}
+            disabled={!targetId || mergeMutation.isPending}
+          >
+            {mergeMutation.isPending ? "Merging..." : "Merge & Delete"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -115,7 +115,7 @@ function ThemeSection() {
             className={cn(
               "flex-1 flex flex-col items-start px-4 py-3 rounded-lg border text-left transition-colors",
               theme === opt.value
-                ? "border-brand-500 bg-brand-600/5 text-brand-700"
+                ? "border-brand-500 bg-brand-600/5 text-brand-700 dark:text-brand-400"
                 : "border-border-light hover:border-border-color hover:bg-surface-1 text-text-secondary",
             )}
           >
@@ -210,9 +210,9 @@ function TeamSection() {
                       className={cn(
                         "px-2 py-0.5 rounded text-[11px] font-medium",
                         m.role === "owner"
-                          ? "bg-brand-50 text-brand-700"
+                          ? "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400"
                           : m.role === "admin"
-                            ? "bg-emerald-50 text-emerald-700"
+                            ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
                             : "bg-surface-2 text-text-secondary",
                       )}
                     >
@@ -298,9 +298,9 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     <Modal open={open} onClose={handleClose} title="Invite Team Member">
       {inviteResult ? (
         <div className="space-y-4 py-2">
-          <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3">
-            <p className="text-sm font-medium text-emerald-800">Invitation created!</p>
-            <p className="text-xs text-emerald-700 mt-0.5">
+          <div className="rounded-lg bg-emerald-600/[0.08] border border-emerald-200 dark:border-emerald-800 px-4 py-3">
+            <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Invitation created!</p>
+            <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
               Share this link with {email} to give them access.
             </p>
           </div>

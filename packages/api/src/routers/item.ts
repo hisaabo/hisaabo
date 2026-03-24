@@ -3,6 +3,7 @@ import { z } from "zod";
 import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
 
 export const itemRouter = router({
   list: businessProcedure
@@ -221,6 +222,146 @@ export const itemRouter = router({
         .limit(5);
 
       return rows;
+    }),
+
+  // Suggest potential merge candidates — items with similar name prefixes
+  suggestMerges: businessProcedure.query(async ({ ctx }) => {
+    // Get all items for the business
+    const allItems = await ctx.db.select({
+      id: items.id,
+      name: items.name,
+      unit: items.unit,
+      salePrice: items.salePrice,
+      stockQuantity: items.stockQuantity,
+    }).from(items)
+      .where(eq(items.businessId, ctx.businessId))
+      .orderBy(items.name);
+
+    // Group items by name prefix (strip trailing numbers, weights, fractions)
+    // e.g., "Okra", "Okra 0.25", "Okra 0.5" → prefix "Okra"
+    // e.g., "Cluster Beans 0.25", "Cluster Beans 0.5" → prefix "Cluster Beans"
+    const groups: Record<string, typeof allItems> = {};
+
+    for (const item of allItems) {
+      // Extract base name: remove trailing numbers like "0.25", "0.5", "0.5kg"
+      const baseName = item.name
+        .replace(/\s+\d+(\.\d+)?\s*(kg|g|ml|l|pcs|gms|kgs)?\s*$/i, "")
+        .trim();
+
+      if (!groups[baseName]) groups[baseName] = [];
+      groups[baseName].push(item);
+    }
+
+    // Return groups that have more than 1 item (potential merges)
+    const suggestions: Array<{
+      baseName: string;
+      items: typeof allItems;
+      suggestedConversions: Array<{
+        sourceId: string;
+        sourceName: string;
+        targetId: string;
+        targetName: string;
+        suggestedFactor: number | null;
+      }>;
+    }> = [];
+
+    for (const [baseName, group] of Object.entries(groups)) {
+      if (group.length <= 1) continue;
+
+      // Find the "base" item (shortest name, or the one without a number suffix)
+      const baseItem = group.reduce((a, b) => a.name.length <= b.name.length ? a : b);
+
+      const conversions = group
+        .filter(item => item.id !== baseItem.id)
+        .map(item => {
+          // Try to extract a conversion factor from the name difference
+          // e.g., "Okra 0.25" → factor 0.25, "Okra 0.5" → factor 0.5
+          const suffix = item.name.replace(baseName, "").trim();
+          const numMatch = suffix.match(/^(\d+\.?\d*)$/);
+          const suggestedFactor = numMatch ? parseFloat(numMatch[1]) : null;
+
+          return {
+            sourceId: item.id,
+            sourceName: item.name,
+            targetId: baseItem.id,
+            targetName: baseItem.name,
+            suggestedFactor,
+          };
+        });
+
+      suggestions.push({ baseName, items: group, suggestedConversions: conversions });
+    }
+
+    return suggestions;
+  }),
+
+  merge: businessProcedure
+    .input(z.object({
+      sourceId: z.string().uuid(),
+      targetId: z.string().uuid(),
+      stockConversionFactor: z.number().positive().default(1),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (input.sourceId === input.targetId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge an item into itself" });
+      }
+
+      return ctx.db.transaction(async (tx) => {
+        const [source] = await tx.select().from(items)
+          .where(and(eq(items.id, input.sourceId), eq(items.businessId, ctx.businessId))).limit(1);
+        const [target] = await tx.select().from(items)
+          .where(and(eq(items.id, input.targetId), eq(items.businessId, ctx.businessId))).limit(1);
+
+        if (!source || !target) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+
+        // Re-link all invoice line items from source to target
+        if (input.stockConversionFactor !== 1) {
+          await tx.execute(sql`
+            UPDATE invoice_items SET
+              item_id = ${input.targetId},
+              conversion_factor = COALESCE(conversion_factor, 1) * ${input.stockConversionFactor}
+            WHERE item_id = ${input.sourceId}
+          `);
+        } else {
+          await tx.update(invoiceItems)
+            .set({ itemId: input.targetId })
+            .where(eq(invoiceItems.itemId, input.sourceId));
+        }
+
+        // Merge stock (convert source stock to target units)
+        const sourceStock = parseFloat(source.stockQuantity || "0");
+        const convertedStock = sourceStock * input.stockConversionFactor;
+        const targetStock = parseFloat(target.stockQuantity || "0");
+        const mergedStock = (targetStock + convertedStock).toFixed(3);
+
+        // Fill missing fields on target from source
+        const updates: Record<string, unknown> = {
+          stockQuantity: mergedStock,
+          updatedAt: new Date(),
+        };
+        if (!target.hsn && source.hsn) updates.hsn = source.hsn;
+        if (!target.sku && source.sku) updates.sku = source.sku;
+        if (!target.category && source.category) updates.category = source.category;
+        if (!target.description && source.description) updates.description = source.description;
+        if (!target.purchasePrice && source.purchasePrice) updates.purchasePrice = source.purchasePrice;
+        if (!target.lowStockAlert && source.lowStockAlert) updates.lowStockAlert = source.lowStockAlert;
+
+        // Merge unit variants (combine both sets, dedup by unit name)
+        const targetVariants = (target.unitVariants as Array<{ unit: string }> || []);
+        const sourceVariants = (source.unitVariants as Array<{ unit: string }> || []);
+        const existingUnits = new Set(targetVariants.map((v) => v.unit.toLowerCase()));
+        const newVariants = sourceVariants.filter((v) => !existingUnits.has(v.unit.toLowerCase()));
+        if (newVariants.length > 0) {
+          updates.unitVariants = [...targetVariants, ...newVariants];
+        }
+
+        await tx.update(items).set(updates).where(eq(items.id, input.targetId));
+
+        // Delete the source item
+        await tx.delete(items).where(eq(items.id, input.sourceId));
+
+        return { success: true, mergedInto: input.targetId };
+      });
     }),
 
   lowStockCount: businessProcedure.query(async ({ ctx }) => {
