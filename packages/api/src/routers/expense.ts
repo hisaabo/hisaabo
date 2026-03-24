@@ -1,5 +1,6 @@
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, ilike, or } from "drizzle-orm";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { expenses } from "@hisaabo/db";
 import { createExpenseSchema, paginationSchema } from "@hisaabo/shared";
 import { router, businessProcedure } from "../trpc.js";
@@ -8,11 +9,24 @@ export const expenseRouter = router({
   list: businessProcedure
     .input(z.object({
       category: z.string().optional(),
+      search: z.string().optional(),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
       const conditions = [eq(expenses.businessId, ctx.businessId)];
       if (input.category) conditions.push(eq(expenses.category, input.category));
+      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      if (input.search) {
+        conditions.push(
+          or(
+            ilike(expenses.description, `%${input.search}%`),
+            ilike(expenses.category, `%${input.search}%`)
+          )!
+        );
+      }
 
       const offset = (input.page - 1) * input.limit;
 
@@ -37,6 +51,26 @@ export const expenseRouter = router({
     }).returning();
     return expense;
   }),
+
+  update: businessProcedure
+    .input(z.object({ id: z.string().uuid(), data: createExpenseSchema.partial() }))
+    .mutation(async ({ input, ctx }) => {
+      const [existing] = await ctx.db.select({ id: expenses.id })
+        .from(expenses)
+        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
+        .limit(1);
+
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Expense not found" });
+
+      const [updated] = await ctx.db.update(expenses)
+        .set({
+          ...input.data,
+          expenseDate: input.data.expenseDate ? new Date(input.data.expenseDate) : undefined,
+        })
+        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
+        .returning();
+      return updated;
+    }),
 
   delete: businessProcedure
     .input(z.object({ id: z.string().uuid() }))

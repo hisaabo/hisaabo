@@ -77,6 +77,7 @@ const navSections = [
     items: [
       { to: "/payments", label: "Payments", icon: PaymentIcon },
       { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
+      { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
     ],
   },
   {
@@ -203,6 +204,7 @@ function RootLayout() {
     { key: "t", alt: true, shift: true, handler: () => navigate({ to: "/items" }), description: "Items", scope: "navigation" },
     { key: "m", alt: true, shift: true, handler: () => navigate({ to: "/payments" }), description: "Payments", scope: "navigation" },
     { key: "b", alt: true, shift: true, handler: () => navigate({ to: "/cash-and-bank" }), description: "Cash & Bank", scope: "navigation" },
+    { key: "e", alt: true, shift: true, handler: () => navigate({ to: "/expenses" }), description: "Expenses", scope: "navigation" },
     { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Reports", scope: "navigation" },
     { key: "s", alt: true, shift: true, handler: () => navigate({ to: "/settings" }), description: "Settings", scope: "navigation" },
   ]);
@@ -551,11 +553,12 @@ function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void
     items: "Items",
     payments: "Payments",
     invoices: "Invoices",
+    expenses: "Expenses",
     general: "General",
   };
 
   // Sort scopes: global first, navigation second, then page-specific
-  const scopeOrder = ["global", "navigation", "parties", "items", "payments", "invoices", "general"];
+  const scopeOrder = ["global", "navigation", "parties", "items", "payments", "invoices", "expenses", "general"];
 
   return (
     <Modal open={open} onClose={onClose} title="Keyboard Shortcuts" className="max-w-md">
@@ -699,6 +702,15 @@ function SalesReturnIcon() {
       <path d="M3 2.5h10a1 1 0 011 1v9a1 1 0 01-1 1H3a1 1 0 01-1-1v-9a1 1 0 011-1z" />
       <path d="M6 6l-2 2 2 2" />
       <path d="M4 8h5.5a1.5 1.5 0 000-3H9" />
+    </svg>
+  );
+}
+
+function ExpenseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="1.5" width="10" height="13" rx="1" />
+      <path d="M6 5h4M6 8h4M6 11h2" />
     </svg>
   );
 }

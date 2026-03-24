@@ -78,6 +78,7 @@ function CashAndBankPage() {
   }, [debouncedUntrackedSearch, untrackedMode]);
   const [datePreset, setDatePreset] = useState<string | null>(null); // null = no preset selected yet
   const [dateRange, setDateRange] = useState<{ fromDate: string; toDate: string }>({ fromDate: "", toDate: "" });
+  const [exporting, setExporting] = useState(false);
 
   // Combine list + summary into parallel fetch (both are lightweight single-query endpoints)
   const { data: accounts, isLoading } = trpc.bankAccount.list.useQuery();
@@ -160,6 +161,59 @@ function CashAndBankPage() {
   }, [untrackedData, untrackedFetching, debouncedUntrackedSearch, untrackedMode]);
 
   const utils = trpc.useUtils();
+
+  async function exportTransactionsCSV() {
+    if (!selectedAccountId || datePreset === null) return;
+    const selectedAccount = accounts?.find((a) => a.id === selectedAccountId);
+    setExporting(true);
+    try {
+      let allData: any[] = [];
+      let page = 1;
+      const limit = 100;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await utils.bankAccount.listTransactions.fetch({
+          bankAccountId: selectedAccountId,
+          page,
+          limit,
+          fromDate: dateRange.fromDate || undefined,
+          toDate: dateRange.toDate || undefined,
+        });
+        allData = [...allData, ...result.data];
+        hasMore = allData.length < result.total;
+        page++;
+      }
+
+      const headers = ["Date", "Description", "Type", "Amount", "Balance After"];
+      const rows = allData.map((txn: any) => [
+        formatDate(txn.transactionDate),
+        (txn.description || "").replace(/"/g, '""'),
+        txn.type,
+        txn.type === "deposit" ? txn.amount : `-${txn.amount}`,
+        txn.balanceAfter,
+      ]);
+
+      const csv = [
+        `Account,${selectedAccount?.accountName || ""}`,
+        `Period,${datePreset}`,
+        `Exported,${new Date().toLocaleDateString("en-IN")}`,
+        `Transactions,${allData.length}`,
+        "",
+        headers.join(","),
+        ...rows.map((r) => r.map((cell: any) => `"${String(cell)}"`).join(",")),
+      ].join("\n");
+
+      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${selectedAccount?.accountName || "transactions"}_${datePreset || "all"}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const deleteAccountMutation = trpc.bankAccount.delete.useMutation({
     onSuccess: () => {
@@ -327,6 +381,7 @@ function CashAndBankPage() {
               <div
                 className="px-4 py-2 flex items-center gap-1 flex-wrap border-b border-border-light"
               >
+                <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
                 {[
                   { value: "this-month", label: "This Month" },
                   { value: "last-month", label: "Last Month" },
@@ -385,6 +440,23 @@ function CashAndBankPage() {
                       className="input py-1 text-xs w-32"
                     />
                   </div>
+                )}
+                </div>
+                {allTxns.length > 0 && (
+                  <button
+                    onClick={exportTransactionsCSV}
+                    disabled={exporting}
+                    className="btn-secondary text-xs px-3 py-1.5 ml-auto shrink-0 flex items-center gap-1.5"
+                  >
+                    {exporting ? (
+                      <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+                      </svg>
+                    )}
+                    {exporting ? "Preparing..." : "Export CSV"}
+                  </button>
                 )}
               </div>
 
