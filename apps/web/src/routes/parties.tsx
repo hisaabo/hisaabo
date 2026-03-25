@@ -39,6 +39,8 @@ function countFilled(...values: string[]): number {
 function PartiesPage() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<"name" | "balance">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -47,12 +49,20 @@ function PartiesPage() {
 
   const debouncedSearch = useDebounce(search, 300);
 
-  // Reset to page 1 whenever filters change
-  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter]);
+  function toggleSort(col: "name" | "balance") {
+    if (sortBy === col && sortDir === "asc") setSortDir("desc");
+    else if (sortBy === col && sortDir === "desc") { setSortBy("name"); setSortDir("asc"); } // reset to default
+    else { setSortBy(col); setSortDir(col === "name" ? "asc" : "desc"); }
+  }
+
+  // Reset to page 1 whenever filters/sort change
+  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter, sortBy, sortDir]);
 
   const { data, isLoading } = trpc.party.list.useQuery({
     search: debouncedSearch || undefined,
     type: typeFilter !== "all" ? (typeFilter as PartyType) : undefined,
+    sortBy,
+    sortDir,
     page,
     limit: PARTIES_PAGE_SIZE,
   });
@@ -77,7 +87,7 @@ function PartiesPage() {
         pg++;
       }
 
-      const headers = ["Name", "Type", "Phone", "Email", "GSTIN", "Opening Balance"];
+      const headers = ["Name", "Type", "Phone", "Email", "GSTIN", "Balance"];
       const rows = allData.map((p: any) => [
         p.name,
         p.type,
@@ -188,11 +198,21 @@ function PartiesPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Name</th>
+                <th
+                  className="cursor-pointer select-none hover:text-text-primary transition-colors"
+                  onClick={() => toggleSort("name")}
+                >
+                  Name {sortBy === "name" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                </th>
                 <th>Type</th>
                 <th>Phone</th>
                 <th>GSTIN</th>
-                <th className="text-right">Opening Balance</th>
+                <th
+                  className="text-right cursor-pointer select-none hover:text-text-primary transition-colors"
+                  onClick={() => toggleSort("balance")}
+                >
+                  Balance {sortBy === "balance" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                </th>
                 <th></th>
               </tr>
             </thead>

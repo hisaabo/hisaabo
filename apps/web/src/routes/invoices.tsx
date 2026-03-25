@@ -452,6 +452,8 @@ function InvoicesPage() {
   const [type, setType] = useState<"sale" | "purchase">("sale");
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"date" | "amount" | "number">("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -469,8 +471,8 @@ function InvoicesPage() {
     { key: "n", handler: () => setShowCreate(true), description: "New invoice", scope: "invoices" },
   ]);
 
-  // Reset to page 1 whenever filters change
-  useEffect(() => { setPage(1); }, [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate]);
+  // Reset to page 1 whenever filters or sort change
+  useEffect(() => { setPage(1); }, [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate, sortBy, sortDir]);
 
   const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
@@ -480,6 +482,8 @@ function InvoicesPage() {
     search: debouncedSearch || undefined,
     fromDate: dateRange.fromDate,
     toDate: dateRange.toDate,
+    sortBy,
+    sortDir,
     page,
     limit: PAGE_SIZE,
   });
@@ -491,7 +495,7 @@ function InvoicesPage() {
     page,
     isFetching,
     onLoadMore: loadMore,
-    resetDeps: [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate],
+    resetDeps: [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate, sortBy, sortDir],
   });
 
   const utils = trpc.useUtils();
@@ -663,10 +667,28 @@ function InvoicesPage() {
               <thead className="sticky top-0 z-10">
                 <tr>
                   <th>Party</th>
-                  <th className="whitespace-nowrap">Invoice #</th>
+                  <th
+                    className="whitespace-nowrap cursor-pointer select-none hover:text-text-primary transition-colors"
+                    onClick={() => {
+                      if (sortBy === "number" && sortDir === "desc") setSortDir("asc");
+                      else if (sortBy === "number" && sortDir === "asc") { setSortBy("date"); setSortDir("desc"); }
+                      else { setSortBy("number"); setSortDir("desc"); }
+                    }}
+                  >
+                    Invoice # {sortBy === "number" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                  </th>
                   <th className="whitespace-nowrap">Date</th>
+                  <th
+                    className="text-right whitespace-nowrap cursor-pointer select-none hover:text-text-primary transition-colors"
+                    onClick={() => {
+                      if (sortBy === "amount" && sortDir === "desc") setSortDir("asc");
+                      else if (sortBy === "amount" && sortDir === "asc") { setSortBy("date"); setSortDir("desc"); }
+                      else { setSortBy("amount"); setSortDir("desc"); }
+                    }}
+                  >
+                    Amount {sortBy === "amount" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                  </th>
                   <th>Status</th>
-                  <th className="text-right whitespace-nowrap">Amount</th>
                   <th className="w-28"></th>
                 </tr>
               </thead>
@@ -684,15 +706,15 @@ function InvoicesPage() {
                       <td className="text-text-secondary whitespace-nowrap">
                         {formatDate(inv.invoiceDate)}
                       </td>
-                      <td className="whitespace-nowrap">
-                        <StatusBadge status={inv.status} size="sm" />
-                      </td>
                       <td className="text-right tabular-nums font-medium whitespace-nowrap">
                         {formatCurrency(inv.totalAmount)}
                       </td>
-                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-0.5">
-                          {/* PDF buttons — always visible */}
+                      <td className="whitespace-nowrap">
+                        <StatusBadge status={inv.status} size="sm" />
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-0.5">
+                          {/* PDF buttons — always visible, LEFT aligned */}
                           <DownloadPDFButton
                             invoiceId={inv.id}
                             invoiceNumber={inv.invoiceNumber}

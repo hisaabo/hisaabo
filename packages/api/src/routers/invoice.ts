@@ -16,6 +16,8 @@ export const invoiceRouter = router({
       toDate: z.string().datetime().nullish(),
       itemId: z.string().uuid().nullish(),
       search: z.string().nullish(),
+      sortBy: z.enum(["date", "amount", "number"]).nullish(),
+      sortDir: z.enum(["asc", "desc"]).nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -68,7 +70,13 @@ export const invoiceRouter = router({
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(and(...conditions))
-          .orderBy(desc(invoices.invoiceDate))
+          .orderBy(
+            input.sortBy === "amount"
+              ? (input.sortDir === "asc" ? sql`${invoices.totalAmount}::numeric ASC` : sql`${invoices.totalAmount}::numeric DESC`)
+              : input.sortBy === "number"
+                ? (input.sortDir === "asc" ? invoices.invoiceNumber : desc(invoices.invoiceNumber))
+                : (input.sortDir === "asc" ? invoices.invoiceDate : desc(invoices.invoiceDate))
+          )
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(invoices)

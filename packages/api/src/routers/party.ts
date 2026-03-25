@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema } from "@hisaabo/shared";
@@ -12,6 +12,8 @@ export const partyRouter = router({
       type: z.enum(["customer", "supplier"]).nullish(),
       search: z.string().nullish(),
       category: z.string().nullish(),
+      sortBy: z.enum(["name", "balance"]).nullish(),
+      sortDir: z.enum(["asc", "desc"]).nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
@@ -22,10 +24,14 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
+      const sortCol = input.sortBy === "balance"
+        ? (input.sortDir === "asc" ? sql`${parties.openingBalance}::numeric ASC` : sql`${parties.openingBalance}::numeric DESC`)
+        : (input.sortDir === "desc" ? desc(parties.name) : asc(parties.name));
+
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(parties)
           .where(and(...conditions))
-          .orderBy(desc(parties.updatedAt))
+          .orderBy(sortCol)
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(parties)
