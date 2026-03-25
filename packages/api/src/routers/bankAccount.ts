@@ -9,12 +9,12 @@ import {
   bankTransferSchema,
   paginationSchema,
 } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
 export const bankAccountRouter = router({
   // ── Accounts ────────────────────────────────────────────────
 
-  list: businessProcedure.query(async ({ ctx }) => {
+  list: viewerProcedure.query(async ({ ctx }) => {
     return ctx.db
       .select()
       .from(bankAccounts)
@@ -22,7 +22,7 @@ export const bankAccountRouter = router({
       .orderBy(desc(bankAccounts.isDefault), asc(bankAccounts.accountName));
   }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const [account] = await ctx.db
@@ -48,7 +48,7 @@ export const bankAccountRouter = router({
       return { ...account, recentTransactions };
     }),
 
-  create: businessProcedure
+  create: memberProcedure
     .input(createBankAccountSchema)
     .mutation(async ({ input, ctx }) => {
       return ctx.db.transaction(async (tx) => {
@@ -80,7 +80,7 @@ export const bankAccountRouter = router({
       });
     }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateBankAccountSchema }))
     .mutation(async ({ input, ctx }) => {
       return ctx.db.transaction(async (tx) => {
@@ -128,7 +128,7 @@ export const bankAccountRouter = router({
       });
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return ctx.db.transaction(async (tx) => {
@@ -175,7 +175,7 @@ export const bankAccountRouter = router({
 
   // ── Transactions ────────────────────────────────────────────
 
-  listTransactions: businessProcedure
+  listTransactions: viewerProcedure
     .input(
       z.object({
         bankAccountId: z.string().uuid(),
@@ -231,7 +231,7 @@ export const bankAccountRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  addTransaction: businessProcedure
+  addTransaction: memberProcedure
     .input(createBankTransactionSchema)
     .mutation(async ({ input, ctx }) => {
       return ctx.db.transaction(async (tx) => {
@@ -289,7 +289,7 @@ export const bankAccountRouter = router({
       });
     }),
 
-  transfer: businessProcedure
+  transfer: memberProcedure
     .input(bankTransferSchema)
     .mutation(async ({ input, ctx }) => {
       if (input.fromAccountId === input.toAccountId) {
@@ -397,7 +397,7 @@ export const bankAccountRouter = router({
       });
     }),
 
-  summary: businessProcedure.query(async ({ ctx }) => {
+  summary: viewerProcedure.query(async ({ ctx }) => {
     const [result] = await ctx.db
       .select({
         totalBalance: sql<string>`coalesce(sum(${bankAccounts.currentBalance}::numeric), 0)::text`,

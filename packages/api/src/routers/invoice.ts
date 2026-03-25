@@ -2,11 +2,11 @@ import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
 export const invoiceRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
       type: z.enum(["sale", "purchase"]).nullish(),
       status: z.enum(["draft", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
@@ -87,7 +87,7 @@ export const invoiceRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const [invoice] = await ctx.db.select().from(invoices)
@@ -107,7 +107,7 @@ export const invoiceRouter = router({
       return { ...invoice, lineItems, party: party ?? null };
     }),
 
-  create: businessProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     return ctx.db.transaction(async (tx) => {
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
@@ -223,7 +223,7 @@ export const invoiceRouter = router({
     });
   }),
 
-  updateStatus: businessProcedure
+  updateStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
       const [invoice] = await ctx.db.update(invoices)
@@ -233,7 +233,7 @@ export const invoiceRouter = router({
       return invoice;
     }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({
       id: z.string().uuid(),
       partyId: z.string().uuid().optional(),
@@ -339,7 +339,7 @@ export const invoiceRouter = router({
       });
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const [inv] = await ctx.db.select({ status: invoices.status })

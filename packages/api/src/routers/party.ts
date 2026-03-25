@@ -2,12 +2,12 @@ import { eq, and, ilike, sql, desc, asc } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
 
 export const partyRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
       type: z.enum(["customer", "supplier"]).nullish(),
       search: z.string().nullish(),
@@ -41,7 +41,7 @@ export const partyRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const [party] = await ctx.db.select().from(parties)
@@ -67,7 +67,7 @@ export const partyRouter = router({
       };
     }),
 
-  create: businessProcedure.input(createPartySchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createPartySchema).mutation(async ({ input, ctx }) => {
     const [party] = await ctx.db.insert(parties).values({
       ...input,
       businessId: ctx.businessId,
@@ -77,7 +77,7 @@ export const partyRouter = router({
     return party;
   }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updatePartySchema }))
     .mutation(async ({ input, ctx }) => {
       const { contactPersonDob, ...rest } = input.data;
@@ -92,7 +92,7 @@ export const partyRouter = router({
       return party;
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await ctx.db.delete(parties)
@@ -100,7 +100,7 @@ export const partyRouter = router({
       return { success: true };
     }),
 
-  topItems: businessProcedure
+  topItems: viewerProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const rows = await ctx.db.select({
@@ -129,7 +129,7 @@ export const partyRouter = router({
       return rows;
     }),
 
-  merge: businessProcedure
+  merge: adminProcedure
     .input(z.object({
       sourceId: z.string().uuid(),
       targetId: z.string().uuid(),
@@ -185,7 +185,7 @@ export const partyRouter = router({
    * Party ledger — chronological UNION ALL of invoices and payments for a party.
    * Each row: date, type, documentNumber, amount, runningBalance.
    */
-  ledger: businessProcedure
+  ledger: viewerProcedure
     .input(z.object({
       partyId: z.string().uuid(),
       fromDate: z.string().datetime().optional(),

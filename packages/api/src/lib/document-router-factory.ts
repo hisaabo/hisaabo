@@ -15,7 +15,7 @@ import {
   calcLineItem,
   calcInvoiceTotals,
 } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -76,7 +76,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
   const allowedStatusEnum = config.allowedStatuses as [string, ...string[]];
 
   return router({
-    list: businessProcedure
+    list: viewerProcedure
       .input(
         z.object({
           type: z.enum(["sale", "purchase"]).optional(),
@@ -152,7 +152,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return { data, total: count, page: input.page, limit: input.limit };
       }),
 
-    getById: businessProcedure
+    getById: viewerProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input, ctx }) => {
         const [invoice] = await ctx.db
@@ -181,7 +181,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return { ...invoice, lineItems, party: party ?? null };
       }),
 
-    create: businessProcedure
+    create: memberProcedure
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async (tx) => {
@@ -329,7 +329,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         });
       }),
 
-    updateStatus: businessProcedure
+    updateStatus: memberProcedure
       .input(
         z.object({
           id: z.string().uuid(),
@@ -359,7 +359,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return doc;
       }),
 
-    delete: businessProcedure
+    delete: adminProcedure
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async (tx) => {

@@ -3,10 +3,10 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
 export const paymentRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
       partyId: z.string().uuid().nullish(),
       invoiceId: z.string().uuid().nullish(),
@@ -59,7 +59,7 @@ export const paymentRouter = router({
     }),
 
   // Return all unpaid/partially-paid invoices for a given party
-  unpaidInvoices: businessProcedure
+  unpaidInvoices: viewerProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const rows = await ctx.db.select({
@@ -89,7 +89,7 @@ export const paymentRouter = router({
     }),
 
   // Return the default/most-recently-used bank account for this business
-  defaultAccount: businessProcedure
+  defaultAccount: viewerProcedure
     .query(async ({ ctx }) => {
       // Look at the last 5 payments that have a bankAccountId
       const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
@@ -150,7 +150,7 @@ export const paymentRouter = router({
       return account ?? null;
     }),
 
-  create: businessProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
     return ctx.db.transaction(async (tx) => {
       // Atomically generate payment number
       const [biz] = await tx.select({
@@ -275,7 +275,7 @@ export const paymentRouter = router({
     });
   }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const [payment] = await ctx.db.select({
@@ -335,7 +335,7 @@ export const paymentRouter = router({
       return { ...payment, linkedInvoices };
     }),
 
-  update: businessProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
+  update: memberProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
     return ctx.db.transaction(async (tx) => {
       // 1. Fetch the existing payment
       const [existing] = await tx.select()
@@ -495,7 +495,7 @@ export const paymentRouter = router({
     });
   }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return ctx.db.transaction(async (tx) => {
@@ -568,7 +568,7 @@ export const paymentRouter = router({
     }),
 
   // Payments with no bank account assigned
-  untrackedPayments: businessProcedure
+  untrackedPayments: viewerProcedure
     .input(z.object({
       search: z.string().nullish(),
       mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).nullish(),
@@ -618,7 +618,7 @@ export const paymentRouter = router({
     }),
 
   // Assign a bank account to untracked payments — by specific IDs or by filter (bulk all matching)
-  assignAccount: businessProcedure
+  assignAccount: memberProcedure
     .input(z.object({
       paymentIds: z.array(z.string().uuid()).optional(), // specific IDs
       allMatching: z.boolean().optional(), // true = assign ALL untracked matching filters

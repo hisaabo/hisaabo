@@ -3,10 +3,10 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { expenses } from "@hisaabo/db";
 import { createExpenseSchema, paginationSchema } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
 export const expenseRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
       category: z.string().optional(),
       search: z.string().optional(),
@@ -43,7 +43,7 @@ export const expenseRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  create: businessProcedure.input(createExpenseSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createExpenseSchema).mutation(async ({ input, ctx }) => {
     const [expense] = await ctx.db.insert(expenses).values({
       ...input,
       businessId: ctx.businessId,
@@ -54,7 +54,7 @@ export const expenseRouter = router({
     return expense;
   }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: createExpenseSchema.partial() }))
     .mutation(async ({ input, ctx }) => {
       const [existing] = await ctx.db.select({ id: expenses.id })
@@ -74,7 +74,7 @@ export const expenseRouter = router({
       return updated;
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await ctx.db.delete(expenses)
@@ -82,7 +82,7 @@ export const expenseRouter = router({
       return { success: true };
     }),
 
-  categories: businessProcedure.query(async ({ ctx }) => {
+  categories: viewerProcedure.query(async ({ ctx }) => {
     const result = await ctx.db.selectDistinct({ category: expenses.category })
       .from(expenses)
       .where(eq(expenses.businessId, ctx.businessId))
@@ -90,7 +90,7 @@ export const expenseRouter = router({
     return result.map((r) => r.category);
   }),
 
-  summary: businessProcedure
+  summary: viewerProcedure
     .input(z.object({
       from: z.string().datetime().optional(),
       to: z.string().datetime().optional(),

@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { parties, items, invoices, invoiceItems, payments, businesses } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
-import { router, businessProcedure } from "../trpc.js";
+import { router, adminProcedure } from "../trpc.js";
 import { calcLineItem } from "@hisaabo/shared";
 
 export const importRouter = router({
   // ── Import parties in batch ─────────────────────────────────────────────
-  importParties: businessProcedure
+  importParties: adminProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
       parties: z.array(z.object({
@@ -69,7 +69,7 @@ export const importRouter = router({
     }),
 
   // ── Import items in batch ───────────────────────────────────────────────
-  importItems: businessProcedure
+  importItems: adminProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
       items: z.array(z.object({
@@ -135,7 +135,7 @@ export const importRouter = router({
     }),
 
   // ── Import invoices in batch (with optional line items) ─────────────────
-  importInvoices: businessProcedure
+  importInvoices: adminProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
       autoCreatePayments: z.boolean().default(false),
@@ -362,7 +362,7 @@ export const importRouter = router({
     }),
 
   // ── Import payments in batch — exact invoice linkage (CSV) or chronological (PDF) ─
-  importPayments: businessProcedure
+  importPayments: adminProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
       payments: z.array(z.object({

@@ -1,10 +1,10 @@
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, payments, expenses, parties, businesses } from "@hisaabo/db";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure } from "../trpc.js";
 
 export const dashboardRouter = router({
-  summary: businessProcedure.query(async ({ ctx }) => {
+  summary: viewerProcedure.query(async ({ ctx }) => {
     // Fetch business to get financialYearStart (1-indexed month, e.g. 4 = April)
     const [biz] = await ctx.db
       .select({ financialYearStart: businesses.financialYearStart })
@@ -128,7 +128,7 @@ export const dashboardRouter = router({
     };
   }),
 
-  shippingSummary: businessProcedure
+  shippingSummary: viewerProcedure
     .input(z.object({
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),

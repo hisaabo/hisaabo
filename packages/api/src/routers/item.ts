@@ -2,11 +2,11 @@ import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { z } from "zod";
 import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
 export const itemRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
       search: z.string().nullish(),
       lowStock: z.boolean().nullish(),
@@ -46,7 +46,7 @@ export const itemRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const [item] = await ctx.db.select().from(items)
@@ -55,7 +55,7 @@ export const itemRouter = router({
       return item ?? null;
     }),
 
-  create: businessProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
+  create: memberProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
     const [item] = await ctx.db.insert(items).values({
       ...input,
       businessId: ctx.businessId,
@@ -64,7 +64,7 @@ export const itemRouter = router({
   }),
 
   // Switch the base unit of an item — converts stock, moves old base to variants
-  switchBaseUnit: businessProcedure
+  switchBaseUnit: memberProcedure
     .input(z.object({
       id: z.string().uuid(),
       newUnit: z.string().min(1),
@@ -133,7 +133,7 @@ export const itemRouter = router({
       });
     }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateItemSchema }))
     .mutation(async ({ input, ctx }) => {
       const [item] = await ctx.db.update(items)
@@ -143,7 +143,7 @@ export const itemRouter = router({
       return item;
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await ctx.db.delete(items)
@@ -152,7 +152,7 @@ export const itemRouter = router({
     }),
 
   // Price history: every price this item was sold/purchased at, derived from invoice line items
-  priceHistory: businessProcedure
+  priceHistory: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const rows = await ctx.db.select({
@@ -184,7 +184,7 @@ export const itemRouter = router({
     }),
 
   // Stock movements: every invoice that changed this item's stock (qty sold/purchased)
-  stockMovements: businessProcedure
+  stockMovements: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const rows = await ctx.db.select({
@@ -222,7 +222,7 @@ export const itemRouter = router({
     }),
 
   // Invoices containing this item
-  relatedInvoices: businessProcedure
+  relatedInvoices: viewerProcedure
     .input(z.object({ id: z.string().uuid(), ...paginationSchema.shape }))
     .query(async ({ input, ctx }) => {
       const offset = (input.page - 1) * input.limit;
@@ -265,7 +265,7 @@ export const itemRouter = router({
     }),
 
   // Top buyers/suppliers for this item
-  topBuyers: businessProcedure
+  topBuyers: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const rows = await ctx.db.select({
@@ -295,7 +295,7 @@ export const itemRouter = router({
     }),
 
   // Suggest potential merge candidates — items with similar name prefixes
-  suggestMerges: businessProcedure.query(async ({ ctx }) => {
+  suggestMerges: viewerProcedure.query(async ({ ctx }) => {
     // Get all items for the business
     const allItems = await ctx.db.select({
       id: items.id,
@@ -365,7 +365,7 @@ export const itemRouter = router({
     return suggestions;
   }),
 
-  merge: businessProcedure
+  merge: adminProcedure
     .input(z.object({
       sourceId: z.string().uuid(),
       targetId: z.string().uuid(),
@@ -434,7 +434,7 @@ export const itemRouter = router({
       });
     }),
 
-  lowStockCount: businessProcedure.query(async ({ ctx }) => {
+  lowStockCount: viewerProcedure.query(async ({ ctx }) => {
     const [result] = await ctx.db.select({
       count: sql<number>`count(*)::int`,
     }).from(items)

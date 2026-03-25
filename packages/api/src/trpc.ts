@@ -72,7 +72,7 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
   return next({
     ctx: {
       ...ctx,
-      businessId: ctx.businessId,
+      businessId: ctx.businessId as string,
     },
   });
 });
@@ -85,14 +85,17 @@ export const businessProcedure = t.procedure.use(isAuthenticated).use(hasTenantA
 // Role check middleware factory
 function requireRole(...allowedRoles: string[]) {
   return t.middleware(async ({ ctx, next }) => {
-    // Query control plane for user's role in current tenant
-    const tenantCtx = ctx as unknown as TenantCtx;
+    // These are guaranteed non-null by businessProcedure middleware chain
+    const user = ctx.user as NonNullable<Context["user"]>;
+    const tenantId = ctx.tenantId as string;
+    const businessId = ctx.businessId as string;
+
     const [membership] = await controlDb
       .select({ role: tenantMembers.role })
       .from(tenantMembers)
       .where(and(
-        eq(tenantMembers.tenantId, tenantCtx.tenantId),
-        eq(tenantMembers.userId, tenantCtx.user.id),
+        eq(tenantMembers.tenantId, tenantId),
+        eq(tenantMembers.userId, user.id),
       ))
       .limit(1);
 
@@ -100,7 +103,8 @@ function requireRole(...allowedRoles: string[]) {
       throw new TRPCError({ code: "FORBIDDEN", message: "Insufficient permissions" });
     }
 
-    return next({ ctx: { ...ctx, role: membership.role } });
+    // Explicitly pass narrowed types so downstream procedures see string, not string | null
+    return next({ ctx: { ...ctx, user, tenantId, businessId, role: membership.role } });
   });
 }
 
