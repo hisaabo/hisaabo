@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { z } from "zod";
 import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
-import { createItemSchema, updateItemSchema, paginationSchema, itemTypes } from "@hisaabo/shared";
+import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
@@ -82,7 +82,7 @@ export const itemRouter = router({
         const oldUnit = item.unit;
         const oldSalePrice = item.salePrice;
         const oldPurchasePrice = item.purchasePrice;
-        const oldStock = parseFloat(item.stockQuantity || "0");
+        const oldStock = money.toNumber(item.stockQuantity || "0");
         const factor = input.conversionFactor;
 
         // Convert stock: if 1 old unit = factor new units, then stock * factor = new stock
@@ -127,6 +127,7 @@ export const itemRouter = router({
             conversion_factor = COALESCE(conversion_factor, 1) * ${(1 / factor).toFixed(6)}
           WHERE item_id = ${input.id}
             AND (selected_unit IS NULL OR selected_unit = ${oldUnit})
+            AND invoice_id IN (SELECT id FROM invoices WHERE business_id = ${ctx.businessId})
         `);
 
         return updated;
@@ -399,10 +400,9 @@ export const itemRouter = router({
         }
 
         // Merge stock (convert source stock to target units)
-        const sourceStock = parseFloat(source.stockQuantity || "0");
+        const sourceStock = money.toNumber(source.stockQuantity || "0");
         const convertedStock = sourceStock * input.stockConversionFactor;
-        const targetStock = parseFloat(target.stockQuantity || "0");
-        const mergedStock = (targetStock + convertedStock).toFixed(3);
+        const mergedStock = money.add(target.stockQuantity || "0", convertedStock.toFixed(3));
 
         // Fill missing fields on target from source
         const updates: Record<string, unknown> = {

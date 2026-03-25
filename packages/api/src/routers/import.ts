@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { parties, items, invoices, invoiceItems, payments, businesses } from "@hisaabo/db";
+import { parties, items, invoices, invoiceItems, payments, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, adminProcedure } from "../trpc.js";
-import { calcLineItem } from "@hisaabo/shared";
+import { calcLineItem, money } from "@hisaabo/shared";
 
 export const importRouter = router({
   // ── Import parties in batch ─────────────────────────────────────────────
@@ -28,25 +28,21 @@ export const importRouter = router({
       let created = 0;
       let skipped = 0;
 
+      // Pre-fetch all existing party names for this business into a Set for O(1) lookup
+      const existingPartyNames = new Set(
+        (await ctx.db.select({ name: parties.name })
+          .from(parties).where(eq(parties.businessId, ctx.businessId)))
+          .map(r => r.name.toLowerCase())
+      );
+
+      const newParties = [];
       for (const p of input.parties) {
         // Check if party with same name already exists (case-insensitive)
-        const [existing] = await ctx.db
-          .select({ id: parties.id })
-          .from(parties)
-          .where(
-            and(
-              eq(parties.businessId, ctx.businessId),
-              sql`LOWER(${parties.name}) = LOWER(${p.name})`
-            )
-          )
-          .limit(1);
-
-        if (existing) {
+        if (existingPartyNames.has(p.name.toLowerCase())) {
           skipped++;
           continue;
         }
-
-        await ctx.db.insert(parties).values({
+        newParties.push({
           businessId: ctx.businessId,
           name: p.name,
           type: p.type,
@@ -62,7 +58,16 @@ export const importRouter = router({
           pincode: p.pincode || null,
           source: input.source,
         });
+        // Track the newly inserted name so subsequent duplicates in the same batch are caught
+        existingPartyNames.add(p.name.toLowerCase());
         created++;
+      }
+
+      if (newParties.length > 0) {
+        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
+        for (let i = 0; i < newParties.length; i += 500) {
+          await ctx.db.insert(parties).values(newParties.slice(i, i + 500));
+        }
       }
 
       return { created, skipped, total: input.parties.length };
@@ -89,32 +94,30 @@ export const importRouter = router({
       let created = 0;
       let skipped = 0;
 
+      // Pre-fetch all existing item names for this business into a Set for O(1) lookup
+      const existingItemNames = new Set(
+        (await ctx.db.select({ name: items.name })
+          .from(items).where(eq(items.businessId, ctx.businessId)))
+          .map(r => r.name.toLowerCase())
+      );
+
+      const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+      type ValidUnit = (typeof validUnits)[number];
+
+      const newItems = [];
       for (const item of input.items) {
         // Check if item with same name already exists (case-insensitive)
-        const [existing] = await ctx.db
-          .select({ id: items.id })
-          .from(items)
-          .where(
-            and(
-              eq(items.businessId, ctx.businessId),
-              sql`LOWER(${items.name}) = LOWER(${item.name})`
-            )
-          )
-          .limit(1);
-
-        if (existing) {
+        if (existingItemNames.has(item.name.toLowerCase())) {
           skipped++;
           continue;
         }
 
         // Validate unit against enum — fall back to "other" for unknown values
-        const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
-        type ValidUnit = (typeof validUnits)[number];
         const unit: ValidUnit = (validUnits as readonly string[]).includes(item.unit)
           ? (item.unit as ValidUnit)
           : "other";
 
-        await ctx.db.insert(items).values({
+        newItems.push({
           businessId: ctx.businessId,
           name: item.name,
           itemType: item.itemType,
@@ -128,7 +131,16 @@ export const importRouter = router({
           category: item.category || null,
           source: input.source,
         });
+        // Track the newly inserted name so subsequent duplicates in the same batch are caught
+        existingItemNames.add(item.name.toLowerCase());
         created++;
+      }
+
+      if (newItems.length > 0) {
+        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
+        for (let i = 0; i < newItems.length; i += 500) {
+          await ctx.db.insert(items).values(newItems.slice(i, i + 500));
+        }
       }
 
       return { created, skipped, total: input.items.length };
@@ -171,191 +183,208 @@ export const importRouter = router({
       let skipped = 0;
       const errors: string[] = [];
 
-      for (const inv of input.invoices) {
-        // Find party by name (case-insensitive)
-        const [party] = await ctx.db
-          .select({ id: parties.id })
-          .from(parties)
-          .where(
-            and(
-              eq(parties.businessId, ctx.businessId),
-              sql`LOWER(${parties.name}) = LOWER(${inv.partyName})`
-            )
-          )
-          .limit(1);
+      // Pre-fetch reference data
+      const allParties = await ctx.db.select({ id: parties.id, name: parties.name })
+        .from(parties).where(eq(parties.businessId, ctx.businessId));
+      const partyByName = new Map(allParties.map(p => [p.name.toLowerCase(), p.id]));
 
-        if (!party) {
+      const allItems = await ctx.db.select({ id: items.id, name: items.name })
+        .from(items).where(eq(items.businessId, ctx.businessId));
+      const itemByName = new Map(allItems.map(i => [i.name.toLowerCase(), i.id]));
+
+      const existingNumbers = new Set(
+        (await ctx.db.select({ n: invoices.invoiceNumber })
+          .from(invoices).where(eq(invoices.businessId, ctx.businessId)))
+          .map(r => r.n)
+      );
+
+      // ── Phase 1: Pre-validate and prepare all rows in memory ──
+      const validInvoices: Array<{
+        invoiceId: string;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        invoiceRow: any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        lineItemRows: any[];
+        stockDeltas: Map<string, number>;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        autoPaymentRow: any | null;
+      }> = [];
+
+      for (const inv of input.invoices) {
+        const partyId = partyByName.get(inv.partyName.toLowerCase());
+        if (!partyId) {
           errors.push(`Party "${inv.partyName}" not found for invoice ${inv.invoiceNumber}`);
           skipped++;
           continue;
         }
 
-        // Check if invoice number already exists for this business
-        const [existing] = await ctx.db
-          .select({ id: invoices.id })
-          .from(invoices)
-          .where(
-            and(
-              eq(invoices.businessId, ctx.businessId),
-              eq(invoices.invoiceNumber, inv.invoiceNumber)
-            )
-          )
-          .limit(1);
-
-        if (existing) {
+        if (existingNumbers.has(inv.invoiceNumber)) {
           skipped++;
           continue;
         }
 
-        // Parse dates — handles Indian and ISO formats
         const invoiceDate = parseFlexibleDate(inv.invoiceDate);
         const dueDate = inv.dueDate ? parseFlexibleDate(inv.dueDate) : null;
-
         if (!invoiceDate) {
           errors.push(`Invalid date "${inv.invoiceDate}" for invoice ${inv.invoiceNumber}`);
           skipped++;
           continue;
         }
 
+        const invoiceId = crypto.randomUUID();
+
+        const invoiceRow = {
+          id: invoiceId,
+          businessId: ctx.businessId,
+          partyId,
+          type: inv.type,
+          documentType: "invoice" as const,
+          invoiceNumber: inv.invoiceNumber,
+          invoiceDate,
+          dueDate,
+          status: inv.status,
+          subtotal: inv.subtotal,
+          taxAmount: inv.taxAmount,
+          discountAmount: inv.discountAmount,
+          charges: inv.charges?.length ? inv.charges : null,
+          additionalCharges: inv.charges?.length
+            ? inv.charges.reduce((s, c) => s + money.toNumber(c.amount), 0).toFixed(2)
+            : "0",
+          roundOff: "0",
+          totalAmount: inv.totalAmount,
+          amountPaid: inv.amountPaid,
+          notes: inv.notes || null,
+          createdByUserId: ctx.user!.id,
+          createdByName: inv.createdByName || ctx.user!.name,
+          source: input.source,
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const lineItemRows: any[] = [];
+        const stockDeltas = new Map<string, number>();
+
+        if (inv.lineItems?.length) {
+          for (let idx = 0; idx < inv.lineItems.length; idx++) {
+            const li = inv.lineItems[idx];
+            const itemId = li.itemName ? (itemByName.get(li.itemName.toLowerCase()) ?? null) : null;
+
+            const calc = calcLineItem({
+              quantity: li.quantity || "1",
+              unitPrice: li.unitPrice || "0",
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            });
+
+            lineItemRows.push({
+              invoiceId,
+              itemId,
+              description: li.description || li.itemName || "Imported item",
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              taxAmount: calc.taxAmount,
+              discountPercent: li.discountPercent || "0",
+              totalAmount: calc.total,
+              sortOrder: idx,
+            });
+
+            if (itemId) {
+              const qty = money.toNumber(li.quantity || "1");
+              stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + qty);
+            }
+          }
+        } else {
+          lineItemRows.push({
+            invoiceId,
+            itemId: null,
+            description: `Imported: ${inv.invoiceNumber}`,
+            quantity: "1",
+            unitPrice: inv.totalAmount,
+            taxPercent: "0",
+            taxAmount: "0",
+            discountPercent: "0",
+            totalAmount: inv.totalAmount,
+            sortOrder: 0,
+          });
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let autoPaymentRow: any | null = null;
+        if (input.autoCreatePayments && money.isPositive(inv.amountPaid)) {
+          const mode = normalizeMode(inv.paymentMode || input.defaultPaymentMode);
+          autoPaymentRow = {
+            businessId: ctx.businessId,
+            partyId,
+            invoiceId,
+            paymentNumber: `IMP-${inv.invoiceNumber}`,
+            amount: inv.amountPaid,
+            discount: "0",
+            mode,
+            paymentDate: invoiceDate,
+            notes: `Imported payment for ${inv.invoiceNumber}`,
+            createdByUserId: ctx.user!.id,
+            createdByName: inv.createdByName || ctx.user!.name,
+            source: input.source,
+          };
+        }
+
+        validInvoices.push({ invoiceId, invoiceRow, lineItemRows, stockDeltas, autoPaymentRow });
+        existingNumbers.add(inv.invoiceNumber);
+        created++;
+      }
+
+      // ── Phase 2: Batch insert in chunks of 100 ──
+      const BATCH = 100;
+      for (let i = 0; i < validInvoices.length; i += BATCH) {
+        const batch = validInvoices.slice(i, i + BATCH);
+
         await ctx.db.transaction(async (tx) => {
-          const [createdInv] = await tx
-            .insert(invoices)
-            .values({
-              businessId: ctx.businessId,
-              partyId: party.id,
-              type: inv.type,
-              documentType: "invoice",
-              invoiceNumber: inv.invoiceNumber,
-              invoiceDate,
-              dueDate,
-              status: inv.status,
-              subtotal: inv.subtotal,
-              taxAmount: inv.taxAmount,
-              discountAmount: inv.discountAmount,
-              charges: inv.charges?.length ? inv.charges : null,
-              additionalCharges: inv.charges?.length
-                ? inv.charges.reduce((s, c) => s + parseFloat(c.amount), 0).toFixed(2)
-                : "0",
-              roundOff: "0",
-              totalAmount: inv.totalAmount,
-              amountPaid: inv.amountPaid,
-              notes: inv.notes || null,
-              createdByUserId: ctx.user!.id,
-              createdByName: inv.createdByName || ctx.user!.name,
-              source: input.source,
-            })
-            .returning();
+          // Bulk insert invoices
+          await tx.insert(invoices).values(batch.map(b => b.invoiceRow));
 
-          if (inv.lineItems?.length) {
-            for (let idx = 0; idx < inv.lineItems.length; idx++) {
-              const li = inv.lineItems[idx];
-
-              // Try to resolve item by name
-              let itemId: string | null = null;
-              if (li.itemName) {
-                const [foundItem] = await tx
-                  .select({ id: items.id })
-                  .from(items)
-                  .where(
-                    and(
-                      eq(items.businessId, ctx.businessId),
-                      sql`LOWER(${items.name}) = LOWER(${li.itemName})`
-                    )
-                  )
-                  .limit(1);
-                if (foundItem) itemId = foundItem.id;
-              }
-
-              const calc = calcLineItem({
-                quantity: li.quantity || "1",
-                unitPrice: li.unitPrice || "0",
-                taxPercent: li.taxPercent || "0",
-                discountPercent: li.discountPercent || "0",
-              });
-
-              await tx.insert(invoiceItems).values({
-                invoiceId: createdInv.id,
-                itemId,
-                description: li.description || li.itemName || "Imported item",
-                quantity: li.quantity,
-                unitPrice: li.unitPrice,
-                taxPercent: li.taxPercent || "0",
-                taxAmount: calc.taxAmount,
-                discountPercent: li.discountPercent || "0",
-                totalAmount: calc.total,
-                sortOrder: idx,
-              });
+          // Bulk insert all line items for this batch
+          const allLineItems = batch.flatMap(b => b.lineItemRows);
+          if (allLineItems.length > 0) {
+            for (let j = 0; j < allLineItems.length; j += 500) {
+              await tx.insert(invoiceItems).values(allLineItems.slice(j, j + 500));
             }
-          } else {
-            // No line items — create a single catch-all line item
-            await tx.insert(invoiceItems).values({
-              invoiceId: createdInv.id,
-              itemId: null,
-              description: `Imported: ${inv.invoiceNumber}`,
-              quantity: "1",
-              unitPrice: inv.totalAmount,
-              taxPercent: "0",
-              taxAmount: "0",
-              discountPercent: "0",
-              totalAmount: inv.totalAmount,
-              sortOrder: 0,
-            });
           }
 
-          // Adjust stock for line items that have an itemId
-          if (inv.lineItems?.length) {
-            for (const li of inv.lineItems) {
-              if (!li.itemName) continue;
-              const [foundItem] = await tx
-                .select({ id: items.id })
-                .from(items)
-                .where(
-                  and(
-                    eq(items.businessId, ctx.businessId),
-                    sql`LOWER(${items.name}) = LOWER(${li.itemName})`
-                  )
-                )
-                .limit(1);
-              if (!foundItem) continue;
-
-              const qty = parseFloat(li.quantity || "1");
-              const baseQty = qty.toFixed(3);
-
-              if (inv.type === "sale") {
-                await tx.update(items).set({
-                  stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
-                  updatedAt: new Date(),
-                }).where(eq(items.id, foundItem.id));
-              } else if (inv.type === "purchase") {
-                await tx.update(items).set({
-                  stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
-                  updatedAt: new Date(),
-                }).where(eq(items.id, foundItem.id));
+          // Aggregate stock deltas by direction
+          const saleDeltas = new Map<string, number>();
+          const purchaseDeltas = new Map<string, number>();
+          for (const b of batch) {
+            for (const [itemId, qty] of b.stockDeltas) {
+              if (b.invoiceRow.type === "sale") {
+                saleDeltas.set(itemId, (saleDeltas.get(itemId) || 0) + qty);
+              } else {
+                purchaseDeltas.set(itemId, (purchaseDeltas.get(itemId) || 0) + qty);
               }
             }
           }
 
-          // Auto-create payment record when requested and amountPaid > 0
-          if (input.autoCreatePayments && parseFloat(inv.amountPaid) > 0) {
-            const mode = normalizeMode(inv.paymentMode || input.defaultPaymentMode);
-            await tx.insert(payments).values({
-              businessId: ctx.businessId,
-              partyId: party.id,
-              invoiceId: createdInv.id,
-              paymentNumber: `IMP-${inv.invoiceNumber}`,
-              amount: inv.amountPaid,
-              discount: "0",
-              mode,
-              paymentDate: invoiceDate,
-              notes: `Imported payment for ${inv.invoiceNumber}`,
-              createdByUserId: ctx.user!.id,
-              createdByName: inv.createdByName || ctx.user!.name,
-              source: input.source,
-            });
+          // Apply sale stock adjustments (subtract)
+          for (const [itemId, totalQty] of saleDeltas) {
+            await tx.update(items).set({
+              stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
+          }
+
+          // Apply purchase stock adjustments (add)
+          for (const [itemId, totalQty] of purchaseDeltas) {
+            await tx.update(items).set({
+              stockQuantity: sql`${items.stockQuantity}::numeric + ${totalQty.toFixed(3)}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
+          }
+
+          // Bulk insert auto-payment records if any
+          const autoPayments = batch.map(b => b.autoPaymentRow).filter(Boolean);
+          if (autoPayments.length > 0) {
+            await tx.insert(payments).values(autoPayments);
           }
         });
-
-        created++;
       }
 
       return { created, skipped, total: input.invoices.length, errors };
@@ -381,20 +410,75 @@ export const importRouter = router({
       let skipped = 0;
       const errors: string[] = [];
 
-      for (const pmt of input.payments) {
-        // Find party by name (case-insensitive)
-        const [party] = await ctx.db
-          .select({ id: parties.id })
-          .from(parties)
-          .where(
-            and(
-              eq(parties.businessId, ctx.businessId),
-              sql`LOWER(${parties.name}) = LOWER(${pmt.partyName})`
-            )
-          )
-          .limit(1);
+      // Pre-fetch parties
+      const allPartiesForPayments = await ctx.db
+        .select({ id: parties.id, name: parties.name })
+        .from(parties).where(eq(parties.businessId, ctx.businessId));
+      const partyByName = new Map(
+        allPartiesForPayments.map(p => [p.name.toLowerCase(), p.id])
+      );
 
-        if (!party) {
+      // Pre-fetch all invoices with their current balances
+      const allInvs = await ctx.db
+        .select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          totalAmount: invoices.totalAmount,
+          amountPaid: invoices.amountPaid,
+          partyId: invoices.partyId,
+          status: invoices.status,
+          documentType: invoices.documentType,
+          invoiceDate: invoices.invoiceDate,
+        })
+        .from(invoices).where(eq(invoices.businessId, ctx.businessId));
+
+      const invoiceByNumber = new Map(allInvs.map(inv => [inv.invoiceNumber, inv]));
+
+      // Build per-party unpaid invoice list for chronological allocation
+      const unpaidByParty = new Map<string, typeof allInvs>();
+      for (const inv of allInvs) {
+        if (inv.documentType !== "invoice") continue;
+        if (inv.status === "paid" || inv.status === "cancelled") continue;
+        const list = unpaidByParty.get(inv.partyId) || [];
+        list.push(inv);
+        unpaidByParty.set(inv.partyId, list);
+      }
+      // Sort each party's invoices by date for chronological allocation
+      for (const list of unpaidByParty.values()) {
+        list.sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
+      }
+
+      // In-memory balance tracker — starts from DB state, updated as we allocate
+      const balanceTracker = new Map<string, number>();
+      for (const inv of allInvs) {
+        balanceTracker.set(inv.id, money.toNumber(inv.totalAmount) - money.toNumber(inv.amountPaid));
+      }
+
+      // ── Phase 1: Pre-validate and simulate allocations in memory ──
+      type PaymentRow = {
+        id: string;
+        paymentNumber: string;
+        partyId: string;
+        primaryInvoiceId: string | null;
+        amount: string;
+        mode: "cash" | "bank" | "upi" | "cheque" | "other";
+        referenceNumber: string | null;
+        paymentDate: Date;
+        notes: string | null;
+      };
+
+      type InvoiceAllocation = {
+        invoiceId: string;
+        allocAmount: number;
+      };
+
+      const validPayments: PaymentRow[] = [];
+      const allAllocations: InvoiceAllocation[] = [];
+      let autoNumberCount = 0;
+
+      for (const pmt of input.payments) {
+        const partyId = partyByName.get(pmt.partyName.toLowerCase());
+        if (!partyId) {
           errors.push(`Party "${pmt.partyName}" not found for payment`);
           skipped++;
           continue;
@@ -407,144 +491,334 @@ export const importRouter = router({
           continue;
         }
 
-        await ctx.db.transaction(async (tx) => {
-          // Atomically get and increment payment number counter
-          const [biz] = await tx
-            .select({
-              prefix: businesses.paymentPrefix,
-              nextNum: businesses.nextPaymentNumber,
-            })
-            .from(businesses)
-            .where(eq(businesses.id, ctx.businessId))
-            .for("update");
+        const paymentId = crypto.randomUUID();
+        let primaryInvoiceId: string | null = null;
+        let remaining = money.toNumber(pmt.amount);
 
-          const paymentNumber =
-            pmt.paymentNumber ||
-            `${biz.prefix}-${String(biz.nextNum).padStart(5, "0")}`;
+        if (pmt.invoiceNumbers?.length) {
+          // CSV path: explicit invoice linkage
+          for (const invNum of pmt.invoiceNumbers) {
+            if (remaining <= 0) break;
+            const inv = invoiceByNumber.get(invNum);
+            if (!inv) continue;
 
-          await tx
-            .update(businesses)
-            .set({ nextPaymentNumber: biz.nextNum + 1 })
-            .where(eq(businesses.id, ctx.businessId));
+            const balance = balanceTracker.get(inv.id) || 0;
+            const allocAmt = Math.min(remaining, Math.max(0, balance));
+            if (allocAmt <= 0) continue;
 
-          let remaining = parseFloat(pmt.amount);
-          let primaryInvoiceId: string | null = null;
-
-          if (pmt.invoiceNumbers?.length) {
-            // CSV path: explicit invoice linkage — allocate to named invoices directly
-            for (const invNum of pmt.invoiceNumbers) {
-              if (remaining <= 0) break;
-
-              const [inv] = await tx
-                .select({
-                  id: invoices.id,
-                  totalAmount: invoices.totalAmount,
-                  amountPaid: invoices.amountPaid,
-                })
-                .from(invoices)
-                .where(
-                  and(
-                    eq(invoices.businessId, ctx.businessId),
-                    eq(invoices.invoiceNumber, invNum),
-                  )
-                )
-                .limit(1);
-
-              if (!inv) continue;
-              if (!primaryInvoiceId) primaryInvoiceId = inv.id;
-
-              const balance = parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
-              const allocAmt = Math.min(remaining, Math.max(0, balance));
-              if (allocAmt <= 0) continue;
-
-              await tx
-                .update(invoices)
-                .set({
-                  amountPaid: sql`${invoices.amountPaid}::numeric + ${allocAmt.toFixed(2)}::numeric`,
-                  updatedAt: new Date(),
-                })
-                .where(eq(invoices.id, inv.id));
-
-              const newPaid = parseFloat(inv.amountPaid) + allocAmt;
-              const total = parseFloat(inv.totalAmount);
-              const newStatus: "paid" | "partial" = newPaid >= total ? "paid" : "partial";
-              await tx
-                .update(invoices)
-                .set({ status: newStatus })
-                .where(eq(invoices.id, inv.id));
-
-              remaining -= allocAmt;
-            }
-          } else {
-            // PDF / fallback path: allocate chronologically across all unpaid invoices for this party
-            const unpaidInvs = await tx
-              .select({
-                id: invoices.id,
-                totalAmount: invoices.totalAmount,
-                amountPaid: invoices.amountPaid,
-              })
-              .from(invoices)
-              .where(
-                and(
-                  eq(invoices.businessId, ctx.businessId),
-                  eq(invoices.partyId, party.id),
-                  eq(invoices.documentType, "invoice"),
-                  sql`${invoices.status} NOT IN ('paid', 'cancelled')`
-                )
-              )
-              .orderBy(invoices.invoiceDate);
-
-            for (const inv of unpaidInvs) {
-              if (remaining <= 0) break;
-              const balance =
-                parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
-              if (balance <= 0) continue;
-
-              const allocAmt = Math.min(remaining, balance);
-              if (!primaryInvoiceId) primaryInvoiceId = inv.id;
-
-              await tx
-                .update(invoices)
-                .set({
-                  amountPaid: sql`${invoices.amountPaid}::numeric + ${allocAmt.toFixed(2)}::numeric`,
-                  updatedAt: new Date(),
-                })
-                .where(eq(invoices.id, inv.id));
-
-              const newPaid = parseFloat(inv.amountPaid) + allocAmt;
-              const total = parseFloat(inv.totalAmount);
-              const newStatus: "paid" | "partial" =
-                newPaid >= total ? "paid" : "partial";
-              await tx
-                .update(invoices)
-                .set({ status: newStatus })
-                .where(eq(invoices.id, inv.id));
-
-              remaining -= allocAmt;
-            }
+            if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+            allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
+            balanceTracker.set(inv.id, balance - allocAmt);
+            remaining -= allocAmt;
           }
+        } else {
+          // Chronological path: allocate across party's unpaid invoices
+          const partyInvs = unpaidByParty.get(partyId) || [];
+          for (const inv of partyInvs) {
+            if (remaining <= 0) break;
+            const balance = balanceTracker.get(inv.id) || 0;
+            if (balance <= 0) continue;
 
-          await tx.insert(payments).values({
-            businessId: ctx.businessId,
-            partyId: party.id,
-            invoiceId: primaryInvoiceId,
-            paymentNumber,
-            amount: pmt.amount,
-            discount: "0",
-            mode: pmt.mode,
-            referenceNumber: pmt.referenceNumber || null,
-            paymentDate,
-            notes: pmt.notes || null,
-            createdByUserId: ctx.user!.id,
-            createdByName: ctx.user!.name,
-            source: input.source,
-          });
+            const allocAmt = Math.min(remaining, balance);
+            if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+            allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
+            balanceTracker.set(inv.id, balance - allocAmt);
+            remaining -= allocAmt;
+          }
+        }
+
+        const needsAutoNumber = !pmt.paymentNumber;
+        if (needsAutoNumber) autoNumberCount++;
+
+        validPayments.push({
+          id: paymentId,
+          paymentNumber: pmt.paymentNumber || "", // placeholder, assigned in batch
+          partyId,
+          primaryInvoiceId,
+          amount: pmt.amount,
+          mode: pmt.mode,
+          referenceNumber: pmt.referenceNumber || null,
+          paymentDate,
+          notes: pmt.notes || null,
         });
 
         created++;
       }
 
+      // ── Phase 2: Batch insert in one transaction ──
+      if (validPayments.length > 0) {
+        await ctx.db.transaction(async (tx) => {
+          // Get counter for auto-numbered payments
+          if (autoNumberCount > 0) {
+            const [biz] = await tx
+              .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+              .from(businesses)
+              .where(eq(businesses.id, ctx.businessId))
+              .for("update");
+
+            let counter = biz.nextNum;
+            for (const p of validPayments) {
+              if (!p.paymentNumber) {
+                p.paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
+                counter++;
+              }
+            }
+
+            await tx.update(businesses)
+              .set({ nextPaymentNumber: counter })
+              .where(eq(businesses.id, ctx.businessId));
+          }
+
+          // Bulk insert all payments in chunks of 500
+          for (let i = 0; i < validPayments.length; i += 500) {
+            const chunk = validPayments.slice(i, i + 500);
+            await tx.insert(payments).values(chunk.map(p => ({
+              id: p.id,
+              businessId: ctx.businessId,
+              partyId: p.partyId,
+              invoiceId: p.primaryInvoiceId,
+              paymentNumber: p.paymentNumber,
+              amount: p.amount,
+              discount: "0",
+              mode: p.mode,
+              referenceNumber: p.referenceNumber,
+              paymentDate: p.paymentDate,
+              notes: p.notes,
+              createdByUserId: ctx.user!.id,
+              createdByName: ctx.user!.name,
+              source: input.source,
+            })));
+          }
+
+          // Group allocations by invoiceId and sum
+          const invoiceUpdates = new Map<string, number>();
+          for (const alloc of allAllocations) {
+            invoiceUpdates.set(alloc.invoiceId, (invoiceUpdates.get(alloc.invoiceId) || 0) + alloc.allocAmount);
+          }
+
+          // Apply one UPDATE per affected invoice
+          for (const [invoiceId, totalAlloc] of invoiceUpdates) {
+            await tx.execute(sql`
+              UPDATE invoices SET
+                amount_paid = amount_paid::numeric + ${totalAlloc.toFixed(2)}::numeric,
+                status = CASE
+                  WHEN (amount_paid::numeric + ${totalAlloc.toFixed(2)}::numeric) >= total_amount::numeric THEN 'paid'
+                  WHEN (amount_paid::numeric + ${totalAlloc.toFixed(2)}::numeric) > 0 THEN 'partial'
+                  ELSE status
+                END,
+                updated_at = NOW()
+              WHERE id = ${invoiceId} AND business_id = ${ctx.businessId}
+            `);
+          }
+        });
+      }
+
       return { created, skipped, total: input.payments.length, errors };
+    }),
+
+  // ── Create payments for directly-paid invoices that lack a payment record ──
+  reconcileDirectPayments: adminProcedure
+    .input(z.object({ source: z.string().default("mybillbook") }))
+    .mutation(async ({ input, ctx }) => {
+      let created = 0;
+      const errors: string[] = [];
+
+      // Find all invoices with amountPaid > 0 that have NO linked payment
+      const rows = (await ctx.db.execute(sql`
+        SELECT i.id, i.invoice_number, i.party_id, i.amount_paid, i.invoice_date, i.type
+        FROM invoices i
+        WHERE i.business_id = ${ctx.businessId}
+          AND i.document_type = 'invoice'
+          AND i.amount_paid::numeric > 0
+          AND i.source = ${input.source}
+          AND NOT EXISTS (
+            SELECT 1 FROM payments p
+            WHERE p.business_id = ${ctx.businessId}
+              AND (
+                p.invoice_id = i.id
+                OR p.payment_number = i.invoice_number
+                OR p.notes LIKE '%' || i.invoice_number || '%'
+              )
+          )
+      `)) as unknown as Array<{
+        id: string;
+        invoice_number: string;
+        party_id: string;
+        amount_paid: string;
+        invoice_date: Date;
+        type: string;
+      }>;
+
+      if (rows.length === 0) {
+        return { created: 0, total: 0, errors: [] };
+      }
+
+      // Get the payment counter
+      const [biz] = await ctx.db
+        .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+        .from(businesses)
+        .where(eq(businesses.id, ctx.businessId))
+        .for("update");
+
+      let counter = biz.nextNum;
+
+      // Batch prepare all payment rows
+      const paymentRows = rows.map((inv) => {
+        const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
+        counter++;
+        return {
+          id: crypto.randomUUID(),
+          businessId: ctx.businessId,
+          partyId: inv.party_id,
+          invoiceId: inv.id,
+          paymentNumber,
+          amount: inv.amount_paid,
+          discount: "0",
+          mode: "cash" as const,
+          paymentDate: inv.invoice_date,
+          notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
+          createdByUserId: ctx.user!.id,
+          createdByName: ctx.user!.name,
+          source: input.source,
+        };
+      });
+
+      // Update counter
+      await ctx.db.update(businesses)
+        .set({ nextPaymentNumber: counter })
+        .where(eq(businesses.id, ctx.businessId));
+
+      // Batch insert in chunks
+      for (let i = 0; i < paymentRows.length; i += 500) {
+        await ctx.db.insert(payments).values(paymentRows.slice(i, i + 500));
+      }
+
+      created = paymentRows.length;
+
+      return { created, total: rows.length, errors };
+    }),
+
+  // ── Ensure bank accounts exist by mode + import inter-account transfers ──
+  importTransfers: adminProcedure
+    .input(z.object({
+      transfers: z.array(z.object({
+        date: z.string(),
+        amount: z.string(),
+        fromMode: z.string(), // "cash", "bank", "upi"
+        toMode: z.string(),
+        notes: z.string().optional(),
+        txnNo: z.string().optional(),
+      })),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      let created = 0;
+      const errors: string[] = [];
+
+      // Map mode → account type
+      const modeToType: Record<string, "cash" | "savings" | "upi"> = {
+        cash: "cash",
+        bank: "savings",
+        upi: "upi",
+      };
+
+      const modeToName: Record<string, string> = {
+        cash: "Cash",
+        bank: "Bank Account",
+        upi: "UPI",
+      };
+
+      // Ensure accounts exist for each mode used in transfers
+      const modesNeeded = new Set<string>();
+      for (const t of input.transfers) {
+        modesNeeded.add(t.fromMode);
+        modesNeeded.add(t.toMode);
+      }
+
+      const existingAccounts = await ctx.db.select()
+        .from(bankAccounts)
+        .where(eq(bankAccounts.businessId, ctx.businessId));
+
+      const accountByType = new Map(existingAccounts.map(a => [a.accountType, a]));
+
+      // Auto-create missing accounts
+      for (const mode of modesNeeded) {
+        const acctType = modeToType[mode] || "savings";
+        if (!accountByType.has(acctType)) {
+          const [created] = await ctx.db.insert(bankAccounts).values({
+            businessId: ctx.businessId,
+            accountName: modeToName[mode] || mode,
+            accountType: acctType,
+            openingBalance: "0",
+            currentBalance: "0",
+            isDefault: acctType === "savings",
+          }).returning();
+          accountByType.set(acctType, created);
+        }
+      }
+
+      // Process transfers
+      for (const t of input.transfers) {
+        const transferDate = parseFlexibleDate(t.date);
+        if (!transferDate) {
+          errors.push(`Invalid date "${t.date}" for transfer`);
+          continue;
+        }
+
+        const fromType = modeToType[t.fromMode] || "savings";
+        const toType = modeToType[t.toMode] || "savings";
+        const fromAccount = accountByType.get(fromType);
+        const toAccount = accountByType.get(toType);
+
+        if (!fromAccount || !toAccount || fromAccount.id === toAccount.id) {
+          errors.push(`Cannot transfer: ${t.fromMode} → ${t.toMode}`);
+          continue;
+        }
+
+        await ctx.db.transaction(async (tx) => {
+          const amount = t.amount;
+
+          // Withdraw from source
+          await tx.insert(bankTransactions).values({
+            bankAccountId: fromAccount.id,
+            businessId: ctx.businessId,
+            type: "withdrawal",
+            amount,
+            description: t.notes || `Transfer to ${modeToName[t.toMode] || t.toMode}`,
+            referenceType: "transfer",
+            transactionDate: transferDate,
+          });
+          await tx.update(bankAccounts).set({
+            currentBalance: sql`${bankAccounts.currentBalance}::numeric - ${amount}::numeric`,
+            updatedAt: new Date(),
+          }).where(eq(bankAccounts.id, fromAccount.id));
+
+          // Deposit to destination
+          await tx.insert(bankTransactions).values({
+            bankAccountId: toAccount.id,
+            businessId: ctx.businessId,
+            type: "deposit",
+            amount,
+            description: t.notes || `Transfer from ${modeToName[t.fromMode] || t.fromMode}`,
+            referenceType: "transfer",
+            transactionDate: transferDate,
+          });
+          await tx.update(bankAccounts).set({
+            currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${amount}::numeric`,
+            updatedAt: new Date(),
+          }).where(eq(bankAccounts.id, toAccount.id));
+        });
+
+        created++;
+      }
+
+      // Return the account IDs so frontend knows what was created
+      const accounts = Array.from(accountByType.entries()).map(([type, a]) => ({
+        type,
+        id: a.id,
+        name: a.accountName,
+      }));
+
+      return { created, total: input.transfers.length, errors, accounts };
     }),
 });
 

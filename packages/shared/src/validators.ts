@@ -69,6 +69,11 @@ export const createBusinessSchema = z.object({
 
 export const updateBusinessSchema = createBusinessSchema.partial();
 
+export const updateSequenceNumberSchema = z.object({
+  documentType: z.enum(["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"]),
+  newNumber: z.number().int().min(1),
+});
+
 // ── Party ──────────────────────────────────────────────────────
 
 export const itemTypes = ["product", "service"] as const;
@@ -91,7 +96,7 @@ export const createPartySchema = z.object({
   name: z.string().min(1).max(200),
   phone: z.string().max(15).optional(),
   email: z.string().email().optional().or(z.literal("")),
-  gstin: z.string().optional().or(z.literal("")),
+  gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().optional().or(z.literal("")),
   billingAddress: z.string().max(500).optional(),
   shippingAddress: z.string().max(500).optional(),
@@ -157,10 +162,10 @@ export const invoiceChargeSchema = z.object({
 export const invoiceLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
   description: z.string().min(1).max(500),
-  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/),
+  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
   unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
-  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 56, { message: "Tax percent cannot exceed 56%" }),
+  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
   selectedUnit: z.string().nullish(),
   conversionFactor: z.string().nullish(), // stored as string like all numerics
 });

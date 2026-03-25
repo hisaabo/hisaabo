@@ -124,6 +124,37 @@ function CashAndBankPage() {
     }
   }, [untrackedData, untrackedFetching, debouncedUntrackedSearch, untrackedMode]);
 
+  // Auto-pick best matching account when untracked selection changes
+  useEffect(() => {
+    if (selectedUntracked.size === 0 || !accounts?.length) return;
+
+    // Count payment modes among selected items
+    const modeCounts = new Map<string, number>();
+    for (const id of selectedUntracked) {
+      const pmt = untrackedData?.data?.find((p) => p.id === id);
+      if (pmt?.mode) modeCounts.set(pmt.mode, (modeCounts.get(pmt.mode) || 0) + 1);
+    }
+
+    // Find dominant mode
+    let dominantMode = "";
+    let maxCount = 0;
+    for (const [mode, count] of modeCounts) {
+      if (count > maxCount) { dominantMode = mode; maxCount = count; }
+    }
+
+    // Match dominant mode to best account
+    let bestAccount = accounts.find((a) => a.isDefault);
+    if (dominantMode === "cash") {
+      bestAccount = accounts.find((a) => a.accountType === "cash") || bestAccount;
+    } else if (dominantMode === "upi") {
+      bestAccount = accounts.find((a) => a.accountType === "upi") || bestAccount;
+    } else if (dominantMode === "bank") {
+      bestAccount = accounts.find((a) => a.accountType === "savings" || a.accountType === "current") || bestAccount;
+    }
+
+    if (bestAccount) setAssignAccountId(bestAccount.id);
+  }, [selectedUntracked.size]); // re-run when selection size changes
+
   const utils = trpc.useUtils();
 
   async function exportTransactionsCSV() {
@@ -791,9 +822,17 @@ function CashAndBankPage() {
 
 // ─── Add Account Modal ────────────────────────────────────────────────────────
 
+const ACCOUNT_TYPE_OPTIONS = [
+  { value: "savings", label: "Savings Account" },
+  { value: "current", label: "Current Account" },
+  { value: "cash", label: "Cash" },
+  { value: "upi", label: "UPI" },
+  { value: "credit_card", label: "Credit Card" },
+];
+
 function AddAccountModal({ onClose }: { onClose: () => void }) {
   const [accountName, setAccountName] = useState("");
-  const [accountType, setAccountType] = useState("savings");
+  const [accountType, setAccountType] = useState("current");
   const [accountNumber, setAccountNumber] = useState("");
   const [ifsc, setIfsc] = useState("");
   const [bankName, setBankName] = useState("");
@@ -825,48 +864,80 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
     });
   }
 
+  const showAccountNumber = accountType === "savings" || accountType === "current" || accountType === "credit_card";
+  const showUpiId = accountType === "upi";
+  const showIfsc = accountType === "savings" || accountType === "current";
+  const showBankName = accountType === "savings" || accountType === "current" || accountType === "credit_card";
+
+  const accountNamePlaceholder =
+    accountType === "cash" ? "e.g. Cash in Hand" :
+    accountType === "upi" ? "e.g. PhonePe" :
+    accountType === "credit_card" ? "e.g. HDFC Credit Card" :
+    "e.g. HDFC Current";
+
+  const accountNumberLabel = accountType === "credit_card" ? "Last 4 Digits" : "Account Number";
+  const accountNumberPlaceholder = accountType === "credit_card" ? "1234" : "Optional";
+
   return (
     <Modal open onClose={onClose} title="Add Bank Account">
       <div className="space-y-4">
+        <div>
+          <p className="label">Account Type</p>
+          <Listbox
+            value={accountType}
+            onChange={(val) => setAccountType(val)}
+            options={ACCOUNT_TYPE_OPTIONS}
+            className="w-full"
+          />
+        </div>
         <InputField
           label="Account Name"
           required
           autoFocus
           value={accountName}
           onChange={(e) => setAccountName(e.target.value)}
-          placeholder="e.g. HDFC Savings"
+          placeholder={accountNamePlaceholder}
         />
-        <SelectField
-          label="Account Type"
-          value={accountType}
-          onChange={(e) => setAccountType(e.target.value)}
-        >
-          <option value="savings">Savings</option>
-          <option value="current">Current</option>
-          <option value="cash">Cash</option>
-          <option value="upi">UPI</option>
-          <option value="credit_card">Credit Card</option>
-        </SelectField>
-        <div className="grid grid-cols-2 gap-4">
+        {showAccountNumber && showIfsc && (
+          <div className="grid grid-cols-2 gap-4">
+            <InputField
+              label={accountNumberLabel}
+              value={accountNumber}
+              onChange={(e) => setAccountNumber(e.target.value)}
+              placeholder={accountNumberPlaceholder}
+            />
+            <InputField
+              label="IFSC Code"
+              value={ifsc}
+              onChange={(e) => setIfsc(e.target.value)}
+              placeholder="Optional"
+            />
+          </div>
+        )}
+        {showAccountNumber && !showIfsc && (
           <InputField
-            label="Account Number"
+            label={accountNumberLabel}
             value={accountNumber}
             onChange={(e) => setAccountNumber(e.target.value)}
-            placeholder="Optional"
+            placeholder={accountNumberPlaceholder}
           />
+        )}
+        {showUpiId && (
           <InputField
-            label="IFSC Code"
-            value={ifsc}
-            onChange={(e) => setIfsc(e.target.value)}
-            placeholder="Optional"
+            label="UPI ID"
+            value={accountNumber}
+            onChange={(e) => setAccountNumber(e.target.value)}
+            placeholder="e.g. business@upi"
           />
-        </div>
-        <InputField
-          label="Bank Name"
-          value={bankName}
-          onChange={(e) => setBankName(e.target.value)}
-          placeholder="e.g. HDFC Bank"
-        />
+        )}
+        {showBankName && (
+          <InputField
+            label="Bank Name"
+            value={bankName}
+            onChange={(e) => setBankName(e.target.value)}
+            placeholder="e.g. HDFC Bank"
+          />
+        )}
         <InputField
           label="Opening Balance (₹)"
           type="number"

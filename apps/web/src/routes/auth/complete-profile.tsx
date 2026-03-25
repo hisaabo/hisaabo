@@ -15,8 +15,9 @@ function CompleteProfilePage() {
   const session = trpc.auth.me.useQuery();
 
   const mutation = trpc.auth.completeProfile.useMutation({
-    onSuccess: () => {
-      utils.auth.me.invalidate();
+    onSuccess: async () => {
+      // Await the refetch so stale needsProfile=true doesn't trigger a redirect loop
+      await utils.auth.me.refetch();
       navigate({ to: "/" });
     },
     onError: (e) => setError(e.message),
@@ -79,7 +80,7 @@ function CompleteProfilePage() {
               required
               autoFocus
               className="input"
-              placeholder="e.g. Saurabh Singhvi"
+              placeholder="e.g. Raj Kumar"
               minLength={2}
             />
           </div>

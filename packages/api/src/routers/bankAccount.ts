@@ -8,6 +8,7 @@ import {
   createBankTransactionSchema,
   bankTransferSchema,
   paginationSchema,
+  money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
@@ -255,13 +256,10 @@ export const bankAccountRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
         }
 
-        const currentBalance = parseFloat(account.currentBalance);
-        const amount = parseFloat(input.amount);
-
         const newBalance =
           input.type === "deposit" || input.type === "transfer"
-            ? currentBalance + amount
-            : currentBalance - amount;
+            ? money.add(account.currentBalance, input.amount)
+            : money.sub(account.currentBalance, input.amount);
 
         const [txn] = await tx
           .insert(bankTransactions)
@@ -273,7 +271,7 @@ export const bankAccountRouter = router({
             description: input.description,
             referenceType: input.referenceType,
             referenceId: input.referenceId,
-            balanceAfter: newBalance.toFixed(2),
+            balanceAfter: newBalance,
             transactionDate: input.transactionDate
               ? new Date(input.transactionDate)
               : new Date(),
@@ -282,7 +280,7 @@ export const bankAccountRouter = router({
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.bankAccountId));
 
         return txn;
@@ -344,12 +342,8 @@ export const bankAccountRouter = router({
         const toAccount =
           firstAccount.id === input.toAccountId ? firstAccount : secondAccount;
 
-        const amount = parseFloat(input.amount);
-        const fromBalance = parseFloat(fromAccount.currentBalance);
-        const toBalance = parseFloat(toAccount.currentBalance);
-
-        const newFromBalance = fromBalance - amount;
-        const newToBalance = toBalance + amount;
+        const newFromBalance = money.sub(fromAccount.currentBalance, input.amount);
+        const newToBalance = money.add(toAccount.currentBalance, input.amount);
 
         const txnDate = input.transactionDate ? new Date(input.transactionDate) : new Date();
 
@@ -363,7 +357,7 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer to account ${input.toAccountId}`,
             referenceType: "transfer",
             referenceId: input.toAccountId,
-            balanceAfter: newFromBalance.toFixed(2),
+            balanceAfter: newFromBalance,
             transactionDate: txnDate,
           })
           .returning();
@@ -378,19 +372,19 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer from account ${input.fromAccountId}`,
             referenceType: "transfer",
             referenceId: input.fromAccountId,
-            balanceAfter: newToBalance.toFixed(2),
+            balanceAfter: newToBalance,
             transactionDate: txnDate,
           })
           .returning();
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newFromBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newFromBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.fromAccountId));
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newToBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newToBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.toAccountId));
 
         return { withdrawal: withdrawalTxn, deposit: depositTxn };

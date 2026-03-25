@@ -1,6 +1,7 @@
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, payments, expenses, parties, businesses } from "@hisaabo/db";
+import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 
 export const dashboardRouter = router({
@@ -21,97 +22,110 @@ export const dashboardRouter = router({
 
     const fyCondition = (dateCol: Parameters<typeof gte>[0]) => gte(dateCol, fyStart);
 
-    const [salesResult] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
-    }).from(invoices)
-      .where(and(
-        eq(invoices.businessId, ctx.businessId),
-        eq(invoices.type, "sale"),
-        eq(invoices.documentType, "invoice"),
-        fyCondition(invoices.invoiceDate),
-      ));
+    const [
+      [salesResult],
+      [purchaseResult],
+      [expenseResult],
+      [receivableResult],
+      [payableResult],
+      recentInvoices,
+      [cashIn],
+      [cashOut],
+    ] = await Promise.all([
+      // Sales total (FY)
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
+      }).from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          fyCondition(invoices.invoiceDate),
+        )),
 
-    const [purchaseResult] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
-    }).from(invoices)
-      .where(and(
-        eq(invoices.businessId, ctx.businessId),
-        eq(invoices.type, "purchase"),
-        eq(invoices.documentType, "invoice"),
-        fyCondition(invoices.invoiceDate),
-      ));
+      // Purchase total (FY)
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric), 0)::text`,
+      }).from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "purchase"),
+          eq(invoices.documentType, "invoice"),
+          fyCondition(invoices.invoiceDate),
+        )),
 
-    const [expenseResult] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${expenses.amount}::numeric), 0)::text`,
-    }).from(expenses)
-      .where(and(
-        eq(expenses.businessId, ctx.businessId),
-        fyCondition(expenses.expenseDate),
-      ));
+      // Expense total (FY)
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${expenses.amount}::numeric), 0)::text`,
+      }).from(expenses)
+        .where(and(
+          eq(expenses.businessId, ctx.businessId),
+          fyCondition(expenses.expenseDate),
+        )),
 
-    // Receivable = total sale invoices - amount paid on sales
-    const [receivableResult] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
-    }).from(invoices)
-      .where(and(
-        eq(invoices.businessId, ctx.businessId),
-        eq(invoices.type, "sale"),
-        eq(invoices.documentType, "invoice"),
-        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
-      ));
+      // Receivable = total sale invoices - amount paid on sales
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
+      }).from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        )),
 
-    // Payable = total purchase invoices - amount paid on purchases
-    const [payableResult] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
-    }).from(invoices)
-      .where(and(
-        eq(invoices.businessId, ctx.businessId),
-        eq(invoices.type, "purchase"),
-        eq(invoices.documentType, "invoice"),
-        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
-      ));
+      // Payable = total purchase invoices - amount paid on purchases
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
+      }).from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "purchase"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        )),
 
-    // Recent invoices
-    const recentInvoices = await ctx.db.select({
-      id: invoices.id,
-      invoiceNumber: invoices.invoiceNumber,
-      partyName: parties.name,
-      totalAmount: invoices.totalAmount,
-      status: invoices.status,
-      invoiceDate: invoices.invoiceDate,
-    }).from(invoices)
-      .innerJoin(parties, eq(parties.id, invoices.partyId))
-      .where(and(
-        eq(invoices.businessId, ctx.businessId),
-        eq(invoices.documentType, "invoice"),
-      ))
-      .orderBy(desc(invoices.createdAt))
-      .limit(10);
+      // Recent invoices
+      ctx.db.select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        partyName: parties.name,
+        totalAmount: invoices.totalAmount,
+        status: invoices.status,
+        invoiceDate: invoices.invoiceDate,
+      }).from(invoices)
+        .innerJoin(parties, eq(parties.id, invoices.partyId))
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.documentType, "invoice"),
+        ))
+        .orderBy(desc(invoices.createdAt))
+        .limit(10),
 
-    // Cash in hand = all payments received (in) - all payments made (out) - expenses
-    const [cashIn] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
-    }).from(payments)
-      .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
-      .where(and(
-        eq(payments.businessId, ctx.businessId),
-        eq(invoices.type, "sale"),
-      ));
+      // Cash in hand = all payments received (in) - all payments made (out) - expenses
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
+      }).from(payments)
+        .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
+        .where(and(
+          eq(payments.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+        )),
 
-    const [cashOut] = await ctx.db.select({
-      total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
-    }).from(payments)
-      .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
-      .where(and(
-        eq(payments.businessId, ctx.businessId),
-        eq(invoices.type, "purchase"),
-      ));
+      ctx.db.select({
+        total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
+      }).from(payments)
+        .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
+        .where(and(
+          eq(payments.businessId, ctx.businessId),
+          eq(invoices.type, "purchase"),
+        )),
+    ]);
 
-    const cashInHand = (
-      parseFloat(cashIn.total) -
-      parseFloat(cashOut.total) -
-      parseFloat(expenseResult.total)
-    ).toFixed(2);
+    const cashInHand = money.sub(
+      money.sub(cashIn.total || "0", cashOut.total || "0"),
+      expenseResult.total || "0",
+    );
 
     return {
       totalSales: salesResult.total,
@@ -167,13 +181,10 @@ export const dashboardRouter = router({
         .from(expenses)
         .where(and(...expenseConditions));
 
-      const charged = parseFloat(shippingCharged.total);
-      const spent = parseFloat(shippingExpenses.total);
-
       return {
-        charged: charged.toFixed(2),
-        spent: spent.toFixed(2),
-        net: (charged - spent).toFixed(2),
+        charged: money.add(shippingCharged.total || "0", "0"),
+        spent: money.add(shippingExpenses.total || "0", "0"),
+        net: money.sub(shippingCharged.total || "0", shippingExpenses.total || "0"),
       };
     }),
 });

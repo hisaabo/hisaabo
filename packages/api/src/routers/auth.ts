@@ -7,6 +7,7 @@ import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens } f
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
+import { invalidateSessionCache } from "../context.js";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -262,6 +263,13 @@ export const authRouter = router({
       .set({ name: input.name, updatedAt: new Date() })
       .where(eq(users.id, ctx.user!.id));
 
+    // Invalidate ALL session cache entries for this user so `me` returns fresh data
+    // (the cache stores by sessionId, so we need to find and clear the right entry)
+    const cookies = ctx.req.headers.get("cookie") || "";
+    const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+    if (sessionId) invalidateSessionCache(sessionId);
+
     return { success: true };
   }),
 
@@ -273,6 +281,7 @@ export const authRouter = router({
 
     if (sessionId) {
       await controlDb.delete(sessions).where(eq(sessions.id, sessionId));
+      invalidateSessionCache(sessionId);
     }
 
     clearSessionCookie(ctx.resHeaders);

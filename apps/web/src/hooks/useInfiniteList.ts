@@ -96,7 +96,15 @@ export function useInfiniteList<T extends { id: string }>({
 
   const hasMore = allItems.length < total;
 
-  // Save scroll position on scroll and trigger infinite load near bottom
+  // Use refs for values that onScroll needs but shouldn't cause re-creation
+  const isFetchingRef = useRef(isFetching);
+  const hasMoreRef = useRef(hasMore);
+  const itemCountRef = useRef(allItems.length);
+  isFetchingRef.current = isFetching;
+  hasMoreRef.current = hasMore;
+  itemCountRef.current = allItems.length;
+
+  // Stable scroll handler — does not change identity when data changes
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -104,14 +112,14 @@ export function useInfiniteList<T extends { id: string }>({
     // Persist scroll position to sessionStorage (survives navigation within tab)
     sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ scrollTop: el.scrollTop, itemCount: allItems.length })
+      JSON.stringify({ scrollTop: el.scrollTop, itemCount: itemCountRef.current })
     );
 
     // Load more when within 150px of the bottom
-    if (!isFetching && hasMore && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+    if (!isFetchingRef.current && hasMoreRef.current && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
       onLoadMore();
     }
-  }, [isFetching, hasMore, allItems.length, onLoadMore, storageKey]);
+  }, [onLoadMore, storageKey]);
 
   // Remove an item optimistically (e.g., after delete)
   const removeItem = useCallback((id: string) => {

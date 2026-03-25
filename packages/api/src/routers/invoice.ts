@@ -193,30 +193,22 @@ export const invoiceRouter = router({
       }
 
       // Update stock quantities for sale/purchase invoices (adjusted for unit conversion)
-      if (input.type === "sale") {
-        for (const li of input.lineItems) {
-          if (li.itemId) {
-            const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
-            await tx.update(items)
-              .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, li.itemId));
-          }
+      // Group by itemId and sum quantities to avoid redundant per-row updates
+      const stockMap = new Map<string, number>();
+      for (const li of input.lineItems) {
+        if (li.itemId) {
+          const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+          stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
         }
-      } else if (input.type === "purchase") {
-        for (const li of input.lineItems) {
-          if (li.itemId) {
-            const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
-            await tx.update(items)
-              .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, li.itemId));
-          }
-        }
+      }
+      for (const [itemId, totalQty] of stockMap) {
+        const qtyStr = totalQty.toFixed(3);
+        await tx.update(items).set({
+          stockQuantity: input.type === "sale"
+            ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+            : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(items.id, itemId));
       }
 
       return invoice;
@@ -277,10 +269,35 @@ export const invoiceRouter = router({
 
         // 4. Handle line items — delete old, insert new, recalculate totals
         if (input.lineItems) {
-          // Delete existing line items
+          // Step 1: Read old line items to reverse their stock impact
+          const oldLineItems = await tx.select({
+            itemId: invoiceItems.itemId,
+            quantity: invoiceItems.quantity,
+            conversionFactor: invoiceItems.conversionFactor,
+          }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
+
+          // Step 2: Reverse old stock adjustments (grouped by itemId)
+          const oldStockMap = new Map<string, number>();
+          for (const li of oldLineItems) {
+            if (li.itemId) {
+              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+              oldStockMap.set(li.itemId, (oldStockMap.get(li.itemId) || 0) + qty);
+            }
+          }
+          for (const [itemId, totalQty] of oldStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(items).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`  // reverse: add back
+                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`, // reverse: subtract back
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
+          }
+
+          // Step 3: Delete existing line items
           await tx.delete(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Process and insert new line items using fixed-point arithmetic
+          // Step 4: Process and insert new line items using fixed-point arithmetic
           const processedItems = input.lineItems.map((li, idx) => {
             const calc = calcLineItem({
               quantity: li.quantity,
@@ -306,6 +323,24 @@ export const invoiceRouter = router({
 
           if (processedItems.length > 0) {
             await tx.insert(invoiceItems).values(processedItems);
+          }
+
+          // Step 5: Apply new stock adjustments (grouped by itemId)
+          const newStockMap = new Map<string, number>();
+          for (const li of input.lineItems) {
+            if (li.itemId) {
+              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+              newStockMap.set(li.itemId, (newStockMap.get(li.itemId) || 0) + qty);
+            }
+          }
+          for (const [itemId, totalQty] of newStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(items).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+                : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
           }
 
           // Recalculate totals using fixed-point arithmetic

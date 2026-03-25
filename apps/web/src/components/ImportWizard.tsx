@@ -33,6 +33,7 @@ interface ImportResult {
   skipped: number;
   total: number;
   errors?: string[];
+  details?: string[];  // informational messages, not errors
 }
 
 interface StepState {
@@ -1006,6 +1007,11 @@ function ImportStepRow({
                   {errorsOpen ? "▲" : "▼"}
                 </button>
               )}
+              {result.details && result.details.length > 0 && (
+                <span className="text-xs text-text-tertiary">
+                  {result.details[0]}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -1052,6 +1058,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const importItemsMut = trpc.import.importItems.useMutation();
   const importInvoicesMut = trpc.import.importInvoices.useMutation();
   const importPaymentsMut = trpc.import.importPayments.useMutation();
+  const importTransfersMut = trpc.import.importTransfers.useMutation();
+  const reconcileDirectMut = trpc.import.reconcileDirectPayments.useMutation();
+  const createExpenseMut = trpc.expense.create.useMutation();
 
   const BATCH_SIZE = 50;
 
@@ -1431,7 +1440,8 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         created: totalCreated,
         skipped: 0,
         total: totalCreated,
-        errors: details.length > 0 ? [details.join(", ")] : [],
+        errors: [],
+        details: details.length > 0 ? [details.join(", ")] : [],
       };
       setImportStatuses((s) => ({ ...s, parties: "done" }));
       setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
@@ -1621,14 +1631,59 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         // Detect whether this is a CSV (has "Invoice numbers" column) or PDF
         const isCashBankCsv = cashBankFile.headers.includes("Invoice numbers");
 
+        // ── Extract inter-account transfers (Add Money / Reduce Money pairs) ──
+        // "Add Money" = money received into an account (Received column)
+        // "Reduce Money" = money sent from an account (Paid column)
+        // They come in pairs with matching Txn No — one is the source, other is dest
+        const addMoneyRows = cashBankRows.filter((r) => (r["Type"] || "").toLowerCase() === "add money");
+        const reduceMoneyRows = cashBankRows.filter((r) => (r["Type"] || "").toLowerCase() === "reduce money");
+
+        // Match pairs by Txn No + amount
+        const transfers: Array<{ date: string; amount: string; fromMode: string; toMode: string; notes?: string; txnNo?: string }> = [];
+        for (const addRow of addMoneyRows) {
+          const txnNo = (addRow["Txn No"] || "").trim();
+          const received = parseFloat(cleanMoney(addRow["Received"] || "0"));
+          if (received <= 0) continue;
+
+          // The "Add Money" side receives — its Mode tells us WHERE money went TO
+          const toMode = normalizePaymentMode(addRow["Mode"] || "bank");
+
+          // Find matching "Reduce Money" with same Txn No
+          const matchingReduce = reduceMoneyRows.find((r) => (r["Txn No"] || "").trim() === txnNo);
+          // The "Reduce Money" side pays — its Mode tells us WHERE money came FROM
+          const fromMode = matchingReduce
+            ? normalizePaymentMode(matchingReduce["Mode"] || "cash")
+            : (toMode === "bank" ? "cash" : "bank"); // best guess if no match
+
+          transfers.push({
+            date: addRow["Date"] || "",
+            amount: received.toFixed(2),
+            fromMode: fromMode === "upi" ? "upi" : fromMode === "bank" ? "bank" : "cash",
+            toMode: toMode === "upi" ? "upi" : toMode === "bank" ? "bank" : "cash",
+            notes: (addRow["Notes"] || "").replace(/"/g, "").trim() || undefined,
+            txnNo: txnNo || undefined,
+          });
+        }
+
+        // Import transfers (also auto-creates Cash/Bank/UPI accounts if missing)
+        let transfersCreated = 0;
+        if (transfers.length > 0) {
+          try {
+            const res = await importTransfersMut.mutateAsync({ transfers });
+            transfersCreated = res.created;
+          } catch {
+            // Non-fatal
+          }
+        }
+
         // Accept all transaction types that involve money movement:
         // Payment-in, Payment-out, Sales Invoice, Purchase Invoice, etc.
-        // Only skip "Opening Balance" and summary rows
+        // Skip "Opening Balance", "Add Money", "Reduce Money" and summary rows
         const paymentRows = cashBankRows
           .filter((row) => {
             const type = (row["Type"] || "").toLowerCase();
-            // Skip non-transaction rows
-            if (type.includes("opening balance") || !type) return false;
+            // Skip non-transaction rows and transfers (handled separately)
+            if (type.includes("opening balance") || type === "add money" || type === "reduce money" || !type) return false;
             // Accept payments, invoices marked as received/paid
             const received = parseFloat(cleanMoney(row["Received"] || "0"));
             const paid = parseFloat(cleanMoney(row["Paid"] || "0"));
@@ -1681,10 +1736,49 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           if (res.errors) errors.push(...res.errors);
         }
 
-        if (expenseRows.length > 0) {
-          errors.push(
-            `${expenseRows.length} expense ${expenseRows.length === 1 ? "entry" : "entries"} found (not imported — use Expenses module)`
-          );
+        // Import expense rows
+        let expensesCreated = 0;
+        for (const row of expenseRows) {
+          try {
+            const paid = parseFloat(cleanMoney(row["Paid"] || "0"));
+            if (paid <= 0) continue;
+
+            const dateStr = row["Date"] || "";
+            const party = (row["Party"] || "").trim();
+            const type = (row["Type"] || "Expense").trim();
+            // Use the party name as description, Type as category
+            const category = type.includes("Expense") ? (party || "General") : type;
+            const description = party && party !== category ? `${type} — ${party}` : type;
+
+            // Parse date to ISO format (myBillBook uses DD/MM/YYYY)
+            let expenseDate: string | undefined;
+            if (dateStr) {
+              const parts = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+              if (parts) {
+                const d = new Date(+parts[3], +parts[2] - 1, +parts[1]);
+                if (!isNaN(d.getTime())) expenseDate = d.toISOString();
+              } else {
+                const iso = new Date(dateStr);
+                if (!isNaN(iso.getTime())) expenseDate = iso.toISOString();
+              }
+            }
+
+            await createExpenseMut.mutateAsync({
+              category,
+              description,
+              amount: paid.toFixed(2),
+              mode: normalizePaymentMode(row["Mode"] || "cash"),
+              expenseDate,
+              referenceNumber: (row["Txn No"] || "").trim() || undefined,
+            });
+            expensesCreated++;
+          } catch (expErr) {
+            // Expense creation failed — non-fatal, continue with next
+            errors.push(`Expense "${row["Party"] || row["Type"]}" failed: ${expErr instanceof Error ? expErr.message : "Unknown"}`);
+          }
+        }
+        if (expensesCreated > 0) {
+          created += expensesCreated;
         }
 
         newResults.cashBank = {
@@ -1702,6 +1796,32 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         setImportStatuses((s) => ({ ...s, cashBank: "done" }));
         setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
       }
+    }
+
+    // ── Step 5: Auto-create payments for directly-paid invoices ────────────
+    // Invoices marked as paid in myBillBook but without a separate Cash & Bank entry
+    try {
+      const res = await reconcileDirectMut.mutateAsync({ source: "mybillbook" });
+      if (res.created > 0) {
+        const prev = newResults.cashBank;
+        if (prev) {
+          newResults.cashBank = {
+            ...prev,
+            created: prev.created + res.created,
+            details: [...(prev.details || []), `${res.created} auto-created for direct-paid invoices`],
+          };
+        } else {
+          newResults.cashBank = {
+            created: res.created,
+            skipped: 0,
+            total: res.created,
+            details: [`${res.created} auto-created for direct-paid invoices`],
+          };
+        }
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      }
+    } catch {
+      // Non-fatal — the main import succeeded
     }
   }
 
@@ -2393,7 +2513,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             invoices: gstReportFile
               ? `Importing invoices with line items from GST Report (${gstReportFile.rows.length.toLocaleString()} line items)...`
               : "Importing invoices...",
-            payments: "Payments (auto-created with invoices)",
+            payments: "Payments",
             cashBank: isCashBankCsv
               ? "Importing payments from Cash & Bank CSV (with invoice linkage)..."
               : "Importing payments from Cash & Bank statement...",
@@ -2415,7 +2535,14 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           )}
 
           {ENTITY_ORDER
-            .filter((key) => key !== "cashBank" || importStatuses[key] !== undefined)
+            .filter((key) => {
+              const status = importStatuses[key];
+              // Hide steps that were skipped entirely
+              if (status === "skipped") return false;
+              // Hide cashBank if not started
+              if (key === "cashBank" && status === undefined) return false;
+              return true;
+            })
             .map((key) => {
               const status = importStatuses[key] || "pending";
               return (
@@ -2471,6 +2598,10 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
   function renderFooter() {
     if (step === 5) {
+      if (!importDone) {
+        // Import is running — no buttons
+        return null;
+      }
       return (
         <div className="flex gap-3">
           <button

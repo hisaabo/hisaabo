@@ -196,29 +196,31 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of effectiveAllocations) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        // Auto-update invoice status based on new amountPaid
-        const [inv] = await tx.select({
+        // Overpayment guard: fetch invoice before applying allocation
+        const [invBefore] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
         }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
 
-        if (inv) {
-          const total = parseFloat(inv.totalAmount);
-          const paid = parseFloat(inv.amountPaid);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : undefined;
-          if (newStatus) {
-            await tx.update(invoices)
-              .set({ status: newStatus })
-              .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
+        if (invBefore) {
+          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
+          if (money.toNumber(alloc.amount) > money.toNumber(balance)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
           }
         }
+
+        // Single SQL: update amountPaid and status atomically
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = amount_paid::numeric + ${alloc.amount}::numeric,
+            status = CASE
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) >= total_amount::numeric THEN 'paid'
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) > 0 THEN 'partial'
+              ELSE status
+            END,
+            updated_at = NOW()
+          WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // ── Bank account transaction ─────────────────────────────────────────
@@ -236,9 +238,6 @@ export const paymentRouter = router({
           .limit(1);
 
         if (account) {
-          const currentBalance = parseFloat(account.currentBalance);
-          const amount = parseFloat(input.amount);
-
           // Determine direction: sale payments are deposits, purchase payments are withdrawals.
           // Check the type of the first linked invoice if any.
           let txType: "deposit" | "withdrawal" = "deposit";
@@ -251,7 +250,9 @@ export const paymentRouter = router({
           }
 
           const newBalance =
-            txType === "deposit" ? currentBalance + amount : currentBalance - amount;
+            txType === "deposit"
+              ? money.add(account.currentBalance, input.amount)
+              : money.sub(account.currentBalance, input.amount);
 
           await tx.insert(bankTransactions).values({
             businessId: ctx.businessId,
@@ -261,12 +262,12 @@ export const paymentRouter = router({
             description: `Payment ${paymentNumber}`,
             referenceType: "payment",
             referenceId: payment.id,
-            balanceAfter: newBalance.toFixed(2),
+            balanceAfter: newBalance,
             transactionDate: payment.paymentDate,
           });
 
           await tx.update(bankAccounts)
-            .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+            .set({ currentBalance: newBalance, updatedAt: new Date() })
             .where(eq(bankAccounts.id, input.bankAccountId));
         }
       }
@@ -318,7 +319,7 @@ export const paymentRouter = router({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
           status: invoices.status,
-        }).from(invoices).where(eq(invoices.id, payment.invoiceId)).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, payment.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
         if (inv) {
           linkedInvoices.push({
             invoiceId: inv.id,
@@ -348,26 +349,19 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
-      // 2. Reverse old invoice allocation
+      // 2. Reverse old invoice allocation (single SQL: update amountPaid and status atomically)
       if (existing.invoiceId) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`GREATEST(${invoices.amountPaid}::numeric - ${existing.amount}::numeric, 0)`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        // Recompute old invoice status
-        const [oldInv] = await tx.select({
-          totalAmount: invoices.totalAmount,
-          amountPaid: invoices.amountPaid,
-        }).from(invoices).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
-        if (oldInv) {
-          const paid = parseFloat(oldInv.amountPaid);
-          const total = parseFloat(oldInv.totalAmount);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : "sent";
-          await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
-        }
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0),
+            status = CASE
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) > 0 THEN 'partial'
+              ELSE 'sent'
+            END,
+            updated_at = NOW()
+          WHERE id = ${existing.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // 3. Reverse old bank transaction
@@ -387,11 +381,11 @@ export const paymentRouter = router({
             .for("update").limit(1);
 
           if (account) {
-            const bal = parseFloat(account.currentBalance);
-            const amt = parseFloat(bankTxn.amount);
-            const revBal = bankTxn.type === "deposit" ? bal - amt : bal + amt;
+            const revBal = bankTxn.type === "deposit"
+              ? money.sub(account.currentBalance, bankTxn.amount)
+              : money.add(account.currentBalance, bankTxn.amount);
             await tx.update(bankAccounts)
-              .set({ currentBalance: revBal.toFixed(2), updatedAt: new Date() })
+              .set({ currentBalance: revBal, updatedAt: new Date() })
               .where(eq(bankAccounts.id, existing.bankAccountId));
           }
 
@@ -423,7 +417,7 @@ export const paymentRouter = router({
           paymentDate: newDate,
           invoiceId: primaryInvoiceId,
         })
-        .where(eq(payments.id, input.id))
+        .where(and(eq(payments.id, input.id), eq(payments.businessId, ctx.businessId)))
         .returning();
 
       // 5. Apply new allocations
@@ -434,25 +428,31 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of newAllocations) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        const [inv] = await tx.select({
+        // Overpayment guard: fetch invoice before applying allocation
+        const [invBefore] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
         }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
-        if (inv) {
-          const total = parseFloat(inv.totalAmount);
-          const paid = parseFloat(inv.amountPaid);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : undefined;
-          if (newStatus) {
-            await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
+
+        if (invBefore) {
+          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
+          if (money.toNumber(alloc.amount) > money.toNumber(balance)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
           }
         }
+
+        // Single SQL: update amountPaid and status atomically
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = amount_paid::numeric + ${alloc.amount}::numeric,
+            status = CASE
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) >= total_amount::numeric THEN 'paid'
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) > 0 THEN 'partial'
+              ELSE status
+            END,
+            updated_at = NOW()
+          WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // 6. Create new bank transaction if bank account set
@@ -463,15 +463,15 @@ export const paymentRouter = router({
           .for("update").limit(1);
 
         if (account) {
-          const bal = parseFloat(account.currentBalance);
-          const amt = parseFloat(newAmount);
           let txType: "deposit" | "withdrawal" = "deposit";
           if (newAllocations.length > 0) {
             const [inv] = await tx.select({ type: invoices.type }).from(invoices)
               .where(eq(invoices.id, newAllocations[0].invoiceId)).limit(1);
             if (inv?.type === "purchase") txType = "withdrawal";
           }
-          const newBal = txType === "deposit" ? bal + amt : bal - amt;
+          const newBal = txType === "deposit"
+            ? money.add(account.currentBalance, newAmount)
+            : money.sub(account.currentBalance, newAmount);
 
           await tx.insert(bankTransactions).values({
             businessId: ctx.businessId,
@@ -481,12 +481,12 @@ export const paymentRouter = router({
             description: `Payment ${existing.paymentNumber} (edited)`,
             referenceType: "payment",
             referenceId: existing.id,
-            balanceAfter: newBal.toFixed(2),
+            balanceAfter: newBal,
             transactionDate: newDate,
           });
 
           await tx.update(bankAccounts)
-            .set({ currentBalance: newBal.toFixed(2), updatedAt: new Date() })
+            .set({ currentBalance: newBal, updatedAt: new Date() })
             .where(eq(bankAccounts.id, newBankAccountId));
         }
       }
@@ -539,16 +539,13 @@ export const paymentRouter = router({
               .limit(1);
 
             if (bankTxn) {
-              const currentBalance = parseFloat(account.currentBalance);
-              const amount = parseFloat(bankTxn.amount);
               // Reverse: if it was a deposit, now subtract; if withdrawal, now add
-              const newBalance =
-                bankTxn.type === "deposit"
-                  ? currentBalance - amount
-                  : currentBalance + amount;
+              const newBalance = bankTxn.type === "deposit"
+                ? money.sub(account.currentBalance, bankTxn.amount)
+                : money.add(account.currentBalance, bankTxn.amount);
 
               await tx.update(bankAccounts)
-                .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+                .set({ currentBalance: newBalance, updatedAt: new Date() })
                 .where(eq(bankAccounts.id, payment.bankAccountId));
 
               // Delete the associated bank transaction
@@ -643,7 +640,7 @@ export const paymentRouter = router({
 
         if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
 
-        let totalDeposited = 0;
+        let totalDeposited = "0.00";
 
         // Resolve payment IDs — either from explicit list or by querying all matching untracked
         let paymentIds = input.paymentIds || [];
@@ -702,11 +699,12 @@ export const paymentRouter = router({
             if (inv?.type === "purchase") txType = "withdrawal";
           }
 
-          const amount = parseFloat(pmt.amount);
-          totalDeposited += txType === "deposit" ? amount : -amount;
+          totalDeposited = txType === "deposit"
+            ? money.add(totalDeposited, pmt.amount)
+            : money.sub(totalDeposited, pmt.amount);
 
           // Calculate running balance after this transaction
-          const currentBal = parseFloat(account.currentBalance) + totalDeposited;
+          const currentBal = money.add(account.currentBalance, totalDeposited);
 
           // Create bank transaction
           await tx.insert(bankTransactions).values({
@@ -717,7 +715,7 @@ export const paymentRouter = router({
             description: `Payment ${pmt.paymentNumber || pmt.id} (assigned)`,
             referenceType: "payment",
             referenceId: pmt.id,
-            balanceAfter: currentBal.toFixed(2),
+            balanceAfter: currentBal,
             transactionDate: pmt.paymentDate,
           });
         }
@@ -725,7 +723,7 @@ export const paymentRouter = router({
         // Update account balance once with net change
         await tx.update(bankAccounts)
           .set({
-            currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${totalDeposited.toFixed(2)}::numeric`,
+            currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${totalDeposited}::numeric`,
             updatedAt: new Date(),
           })
           .where(eq(bankAccounts.id, input.bankAccountId));

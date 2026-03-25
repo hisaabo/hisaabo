@@ -297,31 +297,26 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
 
           // Stock effects (adjusted for unit conversion)
-          if (config.stockEffect === "decrement") {
+          // Group by itemId and sum quantities to avoid redundant per-row updates
+          if (config.stockEffect !== "none") {
+            const stockMap = new Map<string, number>();
             for (const li of input.lineItems) {
               if (li.itemId) {
-                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
-                await tx
-                  .update(items)
-                  .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(items.id, li.itemId));
+                const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+                stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
               }
             }
-          } else if (config.stockEffect === "increment") {
-            for (const li of input.lineItems) {
-              if (li.itemId) {
-                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1")).toFixed(3);
-                await tx
-                  .update(items)
-                  .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(items.id, li.itemId));
-              }
+            for (const [itemId, totalQty] of stockMap) {
+              const qtyStr = totalQty.toFixed(3);
+              await tx
+                .update(items)
+                .set({
+                  stockQuantity: config.stockEffect === "decrement"
+                    ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+                    : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+                  updatedAt: new Date(),
+                })
+                .where(and(eq(items.id, itemId), eq(items.businessId, ctx.businessId)));
             }
           }
 
@@ -397,7 +392,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                       stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
-                    .where(eq(items.id, li.itemId));
+                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 } else if (config.stockEffect === "increment") {
                   // was incremented on create → subtract on delete
                   await tx
@@ -406,7 +401,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                       stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
-                    .where(eq(items.id, li.itemId));
+                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 }
               }
             }

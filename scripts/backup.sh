@@ -1,15 +1,15 @@
 #!/bin/bash
-# ── Billbook PostgreSQL Backup Script ───────────────────────────
-# Run via cron: 0 2 * * * /opt/billbook/scripts/backup.sh
+# ── Hisaabo PostgreSQL Backup Script ──────────────────────────
+# Run via cron: 0 2 * * * /opt/hisaabo/scripts/backup.sh
 # Requires: pg_basebackup, rclone (configured with R2/S3)
 set -euo pipefail
 
 # Config
-DB_USER="${DB_USER:-billbook}"
-DB_NAME="${DB_NAME:-billbook}"
-BACKUP_DIR="/var/backups/billbook"
+DB_USER="${DB_USER:-hisaabo}"
+DB_NAME="${DB_NAME:-hisaabo}"
+BACKUP_DIR="/var/backups/hisaabo"
 RETENTION_DAYS=30
-R2_REMOTE="r2:billbook-backups"  # rclone remote name
+R2_REMOTE="r2:hisaabo-backups"  # rclone remote name
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 echo "[$TIMESTAMP] Starting backup..."

@@ -26,5 +26,15 @@ export default defineConfig({
     target: "es2022",
     outDir: "dist",
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-router': ['@tanstack/react-router'],
+          'vendor-query': ['@tanstack/react-query'],
+          'vendor-trpc': ['@trpc/client', '@trpc/react-query', 'superjson'],
+        },
+      },
+    },
   },
 });

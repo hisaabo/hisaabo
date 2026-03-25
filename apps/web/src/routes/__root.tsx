@@ -152,7 +152,7 @@ function TenantPicker({
 
 function RootLayout() {
   const utils = trpc.useUtils();
-  const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
+  const { data: session, isLoading: sessionLoading, isFetching: sessionFetching } = trpc.auth.me.useQuery();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
     enabled: !!session?.user && !session?.tenantId,
   });
@@ -225,7 +225,8 @@ function RootLayout() {
   }, [needsRedirect, navigate]);
 
   // Redirect to complete profile if name is missing (magic link first sign-in)
-  const needsProfile = !sessionLoading && !!session?.user && !!(session as { needsProfile?: boolean })?.needsProfile && typeof window !== "undefined" && window.location.pathname !== "/auth/complete-profile";
+  // Don't redirect while session is refetching — stale data may have needsProfile=true after profile was just completed
+  const needsProfile = !sessionLoading && !sessionFetching && !!session?.user && !!(session as { needsProfile?: boolean })?.needsProfile && typeof window !== "undefined" && window.location.pathname !== "/auth/complete-profile";
   useEffect(() => {
     if (needsProfile) navigate({ to: "/auth/complete-profile" });
   }, [needsProfile, navigate]);

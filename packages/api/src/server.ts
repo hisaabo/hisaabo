@@ -5,9 +5,12 @@ import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, gt, lt } from "drizzle-orm";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
-import { generateInvoicePDF, type InvoicePDFData } from "./lib/invoice-pdf.js";
+import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants, magicLinkTokens } from "@hisaabo/db";
 
 const app = new Hono();
@@ -27,14 +30,19 @@ app.use("*", cors({
 }));
 
 // ── Rate limiting (in-memory, per IP) ─────────────────────────
+// Authenticated users get 600 req/min (imports can burst).
+// Unauthenticated users get 60 req/min (brute force protection).
 const rateMap = new Map<string, { count: number; reset: number }>();
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
-  const key = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+  const hasSession = c.req.header("cookie")?.includes("session_id=");
+  const limit = hasSession ? 600 : 60;
+  const key = hasSession ? `auth:${ip}` : `anon:${ip}`;
   const now = Date.now();
   const entry = rateMap.get(key);
   if (!entry || now > entry.reset) {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
-  } else if (entry.count >= 120) {
+  } else if (entry.count >= limit) {
     return c.json({ error: "Too many requests" }, 429);
   } else {
     entry.count++;
@@ -42,8 +50,28 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
   await next();
 });
 
+// Clean up stale rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateMap) {
+    if (now > entry.reset) rateMap.delete(key);
+  }
+}, 5 * 60_000).unref();
+
 // ── Health check ───────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+async function generatePDFInWorker(data: any, format: "a4" | "thermal"): Promise<Buffer> {
+  const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "lib/pdf-worker.js");
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, { workerData: { data, format } });
+    worker.on("message", resolve);
+    worker.on("error", reject);
+    worker.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+    });
+  });
+}
 
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
@@ -127,25 +155,12 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     termsAndConditions: invoice.termsAndConditions || undefined,
   };
 
-  const pdfDoc = generateInvoicePDF(pdfData, format);
-
-  // Collect PDF buffer
-  const chunks: Buffer[] = [];
-  pdfDoc.on("data", (chunk: Buffer) => chunks.push(chunk));
-
-  return new Promise<Response>((resolve) => {
-    pdfDoc.on("end", () => {
-      const buffer = Buffer.concat(chunks);
-      const filename = `${invoice.invoiceNumber}_${format}.pdf`;
-      resolve(new Response(buffer, {
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `inline; filename="${filename}"`,
-          "Content-Length": buffer.length.toString(),
-        },
-      }));
-    });
-    pdfDoc.end();
+  const pdfBuffer = await generatePDFInWorker(pdfData, format as "a4" | "thermal");
+  return new Response(new Uint8Array(pdfBuffer), {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+    },
   });
 });
 
@@ -166,8 +181,8 @@ app.use("/api/trpc/*", async (c) => {
 });
 
 // ── Session cleanup (FINDING 7) ────────────────────────────────
-// Clean up expired sessions every hour
-setInterval(async () => {
+// Clean up expired sessions every hour — unref so it doesn't keep process alive
+const cleanupTimer = setInterval(async () => {
   try {
     await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
@@ -175,11 +190,29 @@ setInterval(async () => {
     console.error("[session-cleanup] Failed:", e);
   }
 }, 60 * 60 * 1000);
+cleanupTimer.unref();
 
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);
 
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`🚀 Hisaabo API running on http://localhost:${info.port}`);
-  console.log(`   tRPC endpoint: http://localhost:${info.port}/api/trpc`);
+const server = serve({ fetch: app.fetch, port }, (info) => {
+  console.log(`Hisaabo API running on http://localhost:${info.port}`);
+  console.log(`  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
 });
+
+// ── Graceful shutdown ─────────────────────────────────────────
+function shutdown(signal: string) {
+  console.log(`\n[${signal}] Shutting down...`);
+  server.close(() => {
+    console.log("[shutdown] HTTP server closed");
+    process.exit(0);
+  });
+  // Force kill if server doesn't close within 5 seconds
+  setTimeout(() => {
+    console.error("[shutdown] Forced exit after timeout");
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

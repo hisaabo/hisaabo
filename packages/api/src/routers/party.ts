@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc, asc } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
-import { createPartySchema, updatePartySchema, paginationSchema } from "@hisaabo/shared";
+import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 
@@ -59,11 +59,7 @@ export const partyRouter = router({
 
       return {
         ...party,
-        balance: (
-          parseFloat(party.openingBalance) +
-          parseFloat(balanceResult.totalInvoiced) -
-          parseFloat(balanceResult.totalPaid)
-        ).toFixed(2),
+        balance: money.sub(money.add(party.openingBalance, balanceResult.totalInvoiced || "0"), balanceResult.totalPaid || "0"),
       };
     }),
 
@@ -158,7 +154,7 @@ export const partyRouter = router({
           .where(and(eq(payments.partyId, input.sourceId), eq(payments.businessId, ctx.businessId)));
 
         // Merge opening balances
-        const mergedBalance = (parseFloat(source.openingBalance || "0") + parseFloat(target.openingBalance || "0")).toFixed(2);
+        const mergedBalance = money.add(source.openingBalance || "0", target.openingBalance || "0");
 
         // Fill missing fields on target from source (don't overwrite existing data)
         const updates: Record<string, unknown> = { openingBalance: mergedBalance, updatedAt: new Date() };
@@ -207,7 +203,7 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
-      const openingBalanceNum = parseFloat(party.openingBalance);
+      const openingBalanceNum = money.toNumber(party.openingBalance);
 
       // Build date filter conditions inline
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
