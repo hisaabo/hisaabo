@@ -298,9 +298,6 @@ export const invoiceRouter = router({
           }
 
           // Recalculate totals using fixed-point arithmetic
-          const additionalChargesStr = input.charges
-            ? money.sum(input.charges.map((c) => c.amount))
-            : existing.additionalCharges;
           const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
           const totals = calcInvoiceTotals({
             lineItems: input.lineItems.map((li) => ({
@@ -310,15 +307,15 @@ export const invoiceRouter = router({
               discountPercent: li.discountPercent || "0",
             })),
             charges: input.charges ? input.charges : undefined,
+            invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
+            invoiceDiscountType: input.invoiceDiscountType || "amount",
             roundOff: roundOffStr,
           });
 
           updates.subtotal = totals.subtotal;
           updates.taxAmount = totals.taxTotal;
-          updates.totalAmount = money.add(
-            money.add(totals.subtotal, totals.taxTotal),
-            money.add(additionalChargesStr, roundOffStr)
-          );
+          updates.discountAmount = totals.invoiceDiscountAmount;
+          updates.totalAmount = totals.total;
         }
 
         // 5. Apply update

@@ -4,7 +4,6 @@ import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { toast } from "@/hooks/useToast";
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,

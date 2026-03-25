@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { getBusinessId } from "@/lib/trpc";
 
 interface LineItem {
@@ -210,7 +210,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
 
               {/* Line item rows */}
               <div className="divide-y" style={{ borderColor: "var(--border-light)" }}>
-                {items.map((li, idx) => {
+                {items.map((li, _idx) => {
                   const calc = calcLine(li);
                   return (
                     <div

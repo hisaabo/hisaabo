@@ -77,6 +77,18 @@ export function Combobox({
     optionEl?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, open, uid]);
 
+  const openDropdown = () => setOpen(true);
+
+  const closeDropdown = useCallback(() => {
+    setOpen(false);
+    // If nothing was selected or query doesn't match selection, reset query
+    if (!value) {
+      setQuery("");
+    } else if (selectedOption) {
+      setQuery("");
+    }
+  }, [value, selectedOption]);
+
   // Close on outside click
   useEffect(() => {
     if (!open) return;
@@ -90,19 +102,7 @@ export function Combobox({
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const openDropdown = () => setOpen(true);
-
-  const closeDropdown = useCallback(() => {
-    setOpen(false);
-    // If nothing was selected or query doesn't match selection, reset query
-    if (!value) {
-      setQuery("");
-    } else if (selectedOption) {
-      setQuery("");
-    }
-  }, [value, selectedOption]);
+  }, [open, closeDropdown]);
 
   const selectOption = useCallback(
     (index: number) => {

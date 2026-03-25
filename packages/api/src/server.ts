@@ -8,7 +8,7 @@ import { eq, and, gt, lt } from "drizzle-orm";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { generateInvoicePDF, type InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, users, tenants } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants } from "@hisaabo/db";
 
 const app = new Hono();
 

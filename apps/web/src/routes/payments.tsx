@@ -1,11 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
-import { Pagination } from "@/components/ui/Pagination";
+import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useDateRange } from "@/hooks/useDateRange";
+import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -13,6 +14,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { SearchInput } from "@/components/ui/SearchInput";
+import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
 export const Route = createFileRoute("/payments")({
@@ -27,7 +29,7 @@ const modeLabels: Record<string, string> = {
   other: "Other",
 };
 
-const PAYMENTS_PAGE_SIZE = 20;
+const PAYMENTS_PAGE_SIZE = 25;
 
 function PaymentsPage() {
   const [showPanel, setShowPanel] = useState(false);
@@ -36,16 +38,32 @@ function PaymentsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const dateRange = useDateRange("payments", "this-month");
 
   const debouncedSearch = useDebounce(search, 300);
 
-  // Reset to page 1 whenever search changes
-  useEffect(() => { setPage(1); }, [debouncedSearch]);
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [debouncedSearch, dateRange.fromDate, dateRange.toDate]);
 
-  const { data, isLoading } = trpc.payment.list.useQuery({
+  const loadMore = useCallback(() => setPage((p) => p + 1), []);
+
+  const { data, isFetching, isLoading } = trpc.payment.list.useQuery({
     page,
     limit: PAYMENTS_PAGE_SIZE,
     search: debouncedSearch || undefined,
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
+  });
+
+  const list = useInfiniteList({
+    key: "payments",
+    data: data?.data,
+    total: data?.total ?? 0,
+    page,
+    isFetching,
+    onLoadMore: loadMore,
+    resetDeps: [debouncedSearch, dateRange.fromDate, dateRange.toDate],
   });
   const utils = trpc.useUtils();
 
@@ -71,6 +89,41 @@ function PaymentsPage() {
     },
   ]);
 
+  async function exportPaymentsCSV() {
+    setExporting(true);
+    try {
+      let allData: any[] = [];
+      let pg = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await utils.payment.list.fetch({
+          page: pg,
+          limit: 100,
+          search: debouncedSearch || undefined,
+          fromDate: dateRange.fromDate,
+          toDate: dateRange.toDate,
+        });
+        allData = [...allData, ...result.data];
+        hasMore = allData.length < result.total;
+        pg++;
+      }
+
+      const headers = ["Payment #", "Date", "Party", "Mode", "Reference", "Amount"];
+      const rows = allData.map((p: any) => [
+        p.paymentNumber || "",
+        formatDate(p.paymentDate),
+        p.partyName,
+        p.mode,
+        p.referenceNumber || "",
+        p.amount,
+      ]);
+
+      downloadCSV(`payments_${dateRange.preset}`, headers, rows);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -87,8 +140,8 @@ function PaymentsPage() {
         }
       />
 
-      {/* Search */}
-      <div className="mb-4">
+      {/* Search + Date Range */}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
         <SearchInput
           value={search}
           onChange={setSearch}
@@ -96,6 +149,16 @@ function PaymentsPage() {
           className="max-w-xs"
         />
       </div>
+      <DateRangeBar
+        preset={dateRange.preset}
+        onPresetChange={dateRange.setPreset}
+        customFrom={dateRange.customFrom}
+        customTo={dateRange.customTo}
+        onCustomChange={dateRange.setCustomRange}
+        onExport={exportPaymentsCSV}
+        exporting={exporting}
+        className="mb-4"
+      />
 
       {/* Table */}
       {isLoading ? (
@@ -104,7 +167,7 @@ function PaymentsPage() {
             <div key={i} className="skeleton h-12 rounded-lg" />
           ))}
         </div>
-      ) : !data?.data.length ? (
+      ) : !list.items.length && !isFetching ? (
         <EmptyState
           title="No payments recorded yet"
           description="Record your first payment to start tracking cash flow."
@@ -116,76 +179,86 @@ function PaymentsPage() {
         />
       ) : (
         <div className="card overflow-hidden">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Payment #</th>
-                <th>Party</th>
-                <th>Date</th>
-                <th>Mode</th>
-                <th>Reference</th>
-                <th className="text-right">Amount</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.data.map((p) => (
-                <tr key={p.id} className="group cursor-pointer" onClick={() => setSelectedPaymentId(p.id)}>
-                  <td className="font-mono text-[13px] text-text-secondary">
-                    {p.paymentNumber || "—"}
-                  </td>
-                  <td className="font-medium">{p.partyName}</td>
-                  <td className="text-text-secondary">{formatDate(p.paymentDate)}</td>
-                  <td className="text-text-secondary">
-                    {modeLabels[p.mode] || p.mode}
-                  </td>
-                  <td className="text-text-secondary text-xs">
-                    {p.referenceNumber || "—"}
-                  </td>
-                  <td className="text-right tabular-nums font-semibold text-emerald-600">
-                    {formatCurrency(p.amount)}
-                  </td>
-                  <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
-                        onClick={() => setEditPaymentId(p.id)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                        onClick={() => setDeleteId(p.id)}
-                        aria-label="Delete payment"
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  </td>
+          <div
+            ref={list.scrollRef}
+            onScroll={list.onScroll}
+            className="max-h-[600px] overflow-y-auto"
+          >
+            <table className="data-table">
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th>Payment #</th>
+                  <th>Party</th>
+                  <th>Date</th>
+                  <th>Mode</th>
+                  <th>Reference</th>
+                  <th className="text-right">Amount</th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <Pagination
-            page={page}
-            totalPages={Math.ceil(data.total / PAYMENTS_PAGE_SIZE)}
-            onPageChange={setPage}
-            total={data.total}
-            pageSize={PAYMENTS_PAGE_SIZE}
-          />
+              </thead>
+              <tbody>
+                {list.items.map((p) => (
+                  <tr key={p.id} className="group cursor-pointer" onClick={() => setSelectedPaymentId(p.id)}>
+                    <td className="font-mono text-[13px] text-text-secondary">
+                      {p.paymentNumber || "—"}
+                    </td>
+                    <td className="font-medium">{p.partyName}</td>
+                    <td className="text-text-secondary">{formatDate(p.paymentDate)}</td>
+                    <td className="text-text-secondary">
+                      {modeLabels[p.mode] || p.mode}
+                    </td>
+                    <td className="text-text-secondary text-xs">
+                      {p.referenceNumber || "—"}
+                    </td>
+                    <td className="text-right tabular-nums font-semibold text-emerald-600">
+                      {formatCurrency(p.amount)}
+                    </td>
+                    <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
+                          onClick={() => setEditPaymentId(p.id)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                          onClick={() => setDeleteId(p.id)}
+                          aria-label="Delete payment"
+                        >
+                          <svg
+                            className="w-4 h-4"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {list.loadingMore && (
+              <div className="flex items-center justify-center py-3 border-t border-border-light">
+                <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                <span className="ml-2 text-xs text-text-tertiary">Loading more...</span>
+              </div>
+            )}
+            {!list.hasMore && list.items.length > PAYMENTS_PAGE_SIZE && (
+              <div className="py-2 text-center text-xs text-text-tertiary border-t border-border-light">
+                All {list.total.toLocaleString()} records loaded
+              </div>
+            )}
+          </div>
         </div>
       )}
 

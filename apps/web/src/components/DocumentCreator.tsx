@@ -102,7 +102,12 @@ export function DocumentCreator({
   const [invoiceDate, setInvoiceDate] = useState(
     new Date().toISOString().split("T")[0]
   );
-  const [dueDate, setDueDate] = useState("");
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split("T")[0];
+  });
+  const [dueDateManuallySet, setDueDateManuallySet] = useState(false);
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
   const [items, setItems] = useState<LineItem[]>([newLineItem()]);
@@ -119,6 +124,18 @@ export function DocumentCreator({
 
   const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 100 });
 
+  const isEditing = !!editInvoiceId;
+
+  // Auto-calculate due date: party's credit period or default 7 days
+  useEffect(() => {
+    if (dueDateManuallySet || isEditing) return;
+    const selectedParty = partiesData?.data.find((p) => p.id === partyId);
+    const creditDays = selectedParty?.creditPeriodDays ?? 7;
+    const base = new Date(invoiceDate || new Date().toISOString().split("T")[0]);
+    base.setDate(base.getDate() + creditDays);
+    setDueDate(base.toISOString().split("T")[0]);
+  }, [invoiceDate, partyId, partiesData, dueDateManuallySet, isEditing]);
+
   const utils = trpc.useUtils();
 
   const { data: editData } = trpc.invoice.getById.useQuery(
@@ -134,6 +151,12 @@ export function DocumentCreator({
     setNotes(editData.notes || "");
     setTerms(editData.termsAndConditions || "");
     setRoundOff(editData.roundOff || "0");
+
+    // Pre-fill invoice discount
+    if (editData.discountAmount && parseFloat(editData.discountAmount) > 0) {
+      setInvoiceDiscount(editData.discountAmount);
+      setInvoiceDiscountType("amount"); // stored discount is always an amount
+    }
 
     // Map charges from JSONB
     if (editData.charges && Array.isArray(editData.charges)) {
@@ -153,8 +176,6 @@ export function DocumentCreator({
       })));
     }
   }, [editData]);
-
-  const isEditing = !!editInvoiceId;
 
   function handleSuccess() {
     utils.invoice.list.invalidate();
@@ -422,7 +443,7 @@ export function DocumentCreator({
             <input
               type="date"
               value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
+              onChange={(e) => { setDueDate(e.target.value); setDueDateManuallySet(true); }}
               className="input"
             />
           </div>

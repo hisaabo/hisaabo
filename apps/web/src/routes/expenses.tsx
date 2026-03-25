@@ -1,63 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDateRange } from "@/hooks/useDateRange";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Modal } from "@/components/ui/Modal";
+import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField } from "@/components/ui/FormField";
 import { Listbox } from "@/components/ui/Listbox";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Pagination } from "@/components/ui/Pagination";
+import { DateRangeBar } from "@/components/ui/DateRangeBar";
+import { useInfiniteList } from "@/hooks/useInfiniteList";
 
 export const Route = createFileRoute("/expenses")({
   component: ExpensesPage,
 });
 
-const EXPENSE_PAGE_SIZE = 20;
-
-function getDatePreset(preset: string): { fromDate: string; toDate: string } {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = now.getMonth();
-
-  switch (preset) {
-    case "this-month": {
-      const from = new Date(yyyy, mm, 1);
-      const to = new Date(yyyy, mm + 1, 0);
-      return { fromDate: from.toISOString(), toDate: to.toISOString() };
-    }
-    case "last-month": {
-      const from = new Date(yyyy, mm - 1, 1);
-      const to = new Date(yyyy, mm, 0);
-      return { fromDate: from.toISOString(), toDate: to.toISOString() };
-    }
-    case "last-30": {
-      const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      return { fromDate: from.toISOString(), toDate: now.toISOString() };
-    }
-    case "this-fy": {
-      const fyYear = mm >= 3 ? yyyy : yyyy - 1;
-      return { fromDate: new Date(fyYear, 3, 1).toISOString(), toDate: now.toISOString() };
-    }
-    case "last-fy": {
-      const lastFyYear = mm >= 3 ? yyyy - 1 : yyyy - 2;
-      return {
-        fromDate: new Date(lastFyYear, 3, 1).toISOString(),
-        toDate: new Date(lastFyYear + 1, 2, 31, 23, 59, 59).toISOString(),
-      };
-    }
-    case "all":
-      return { fromDate: "", toDate: "" };
-    default:
-      return { fromDate: "", toDate: "" };
-  }
-}
+const EXPENSE_PAGE_SIZE = 25;
 
 const MODE_OPTIONS = [
   { value: "cash", label: "Cash" },
@@ -65,16 +29,6 @@ const MODE_OPTIONS = [
   { value: "bank", label: "Bank Transfer" },
   { value: "cheque", label: "Cheque" },
   { value: "other", label: "Other" },
-];
-
-const DATE_PRESETS = [
-  { value: "this-month", label: "This Month" },
-  { value: "last-month", label: "Last Month" },
-  { value: "last-30", label: "Last 30 Days" },
-  { value: "this-fy", label: "This FY" },
-  { value: "last-fy", label: "Last FY" },
-  { value: "custom", label: "Custom" },
-  { value: "all", label: "All" },
 ];
 
 function modeColor(mode: string) {
@@ -115,8 +69,7 @@ const EMPTY_FORM: ExpenseFormState = {
 function ExpensesPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [datePreset, setDatePreset] = useState("this-month");
-  const [dateRange, setDateRange] = useState(() => getDatePreset("this-month"));
+  const dateRange = useDateRange("expenses", "this-month");
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editExpenseId, setEditExpenseId] = useState<string | null>(null);
@@ -129,7 +82,9 @@ function ExpensesPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, categoryFilter, dateRange]);
+  }, [debouncedSearch, categoryFilter, dateRange.fromDate, dateRange.toDate]);
+
+  const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
   useHotkeys([
     {
@@ -145,13 +100,23 @@ function ExpensesPage() {
     },
   ]);
 
-  const { data, isLoading } = trpc.expense.list.useQuery({
+  const { data, isFetching, isLoading } = trpc.expense.list.useQuery({
     page,
     limit: EXPENSE_PAGE_SIZE,
     search: debouncedSearch || undefined,
     category: categoryFilter || undefined,
-    fromDate: dateRange.fromDate || undefined,
-    toDate: dateRange.toDate || undefined,
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
+  });
+
+  const list = useInfiniteList({
+    key: "expenses",
+    data: data?.data,
+    total: data?.total ?? 0,
+    page,
+    isFetching,
+    onLoadMore: loadMore,
+    resetDeps: [debouncedSearch, categoryFilter, dateRange.fromDate, dateRange.toDate],
   });
 
   const { data: categories } = trpc.expense.categories.useQuery();
@@ -250,16 +215,15 @@ function ExpensesPage() {
     try {
       let allData: any[] = [];
       let pg = 1;
-      const limit = 100;
       let hasMore = true;
       while (hasMore) {
         const result = await utils.expense.list.fetch({
           page: pg,
-          limit,
+          limit: 100,
           search: debouncedSearch || undefined,
           category: categoryFilter || undefined,
-          fromDate: dateRange.fromDate || undefined,
-          toDate: dateRange.toDate || undefined,
+          fromDate: dateRange.fromDate,
+          toDate: dateRange.toDate,
         });
         allData = [...allData, ...result.data];
         hasMore = allData.length < result.total;
@@ -269,36 +233,20 @@ function ExpensesPage() {
       const headers = ["Date", "Category", "Description", "Mode", "Reference", "Amount"];
       const rows = allData.map((exp: any) => [
         formatDate(exp.expenseDate),
-        (exp.category || "").replace(/"/g, '""'),
-        (exp.description || "").replace(/"/g, '""'),
+        exp.category || "",
+        exp.description || "",
         exp.mode,
-        (exp.referenceNumber || "").replace(/"/g, '""'),
+        exp.referenceNumber || "",
         exp.amount,
       ]);
 
-      const csv = [
-        `Period,${datePreset}`,
-        `Exported,${new Date().toLocaleDateString("en-IN")}`,
-        `Expenses,${allData.length}`,
-        "",
-        headers.join(","),
-        ...rows.map((r) => r.map((cell: any) => `"${String(cell)}"`).join(",")),
-      ].join("\n");
-
-      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `expenses_${datePreset || "all"}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadCSV(`expenses_${dateRange.preset}`, headers, rows);
     } finally {
       setExporting(false);
     }
   }
 
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
-  const totalPages = data ? Math.ceil(data.total / EXPENSE_PAGE_SIZE) : 1;
 
   // Build category pill tabs from fetched categories
   const categoryTabs = [
@@ -345,56 +293,14 @@ function ExpensesPage() {
             placeholder="Search category or description..."
             className="max-w-xs"
           />
-          <div className="flex items-center gap-1 flex-wrap">
-            {DATE_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => {
-                  setDatePreset(p.value);
-                  if (p.value !== "custom") {
-                    setDateRange(getDatePreset(p.value));
-                  }
-                }}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                  datePreset === p.value
-                    ? "bg-brand-600/[0.1] text-brand-700 dark:text-brand-400"
-                    : "text-text-tertiary hover:text-text-secondary hover:bg-surface-2"
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-            {datePreset === "custom" && (
-              <div className="flex items-center gap-2 ml-2">
-                <input
-                  type="date"
-                  value={dateRange.fromDate ? dateRange.fromDate.split("T")[0] : ""}
-                  onChange={(e) =>
-                    setDateRange((prev) => ({
-                      ...prev,
-                      fromDate: e.target.value ? new Date(e.target.value).toISOString() : "",
-                    }))
-                  }
-                  className="input py-1 text-xs w-32"
-                />
-                <span className="text-text-tertiary text-xs">to</span>
-                <input
-                  type="date"
-                  value={dateRange.toDate ? dateRange.toDate.split("T")[0] : ""}
-                  onChange={(e) =>
-                    setDateRange((prev) => ({
-                      ...prev,
-                      toDate: e.target.value
-                        ? new Date(e.target.value + "T23:59:59").toISOString()
-                        : "",
-                    }))
-                  }
-                  className="input py-1 text-xs w-32"
-                />
-              </div>
-            )}
-          </div>
+          <DateRangeBar
+            preset={dateRange.preset}
+            onPresetChange={dateRange.setPreset}
+            customFrom={dateRange.customFrom}
+            customTo={dateRange.customTo}
+            onCustomChange={dateRange.setCustomRange}
+            className="flex-1"
+          />
         </div>
 
         {categoryTabs.length > 1 && (
@@ -410,7 +316,7 @@ function ExpensesPage() {
         {/* Table */}
         {isLoading ? (
           <ExpenseTableSkeleton />
-        ) : !data?.data.length ? (
+        ) : !list.items.length && !isFetching ? (
           <EmptyState
             title="No expenses"
             description={
@@ -421,9 +327,13 @@ function ExpensesPage() {
           />
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div
+              ref={list.scrollRef}
+              onScroll={list.onScroll}
+              className="max-h-[600px] overflow-y-auto overflow-x-auto"
+            >
               <table className="data-table">
-                <thead>
+                <thead className="sticky top-0 z-10">
                   <tr>
                     <th>Date</th>
                     <th>Category</th>
@@ -435,7 +345,7 @@ function ExpensesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.data.map((exp) => (
+                  {list.items.map((exp) => (
                     <tr key={exp.id} className="group">
                       <td className="text-text-secondary whitespace-nowrap">
                         {formatDate(exp.expenseDate)}
@@ -485,33 +395,65 @@ function ExpensesPage() {
                   ))}
                 </tbody>
               </table>
+              {list.loadingMore && (
+                <div className="flex items-center justify-center py-3 border-t border-border-light">
+                  <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                  <span className="ml-2 text-xs text-text-tertiary">Loading more...</span>
+                </div>
+              )}
+              {!list.hasMore && list.items.length > EXPENSE_PAGE_SIZE && (
+                <div className="py-2 text-center text-xs text-text-tertiary border-t border-border-light">
+                  All {list.total.toLocaleString()} records loaded
+                </div>
+              )}
             </div>
 
-            {/* Footer: total + pagination */}
-            <div className="px-4 py-3 border-t border-border-light flex items-center justify-between">
+            {/* Footer: total count */}
+            <div className="px-4 py-3 border-t border-border-light">
               <p className="text-xs text-text-tertiary">
-                {data.total.toLocaleString()} expense{data.total !== 1 ? "s" : ""}
+                {list.total.toLocaleString()} expense{list.total !== 1 ? "s" : ""}
               </p>
-              {totalPages > 1 && (
-                <Pagination
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={setPage}
-                />
-              )}
             </div>
           </>
         )}
       </div>
 
-      {/* Add / Edit Modal */}
-      <Modal
+      {/* Add / Edit SlideOver */}
+      <SlideOver
         open={showAddModal}
         onClose={() => {
           setShowAddModal(false);
           setEditExpenseId(null);
         }}
         title={editExpenseId ? "Edit Expense" : "Add Expense"}
+        description={editExpenseId ? "Update expense details" : "Record a new business expense"}
+        footer={
+          <div className="flex justify-end gap-3">
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                setShowAddModal(false);
+                setEditExpenseId(null);
+              }}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting
+                ? editExpenseId
+                  ? "Saving..."
+                  : "Adding..."
+                : editExpenseId
+                  ? "Save Changes"
+                  : "Add Expense"}
+            </button>
+          </div>
+        }
       >
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -523,6 +465,7 @@ function ExpensesPage() {
                 onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
                 error={formErrors.category}
                 required
+                autoFocus
               />
             </div>
             <InputField
@@ -570,34 +513,8 @@ function ExpensesPage() {
               />
             </div>
           </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              className="btn-ghost"
-              onClick={() => {
-                setShowAddModal(false);
-                setEditExpenseId(null);
-              }}
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              className="btn-primary"
-              onClick={handleSubmit}
-              disabled={isSubmitting}
-            >
-              {isSubmitting
-                ? editExpenseId
-                  ? "Saving..."
-                  : "Adding..."
-                : editExpenseId
-                  ? "Save Changes"
-                  : "Add Expense"}
-            </button>
-          </div>
         </div>
-      </Modal>
+      </SlideOver>
 
       <ConfirmDialog
         open={!!deleteId}

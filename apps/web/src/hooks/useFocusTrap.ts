@@ -14,9 +14,13 @@ export function useFocusTrap(
 
     previousFocus.current = document.activeElement as HTMLElement;
 
-    // Focus first focusable element
-    const focusable = ref.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS);
-    if (focusable.length > 0) focusable[0].focus();
+    // Focus: only elements that explicitly request it via autofocus/data-autofocus
+    // This prevents opening Combobox dropdowns or focusing the wrong field in edit mode
+    const autoFocusEl = ref.current.querySelector<HTMLElement>("[autofocus], [data-autofocus]");
+    if (autoFocusEl) {
+      requestAnimationFrame(() => autoFocusEl.focus());
+    }
+    // If no autofocus element, don't auto-focus anything — let the user click where they want
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Tab" || !ref.current) return;

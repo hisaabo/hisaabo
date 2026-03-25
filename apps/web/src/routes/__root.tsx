@@ -459,7 +459,7 @@ function RootLayout() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-[1200px] mx-auto px-6 py-6">
+          <div className="max-w-[1400px] mx-auto px-6 py-6">
             <Outlet />
           </div>
         </div>

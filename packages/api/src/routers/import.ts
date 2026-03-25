@@ -565,7 +565,7 @@ function parseFlexibleDate(str: string): Date | null {
   }
 
   // DD/MM/YYYY or DD-MM-YYYY (Indian format — most common in myBillBook exports)
-  const ddmmyyyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const ddmmyyyy = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (ddmmyyyy) {
     const [, dd, mm, yyyy] = ddmmyyyy;
     const d = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
@@ -573,7 +573,7 @@ function parseFlexibleDate(str: string): Date | null {
   }
 
   // "22 Mar 2026" or "22-Mar-2026"
-  const dMonY = s.match(/^(\d{1,2})[\s\-]([A-Za-z]{3,})[\s\-](\d{4})$/);
+  const dMonY = s.match(/^(\d{1,2})[\s-]([A-Za-z]{3,})[\s-](\d{4})$/);
   if (dMonY) {
     const d = new Date(s);
     if (!isNaN(d.getTime())) return d;

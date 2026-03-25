@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -62,6 +62,7 @@ function ItemsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -77,6 +78,49 @@ function ItemsPage() {
 
   const { data: lowStockCount } = trpc.item.lowStockCount.useQuery();
   const utils = trpc.useUtils();
+
+  async function exportItemsCSV() {
+    setExporting(true);
+    try {
+      let allData: any[] = [];
+      let pg = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await utils.item.list.fetch({
+          search: debouncedSearch || undefined,
+          lowStock: showLowStock || undefined,
+          page: pg,
+          limit: 100,
+        });
+        allData = [...allData, ...result.data];
+        hasMore = allData.length < result.total;
+        pg++;
+      }
+
+      // Apply client-side type filter (mirrors what filteredItems does)
+      const filtered = allData.filter((item: any) => {
+        if (typeFilter === "all") return true;
+        return item.itemType === typeFilter;
+      });
+
+      const headers = ["Name", "Type", "SKU", "HSN", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
+      const rows = filtered.map((item: any) => [
+        item.name,
+        item.itemType,
+        item.sku || "",
+        item.hsn || "",
+        item.salePrice || "",
+        item.purchasePrice || "",
+        item.stockQuantity,
+        item.unit,
+        item.category || "",
+      ]);
+
+      downloadCSV(`items_${typeFilter}`, headers, rows);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const deleteMutation = trpc.item.delete.useMutation({
     onSuccess: () => {
@@ -111,13 +155,31 @@ function ItemsPage() {
         title="Items"
         description="Products and services inventory"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowAddModal(true)}
-          >
-            + Add Item
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          <div className="flex items-center gap-2">
+            {data && data.total > 0 && (
+              <button
+                onClick={exportItemsCSV}
+                disabled={exporting}
+                className="btn-secondary text-sm flex items-center gap-1.5"
+              >
+                {exporting ? (
+                  <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+                  </svg>
+                )}
+                {exporting ? "Preparing..." : "Export CSV"}
+              </button>
+            )}
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowAddModal(true)}
+            >
+              + Add Item
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          </div>
         }
       />
 
@@ -382,7 +444,26 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add Item" className="max-w-xl">
+    <SlideOver
+      open={open}
+      onClose={handleClose}
+      title="Add Item"
+      description="Add a new product or service"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn-secondary" onClick={handleClose} disabled={createMutation.isPending}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={handleCreate}
+            disabled={createMutation.isPending || !name.trim()}
+          >
+            {createMutation.isPending ? "Creating..." : "Create Item"}
+          </button>
+        </div>
+      }
+    >
       <div className="space-y-4">
         {/* Item Type toggle */}
         <SegmentedControl
@@ -585,21 +666,8 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
           </Disclosure>
         </div>
 
-        {/* Actions */}
-        <div className="flex justify-end gap-3 pt-4 border-t border-border-light">
-          <button className="btn-secondary" onClick={handleClose}>
-            Cancel
-          </button>
-          <button
-            className="btn-primary"
-            onClick={handleCreate}
-            disabled={createMutation.isPending || !name.trim()}
-          >
-            {createMutation.isPending ? "Creating..." : "Create Item"}
-          </button>
-        </div>
       </div>
-    </Modal>
+    </SlideOver>
   );
 }
 
@@ -689,7 +757,26 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
   }
 
   return (
-    <Modal open={true} onClose={onClose} title="Edit Item" className="max-w-xl">
+    <SlideOver
+      open={true}
+      onClose={onClose}
+      title="Edit Item"
+      description="Update product or service details"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn-secondary" onClick={onClose} disabled={updateMutation.isPending}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={updateMutation.isPending || !name.trim()}
+          >
+            {updateMutation.isPending ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      }
+    >
       <div className="space-y-4">
         {/* Item Type toggle */}
         <SegmentedControl
@@ -892,21 +979,8 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
           </Disclosure>
         </div>
 
-        {/* Actions */}
-        <div className="flex justify-end gap-3 pt-4 border-t border-border-light">
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="btn-primary"
-            onClick={handleSave}
-            disabled={updateMutation.isPending || !name.trim()}
-          >
-            {updateMutation.isPending ? "Saving..." : "Save Changes"}
-          </button>
-        </div>
       </div>
-    </Modal>
+    </SlideOver>
   );
 }
 

@@ -13,47 +13,11 @@ import { Pagination } from "@/components/ui/Pagination";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "@/hooks/useToast";
+import { getDatePreset } from "@/hooks/useDateRange";
 
 export const Route = createFileRoute("/cash-and-bank")({
   component: CashAndBankPage,
 });
-
-function getDatePreset(preset: string): { fromDate: string; toDate: string } {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = now.getMonth();
-
-  switch (preset) {
-    case "this-month": {
-      const from = new Date(yyyy, mm, 1);
-      const to = new Date(yyyy, mm + 1, 0);
-      return { fromDate: from.toISOString(), toDate: to.toISOString() };
-    }
-    case "last-month": {
-      const from = new Date(yyyy, mm - 1, 1);
-      const to = new Date(yyyy, mm, 0);
-      return { fromDate: from.toISOString(), toDate: to.toISOString() };
-    }
-    case "last-30": {
-      const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      return { fromDate: from.toISOString(), toDate: now.toISOString() };
-    }
-    case "this-fy": {
-      // Indian FY: April 1 to March 31
-      const fyYear = mm >= 3 ? yyyy : yyyy - 1;
-      return { fromDate: new Date(fyYear, 3, 1).toISOString(), toDate: now.toISOString() };
-    }
-    case "last-fy": {
-      const lastFyYear = mm >= 3 ? yyyy - 1 : yyyy - 2;
-      return {
-        fromDate: new Date(lastFyYear, 3, 1).toISOString(),
-        toDate: new Date(lastFyYear + 1, 2, 31, 23, 59, 59).toISOString(),
-      };
-    }
-    default:
-      return { fromDate: "", toDate: "" };
-  }
-}
 
 function CashAndBankPage() {
   const navigate = useNavigate();
@@ -867,6 +831,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
         <InputField
           label="Account Name"
           required
+          autoFocus
           value={accountName}
           onChange={(e) => setAccountName(e.target.value)}
           placeholder="e.g. HDFC Savings"

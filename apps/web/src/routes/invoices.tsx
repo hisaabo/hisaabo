@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -12,10 +12,12 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator } from "@/components/DocumentCreator";
 import { SearchInput } from "@/components/ui/SearchInput";
-import { Pagination } from "@/components/ui/Pagination";
+import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDateRange } from "@/hooks/useDateRange";
+import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
@@ -81,20 +83,30 @@ function DownloadPDFButton({
   }
 
   return (
-    <div className="flex gap-1">
+    <div className="flex gap-0.5">
       <button
         onClick={(e) => { e.stopPropagation(); download("a4"); }}
         disabled={loading}
-        className="text-xs px-2 py-1 rounded font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950 transition-colors disabled:opacity-50"
+        title="Download A4 PDF"
+        className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
       >
-        {loading ? "…" : "A4 PDF"}
+        {loading ? (
+          <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+        ) : (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+          </svg>
+        )}
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); download("thermal"); }}
         disabled={loading}
-        className="text-xs px-2 py-1 rounded font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950 transition-colors disabled:opacity-50"
+        title="Download receipt"
+        className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
       >
-        Receipt
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 14.25l6-6m4.5-3.493V21.75l-3.75-1.5-3.75 1.5-3.75-1.5-3.75 1.5V4.757c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0c1.1.128 1.907 1.077 1.907 2.185z" />
+        </svg>
       </button>
     </div>
   );
@@ -434,7 +446,7 @@ interface PaymentPanelState {
   balance: string;
 }
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 25;
 
 function InvoicesPage() {
   const [type, setType] = useState<"sale" | "purchase">("sale");
@@ -447,6 +459,8 @@ function InvoicesPage() {
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const dateRange = useDateRange("invoices", "this-month");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -456,14 +470,28 @@ function InvoicesPage() {
   ]);
 
   // Reset to page 1 whenever filters change
-  useEffect(() => { setPage(1); }, [type, status, debouncedSearch]);
+  useEffect(() => { setPage(1); }, [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate]);
 
-  const { data, isLoading } = trpc.invoice.list.useQuery({
+  const loadMore = useCallback(() => setPage((p) => p + 1), []);
+
+  const { data, isFetching, isLoading } = trpc.invoice.list.useQuery({
     type,
     status: (status || undefined) as any,
     search: debouncedSearch || undefined,
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
     page,
     limit: PAGE_SIZE,
+  });
+
+  const list = useInfiniteList({
+    key: "invoices",
+    data: data?.data,
+    total: data?.total ?? 0,
+    page,
+    isFetching,
+    onLoadMore: loadMore,
+    resetDeps: [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate],
   });
 
   const utils = trpc.useUtils();
@@ -479,6 +507,8 @@ function InvoicesPage() {
 
   const deleteMutation = trpc.invoice.delete.useMutation({
     onSuccess: () => {
+      // Optimistically remove from infinite list immediately
+      if (deleteId) list.removeItem(deleteId);
       utils.invoice.list.invalidate();
       utils.dashboard.summary.invalidate();
       toast.success("Invoice deleted");
@@ -500,6 +530,44 @@ function InvoicesPage() {
     setPaymentPanel({ partyId, invoiceId, balance });
   }
 
+  async function exportInvoicesCSV() {
+    setExporting(true);
+    try {
+      let allData: any[] = [];
+      let pg = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await utils.invoice.list.fetch({
+          type,
+          status: (status || undefined) as any,
+          search: debouncedSearch || undefined,
+          fromDate: dateRange.fromDate,
+          toDate: dateRange.toDate,
+          page: pg,
+          limit: 100,
+        });
+        allData = [...allData, ...result.data];
+        hasMore = allData.length < result.total;
+        pg++;
+      }
+
+      const headers = ["Invoice #", "Date", "Party", "Status", "Total", "Paid", "Balance"];
+      const rows = allData.map((inv: any) => [
+        inv.invoiceNumber,
+        formatDate(inv.invoiceDate),
+        inv.partyName,
+        inv.status,
+        inv.totalAmount,
+        inv.amountPaid,
+        (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid)).toFixed(2),
+      ]);
+
+      downloadCSV(`invoices_${dateRange.preset}`, headers, rows);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -517,7 +585,7 @@ function InvoicesPage() {
       />
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
         <SearchInput
           value={search}
           onChange={setSearch}
@@ -537,6 +605,16 @@ function InvoicesPage() {
           />
         </div>
       </div>
+      <DateRangeBar
+        preset={dateRange.preset}
+        onPresetChange={dateRange.setPreset}
+        customFrom={dateRange.customFrom}
+        customTo={dateRange.customTo}
+        onCustomChange={dateRange.setCustomRange}
+        onExport={exportInvoicesCSV}
+        exporting={exporting}
+        className="mb-4"
+      />
 
       {/* Content */}
       {isLoading ? (
@@ -545,7 +623,7 @@ function InvoicesPage() {
             <div key={i} className="skeleton h-14 rounded-lg" />
           ))}
         </div>
-      ) : !data?.data.length ? (
+      ) : !list.items.length && !isFetching ? (
         <EmptyState
           icon={
             <svg
@@ -576,122 +654,119 @@ function InvoicesPage() {
         />
       ) : (
         <div className="card overflow-hidden">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Party</th>
-                <th>Invoice #</th>
-                <th>Date</th>
-                <th>Due Date</th>
-                <th>Status</th>
-                <th className="text-right">Total</th>
-                <th className="text-right">Balance</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.data.map((inv) => {
-                const balance =
-                  parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
-                return (
-                  <tr
-                    key={inv.id}
-                    className="group cursor-pointer"
-                    onClick={() => setSelectedInvoiceId(inv.id)}
-                  >
-                    <td className="font-medium">{inv.partyName}</td>
-                    <td className="font-mono text-[13px] text-text-secondary">
-                      {inv.invoiceNumber}
-                    </td>
-                    <td className="text-text-secondary">
-                      {formatDate(inv.invoiceDate)}
-                    </td>
-                    <td className="text-text-secondary">
-                      {inv.dueDate ? formatDate(inv.dueDate) : "—"}
-                    </td>
-                    <td>
-                      <StatusBadge status={inv.status} size="sm" />
-                    </td>
-                    <td className="text-right tabular-nums font-medium">
-                      {formatCurrency(inv.totalAmount)}
-                    </td>
-                    <td className="text-right tabular-nums font-medium text-amber-600">
-                      {balance > 0 && inv.status !== "draft"
-                        ? formatCurrency(balance)
-                        : "—"}
-                    </td>
-                    <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        {/* PDF buttons — always visible */}
-                        <DownloadPDFButton
-                          invoiceId={inv.id}
-                          invoiceNumber={inv.invoiceNumber}
-                          invoiceStatus={inv.status}
-                          onShared={() =>
-                            updateStatus.mutate({ id: inv.id, status: "sent" })
-                          }
-                        />
-                        {/* Hover-only actions */}
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {inv.status === "draft" && (
-                            <button
-                              onClick={() =>
-                                updateStatus.mutate({
-                                  id: inv.id,
-                                  status: "sent",
-                                })
-                              }
-                              className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
-                            >
-                              Mark Sent
-                            </button>
-                          )}
-                          {inv.status !== "draft" &&
-                            inv.status !== "cancelled" &&
-                            inv.status !== "paid" && (
+          <div
+            ref={list.scrollRef}
+            onScroll={list.onScroll}
+            className="max-h-[600px] overflow-y-auto"
+          >
+            <table className="data-table w-full">
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th>Party</th>
+                  <th className="whitespace-nowrap">Invoice #</th>
+                  <th className="whitespace-nowrap">Date</th>
+                  <th>Status</th>
+                  <th className="text-right whitespace-nowrap">Amount</th>
+                  <th className="w-28"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.items.map((inv) => (
+                    <tr
+                      key={inv.id}
+                      className="group cursor-pointer"
+                      onClick={() => setSelectedInvoiceId(inv.id)}
+                    >
+                      <td className="font-medium"><span className="block truncate max-w-[250px]">{inv.partyName}</span></td>
+                      <td className="font-mono text-[13px] text-text-secondary whitespace-nowrap">
+                        {inv.invoiceNumber}
+                      </td>
+                      <td className="text-text-secondary whitespace-nowrap">
+                        {formatDate(inv.invoiceDate)}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <StatusBadge status={inv.status} size="sm" />
+                      </td>
+                      <td className="text-right tabular-nums font-medium whitespace-nowrap">
+                        {formatCurrency(inv.totalAmount)}
+                      </td>
+                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-0.5">
+                          {/* PDF buttons — always visible */}
+                          <DownloadPDFButton
+                            invoiceId={inv.id}
+                            invoiceNumber={inv.invoiceNumber}
+                            invoiceStatus={inv.status}
+                            onShared={() =>
+                              updateStatus.mutate({ id: inv.id, status: "sent" })
+                            }
+                          />
+                          {/* Context actions — visible on hover */}
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {inv.status === "draft" && (
                               <button
                                 onClick={() =>
-                                  openPaymentPanel(
-                                    inv.partyId,
-                                    inv.id,
-                                    (
-                                      parseFloat(inv.totalAmount) -
-                                      parseFloat(inv.amountPaid)
-                                    ).toFixed(2)
-                                  )
+                                  updateStatus.mutate({ id: inv.id, status: "sent" })
                                 }
-                                className="text-xs px-2 py-1 rounded font-medium text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950 transition-colors"
+                                title="Mark as sent"
+                                className="p-1.5 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors"
                               >
-                                Record Payment
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                                </svg>
                               </button>
                             )}
-                          {inv.status === "draft" && (
-                            <button
-                              onClick={() =>
-                                confirmDelete(inv.id, inv.invoiceNumber)
-                              }
-                              className="text-xs px-2 py-1 rounded font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950 transition-colors"
-                            >
-                              Delete
-                            </button>
-                          )}
+                            {inv.status !== "draft" &&
+                              inv.status !== "cancelled" &&
+                              inv.status !== "paid" && (
+                                <button
+                                  onClick={() =>
+                                    openPaymentPanel(
+                                      inv.partyId,
+                                      inv.id,
+                                      (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid)).toFixed(2)
+                                    )
+                                  }
+                                  title="Record payment"
+                                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-600/[0.08] transition-colors"
+                                >
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
+                                  </svg>
+                                </button>
+                              )}
+                            {inv.status === "draft" && (
+                              <button
+                                onClick={() =>
+                                  confirmDelete(inv.id, inv.invoiceNumber)
+                                }
+                                title="Delete invoice"
+                                className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {data && (
-            <Pagination
-              page={page}
-              totalPages={Math.ceil(data.total / PAGE_SIZE)}
-              onPageChange={setPage}
-              total={data.total}
-              pageSize={PAGE_SIZE}
-            />
-          )}
+                      </td>
+                    </tr>
+                ))}
+              </tbody>
+            </table>
+            {list.loadingMore && (
+              <div className="flex items-center justify-center py-3 border-t border-border-light">
+                <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                <span className="ml-2 text-xs text-text-tertiary">Loading more...</span>
+              </div>
+            )}
+            {!list.hasMore && list.items.length > PAGE_SIZE && (
+              <div className="py-2 text-center text-xs text-text-tertiary border-t border-border-light">
+                All {list.total.toLocaleString()} records loaded
+              </div>
+            )}
+          </div>
         </div>
       )}
 
