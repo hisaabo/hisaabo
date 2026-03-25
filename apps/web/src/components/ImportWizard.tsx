@@ -517,7 +517,8 @@ function transformItemRow(row: Record<string, string>): object {
     taxPercent: row.taxPercent ? cleanMoney(row.taxPercent) : "0",
     hsn: row.hsn || undefined,
     unit: normalizeUnit(unit),
-    stockQuantity: cleanMoney(stockQty),
+    // Opening stock defaults to 0 — actual stock is calculated from imported invoices
+    stockQuantity: "0",
     sku: row.sku || undefined,
     category: row.category || undefined,
   };
@@ -1619,6 +1620,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
       }
     }
 
+    // Track allocated invoice IDs across all C&B batches for reconciliation
+    let allAllocatedInvoiceIds: string[] = [];
+
     // ── Step 4: Import payments from Cash & Bank PDF ───────────────────────
     if (cashBankFile) {
       setImportStatuses((s) => ({ ...s, cashBank: "running" }));
@@ -1734,6 +1738,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           created += res.created;
           skipped += res.skipped;
           if (res.errors) errors.push(...res.errors);
+          if (res.allocatedInvoiceIds) allAllocatedInvoiceIds.push(...res.allocatedInvoiceIds);
         }
 
         // Import expense rows
@@ -1781,11 +1786,16 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           created += expensesCreated;
         }
 
+        const details: string[] = [];
+        if (transfersCreated > 0) details.push(`${transfersCreated} inter-account transfers`);
+        if (expensesCreated > 0) details.push(`${expensesCreated} expenses`);
+
         newResults.cashBank = {
-          created,
+          created: created + transfersCreated,
           skipped,
           total: cashBankRows.length,
           errors,
+          details: details.length > 0 ? details : undefined,
         };
         setImportStatuses((s) => ({ ...s, cashBank: "done" }));
         setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
@@ -1798,31 +1808,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
       }
     }
 
-    // ── Step 5: Auto-create payments for directly-paid invoices ────────────
-    // Invoices marked as paid in myBillBook but without a separate Cash & Bank entry
-    try {
-      const res = await reconcileDirectMut.mutateAsync({ source: "mybillbook" });
-      if (res.created > 0) {
-        const prev = newResults.cashBank;
-        if (prev) {
-          newResults.cashBank = {
-            ...prev,
-            created: prev.created + res.created,
-            details: [...(prev.details || []), `${res.created} auto-created for direct-paid invoices`],
-          };
-        } else {
-          newResults.cashBank = {
-            created: res.created,
-            skipped: 0,
-            total: res.created,
-            details: [`${res.created} auto-created for direct-paid invoices`],
-          };
-        }
-        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
-      }
-    } catch {
-      // Non-fatal — the main import succeeded
-    }
+    // NOTE: Auto-creation of payments for direct-paid invoices is disabled until
+    // the import pipeline moves to the backend with proper modular reconciliation.
+    // The C&B payments + invoice amountPaid data is sufficient for now.
   }
 
   // Generic import (Tally / custom CSV) — original sequential flow
@@ -2489,6 +2477,28 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
               </div>
             </div>
           )}
+          {cashBankFile && cashBankFile.rows.length > 0 && (() => {
+            const types: Record<string, number> = {};
+            for (const row of cashBankFile.rows) {
+              const t = (row["Type"] || "unknown").toLowerCase();
+              if (t.includes("opening balance") || !t) continue;
+              const key = t.includes("expense") ? "Expenses"
+                : t === "add money" || t === "reduce money" ? "Inter-account Transfers"
+                : t.includes("payment-out") ? "Payments Out"
+                : t.includes("sales invoice") ? "Direct-Paid Invoices"
+                : "Payments In";
+              types[key] = (types[key] || 0) + 1;
+            }
+            return (
+              <div className="flex flex-wrap gap-3 mt-2">
+                {Object.entries(types).map(([label, count]) => (
+                  <span key={label} className="text-xs px-2.5 py-1 rounded-lg bg-surface-2 text-text-secondary">
+                    {label}: <span className="font-medium text-text-primary">{count}</span>
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       );
     }

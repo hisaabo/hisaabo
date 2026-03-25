@@ -496,35 +496,34 @@ export const importRouter = router({
         let remaining = money.toNumber(pmt.amount);
 
         if (pmt.invoiceNumbers?.length) {
-          // CSV path: explicit invoice linkage
+          // CSV path: link to the explicitly named invoice first
           for (const invNum of pmt.invoiceNumbers) {
-            if (remaining <= 0) break;
             const inv = invoiceByNumber.get(invNum);
             if (!inv) continue;
-
-            const balance = balanceTracker.get(inv.id) || 0;
-            const allocAmt = Math.min(remaining, Math.max(0, balance));
-            if (allocAmt <= 0) continue;
-
             if (!primaryInvoiceId) primaryInvoiceId = inv.id;
-            allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
-            balanceTracker.set(inv.id, balance - allocAmt);
-            remaining -= allocAmt;
           }
-        } else {
-          // Chronological path: allocate across party's unpaid invoices
-          const partyInvs = unpaidByParty.get(partyId) || [];
-          for (const inv of partyInvs) {
-            if (remaining <= 0) break;
-            const balance = balanceTracker.get(inv.id) || 0;
-            if (balance <= 0) continue;
+        }
 
-            const allocAmt = Math.min(remaining, balance);
-            if (!primaryInvoiceId) primaryInvoiceId = inv.id;
-            allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
-            balanceTracker.set(inv.id, balance - allocAmt);
-            remaining -= allocAmt;
-          }
+        // Chronological allocation: walk this party's invoices oldest-first,
+        // consuming the payment amount. This covers:
+        // - Single-invoice payments (links + allocates the named invoice)
+        // - Multi-invoice bulk payments (covers named invoice + subsequent ones)
+        // - Payments without invoice numbers (pure chronological)
+        //
+        // The balanceTracker uses amountPaid from invoice import, so invoices
+        // already marked as fully paid (balance=0) are skipped. As payments
+        // allocate, balances decrease, naturally flowing to the next invoice.
+        const partyInvs = unpaidByParty.get(partyId) || [];
+        for (const inv of partyInvs) {
+          if (remaining <= 0) break;
+          const balance = balanceTracker.get(inv.id) || 0;
+          if (balance <= 0) continue;
+
+          const allocAmt = Math.min(remaining, balance);
+          if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+          allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
+          balanceTracker.set(inv.id, balance - allocAmt);
+          remaining -= allocAmt;
         }
 
         const needsAutoNumber = !pmt.paymentNumber;
@@ -613,17 +612,27 @@ export const importRouter = router({
         });
       }
 
-      return { created, skipped, total: input.payments.length, errors };
+      // Return allocated invoice IDs so reconcileDirectPayments can exclude them
+      const allocatedInvoiceIds = [...new Set(allAllocations.map(a => a.invoiceId))];
+      return { created, skipped, total: input.payments.length, errors, allocatedInvoiceIds };
     }),
 
   // ── Create payments for directly-paid invoices that lack a payment record ──
   reconcileDirectPayments: adminProcedure
-    .input(z.object({ source: z.string().default("mybillbook") }))
+    .input(z.object({
+      source: z.string().default("mybillbook"),
+      excludeInvoiceIds: z.array(z.string()).default([]),
+    }))
     .mutation(async ({ input, ctx }) => {
       let created = 0;
       const errors: string[] = [];
 
       // Find all invoices with amountPaid > 0 that have NO linked payment
+      // Find invoices with amountPaid > 0 that:
+      // 1. Have no payment directly linked (invoice_id = this invoice)
+      // 2. Were NOT allocated during the C&B payment import (excludeInvoiceIds)
+      // These are genuinely "direct-paid" invoices in myBillBook with no separate payment record.
+      const excludeIds = input.excludeInvoiceIds;
       const rows = (await ctx.db.execute(sql`
         SELECT i.id, i.invoice_number, i.party_id, i.amount_paid, i.invoice_date, i.type
         FROM invoices i
@@ -634,12 +643,10 @@ export const importRouter = router({
           AND NOT EXISTS (
             SELECT 1 FROM payments p
             WHERE p.business_id = ${ctx.businessId}
-              AND (
-                p.invoice_id = i.id
-                OR p.payment_number = i.invoice_number
-                OR p.notes LIKE '%' || i.invoice_number || '%'
-              )
+              AND p.invoice_id = i.id
           )
+          ${excludeIds.length > 0 ? sql`AND i.id NOT IN (${sql.join(excludeIds.map(id => sql`${id}`), sql`,`)})` : sql``}
+        ORDER BY i.invoice_date ASC
       `)) as unknown as Array<{
         id: string;
         invoice_number: string;
@@ -662,7 +669,7 @@ export const importRouter = router({
 
       let counter = biz.nextNum;
 
-      // Batch prepare all payment rows
+      // Create a payment for each unmatched invoice
       const paymentRows = rows.map((inv) => {
         const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
         counter++;
@@ -675,7 +682,7 @@ export const importRouter = router({
           amount: inv.amount_paid,
           discount: "0",
           mode: "cash" as const,
-          paymentDate: inv.invoice_date,
+          paymentDate: new Date(inv.invoice_date),
           notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
           createdByUserId: ctx.user!.id,
           createdByName: ctx.user!.name,

@@ -215,9 +215,37 @@ export const bankAccountRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
+      // Get the opening balance for running total calculation
+      const [acct] = await ctx.db
+        .select({ openingBalance: bankAccounts.openingBalance })
+        .from(bankAccounts)
+        .where(eq(bankAccounts.id, input.bankAccountId))
+        .limit(1);
+
       const [data, [{ count }]] = await Promise.all([
         ctx.db
-          .select()
+          .select({
+            id: bankTransactions.id,
+            businessId: bankTransactions.businessId,
+            bankAccountId: bankTransactions.bankAccountId,
+            type: bankTransactions.type,
+            amount: bankTransactions.amount,
+            description: bankTransactions.description,
+            referenceType: bankTransactions.referenceType,
+            referenceId: bankTransactions.referenceId,
+            transactionDate: bankTransactions.transactionDate,
+            createdAt: bankTransactions.createdAt,
+            // Running balance: opening_balance + cumulative deposits - cumulative withdrawals
+            balanceAfter: sql<string>`(
+              ${acct.openingBalance}::numeric + SUM(
+                CASE WHEN ${bankTransactions.type} = 'deposit' THEN ${bankTransactions.amount}::numeric
+                     ELSE -${bankTransactions.amount}::numeric END
+              ) OVER (
+                ORDER BY ${bankTransactions.transactionDate} ASC, ${bankTransactions.createdAt} ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+              )
+            )::text`.as("balance_after"),
+          })
           .from(bankTransactions)
           .where(and(...conditions))
           .orderBy(desc(bankTransactions.transactionDate))
@@ -271,7 +299,7 @@ export const bankAccountRouter = router({
             description: input.description,
             referenceType: input.referenceType,
             referenceId: input.referenceId,
-            balanceAfter: newBalance,
+
             transactionDate: input.transactionDate
               ? new Date(input.transactionDate)
               : new Date(),
@@ -357,7 +385,7 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer to account ${input.toAccountId}`,
             referenceType: "transfer",
             referenceId: input.toAccountId,
-            balanceAfter: newFromBalance,
+
             transactionDate: txnDate,
           })
           .returning();
@@ -372,7 +400,7 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer from account ${input.fromAccountId}`,
             referenceType: "transfer",
             referenceId: input.fromAccountId,
-            balanceAfter: newToBalance,
+
             transactionDate: txnDate,
           })
           .returning();

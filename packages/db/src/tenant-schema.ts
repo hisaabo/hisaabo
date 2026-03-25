@@ -255,7 +255,6 @@ export const bankTransactions = pgTable("bank_transactions", {
   description: text("description"),
   referenceType: text("reference_type"),
   referenceId: uuid("reference_id"),
-  balanceAfter: numeric("balance_after", { precision: 15, scale: 2 }).notNull(),
   transactionDate: timestamp("transaction_date", { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [

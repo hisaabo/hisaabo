@@ -262,7 +262,7 @@ export const paymentRouter = router({
             description: `Payment ${paymentNumber}`,
             referenceType: "payment",
             referenceId: payment.id,
-            balanceAfter: newBalance,
+
             transactionDate: payment.paymentDate,
           });
 
@@ -481,7 +481,7 @@ export const paymentRouter = router({
             description: `Payment ${existing.paymentNumber} (edited)`,
             referenceType: "payment",
             referenceId: existing.id,
-            balanceAfter: newBal,
+
             transactionDate: newDate,
           });
 
@@ -715,7 +715,7 @@ export const paymentRouter = router({
             description: `Payment ${pmt.paymentNumber || pmt.id} (assigned)`,
             referenceType: "payment",
             referenceId: pmt.id,
-            balanceAfter: currentBal,
+
             transactionDate: pmt.paymentDate,
           });
         }
