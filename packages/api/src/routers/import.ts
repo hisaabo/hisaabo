@@ -2,6 +2,7 @@ import { z } from "zod";
 import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 import { calcLineItem, money } from "@hisaabo/shared";
 
 export const importRouter = router({
@@ -25,6 +26,7 @@ export const importRouter = router({
       })),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       let skipped = 0;
 
@@ -91,6 +93,7 @@ export const importRouter = router({
       })),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       let skipped = 0;
 
@@ -179,6 +182,7 @@ export const importRouter = router({
       })),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       let skipped = 0;
       const errors: string[] = [];
@@ -411,6 +415,7 @@ export const importRouter = router({
       })),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       let skipped = 0;
       const errors: string[] = [];
@@ -729,6 +734,7 @@ export const importRouter = router({
       excludeInvoiceIds: z.array(z.string()).default([]),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       const errors: string[] = [];
 
@@ -823,6 +829,7 @@ export const importRouter = router({
       })),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "manage", "Import");
       let created = 0;
       const errors: string[] = [];
 

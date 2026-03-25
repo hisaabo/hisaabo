@@ -5,7 +5,12 @@ import { relations } from "drizzle-orm";
 
 export const tenantStatusEnum = pgEnum("tenant_status", ["active", "suspended", "deleted"]);
 export const tenantPlanEnum = pgEnum("tenant_plan", ["free", "pro", "business", "enterprise"]);
-export const memberRoleEnum = pgEnum("member_role", ["owner", "admin", "member", "viewer"]);
+export const memberRoleEnum = pgEnum("member_role", [
+  // Legacy values (kept for backward compat with existing DB rows)
+  "owner", "admin", "member", "viewer",
+  // New CASL-based roles (require ALTER TYPE migration in production)
+  "superadmin", "seller_manager", "seller", "accountant",
+]);
 
 // ── Tenants ────────────────────────────────────────────────────
 

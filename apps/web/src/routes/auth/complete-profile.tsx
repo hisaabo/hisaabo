@@ -14,11 +14,14 @@ function CompleteProfilePage() {
 
   const session = trpc.auth.me.useQuery();
 
+  const [saved, setSaved] = useState(false);
+
   const mutation = trpc.auth.completeProfile.useMutation({
     onSuccess: async () => {
-      // Await the refetch so stale needsProfile=true doesn't trigger a redirect loop
       await utils.auth.me.refetch();
-      navigate({ to: "/settings" });
+      setSaved(true);
+      // Brief pause so user sees confirmation before redirect
+      setTimeout(() => navigate({ to: "/settings" }), 800);
     },
     onError: (e) => setError(e.message),
   });
@@ -57,6 +60,22 @@ function CompleteProfilePage() {
           </span>
         </div>
 
+        {saved ? (
+          <div className="text-center py-4">
+            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+              <svg className="w-6 h-6 text-emerald-600" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <h1 className="text-xl font-semibold text-text-primary">
+              Welcome, {name}!
+            </h1>
+            <p className="text-sm text-text-tertiary mt-1">
+              Setting up your business...
+            </p>
+          </div>
+        ) : (
+        <>
         <h1 className="text-xl font-semibold mb-1 text-text-primary">
           Welcome to Hisaabo
         </h1>
@@ -93,6 +112,8 @@ function CompleteProfilePage() {
             {mutation.isPending ? "Saving..." : "Continue"}
           </button>
         </form>
+        </>
+        )}
       </div>
     </div>
   );

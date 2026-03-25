@@ -11,11 +11,13 @@ import {
   money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 
 export const bankAccountRouter = router({
   // ── Accounts ────────────────────────────────────────────────
 
   list: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "BankAccount");
     return ctx.db
       .select()
       .from(bankAccounts)
@@ -26,6 +28,7 @@ export const bankAccountRouter = router({
   getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankAccount");
       const [account] = await ctx.db
         .select()
         .from(bankAccounts)
@@ -52,6 +55,7 @@ export const bankAccountRouter = router({
   create: memberProcedure
     .input(createBankAccountSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         // If new account is default, clear existing defaults
         if (input.isDefault) {
@@ -84,6 +88,7 @@ export const bankAccountRouter = router({
   update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateBankAccountSchema }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         // Verify ownership
         const [existing] = await tx
@@ -132,6 +137,7 @@ export const bankAccountRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         const [account] = await tx
           .select({ id: bankAccounts.id })
@@ -187,6 +193,7 @@ export const bankAccountRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankTransaction");
       // Verify account belongs to business
       const [account] = await ctx.db
         .select({ id: bankAccounts.id })
@@ -263,6 +270,7 @@ export const bankAccountRouter = router({
   addTransaction: memberProcedure
     .input(createBankTransactionSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankTransaction");
       return ctx.db.transaction(async (tx) => {
         // Lock account row for atomic balance update
         const [account] = await tx
@@ -318,6 +326,7 @@ export const bankAccountRouter = router({
   transfer: memberProcedure
     .input(bankTransferSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankTransaction");
       if (input.fromAccountId === input.toAccountId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -420,6 +429,7 @@ export const bankAccountRouter = router({
     }),
 
   summary: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "BankAccount");
     const [result] = await ctx.db
       .select({
         totalBalance: sql<string>`coalesce(sum(${bankAccounts.currentBalance}::numeric), 0)::text`,

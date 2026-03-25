@@ -764,7 +764,16 @@ function MergePartyModal({
   onClose: () => void;
 }) {
   const [targetId, setTargetId] = useState("");
+  const [targetSearch, setTargetSearch] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+
   const { data: partiesData } = trpc.party.list.useQuery({ page: 1, limit: 500 });
+  const { data: sourceStats } = trpc.party.getStats.useQuery({ id: sourceId });
+  const { data: targetStats } = trpc.party.getStats.useQuery(
+    { id: targetId },
+    { enabled: !!targetId }
+  );
+
   const utils = trpc.useUtils();
 
   const mergeMutation = trpc.party.merge.useMutation({
@@ -776,39 +785,207 @@ function MergePartyModal({
     onError: (err) => toast.error(err.message),
   });
 
-  const targetOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
+  const allOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
+  const filteredOptions = targetSearch.trim()
+    ? allOptions.filter((p) =>
+        p.name.toLowerCase().includes(targetSearch.toLowerCase())
+      )
+    : allOptions;
+
+  const selectedTarget = allOptions.find((p) => p.id === targetId);
+
+  const totalInvoices = (sourceStats?.invoiceCount ?? 0) + (targetStats?.invoiceCount ?? 0);
+  const totalPayments = (sourceStats?.paymentCount ?? 0) + (targetStats?.paymentCount ?? 0);
+
+  function handleSelectTarget(id: string) {
+    setTargetId(id);
+    setTargetSearch("");
+    setConfirmed(false);
+  }
 
   return (
-    <Modal open={true} onClose={onClose} title={`Merge "${sourceName}"`} className="max-w-md">
-      <div className="space-y-4">
-        <p className="text-sm text-text-secondary">
-          All invoices, payments, and data from <strong>{sourceName}</strong> will be transferred to the target party. The source party will be deleted.
-        </p>
+    <Modal open={true} onClose={onClose} title="Merge Parties" className="max-w-lg">
+      <div className="space-y-5">
 
-        <div>
-          <label className="text-sm font-medium text-text-primary block mb-1">
-            Merge into <span className="text-red-500">*</span>
-          </label>
-          <select
-            value={targetId}
-            onChange={(e) => setTargetId(e.target.value)}
-            className="input-field w-full"
-          >
-            <option value="">Select target party...</option>
-            {targetOptions.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.type})
-              </option>
-            ))}
-          </select>
+        {/* Two-column direction layout */}
+        <div className="grid grid-cols-[1fr_auto_1fr] gap-3 items-start">
+          {/* Source column */}
+          <div className="rounded-xl border-2 border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-3 space-y-1">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 dark:text-red-400">
+              Merge FROM
+            </p>
+            <p className="font-semibold text-sm text-text-primary truncate" title={sourceName}>
+              {sourceName}
+            </p>
+            {sourceStats && (
+              <p className="text-[11px] text-text-tertiary">
+                {sourceStats.invoiceCount} invoice{sourceStats.invoiceCount !== 1 ? "s" : ""}
+                {" · "}
+                {sourceStats.paymentCount} payment{sourceStats.paymentCount !== 1 ? "s" : ""}
+              </p>
+            )}
+            <p className="text-[10px] text-red-500 dark:text-red-400 font-medium mt-1">
+              Will be removed
+            </p>
+          </div>
+
+          {/* Arrow */}
+          <div className="flex items-center justify-center pt-6">
+            <svg className="w-5 h-5 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+            </svg>
+          </div>
+
+          {/* Target column */}
+          <div className={cn(
+            "rounded-xl border-2 p-3 space-y-1 transition-colors",
+            selectedTarget
+              ? "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30"
+              : "border-dashed border-border-default bg-surface-1"
+          )}>
+            <p className={cn(
+              "text-[10px] font-bold uppercase tracking-wider",
+              selectedTarget ? "text-emerald-600 dark:text-emerald-400" : "text-text-tertiary"
+            )}>
+              Merge INTO
+            </p>
+            {selectedTarget ? (
+              <>
+                <p className="font-semibold text-sm text-text-primary truncate" title={selectedTarget.name}>
+                  {selectedTarget.name}
+                </p>
+                {targetStats && (
+                  <p className="text-[11px] text-text-tertiary">
+                    {targetStats.invoiceCount} invoice{targetStats.invoiceCount !== 1 ? "s" : ""}
+                    {" · "}
+                    {targetStats.paymentCount} payment{targetStats.paymentCount !== 1 ? "s" : ""}
+                  </p>
+                )}
+                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+                  Will be kept
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px] text-text-tertiary italic">Select a party below</p>
+            )}
+          </div>
         </div>
+
+        {/* Target party selector */}
+        <div>
+          <label className="text-sm font-medium text-text-primary block mb-1.5">
+            Select target party <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            className="input-field w-full mb-2"
+            placeholder="Search parties..."
+            value={targetSearch}
+            onChange={(e) => setTargetSearch(e.target.value)}
+          />
+          <div className="border border-border-light rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+            {filteredOptions.length === 0 ? (
+              <p className="text-sm text-text-tertiary px-3 py-2 italic">No parties found</p>
+            ) : (
+              filteredOptions.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleSelectTarget(p.id)}
+                  className={cn(
+                    "w-full text-left px-3 py-2 text-sm transition-colors flex items-center justify-between gap-2",
+                    targetId === p.id
+                      ? "bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 font-medium"
+                      : "hover:bg-surface-2 text-text-primary"
+                  )}
+                >
+                  <span className="truncate">{p.name}</span>
+                  <span className="text-[11px] text-text-tertiary capitalize shrink-0">{p.type}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Preview: what will happen */}
+        {selectedTarget && (
+          <div className="rounded-xl bg-surface-1 border border-border-light p-3 space-y-2">
+            <p className="text-xs font-semibold text-text-secondary">What will happen</p>
+            <ul className="space-y-1 text-xs text-text-secondary">
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>
+                  Merging <span className="font-medium text-text-primary">{sourceName}</span>
+                  {" "}into{" "}
+                  <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                </span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>
+                  The merged party will keep <span className="font-medium text-text-primary">{selectedTarget.name}</span>'s
+                  details (address, phone, GSTIN)
+                </span>
+              </li>
+              {(sourceStats || targetStats) && (
+                <li className="flex items-start gap-1.5">
+                  <span className="text-brand-500 mt-0.5">→</span>
+                  <span>
+                    <span className="font-medium text-text-primary">{totalInvoices} invoice{totalInvoices !== 1 ? "s" : ""}</span>
+                    {" and "}
+                    <span className="font-medium text-text-primary">{totalPayments} payment{totalPayments !== 1 ? "s" : ""}</span>
+                    {" "}will be moved to{" "}
+                    <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                  </span>
+                </li>
+              )}
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>Opening balances will be combined</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-red-500 mt-0.5">✕</span>
+                <span>
+                  <span className="font-medium text-text-primary">{sourceName}</span> will be permanently deleted
+                </span>
+              </li>
+            </ul>
+          </div>
+        )}
+
+        {/* Irreversibility warning */}
+        {selectedTarget && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-500 text-base leading-none mt-0.5">⚠️</span>
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                <span className="font-semibold">This action is irreversible.</span>{" "}
+                All invoices, payments, and credit notes from{" "}
+                <span className="font-semibold">{sourceName}</span>{" "}
+                will be permanently moved to{" "}
+                <span className="font-semibold">{selectedTarget.name}</span>.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 mt-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              />
+              <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                I understand this cannot be undone
+              </span>
+            </label>
+          </div>
+        )}
 
         <div className="flex justify-end gap-3 pt-3 border-t border-border-light">
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
           <button
             className="btn-danger"
             onClick={() => mergeMutation.mutate({ sourceId, targetId })}
-            disabled={!targetId || mergeMutation.isPending}
+            disabled={!targetId || !confirmed || mergeMutation.isPending}
           >
             {mergeMutation.isPending ? "Merging..." : "Merge & Delete"}
           </button>

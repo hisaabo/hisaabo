@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 
 export const paymentRouter = router({
@@ -17,6 +18,7 @@ export const paymentRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Payment");
       const conditions = [eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)];
       if (input.partyId) conditions.push(eq(payments.partyId, input.partyId));
       if (input.invoiceId) conditions.push(eq(payments.invoiceId, input.invoiceId));
@@ -63,6 +65,7 @@ export const paymentRouter = router({
   unpaidInvoices: viewerProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const rows = await ctx.db.select({
         id: invoices.id,
         invoiceNumber: invoices.invoiceNumber,
@@ -92,6 +95,7 @@ export const paymentRouter = router({
   // Return the default/most-recently-used bank account for this business
   defaultAccount: viewerProcedure
     .query(async ({ ctx }) => {
+      requireCan(ctx.ability, "read", "BankAccount");
       // Look at the last 5 payments that have a bankAccountId
       const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
         .from(payments)
@@ -152,6 +156,7 @@ export const paymentRouter = router({
     }),
 
   create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Payment");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const payment = await ctx.db.transaction(async (tx) => {
       // Atomically generate payment number
@@ -293,6 +298,7 @@ export const paymentRouter = router({
   getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Payment");
       const [payment] = await ctx.db.select({
         id: payments.id,
         paymentNumber: payments.paymentNumber,
@@ -365,6 +371,7 @@ export const paymentRouter = router({
     }),
 
   update: memberProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "update", "Payment");
     return ctx.db.transaction(async (tx) => {
       // 1. Fetch the existing payment
       const [existing] = await tx.select()
@@ -526,6 +533,7 @@ export const paymentRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Payment");
       const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       const result = await ctx.db.transaction(async (tx) => {
         const [payment] = await tx.select()
@@ -623,6 +631,7 @@ export const paymentRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Payment");
       const offset = (input.page - 1) * input.limit;
 
       const conditions = [
@@ -673,6 +682,7 @@ export const paymentRouter = router({
       bankAccountId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Payment");
       return ctx.db.transaction(async (tx) => {
         // Verify bank account exists and belongs to this business
         const [account] = await tx.select({

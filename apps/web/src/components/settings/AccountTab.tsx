@@ -26,7 +26,7 @@ function AuditTrailCard() {
   const limit = 20;
   const { data, isLoading } = trpc.business.auditTrail.useQuery(
     { page, limit },
-    { keepPreviousData: true }
+    { placeholderData: (prev: any) => prev }
   );
 
   const entries = data?.data ?? [];
@@ -110,6 +110,31 @@ export function AccountTab() {
   const [showLogout, setShowLogout] = useState(false);
   const utils = trpc.useUtils();
 
+  // Name editing state
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState(session?.user?.name || "");
+
+  // Email change state
+  const [changingEmail, setChangingEmail] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
+
+  const updateNameMut = trpc.auth.updateName.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      setEditingName(false);
+      toast.success("Name updated");
+    },
+    onError: (err) => toast.error("Failed", err.message),
+  });
+
+  const changeEmailMut = trpc.auth.requestEmailChange.useMutation({
+    onSuccess: () => {
+      setEmailSent(true);
+    },
+    onError: (err) => toast.error("Failed", err.message),
+  });
+
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
       toast.info("Logged out successfully");
@@ -129,11 +154,84 @@ export function AccountTab() {
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-xs text-text-tertiary">Name</span>
-            <p className="text-text-primary">{session?.user?.name || "—"}</p>
+            {editingName ? (
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  className="input py-1 text-sm"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  autoFocus
+                />
+                <button
+                  className="btn-primary btn-sm"
+                  onClick={() => updateNameMut.mutate({ name: newName })}
+                  disabled={updateNameMut.isPending}
+                >
+                  Save
+                </button>
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => setEditingName(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <p className="text-text-primary">{session?.user?.name || "—"}</p>
+                <button
+                  className="text-xs text-brand-600 hover:text-brand-700"
+                  onClick={() => {
+                    setNewName(session?.user?.name || "");
+                    setEditingName(true);
+                  }}
+                >
+                  Edit
+                </button>
+              </div>
+            )}
           </div>
           <div>
             <span className="text-xs text-text-tertiary">Email</span>
             <p className="text-text-primary">{session?.user?.email || "—"}</p>
+            {!changingEmail && !emailSent && (
+              <button
+                className="text-xs text-brand-600 hover:text-brand-700 mt-1"
+                onClick={() => { setChangingEmail(true); setNewEmail(""); }}
+              >
+                Change Email
+              </button>
+            )}
+            {changingEmail && !emailSent && (
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="email"
+                  className="input py-1 text-sm"
+                  placeholder="New email address"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  autoFocus
+                />
+                <button
+                  className="btn-primary btn-sm"
+                  onClick={() => changeEmailMut.mutate({ newEmail })}
+                  disabled={changeEmailMut.isPending || !newEmail}
+                >
+                  Send verification
+                </button>
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => setChangingEmail(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {emailSent && (
+              <p className="text-xs text-green-600 mt-1">
+                Verification email sent to {newEmail}. Check your inbox to confirm the change.
+              </p>
+            )}
           </div>
         </div>
       </div>

@@ -435,8 +435,17 @@ function getFYLabel(fyStartIso: string): string {
   return `FY ${startYear}–${String(startYear + 1).slice(-2)}`;
 }
 
+const PERIOD_LABELS: Record<PeriodId, string> = {
+  "this-month": "This Month",
+  "this-quarter": "This Quarter",
+  "this-fy": "This Financial Year",
+  "last-fy": "Last Financial Year",
+  "all": "All Time",
+};
+
 function SummaryCards({
   data,
+  period,
 }: {
   data: {
     totalSales: string;
@@ -447,9 +456,8 @@ function SummaryCards({
     totalExpenses: string;
     fyStart: string;
   };
+  period: PeriodId;
 }) {
-  const fyLabel = getFYLabel(data.fyStart);
-
   const cards = [
     { label: "Sales", value: data.totalSales, color: "text-emerald-600" },
     { label: "Purchases", value: data.totalPurchases, color: "text-blue-600" },
@@ -461,7 +469,7 @@ function SummaryCards({
 
   return (
     <div className="mb-6">
-      <p className="text-[11px] font-medium text-text-tertiary mb-2">{fyLabel} — Financial Year totals</p>
+      <p className="text-[11px] font-medium text-text-tertiary mb-2">{PERIOD_LABELS[period]} — Receivable & Payable are current totals</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {cards.map((c) => (
           <div key={c.label} className="card px-4 py-3">
@@ -502,7 +510,9 @@ function DashboardPage() {
   const [period, setPeriod] = useState<PeriodId>("this-fy");
   const { from, to } = getPeriodDates(period);
 
-  const { data, isLoading } = trpc.dashboard.summary.useQuery();
+  const { data, isLoading } = trpc.dashboard.summary.useQuery(
+    from || to ? { fromDate: from, toDate: to } : undefined
+  );
 
   if (isLoading) return <PageSkeleton />;
 
@@ -534,8 +544,7 @@ function DashboardPage() {
         }
       />
 
-      {/* Summary cards — always show This FY totals (receivable/payable are current-balance metrics) */}
-      <SummaryCards data={data} />
+      <SummaryCards data={data} period={period} />
 
       {/* Charts grid — all charts respect the selected period */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

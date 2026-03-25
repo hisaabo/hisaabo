@@ -4,6 +4,7 @@ import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { requireCan } from "../lib/permissions.js";
 
 export const itemRouter = router({
   list: viewerProcedure
@@ -15,6 +16,7 @@ export const itemRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const conditions = [eq(items.businessId, ctx.businessId)];
       if (input.search) {
         conditions.push(ilike(items.name, `%${input.search}%`));
@@ -49,6 +51,7 @@ export const itemRouter = router({
   getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const [item] = await ctx.db.select().from(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
         .limit(1);
@@ -56,6 +59,7 @@ export const itemRouter = router({
     }),
 
   create: memberProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Item");
     const [item] = await ctx.db.insert(items).values({
       ...input,
       businessId: ctx.businessId,
@@ -71,6 +75,7 @@ export const itemRouter = router({
       conversionFactor: z.number().positive(), // how many NEW units = 1 OLD unit
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
       return ctx.db.transaction(async (tx) => {
         const [item] = await tx.select().from(items)
           .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
@@ -137,6 +142,7 @@ export const itemRouter = router({
   update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateItemSchema }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
       const [item] = await ctx.db.update(items)
         .set({ ...input.data, updatedAt: new Date() })
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
@@ -147,6 +153,7 @@ export const itemRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Item");
       await ctx.db.delete(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
       return { success: true };
@@ -157,6 +164,7 @@ export const itemRouter = router({
   salesStats: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const [row] = await ctx.db.select({
         totalSaleAmount: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.totalAmount}::numeric ELSE 0 END), 0)::text`,
         totalSaleQty: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.quantity}::numeric ELSE 0 END), 0)::text`,
@@ -193,6 +201,7 @@ export const itemRouter = router({
   priceHistory: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const rows = await ctx.db.select({
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
@@ -225,6 +234,7 @@ export const itemRouter = router({
   stockMovements: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const rows = await ctx.db.select({
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
@@ -263,6 +273,7 @@ export const itemRouter = router({
   relatedInvoices: viewerProcedure
     .input(z.object({ id: z.string().uuid(), ...paginationSchema.shape }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
@@ -306,6 +317,7 @@ export const itemRouter = router({
   topBuyers: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
       const rows = await ctx.db.select({
         partyId: invoices.partyId,
         partyName: parties.name,
@@ -334,6 +346,7 @@ export const itemRouter = router({
 
   // Suggest potential merge candidates — items with similar name prefixes
   suggestMerges: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "Item");
     // Get all items for the business
     const allItems = await ctx.db.select({
       id: items.id,
@@ -410,6 +423,7 @@ export const itemRouter = router({
       stockConversionFactor: z.number().positive().default(1),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Item");
       if (input.sourceId === input.targetId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge an item into itself" });
       }
@@ -472,6 +486,7 @@ export const itemRouter = router({
     }),
 
   lowStockCount: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "Item");
     const [result] = await ctx.db.select({
       count: sql<number>`count(*)::int`,
     }).from(items)

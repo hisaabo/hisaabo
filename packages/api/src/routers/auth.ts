@@ -1,4 +1,5 @@
 import { eq, and, gt, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
@@ -272,6 +273,84 @@ export const authRouter = router({
 
     return { success: true };
   }),
+
+  // ── Update name ──────────────────────────────────────────────
+  updateName: protectedProcedure
+    .input(z.object({ name: z.string().min(2).max(100) }))
+    .mutation(async ({ input, ctx }) => {
+      await controlDb.update(users)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(users.id, ctx.user!.id));
+
+      // Invalidate session cache so `me` returns fresh data
+      const cookies = ctx.req.headers.get("cookie") || "";
+      const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+      const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+      if (sessionId) invalidateSessionCache(sessionId);
+
+      return { success: true };
+    }),
+
+  // ── Request email change ─────────────────────────────────────
+  requestEmailChange: protectedProcedure
+    .input(z.object({ newEmail: z.string().email().max(255) }))
+    .mutation(async ({ input, ctx }) => {
+      const email = input.newEmail.toLowerCase();
+
+      // Check if new email is already taken
+      const [existing] = await controlDb.select({ id: users.id })
+        .from(users).where(eq(users.email, email)).limit(1);
+      if (existing) {
+        throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
+      }
+
+      // Generate a token for email change verification
+      const rawToken = crypto.randomUUID() + "-" + nanoid(32);
+      const tokenHash = hashToken(rawToken);
+
+      await controlDb.insert(magicLinkTokens).values({
+        email: email, // Store the NEW email
+        tokenHash,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+      });
+
+      // Send verification to new email
+      const baseUrl = process.env.APP_URL || "http://localhost:5173";
+      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}&userId=${ctx.user!.id}`;
+
+      await emailService.sendMagicLink(email, verifyUrl);
+
+      return { success: true };
+    }),
+
+  // ── Confirm email change ─────────────────────────────────────
+  confirmEmailChange: publicProcedure
+    .input(z.object({ token: z.string(), userId: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      const tokenH = hashToken(input.token);
+
+      // Atomic: find + mark-used
+      const [tokenRow] = await controlDb.update(magicLinkTokens)
+        .set({ usedAt: new Date() })
+        .where(and(
+          eq(magicLinkTokens.tokenHash, tokenH),
+          gt(magicLinkTokens.expiresAt, new Date()),
+          isNull(magicLinkTokens.usedAt),
+        ))
+        .returning();
+
+      if (!tokenRow) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
+      }
+
+      // Update the user's email
+      await controlDb.update(users)
+        .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
+        .where(eq(users.id, input.userId));
+
+      return { success: true, newEmail: tokenRow.email };
+    }),
 
   // ── Logout ───────────────────────────────────────────────────
   logout: protectedProcedure.mutation(async ({ ctx }) => {

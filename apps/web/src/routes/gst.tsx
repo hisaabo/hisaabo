@@ -27,23 +27,21 @@ function GSTReportsPage() {
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
 
-  if (biz && biz.gstRegistrationType === "unregistered") {
-    return (
-      <div>
-        <PageHeader title="GST Reports" description="Generate GSTR-1 and GSTR-3B reports" />
-        <EmptyState
-          title="GST not applicable"
-          description="Your business is not registered under GST. GST reports are only available for GST-registered businesses."
-        />
-      </div>
-    );
-  }
+  const isGstRegistered = biz?.gstRegistrationType !== "unregistered" || !!biz?.gstin;
+
+  // Report labels adapt based on GST status
+  const reportTitle = isGstRegistered ? "GST Reports" : "Financial Reports";
+  const reportDesc = isGstRegistered
+    ? "Generate GSTR-1 and GSTR-3B reports"
+    : "Sales summary and tax reports";
+  const tab1Label = isGstRegistered ? "GSTR-1" : "Sales Report";
+  const tab2Label = isGstRegistered ? "GSTR-3B" : "Tax Summary";
 
   return (
     <div>
       <PageHeader
-        title="GST Reports"
-        description="Generate GSTR-1 and GSTR-3B reports"
+        title={reportTitle}
+        description={reportDesc}
       />
 
       {/* Period selector + tab toggle */}
@@ -70,8 +68,8 @@ function GSTReportsPage() {
         <div className="ml-4">
           <SegmentedControl
             tabs={[
-              { value: "gstr1", label: "GSTR-1" },
-              { value: "gstr3b", label: "GSTR-3B" },
+              { value: "gstr1", label: tab1Label },
+              { value: "gstr3b", label: tab2Label },
             ]}
             value={activeTab}
             onChange={(v) => setActiveTab(v as "gstr1" | "gstr3b")}

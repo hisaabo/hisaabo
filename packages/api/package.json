@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@casl/ability": "^6.8.0",
     "@hisaabo/db": "workspace:*",
     "@hisaabo/shared": "workspace:*",
     "@hono/node-server": "^1.13.0",

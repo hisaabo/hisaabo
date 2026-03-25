@@ -4,6 +4,7 @@ import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 
 
@@ -18,6 +19,7 @@ export const partyRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Party");
       const conditions = [eq(parties.businessId, ctx.businessId)];
       if (input.type) conditions.push(eq(parties.type, input.type));
       if (input.search) conditions.push(ilike(parties.name, `%${input.search}%`));
@@ -45,6 +47,7 @@ export const partyRouter = router({
   getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Party");
       const [party] = await ctx.db.select().from(parties)
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -65,6 +68,7 @@ export const partyRouter = router({
     }),
 
   create: memberProcedure.input(createPartySchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Party");
     const [party] = await ctx.db.insert(parties).values({
       ...input,
       businessId: ctx.businessId,
@@ -77,6 +81,7 @@ export const partyRouter = router({
   update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updatePartySchema }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Party");
       const { contactPersonDob, ...rest } = input.data;
       const [party] = await ctx.db.update(parties)
         .set({
@@ -92,6 +97,7 @@ export const partyRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Party");
       await ctx.db.delete(parties)
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)));
       return { success: true };
@@ -100,6 +106,7 @@ export const partyRouter = router({
   topItems: viewerProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Party");
       const rows = await ctx.db.select({
         itemId: invoiceItems.itemId,
         itemName: items.name,
@@ -126,12 +133,30 @@ export const partyRouter = router({
       return rows;
     }),
 
+  getStats: viewerProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Party");
+      const [stats] = await ctx.db.select({
+        invoiceCount: sql<number>`count(distinct ${invoices.id})::int`,
+        paymentCount: sql<number>`(select count(*)::int from ${payments} where ${payments.partyId} = ${input.id} and ${payments.businessId} = ${ctx.businessId})`,
+      })
+        .from(invoices)
+        .where(and(eq(invoices.partyId, input.id), eq(invoices.businessId, ctx.businessId)));
+
+      return {
+        invoiceCount: stats?.invoiceCount ?? 0,
+        paymentCount: stats?.paymentCount ?? 0,
+      };
+    }),
+
   merge: adminProcedure
     .input(z.object({
       sourceId: z.string().uuid(),
       targetId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Party");
       if (input.sourceId === input.targetId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge a party into itself" });
       }
@@ -204,6 +229,7 @@ export const partyRouter = router({
       limit: z.number().int().min(1).max(100).default(50),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Party");
       // Verify party belongs to this business
       const [party] = await ctx.db
         .select({ id: parties.id, openingBalance: parties.openingBalance })

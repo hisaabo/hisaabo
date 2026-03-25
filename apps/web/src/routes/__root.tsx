@@ -83,7 +83,7 @@ const navSections = [
   {
     label: "COMPLIANCE",
     items: [
-      { to: "/gst", label: "GST Reports", icon: GSTIcon },
+      { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
     ],
   },
 ] as const;
@@ -325,7 +325,8 @@ function RootLayout() {
   }
 
   const activeBusiness = businesses?.find((b) => b.id === (currentBusinessId ?? businesses?.[0]?.id)) ?? businesses?.[0];
-  const isGstRegistered = activeBusiness?.gstRegistrationType !== "unregistered";
+  const isGstRegistered =
+    activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
@@ -376,10 +377,12 @@ function RootLayout() {
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2">
           {navSections.map((section) => {
-            const visibleItems = section.items.filter((item) => {
-              // Hide GST Reports for non-GST-registered businesses
-              if (item.to === "/gst" && !isGstRegistered) return false;
-              return true;
+            const visibleItems = section.items.map((item) => {
+              // Rename reports label based on GST status (always visible)
+              if (item.to === "/gst") {
+                return { ...item, label: (isGstRegistered ? "GST Reports" : "Reports") as typeof item.label };
+              }
+              return item;
             });
             if (visibleItems.length === 0) return null;
             return (

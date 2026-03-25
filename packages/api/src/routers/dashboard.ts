@@ -3,9 +3,16 @@ import { z } from "zod";
 import { invoices, payments, expenses, parties, businesses } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 
 export const dashboardRouter = router({
-  summary: viewerProcedure.query(async ({ ctx }) => {
+  summary: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }).optional())
+    .query(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "read", "Report");
     // Fetch business to get financialYearStart (1-indexed month, e.g. 4 = April)
     const [biz] = await ctx.db
       .select({ financialYearStart: businesses.financialYearStart })
@@ -20,7 +27,14 @@ export const dashboardRouter = router({
     const fyYear = now.getMonth() < fyStartMonth ? now.getFullYear() - 1 : now.getFullYear();
     const fyStart = new Date(fyYear, fyStartMonth, 1);
 
-    const fyCondition = (dateCol: Parameters<typeof gte>[0]) => gte(dateCol, fyStart);
+    // Use custom date range if provided, otherwise default to FY
+    const periodStart = input?.fromDate ? new Date(input.fromDate) : fyStart;
+    const periodEnd = input?.toDate ? new Date(input.toDate) : undefined;
+
+    const dateCondition = (dateCol: Parameters<typeof gte>[0]) => {
+      if (periodEnd) return and(gte(dateCol, periodStart), lte(dateCol, periodEnd));
+      return gte(dateCol, periodStart);
+    };
 
     const [
       [salesResult],
@@ -40,7 +54,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
-          fyCondition(invoices.invoiceDate),
+          dateCondition(invoices.invoiceDate),
         )),
 
       // Purchase total (FY)
@@ -51,7 +65,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
-          fyCondition(invoices.invoiceDate),
+          dateCondition(invoices.invoiceDate),
         )),
 
       // Expense total (FY)
@@ -60,7 +74,7 @@ export const dashboardRouter = router({
       }).from(expenses)
         .where(and(
           eq(expenses.businessId, ctx.businessId),
-          fyCondition(expenses.expenseDate),
+          dateCondition(expenses.expenseDate),
         )),
 
       // Receivable = total sale invoices - amount paid on sales
@@ -102,7 +116,7 @@ export const dashboardRouter = router({
         .orderBy(desc(invoices.createdAt))
         .limit(10),
 
-      // Cash in hand = all payments received (in) - all payments made (out) - expenses
+      // Cash in = payments received for sales (period-scoped)
       ctx.db.select({
         total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
       }).from(payments)
@@ -110,8 +124,10 @@ export const dashboardRouter = router({
         .where(and(
           eq(payments.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
+          dateCondition(payments.paymentDate),
         )),
 
+      // Cash out = payments made for purchases (period-scoped)
       ctx.db.select({
         total: sql<string>`coalesce(sum(${payments.amount}::numeric), 0)::text`,
       }).from(payments)
@@ -119,6 +135,7 @@ export const dashboardRouter = router({
         .where(and(
           eq(payments.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
+          dateCondition(payments.paymentDate),
         )),
     ]);
 
@@ -148,6 +165,7 @@ export const dashboardRouter = router({
       toDate: z.string().datetime().optional(),
     }).optional())
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, "invoice"),
@@ -195,6 +213,7 @@ export const dashboardRouter = router({
       toDate: z.string().datetime().optional(),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       // If fromDate/toDate are provided, derive the month range from them.
       // Otherwise fall back to the last N months from today.
       let rangeStart: Date;
@@ -254,6 +273,7 @@ export const dashboardRouter = router({
   topOutstanding: viewerProcedure
     .input(z.object({ limit: z.number().int().min(3).max(20).default(5) }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       const results = await ctx.db
         .select({
           partyId: parties.id,
@@ -291,6 +311,7 @@ export const dashboardRouter = router({
       toDate: z.string().datetime().optional(),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       const conditions = [eq(expenses.businessId, ctx.businessId)];
       if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
@@ -313,6 +334,7 @@ export const dashboardRouter = router({
       toDate: z.string().datetime().optional(),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, sql`'invoice'`),

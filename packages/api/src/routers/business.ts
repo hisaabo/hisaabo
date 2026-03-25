@@ -1,9 +1,9 @@
 import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { businesses, bankAccounts, controlDb, tenantMembers, auditLog } from "@hisaabo/db";
+import { businesses, bankAccounts, controlDb, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
-import { router, tenantProcedure, viewerProcedure } from "../trpc.js";
+import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -126,4 +126,43 @@ export const businessRouter = router({
         .offset(offset);
       return { data, page: input.page, limit: input.limit };
     }),
+
+  exportData: adminProcedure.mutation(async ({ ctx }) => {
+    const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
+      ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
+      ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),
+      ctx.db.select().from(invoices).where(eq(invoices.businessId, ctx.businessId)).orderBy(invoices.invoiceDate),
+      ctx.db
+        .select({ invoice_items: invoiceItems })
+        .from(invoiceItems)
+        .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+        .where(eq(invoices.businessId, ctx.businessId)),
+      ctx.db.select().from(payments).where(eq(payments.businessId, ctx.businessId)).orderBy(payments.paymentDate),
+      ctx.db.select().from(expenses).where(eq(expenses.businessId, ctx.businessId)).orderBy(expenses.expenseDate),
+    ]);
+
+    return {
+      parties: toCsv(partiesData, ["name", "type", "phone", "email", "gstin", "billingAddress", "city", "state", "pincode", "openingBalance", "category"]),
+      items: toCsv(itemsData, ["name", "itemType", "unit", "salePrice", "purchasePrice", "taxPercent", "hsn", "sku", "stockQuantity", "category"]),
+      invoices: toCsv(invoicesData, ["invoiceNumber", "type", "documentType", "invoiceDate", "dueDate", "status", "subtotal", "taxAmount", "discountAmount", "totalAmount", "amountPaid", "notes"]),
+      lineItems: toCsv(lineItemsData.map(r => r.invoice_items), ["invoiceId", "description", "quantity", "unitPrice", "taxPercent", "taxAmount", "discountPercent", "totalAmount"]),
+      payments: toCsv(paymentsData, ["paymentNumber", "paymentDate", "amount", "mode", "referenceNumber", "notes"]),
+      expenses: toCsv(expensesData, ["category", "description", "amount", "mode", "expenseDate", "referenceNumber"]),
+    };
+  }),
 });
+
+function toCsv<T extends Record<string, unknown>>(data: T[], fields: string[]): string {
+  const header = fields.join(",");
+  const rows = data.map(row =>
+    fields.map(f => {
+      const val = row[f];
+      if (val === null || val === undefined) return "";
+      const str = val instanceof Date ? val.toISOString() : String(val);
+      return str.includes(",") || str.includes('"') || str.includes("\n")
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    }).join(",")
+  );
+  return [header, ...rows].join("\n");
+}

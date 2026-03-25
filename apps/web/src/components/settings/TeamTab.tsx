@@ -7,8 +7,9 @@ import { cn, formatDate } from "@/lib/utils";
 
 const roleOptions = [
   { value: "admin", label: "Admin" },
-  { value: "member", label: "Member" },
-  { value: "viewer", label: "Viewer" },
+  { value: "seller_manager", label: "Seller Manager" },
+  { value: "seller", label: "Seller" },
+  { value: "accountant", label: "Accountant" },
 ];
 
 function TeamSection() {
@@ -37,7 +38,7 @@ function TeamSection() {
 
   const { data: me } = trpc.auth.me.useQuery();
   const callerMember = members?.find((m) => m.userEmail === me?.user?.email);
-  const canManage = callerMember?.role === "owner" || callerMember?.role === "admin";
+  const canManage = callerMember?.role === "owner" || callerMember?.role === "superadmin" || callerMember?.role === "admin";
 
   if (!session?.tenantId) return null;
 
@@ -83,14 +84,14 @@ function TeamSection() {
                     <span
                       className={cn(
                         "px-2 py-0.5 rounded text-[11px] font-medium",
-                        m.role === "owner"
+                        m.role === "owner" || m.role === "superadmin"
                           ? "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400"
                           : m.role === "admin"
                             ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
                             : "bg-surface-2 text-text-secondary",
                       )}
                     >
-                      {m.role}
+                      {m.role === "owner" ? "superadmin" : m.role}
                     </span>
                   </td>
                   <td className="text-text-secondary text-xs">
@@ -98,13 +99,13 @@ function TeamSection() {
                   </td>
                   {canManage && (
                     <td className="text-right">
-                      {m.role !== "owner" && m.userEmail !== me?.user?.email && (
+                      {m.role !== "owner" && m.role !== "superadmin" && m.userEmail !== me?.user?.email && (
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-28">
                             <Listbox
                               value={m.role}
                               onChange={(role) =>
-                                updateRole.mutate({ userId: m.userId, role: role as "admin" | "member" | "viewer" })
+                                updateRole.mutate({ userId: m.userId, role: role as "admin" | "seller_manager" | "seller" | "accountant" })
                               }
                               options={roleOptions}
                             />
@@ -135,7 +136,7 @@ function TeamSection() {
 
 function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("member");
+  const [role, setRole] = useState("seller");
   const [inviteResult, setInviteResult] = useState<{ token: string; inviteLink: string } | null>(null);
   const utils = trpc.useUtils();
 
@@ -151,14 +152,14 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   function handleClose() {
     setEmail("");
-    setRole("member");
+    setRole("seller");
     setInviteResult(null);
     onClose();
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    inviteMutation.mutate({ email, role: role as "admin" | "member" | "viewer" });
+    inviteMutation.mutate({ email, role: role as "admin" | "seller_manager" | "seller" | "accountant" });
   }
 
   return (

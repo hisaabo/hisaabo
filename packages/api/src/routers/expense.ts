@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { expenses } from "@hisaabo/db";
 import { createExpenseSchema, paginationSchema } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 
 export const expenseRouter = router({
   list: viewerProcedure
@@ -15,6 +16,7 @@ export const expenseRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Expense");
       const conditions = [eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)];
       if (input.category) conditions.push(eq(expenses.category, input.category));
       if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
@@ -44,6 +46,7 @@ export const expenseRouter = router({
     }),
 
   create: memberProcedure.input(createExpenseSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Expense");
     const [expense] = await ctx.db.insert(expenses).values({
       ...input,
       businessId: ctx.businessId,
@@ -57,6 +60,7 @@ export const expenseRouter = router({
   update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: createExpenseSchema.partial() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Expense");
       const [existing] = await ctx.db.select({ id: expenses.id })
         .from(expenses)
         .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
@@ -77,6 +81,7 @@ export const expenseRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Expense");
       const [existing] = await ctx.db.select({ id: expenses.id, deletedAt: expenses.deletedAt })
         .from(expenses)
         .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
@@ -92,6 +97,7 @@ export const expenseRouter = router({
     }),
 
   categories: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "Expense");
     const result = await ctx.db.selectDistinct({ category: expenses.category })
       .from(expenses)
       .where(and(eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)))
@@ -105,6 +111,7 @@ export const expenseRouter = router({
       to: z.string().datetime().optional(),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Expense");
       const conditions = [eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)];
       if (input.from) conditions.push(sql`${expenses.expenseDate} >= ${input.from}`);
       if (input.to) conditions.push(sql`${expenses.expenseDate} <= ${input.to}`);

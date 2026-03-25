@@ -4,6 +4,7 @@ import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db"
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 
 export const invoiceRouter = router({
@@ -22,6 +23,7 @@ export const invoiceRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, input.documentType),
@@ -92,6 +94,7 @@ export const invoiceRouter = router({
   getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const [invoice] = await ctx.db.select().from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
@@ -110,6 +113,7 @@ export const invoiceRouter = router({
     }),
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Invoice");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const invoice = await ctx.db.transaction(async (tx) => {
       // Get and increment invoice number atomically
@@ -233,6 +237,7 @@ export const invoiceRouter = router({
   updateStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Invoice");
       const [invoice] = await ctx.db.update(invoices)
         .set({ status: input.status, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
@@ -255,6 +260,7 @@ export const invoiceRouter = router({
       lineItems: z.array(invoiceLineItemSchema).min(1).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Invoice");
       return ctx.db.transaction(async (tx) => {
         // 1. Fetch existing invoice
         const [existing] = await tx.select()
@@ -392,13 +398,26 @@ export const invoiceRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const [inv] = await ctx.db.select({ status: invoices.status, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt })
+      requireCan(ctx.ability, "delete", "Invoice");
+
+      const [inv] = await ctx.db.select({ status: invoices.status, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
 
       if (!inv) return { success: true };
       if (inv.deletedAt) return { success: true }; // already soft-deleted
+
+      // seller_manager: can only delete unpaid invoices created within the last 2 hours
+      if (ctx.role === "seller_manager") {
+        if (inv.status === "paid") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Cannot delete paid invoices" });
+        }
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        if (inv.createdAt < twoHoursAgo) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Can only delete invoices within 2 hours of creation" });
+        }
+      }
 
       await ctx.db.update(invoices)
         .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })

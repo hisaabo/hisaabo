@@ -1041,7 +1041,7 @@ function PriceHistoryTab({
       : chronological;
     return limited.map((h) => ({
       date: formatDate(h.invoiceDate),
-      price: parseFloat(h.unitPrice),
+      price: parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1"),
       invoiceNumber: h.invoiceNumber,
     }));
   }, [filtered, period]);
@@ -1051,7 +1051,9 @@ function PriceHistoryTab({
     const chronological = [...filtered].reverse();
     return chronological.filter((h, i) => {
       if (i === 0) return true;
-      return parseFloat(h.unitPrice) !== parseFloat(chronological[i - 1].unitPrice);
+      const basePrice = parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1");
+      const prevBasePrice = parseFloat(chronological[i - 1].unitPrice) / parseFloat(chronological[i - 1].conversionFactor || "1");
+      return Math.abs(basePrice - prevBasePrice) > 0.01;
     }).reverse(); // show newest first
   }, [filtered]);
 
@@ -1114,22 +1116,31 @@ function PriceHistoryTab({
         <div>
           <p className="text-xs font-semibold text-text-secondary mb-2">Price Changes</p>
           <div className="rounded-xl border border-border-light overflow-hidden">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Invoice #</th>
-                  <th className="text-right">Unit Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {priceChangedRows.map((h, i) => (
-                  <tr key={i}>
-                    <td className="font-mono text-[13px] text-brand-600">{h.invoiceNumber}</td>
-                    <td className="text-right tabular-nums font-medium">{formatCurrency(h.unitPrice)}</td>
+            <div className="max-h-[300px] overflow-y-auto">
+              <table className="data-table w-full">
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    <th style={{ width: "50%" }}>Invoice #</th>
+                    <th style={{ width: "50%" }} className="text-right">Unit Price (base)</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {priceChangedRows.map((h, i) => (
+                    <tr key={i}>
+                      <td className="font-mono text-[13px] text-brand-600">{h.invoiceNumber}</td>
+                      <td className="text-right tabular-nums font-medium">
+                        {formatCurrency(String(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1")))}
+                        {h.selectedUnit && h.conversionFactor && parseFloat(h.conversionFactor) !== 1 && (
+                          <span className="text-[10px] text-text-tertiary ml-1">
+                            ({formatCurrency(h.unitPrice)}/{h.selectedUnit})
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -1157,7 +1168,8 @@ function StockMovementsTab({
     // Compute running balance backwards from current stock
     // Sum all qty changes (+ for in, - for out) in the filtered window
     const totalChange = chronological.reduce((acc, m) => {
-      const qty = parseFloat(m.quantity);
+      const factor = parseFloat(m.conversionFactor || "1");
+      const qty = parseFloat(m.quantity) * factor;
       return acc + (m.direction === "in" ? qty : -qty);
     }, 0);
 
@@ -1166,7 +1178,8 @@ function StockMovementsTab({
     const rows: { date: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
 
     for (const m of chronological) {
-      const qty = parseFloat(m.quantity);
+      const factor = parseFloat(m.conversionFactor || "1");
+      const qty = parseFloat(m.quantity) * factor;
       const delta = m.direction === "in" ? qty : -qty;
       running += delta;
       rows.push({
@@ -1188,6 +1201,17 @@ function StockMovementsTab({
     return { chartData, tableRows };
   }, [filtered, currentStock]);
 
+  const { totalIn, totalOut } = useMemo(() => {
+    let totalIn = 0, totalOut = 0;
+    for (const m of filtered) {
+      const factor = parseFloat(m.conversionFactor || "1");
+      const qty = parseFloat(m.quantity) * factor;
+      if (m.direction === "in") totalIn += qty;
+      else totalOut += qty;
+    }
+    return { totalIn, totalOut };
+  }, [filtered]);
+
   if (!stockMovements.length) {
     return (
       <EmptyState
@@ -1202,6 +1226,21 @@ function StockMovementsTab({
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold text-text-secondary">Stock Over Time</p>
         <PeriodToggle value={period} onChange={onPeriodChange} />
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600/10 text-emerald-700 dark:text-emerald-400 font-medium">
+          In: +{totalIn.toLocaleString()}
+        </span>
+        <span className="text-xs px-2.5 py-1 rounded-lg bg-red-600/10 text-red-700 dark:text-red-400 font-medium">
+          Out: -{totalOut.toLocaleString()}
+        </span>
+        <span className="text-xs px-2.5 py-1 rounded-lg bg-surface-2 text-text-secondary font-medium">
+          Net: {(totalIn - totalOut) > 0 ? "+" : ""}{(totalIn - totalOut).toLocaleString()}
+        </span>
+        <span className="text-xs text-text-tertiary ml-auto">
+          {filtered.length} movements
+        </span>
       </div>
 
       {chartData.length > 1 ? (
@@ -1243,29 +1282,31 @@ function StockMovementsTab({
       )}
 
       <div className="rounded-xl border border-border-light overflow-hidden">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th className="text-right">Qty Change</th>
-              <th className="text-right">Balance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tableRows.map((r, i) => (
-              <tr key={i}>
-                <td className="text-text-secondary text-xs">{r.date}</td>
-                <td className={cn(
-                  "text-right tabular-nums font-medium",
-                  r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
-                )}>
-                  {r.qtyChange > 0 ? "+" : ""}{r.qtyChange.toLocaleString()}
-                </td>
-                <td className="text-right tabular-nums text-text-secondary">{r.running.toLocaleString()}</td>
+        <div className="max-h-[300px] overflow-y-auto">
+          <table className="data-table w-full">
+            <thead className="sticky top-0 z-10">
+              <tr>
+                <th style={{ width: "40%" }}>Date</th>
+                <th style={{ width: "30%" }} className="text-right">Qty Change</th>
+                <th style={{ width: "30%" }} className="text-right">Balance</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tableRows.map((r, i) => (
+                <tr key={i}>
+                  <td className="text-text-secondary text-xs">{r.date}</td>
+                  <td className={cn(
+                    "text-right tabular-nums font-medium",
+                    r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
+                  )}>
+                    {r.qtyChange > 0 ? "+" : ""}{r.qtyChange.toLocaleString()}
+                  </td>
+                  <td className="text-right tabular-nums text-text-secondary">{r.running.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
