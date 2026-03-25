@@ -83,10 +83,10 @@ export const tenantRouter = router({
   inviteMember: tenantProcedure
     .input(z.object({
       email: z.string().email(),
-      role: z.enum(["admin", "member", "viewer"]).default("member"),
+      role: z.enum(["admin", "seller_manager", "seller", "accountant"]).default("seller"),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Check caller has permission (owner or admin)
+      // Check caller has permission (owner/superadmin or admin)
       const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
         .from(tenantMembers)
         .where(and(
@@ -95,7 +95,7 @@ export const tenantRouter = router({
         ))
         .limit(1);
 
-      if (!callerMembership || !["owner", "admin"].includes(callerMembership.role)) {
+      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can invite members" });
       }
 
@@ -202,12 +202,25 @@ export const tenantRouter = router({
         ))
         .limit(1);
 
-      if (!callerMembership || !["owner", "admin"].includes(callerMembership.role)) {
+      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can remove members" });
       }
 
       if (input.userId === ctx.user.id) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot remove yourself" });
+      }
+
+      // Prevent removing a superadmin/owner
+      const [targetMembership] = await controlDb.select({ role: tenantMembers.role })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, ctx.tenantId),
+          eq(tenantMembers.userId, input.userId),
+        ))
+        .limit(1);
+
+      if (targetMembership && ["owner", "superadmin"].includes(targetMembership.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot remove a superadmin" });
       }
 
       await controlDb.delete(tenantMembers)
@@ -223,7 +236,7 @@ export const tenantRouter = router({
   updateMemberRole: tenantProcedure
     .input(z.object({
       userId: z.string().uuid(),
-      role: z.enum(["admin", "member", "viewer"]),
+      role: z.enum(["admin", "seller_manager", "seller", "accountant"]),
     }))
     .mutation(async ({ input, ctx }) => {
       const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
@@ -234,8 +247,21 @@ export const tenantRouter = router({
         ))
         .limit(1);
 
-      if (!callerMembership || callerMembership.role !== "owner") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can change roles" });
+      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can change roles" });
+      }
+
+      // Prevent changing a superadmin/owner's role
+      const [targetMembership] = await controlDb.select({ role: tenantMembers.role })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, ctx.tenantId),
+          eq(tenantMembers.userId, input.userId),
+        ))
+        .limit(1);
+
+      if (targetMembership && ["owner", "superadmin"].includes(targetMembership.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot change the role of a superadmin" });
       }
 
       await controlDb.update(tenantMembers)

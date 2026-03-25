@@ -13,9 +13,9 @@
   --border-color: #dee2e6;
   --border-light: #e9ecef;
   --success: #2b8a3e;
-  --warning: #e67700;
-  --danger: #c92a2a;
-  --info: #1971c2;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
 }
 
 .dark {
@@ -56,7 +56,7 @@ body {
 
 /* Focus ring */
 *:focus-visible {
-  outline: 2px solid #4c6ef5;
+  outline: 2px solid #5b5bd6;
   outline-offset: 2px;
 }
 
@@ -120,8 +120,8 @@ input, select, textarea {
     border-color: var(--border-color);
   }
   .input:focus {
-    border-color: #4c6ef5;
-    box-shadow: 0 0 0 3px rgba(76, 110, 245, 0.1);
+    border-color: #5b5bd6;
+    box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.1);
   }
   .input:disabled {
     @apply opacity-50 cursor-not-allowed;

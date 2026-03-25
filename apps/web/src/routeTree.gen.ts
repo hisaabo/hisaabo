@@ -19,10 +19,13 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ItemsRouteImport } from './routes/items'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as GstRouteImport } from './routes/gst'
+import { Route as ExpensesRouteImport } from './routes/expenses'
 import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
 import { Route as CreditNotesRouteImport } from './routes/credit-notes'
 import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
+import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
@@ -74,6 +77,11 @@ const GstRoute = GstRouteImport.update({
   path: '/gst',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ExpensesRoute = ExpensesRouteImport.update({
+  id: '/expenses',
+  path: '/expenses',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryChallansRoute = DeliveryChallansRouteImport.update({
   id: '/delivery-challans',
   path: '/delivery-challans',
@@ -94,12 +102,23 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthVerifyRoute = AuthVerifyRouteImport.update({
+  id: '/auth/verify',
+  path: '/auth/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
+  id: '/auth/complete-profile',
+  path: '/auth/complete-profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
   '/items': typeof ItemsRoute
@@ -110,12 +129,15 @@ export interface FileRoutesByFullPath {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
   '/items': typeof ItemsRoute
@@ -126,6 +148,8 @@ export interface FileRoutesByTo {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -133,6 +157,7 @@ export interface FileRoutesById {
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
   '/items': typeof ItemsRoute
@@ -143,6 +168,8 @@ export interface FileRoutesById {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -151,6 +178,7 @@ export interface FileRouteTypes {
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/expenses'
     | '/gst'
     | '/invoices'
     | '/items'
@@ -161,12 +189,15 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/expenses'
     | '/gst'
     | '/invoices'
     | '/items'
@@ -177,12 +208,15 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   id:
     | '__root__'
     | '/'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/expenses'
     | '/gst'
     | '/invoices'
     | '/items'
@@ -193,6 +227,8 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -200,6 +236,7 @@ export interface RootRouteChildren {
   CashAndBankRoute: typeof CashAndBankRoute
   CreditNotesRoute: typeof CreditNotesRoute
   DeliveryChallansRoute: typeof DeliveryChallansRoute
+  ExpensesRoute: typeof ExpensesRoute
   GstRoute: typeof GstRoute
   InvoicesRoute: typeof InvoicesRoute
   ItemsRoute: typeof ItemsRoute
@@ -210,6 +247,8 @@ export interface RootRouteChildren {
   QuotationsRoute: typeof QuotationsRoute
   SalesReturnsRoute: typeof SalesReturnsRoute
   SettingsRoute: typeof SettingsRoute
+  AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
+  AuthVerifyRoute: typeof AuthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -284,6 +323,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GstRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/expenses': {
+      id: '/expenses'
+      path: '/expenses'
+      fullPath: '/expenses'
+      preLoaderRoute: typeof ExpensesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/delivery-challans': {
       id: '/delivery-challans'
       path: '/delivery-challans'
@@ -312,6 +358,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/verify': {
+      id: '/auth/verify'
+      path: '/auth/verify'
+      fullPath: '/auth/verify'
+      preLoaderRoute: typeof AuthVerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/complete-profile': {
+      id: '/auth/complete-profile'
+      path: '/auth/complete-profile'
+      fullPath: '/auth/complete-profile'
+      preLoaderRoute: typeof AuthCompleteProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -320,6 +380,7 @@ const rootRouteChildren: RootRouteChildren = {
   CashAndBankRoute: CashAndBankRoute,
   CreditNotesRoute: CreditNotesRoute,
   DeliveryChallansRoute: DeliveryChallansRoute,
+  ExpensesRoute: ExpensesRoute,
   GstRoute: GstRoute,
   InvoicesRoute: InvoicesRoute,
   ItemsRoute: ItemsRoute,
@@ -330,6 +391,8 @@ const rootRouteChildren: RootRouteChildren = {
   QuotationsRoute: QuotationsRoute,
   SalesReturnsRoute: SalesReturnsRoute,
   SettingsRoute: SettingsRoute,
+  AuthCompleteProfileRoute: AuthCompleteProfileRoute,
+  AuthVerifyRoute: AuthVerifyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

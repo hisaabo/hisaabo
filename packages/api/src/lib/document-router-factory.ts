@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -14,9 +14,8 @@ import {
   type DocumentType,
   calcLineItem,
   calcInvoiceTotals,
-  money,
 } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -77,7 +76,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
   const allowedStatusEnum = config.allowedStatuses as [string, ...string[]];
 
   return router({
-    list: businessProcedure
+    list: viewerProcedure
       .input(
         z.object({
           type: z.enum(["sale", "purchase"]).optional(),
@@ -94,6 +93,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         const conditions = [
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.documentType, docType as DocumentType),
+          isNull(invoices.deletedAt),
         ];
 
         if (input.type) conditions.push(eq(invoices.type, input.type));
@@ -153,7 +153,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return { data, total: count, page: input.page, limit: input.limit };
       }),
 
-    getById: businessProcedure
+    getById: viewerProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input, ctx }) => {
         const [invoice] = await ctx.db
@@ -182,7 +182,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return { ...invoice, lineItems, party: party ?? null };
       }),
 
-    create: businessProcedure
+    create: memberProcedure
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async (tx) => {
@@ -244,6 +244,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               discountPercent: li.discountPercent || "0",
               totalAmount: calc.total,
               sortOrder: idx,
+              selectedUnit: li.selectedUnit || null,
+              conversionFactor: li.conversionFactor || "1",
             };
           });
 
@@ -284,6 +286,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               notes: input.notes,
               termsAndConditions: input.termsAndConditions,
               referenceDocumentId: input.referenceDocumentId || null,
+              createdByUserId: ctx.user!.id,
+              createdByName: ctx.user!.name,
             })
             .returning();
 
@@ -293,30 +297,27 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .values(processedItems.map((li) => ({ ...li, invoiceId: doc.id })));
           }
 
-          // Stock effects
-          if (config.stockEffect === "decrement") {
+          // Stock effects (adjusted for unit conversion)
+          // Group by itemId and sum quantities to avoid redundant per-row updates
+          if (config.stockEffect !== "none") {
+            const stockMap = new Map<string, number>();
             for (const li of input.lineItems) {
               if (li.itemId) {
-                await tx
-                  .update(items)
-                  .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(items.id, li.itemId));
+                const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+                stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
               }
             }
-          } else if (config.stockEffect === "increment") {
-            for (const li of input.lineItems) {
-              if (li.itemId) {
-                await tx
-                  .update(items)
-                  .set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(items.id, li.itemId));
-              }
+            for (const [itemId, totalQty] of stockMap) {
+              const qtyStr = totalQty.toFixed(3);
+              await tx
+                .update(items)
+                .set({
+                  stockQuantity: config.stockEffect === "decrement"
+                    ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+                    : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+                  updatedAt: new Date(),
+                })
+                .where(and(eq(items.id, itemId), eq(items.businessId, ctx.businessId)));
             }
           }
 
@@ -324,7 +325,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         });
       }),
 
-    updateStatus: businessProcedure
+    updateStatus: memberProcedure
       .input(
         z.object({
           id: z.string().uuid(),
@@ -354,7 +355,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         return doc;
       }),
 
-    delete: businessProcedure
+    delete: adminProcedure
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async (tx) => {
@@ -374,7 +375,10 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
           }
 
-          // Reverse stock effects on delete
+          // Already soft-deleted — return early
+          if (doc.deletedAt) return { success: true };
+
+          // Reverse stock effects on delete (using stored conversionFactor)
           if (config.stockEffect !== "none") {
             const lineItems = await tx
               .select()
@@ -383,32 +387,34 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
             for (const li of lineItems) {
               if (li.itemId) {
+                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1")).toFixed(3);
                 if (config.stockEffect === "decrement") {
                   // was decremented on create → add back on delete
                   await tx
                     .update(items)
                     .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                      stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
-                    .where(eq(items.id, li.itemId));
+                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 } else if (config.stockEffect === "increment") {
                   // was incremented on create → subtract on delete
                   await tx
                     .update(items)
                     .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                      stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
                       updatedAt: new Date(),
                     })
-                    .where(eq(items.id, li.itemId));
+                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 }
               }
             }
           }
 
-          // Cascade on invoice_items is handled by FK, but we already fetched line items above
+          // Soft delete: set deletedAt + cancel the document
           await tx
-            .delete(invoices)
+            .update(invoices)
+            .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
             .where(
               and(
                 eq(invoices.id, input.id),

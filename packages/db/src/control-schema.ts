@@ -5,7 +5,12 @@ import { relations } from "drizzle-orm";
 
 export const tenantStatusEnum = pgEnum("tenant_status", ["active", "suspended", "deleted"]);
 export const tenantPlanEnum = pgEnum("tenant_plan", ["free", "pro", "business", "enterprise"]);
-export const memberRoleEnum = pgEnum("member_role", ["owner", "admin", "member", "viewer"]);
+export const memberRoleEnum = pgEnum("member_role", [
+  // Legacy values (kept for backward compat with existing DB rows)
+  "owner", "admin", "member", "viewer",
+  // New CASL-based roles (require ALTER TYPE migration in production)
+  "superadmin", "seller_manager", "seller", "accountant",
+]);
 
 // ── Tenants ────────────────────────────────────────────────────
 
@@ -35,8 +40,8 @@ export const tenants = pgTable("tenants", {
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
-  name: text("name").notNull(),
-  passwordHash: text("password_hash").notNull(),
+  name: text("name"),
+  passwordHash: text("password_hash"),
   emailVerified: boolean("email_verified").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -91,6 +96,21 @@ export const invitations = pgTable("invitations", {
   uniqueIndex("invitations_token_idx").on(t.token),
   index("invitations_email_idx").on(t.email),
   index("invitations_tenant_idx").on(t.tenantId),
+]);
+
+// ── Magic Link Tokens ─────────────────────────────────────────
+
+export const magicLinkTokens = pgTable("magic_link_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("magic_link_tokens_email_idx").on(t.email),
+  index("magic_link_tokens_hash_idx").on(t.tokenHash),
 ]);
 
 // ── Relations ──────────────────────────────────────────────────

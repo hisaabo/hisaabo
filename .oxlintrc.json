@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicolo-ribaudo/oxlint-config-json-schema/refs/heads/main/json-schema.json",
+  "rules": {
+    "no-use-before-define": ["warn", { "functions": false, "classes": false, "variables": true }]
+  }
+}

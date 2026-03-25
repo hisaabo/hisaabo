@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, getInitials, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, getInitials, cn, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -24,10 +24,15 @@ export const Route = createFileRoute("/parties")({
   component: PartiesPage,
 });
 
-const TYPE_TABS = [
+const PARTY_TYPE_TABS = [
   { value: "all", label: "All" },
   { value: "customer", label: "Customers" },
   { value: "supplier", label: "Suppliers" },
+];
+
+const PARTY_STATUS_FILTERS = [
+  { value: "outstanding", label: "Outstanding" },
+  { value: "overdue", label: "Overdue" },
 ];
 
 const PARTIES_PAGE_SIZE = 20;
@@ -38,25 +43,71 @@ function countFilled(...values: string[]): number {
 
 function PartiesPage() {
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [partyFilter, setPartyFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<"name" | "balance">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const debouncedSearch = useDebounce(search, 300);
 
-  // Reset to page 1 whenever filters change
-  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter]);
+  function toggleSort(col: "name" | "balance") {
+    if (sortBy === col && sortDir === "asc") setSortDir("desc");
+    else if (sortBy === col && sortDir === "desc") { setSortBy("name"); setSortDir("asc"); } // reset to default
+    else { setSortBy(col); setSortDir(col === "name" ? "asc" : "desc"); }
+  }
+
+  // Reset to page 1 whenever filters/sort change
+  useEffect(() => { setPage(1); }, [debouncedSearch, partyFilter, sortBy, sortDir]);
 
   const { data, isLoading } = trpc.party.list.useQuery({
     search: debouncedSearch || undefined,
-    type: typeFilter !== "all" ? (typeFilter as PartyType) : undefined,
+    filter: partyFilter as any,
+    sortBy,
+    sortDir,
     page,
     limit: PARTIES_PAGE_SIZE,
   });
 
   const utils = trpc.useUtils();
+
+  async function exportPartiesCSV() {
+    setExporting(true);
+    try {
+      let allData: any[] = [];
+      let pg = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const result = await utils.party.list.fetch({
+          search: debouncedSearch || undefined,
+          filter: partyFilter as any,
+          page: pg,
+          limit: 100,
+        });
+        allData = [...allData, ...result.data];
+        hasMore = allData.length < result.total;
+        pg++;
+      }
+
+      const headers = ["Name", "Type", "Phone", "Email", "GSTIN", "Balance"];
+      const rows = allData.map((p: any) => [
+        p.name,
+        p.type,
+        p.phone || "",
+        p.email || "",
+        p.gstin || "",
+        p.openingBalance || "0",
+      ]);
+
+      downloadCSV(`parties_${partyFilter}`, headers, rows);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const deleteMutation = trpc.party.delete.useMutation({
     onSuccess: () => {
       utils.party.list.invalidate();
@@ -98,18 +149,46 @@ function PartiesPage() {
       />
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <SearchInput
           value={search}
           onChange={setSearch}
           placeholder="Search by name..."
           className="max-w-xs"
         />
-        <SegmentedControl
-          tabs={TYPE_TABS}
-          value={typeFilter}
-          onChange={setTypeFilter}
+        <PillTabs
+          tabs={PARTY_TYPE_TABS}
+          value={["all", "customer", "supplier"].includes(partyFilter) ? partyFilter : "all"}
+          onChange={setPartyFilter}
         />
+        <div className="ml-auto flex items-center gap-1.5">
+          <PillTabs
+            tabs={PARTY_STATUS_FILTERS}
+            value={partyFilter}
+            onChange={(v) => setPartyFilter(partyFilter === v ? "all" : v)}
+          />
+          {data && data.total > 0 && (
+            <button
+              onClick={exportPartiesCSV}
+              disabled={exporting}
+              className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 shrink-0"
+            >
+              {exporting ? (
+                <>
+                  <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Preparing...
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+                  </svg>
+                  Export CSV
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -134,11 +213,21 @@ function PartiesPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Name</th>
+                <th
+                  className="cursor-pointer select-none hover:text-text-primary transition-colors"
+                  onClick={() => toggleSort("name")}
+                >
+                  Name {sortBy === "name" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                </th>
                 <th>Type</th>
                 <th>Phone</th>
                 <th>GSTIN</th>
-                <th className="text-right">Opening Balance</th>
+                <th
+                  className="text-right cursor-pointer select-none hover:text-text-primary transition-colors"
+                  onClick={() => toggleSort("balance")}
+                >
+                  Balance {sortBy === "balance" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                </th>
                 <th></th>
               </tr>
             </thead>
@@ -247,6 +336,7 @@ const PARTY_DETAIL_TABS = [
 
 function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () => void }) {
   const [tab, setTab] = useState("overview");
+  const [showMerge, setShowMerge] = useState(false);
   const navigate = useNavigate();
 
   const { data: party } = trpc.party.getById.useQuery({ id: partyId });
@@ -272,6 +362,7 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
   const isPositiveBalance = balanceNum > 0;
 
   return (
+    <>
     <SlideOver
       open={true}
       onClose={onClose}
@@ -281,6 +372,16 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
         party.phone,
         party.gstin,
       ].filter(Boolean).join(" · ")}
+      footer={
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowMerge(true)}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800 transition-colors"
+          >
+            Merge
+          </button>
+        </div>
+      }
     >
       <div className="space-y-4">
         {/* Tabs */}
@@ -654,6 +755,299 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
         )}
       </div>
     </SlideOver>
+    {showMerge && (
+      <MergePartyModal
+        sourceId={partyId}
+        sourceName={party.name}
+        onClose={() => {
+          setShowMerge(false);
+          onClose();
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+function MergePartyModal({
+  sourceId,
+  sourceName,
+  onClose,
+}: {
+  sourceId: string;
+  sourceName: string;
+  onClose: () => void;
+}) {
+  const [targetId, setTargetId] = useState("");
+  const [targetSearch, setTargetSearch] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+
+  const debouncedTargetSearch = useDebounce(targetSearch, 300);
+
+  const { data: partiesData, isLoading: partiesLoading } = trpc.party.list.useQuery({
+    page: 1,
+    limit: 100,
+    filter: "all",
+    search: debouncedTargetSearch || undefined,
+  });
+  const { data: sourceStats } = trpc.party.getStats.useQuery({ id: sourceId });
+  const { data: targetStats } = trpc.party.getStats.useQuery(
+    { id: targetId },
+    { enabled: !!targetId }
+  );
+
+  const utils = trpc.useUtils();
+
+  const mergeMutation = trpc.party.merge.useMutation({
+    onSuccess: () => {
+      utils.party.list.invalidate();
+      toast.success(`"${sourceName}" merged successfully`);
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Server-side search filters results; exclude only the source party client-side
+  const allParties = (partiesData?.data || []).filter((p) => p.id !== sourceId);
+
+  // Keep a stable reference to the selected target — don't lose it when search results change
+  const [selectedTargetCache, setSelectedTargetCache] = useState<{ id: string; name: string; type: string } | null>(null);
+  const selectedTarget = selectedTargetCache && targetId === selectedTargetCache.id
+    ? selectedTargetCache
+    : allParties.find((p) => p.id === targetId) || null;
+
+  function handleSelectTarget(id: string) {
+    const party = allParties.find((p) => p.id === id);
+    if (party) setSelectedTargetCache({ id: party.id, name: party.name, type: party.type });
+    setTargetId(id);
+    setConfirmed(false);
+  }
+
+  return (
+    <Modal open={true} onClose={onClose} title="Merge Parties" className="max-w-lg">
+      <div className="space-y-5">
+
+        {/* Two-column direction layout */}
+        <div className="grid grid-cols-[1fr_auto_1fr] gap-3 items-start">
+          {/* Source column */}
+          <div className="rounded-xl border-2 border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-3 space-y-1">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 dark:text-red-400">
+              Merge FROM
+            </p>
+            <p className="font-semibold text-sm text-text-primary truncate" title={sourceName}>
+              {sourceName}
+            </p>
+            {sourceStats && (
+              <p className="text-[11px] text-text-tertiary">
+                {sourceStats.invoiceCount} invoice{sourceStats.invoiceCount !== 1 ? "s" : ""}
+                {" · "}
+                {sourceStats.paymentCount} payment{sourceStats.paymentCount !== 1 ? "s" : ""}
+              </p>
+            )}
+            <p className="text-[10px] text-red-500 dark:text-red-400 font-medium mt-1">
+              Will be removed
+            </p>
+          </div>
+
+          {/* Arrow */}
+          <div className="flex items-center justify-center pt-6">
+            <svg className="w-5 h-5 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+            </svg>
+          </div>
+
+          {/* Target column */}
+          <div className={cn(
+            "rounded-xl border-2 p-3 space-y-1 transition-colors",
+            selectedTarget
+              ? "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30"
+              : "border-dashed border-border-light bg-surface-1"
+          )}>
+            <p className={cn(
+              "text-[10px] font-bold uppercase tracking-wider",
+              selectedTarget ? "text-emerald-600 dark:text-emerald-400" : "text-text-tertiary"
+            )}>
+              Merge INTO
+            </p>
+            {selectedTarget ? (
+              <>
+                <p className="font-semibold text-sm text-text-primary truncate" title={selectedTarget.name}>
+                  {selectedTarget.name}
+                </p>
+                {targetStats && (
+                  <p className="text-[11px] text-text-tertiary">
+                    {targetStats.invoiceCount} invoice{targetStats.invoiceCount !== 1 ? "s" : ""}
+                    {" · "}
+                    {targetStats.paymentCount} payment{targetStats.paymentCount !== 1 ? "s" : ""}
+                  </p>
+                )}
+                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+                  Will be kept
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px] text-text-tertiary italic">Select a party below</p>
+            )}
+          </div>
+        </div>
+
+        {/* Target party selector */}
+        <div>
+          {selectedTarget ? (
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium text-text-primary">
+                Target: <span className="text-emerald-600">{selectedTarget.name}</span>
+              </label>
+              <button
+                type="button"
+                className="text-xs text-brand-600 hover:text-brand-700"
+                onClick={() => { setTargetId(""); setSelectedTargetCache(null); setConfirmed(false); }}
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <>
+              <label className="text-sm font-medium text-text-primary block mb-1.5">
+                Select target party <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                className="input w-full mb-2"
+                placeholder="Search parties..."
+                value={targetSearch}
+                onChange={(e) => setTargetSearch(e.target.value)}
+                autoFocus
+              />
+            </>
+          )}
+          {!selectedTarget && (
+          <div className="border border-border-light rounded-lg overflow-hidden max-h-40 overflow-y-auto bg-surface-0">
+            {partiesLoading ? (
+              <p className="text-sm text-text-tertiary px-3 py-2">Loading parties...</p>
+            ) : allParties.length === 0 ? (
+              <p className="text-sm text-text-tertiary px-3 py-2 italic">No parties found</p>
+            ) : (
+              allParties.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleSelectTarget(p.id)}
+                  className={cn(
+                    "w-full text-left px-3 py-2 text-sm transition-colors flex items-center justify-between gap-2",
+                    targetId === p.id
+                      ? "bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 font-medium"
+                      : "hover:bg-surface-2 text-text-primary"
+                  )}
+                >
+                  <span className="truncate">{p.name}</span>
+                  <span className="text-[11px] text-text-tertiary capitalize shrink-0">{p.type}</span>
+                </button>
+              ))
+            )}
+          </div>
+          )}
+        </div>
+
+        {/* Preview: what will happen */}
+        {selectedTarget && (
+          <div className="rounded-xl bg-surface-1 border border-border-light p-3 space-y-2">
+            <p className="text-xs font-semibold text-text-secondary">What will happen</p>
+            <ul className="space-y-1 text-xs text-text-secondary">
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>
+                  Merging <span className="font-medium text-text-primary">{sourceName}</span>
+                  {" "}into{" "}
+                  <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                </span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>
+                  The merged party will keep <span className="font-medium text-text-primary">{selectedTarget.name}</span>'s
+                  details (address, phone, GSTIN)
+                </span>
+              </li>
+              {sourceStats && (
+                <li className="flex items-start gap-1.5">
+                  <span className="text-brand-500 mt-0.5">→</span>
+                  <span>
+                    <span className="font-medium text-text-primary">{sourceStats.invoiceCount} invoice{sourceStats.invoiceCount !== 1 ? "s" : ""}</span>
+                    {" and "}
+                    <span className="font-medium text-text-primary">{sourceStats.paymentCount} payment{sourceStats.paymentCount !== 1 ? "s" : ""}</span>
+                    {" from "}
+                    <span className="font-medium text-text-primary">{sourceName}</span>
+                    {" will be moved to "}
+                    <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                  </span>
+                </li>
+              )}
+              {targetStats && (
+                <li className="flex items-start gap-1.5">
+                  <span className="text-text-tertiary mt-0.5">•</span>
+                  <span>
+                    <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                    {" already has "}
+                    {targetStats.invoiceCount} invoice{targetStats.invoiceCount !== 1 ? "s" : ""}
+                    {" and "}
+                    {targetStats.paymentCount} payment{targetStats.paymentCount !== 1 ? "s" : ""}
+                  </span>
+                </li>
+              )}
+              <li className="flex items-start gap-1.5">
+                <span className="text-brand-500 mt-0.5">→</span>
+                <span>Opening balances will be combined</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-red-500 mt-0.5">✕</span>
+                <span>
+                  <span className="font-medium text-text-primary">{sourceName}</span> will be permanently deleted
+                </span>
+              </li>
+            </ul>
+          </div>
+        )}
+
+        {/* Irreversibility warning */}
+        {selectedTarget && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-500 text-base leading-none mt-0.5">⚠️</span>
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                <span className="font-semibold">This action is irreversible.</span>{" "}
+                All invoices, payments, and credit notes from{" "}
+                <span className="font-semibold">{sourceName}</span>{" "}
+                will be permanently moved to{" "}
+                <span className="font-semibold">{selectedTarget.name}</span>.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 mt-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              />
+              <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                I understand this cannot be undone
+              </span>
+            </label>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-3 border-t border-border-light">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-danger"
+            onClick={() => mergeMutation.mutate({ sourceId, targetId })}
+            disabled={!targetId || !confirmed || mergeMutation.isPending}
+          >
+            {mergeMutation.isPending ? "Merging..." : "Merge & Delete"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -749,10 +1143,29 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
     });
   }
 
-  const effectiveShipping = sameAsBilling ? billingAddress : shippingAddress;
+  const _effectiveShipping = sameAsBilling ? billingAddress : shippingAddress;
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add Party" className="max-w-2xl">
+    <SlideOver
+      open={open}
+      onClose={handleClose}
+      title="Add Party"
+      description="Create a new customer or supplier"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn-secondary" onClick={handleClose} disabled={createMutation.isPending}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={handleCreate}
+            disabled={createMutation.isPending || !name.trim()}
+          >
+            {createMutation.isPending ? "Creating..." : "Create Party"}
+          </button>
+        </div>
+      }
+    >
       <div className="space-y-4">
         {/* Party Type toggle */}
         <SegmentedControl
@@ -958,20 +1371,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
           </Disclosure>
         </div>
 
-        {/* Actions */}
-        <div className="flex justify-end gap-3 pt-4 border-t border-border-light">
-          <button className="btn-secondary" onClick={handleClose}>
-            Cancel
-          </button>
-          <button
-            className="btn-primary"
-            onClick={handleCreate}
-            disabled={createMutation.isPending || !name.trim()}
-          >
-            {createMutation.isPending ? "Creating..." : "Create Party"}
-          </button>
-        </div>
       </div>
-    </Modal>
+    </SlideOver>
   );
 }

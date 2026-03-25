@@ -4,11 +4,17 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt } from "drizzle-orm";
+import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
-import { generateInvoicePDF, type InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, users, tenants } from "@hisaabo/db";
+import type { InvoicePDFData } from "./lib/invoice-pdf.js";
+import { generateLedgerPDF } from "./lib/ledger-pdf.js";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 const app = new Hono();
 
@@ -27,14 +33,19 @@ app.use("*", cors({
 }));
 
 // ── Rate limiting (in-memory, per IP) ─────────────────────────
+// Authenticated users get 600 req/min (imports can burst).
+// Unauthenticated users get 60 req/min (brute force protection).
 const rateMap = new Map<string, { count: number; reset: number }>();
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
-  const key = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+  const hasSession = c.req.header("cookie")?.includes("session_id=");
+  const limit = hasSession ? 600 : 60;
+  const key = hasSession ? `auth:${ip}` : `anon:${ip}`;
   const now = Date.now();
   const entry = rateMap.get(key);
   if (!entry || now > entry.reset) {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
-  } else if (entry.count >= 120) {
+  } else if (entry.count >= limit) {
     return c.json({ error: "Too many requests" }, 429);
   } else {
     entry.count++;
@@ -42,13 +53,33 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
   await next();
 });
 
+// Clean up stale rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateMap) {
+    if (now > entry.reset) rateMap.delete(key);
+  }
+}, 5 * 60_000).unref();
+
 // ── Health check ───────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "thermal"): Promise<Buffer> {
+  const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "lib/pdf-worker.js");
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, { workerData: { data, format } });
+    worker.on("message", resolve);
+    worker.on("error", reject);
+    worker.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+    });
+  });
+}
 
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
-  const format = (c.req.query("format") || "a4") as "a4" | "thermal";
+  const format = (c.req.query("format") || "a5-landscape") as "a5-landscape" | "a4" | "thermal";
 
   // Auth check — look up session in control DB
   const cookies = c.req.header("cookie") || "";
@@ -86,6 +117,34 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
+
+  // Fetch HSN codes for linked items
+  const itemIds = lineItems.map(li => li.itemId).filter(Boolean) as string[];
+  const itemHsns = itemIds.length > 0
+    ? await db.select({ id: items.id, hsn: items.hsn }).from(items).where(inArray(items.id, itemIds))
+    : [];
+  const hsnMap = new Map(itemHsns.map(i => [i.id, i.hsn || ""]));
+
+  // Fetch bank accounts for payment info on invoice
+  const bizBankAccounts = await db.select().from(bankAccounts)
+    .where(eq(bankAccounts.businessId, businessId))
+    .orderBy(bankAccounts.isDefault);
+
+  // Find UPI account and primary bank account
+  const upiAccount = bizBankAccounts.find(a => a.accountType === "upi");
+  const bankAccount = bizBankAccounts.find(a => a.accountType === "savings" || a.accountType === "current")
+    || bizBankAccounts.find(a => a.isDefault);
+
+  // Generate UPI QR code if UPI account exists and invoice is a sale with remaining balance
+  let upiQrDataUrl: string | undefined;
+  const upiId = upiAccount?.accountNumber; // UPI ID stored in accountNumber for UPI type
+  if (upiId && invoice.type === "sale") {
+    const balance = parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid);
+    if (balance > 0) {
+      const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+      upiQrDataUrl = await QRCode.toDataURL(upiUrl, { width: 200, margin: 1 });
+    }
+  }
 
   const pdfData: InvoicePDFData = {
     businessName: biz.name,
@@ -125,28 +184,685 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     amountPaid: invoice.amountPaid,
     notes: invoice.notes || undefined,
     termsAndConditions: invoice.termsAndConditions || undefined,
+    bankAccountName: bankAccount?.accountName || undefined,
+    bankAccountNumber: bankAccount?.accountNumber || undefined,
+    bankIfsc: bankAccount?.ifsc || undefined,
+    bankName: bankAccount?.bankName || undefined,
+    upiId: upiId || undefined,
+    upiQrDataUrl,
+    gstRegistrationType: biz.gstRegistrationType || "unregistered",
+    businessStateCode: biz.stateCode || undefined,
+    partyStateCode: party.stateCode || undefined,
+    lineItemHsn: lineItems.map(li => li.itemId ? (hsnMap.get(li.itemId) || "") : ""),
   };
 
-  const pdfDoc = generateInvoicePDF(pdfData, format);
-
-  // Collect PDF buffer
-  const chunks: Buffer[] = [];
-  pdfDoc.on("data", (chunk: Buffer) => chunks.push(chunk));
-
-  return new Promise<Response>((resolve) => {
-    pdfDoc.on("end", () => {
-      const buffer = Buffer.concat(chunks);
-      const filename = `${invoice.invoiceNumber}_${format}.pdf`;
-      resolve(new Response(buffer, {
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `inline; filename="${filename}"`,
-          "Content-Length": buffer.length.toString(),
-        },
-      }));
-    });
-    pdfDoc.end();
+  const pdfBuffer = await generatePDFInWorker(pdfData, format);
+  return new Response(new Uint8Array(pdfBuffer), {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+    },
   });
+});
+
+// ── Party Ledger PDF endpoint ─────────────────────────────────
+// GET /api/parties/:id/ledger.pdf?from=...&to=...
+app.get("/api/parties/:id/ledger.pdf", async (c) => {
+  const partyId = c.req.param("id");
+
+  // Auth check — same pattern as invoice PDF
+  const cookies = c.req.header("cookie") || "";
+  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
+
+  const sessionId = decodeURIComponent(sessionMatch[1]);
+
+  const [sessionRow] = await controlDb
+    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+
+  if (!sessionRow) return c.json({ error: "Unauthorized" }, 401);
+  if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
+
+  const [tenant] = await controlDb.select({ status: tenants.status })
+    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
+  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+
+  const businessId = c.req.header("x-business-id");
+  if (!businessId) return c.json({ error: "No business selected" }, 400);
+
+  const db = await getTenantDb(sessionRow.tenantId);
+
+  // Validate party belongs to this business
+  const [party] = await db.select().from(parties)
+    .where(and(eq(parties.id, partyId), eq(parties.businessId, businessId)))
+    .limit(1);
+  if (!party) return c.json({ error: "Party not found" }, 404);
+
+  const [biz] = await db.select().from(businesses)
+    .where(eq(businesses.id, businessId)).limit(1);
+  if (!biz) return c.json({ error: "Business not found" }, 404);
+
+  // Parse optional date range query params
+  const fromParam = c.req.query("from");
+  const toParam = c.req.query("to");
+  const fromDate = fromParam ? new Date(fromParam) : null;
+  const toDate = toParam ? new Date(toParam) : null;
+
+  // Build conditions for invoices and payments
+  const invoiceConditions = [
+    eq(invoices.partyId, partyId),
+    eq(invoices.businessId, businessId),
+    eq(invoices.documentType, "invoice"),
+  ] as Parameters<typeof and>[0][];
+  const paymentConditions = [
+    eq(payments.partyId, partyId),
+    eq(payments.businessId, businessId),
+  ] as Parameters<typeof and>[0][];
+
+  if (fromDate) {
+    invoiceConditions.push(gte(invoices.invoiceDate, fromDate));
+    paymentConditions.push(gte(payments.paymentDate, fromDate));
+  }
+  if (toDate) {
+    invoiceConditions.push(lte(invoices.invoiceDate, toDate));
+    paymentConditions.push(lte(payments.paymentDate, toDate));
+  }
+
+  const [partyInvoices, partyPayments] = await Promise.all([
+    db.select({
+      id: invoices.id,
+      invoiceNumber: invoices.invoiceNumber,
+      date: invoices.invoiceDate,
+      type: invoices.type,
+      totalAmount: invoices.totalAmount,
+      status: invoices.status,
+    }).from(invoices).where(and(...invoiceConditions as [any, ...any[]])).orderBy(invoices.invoiceDate),
+    db.select({
+      id: payments.id,
+      paymentNumber: payments.paymentNumber,
+      date: payments.paymentDate,
+      amount: payments.amount,
+      mode: payments.mode,
+    }).from(payments).where(and(...paymentConditions as [any, ...any[]])).orderBy(payments.paymentDate),
+  ]);
+
+  // Build ledger entries (same logic as ledgerReport tRPC procedure)
+  const entries = [
+    ...partyInvoices.map(inv => ({
+      date: inv.date as Date,
+      type: "invoice" as const,
+      number: inv.invoiceNumber,
+      description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
+      debit: inv.type === "sale" ? inv.totalAmount : "0",
+      credit: inv.type === "sale" ? "0" : inv.totalAmount,
+    })),
+    ...partyPayments.map(pmt => ({
+      date: pmt.date as Date,
+      type: "payment" as const,
+      number: pmt.paymentNumber || "",
+      description: `Payment (${pmt.mode})`,
+      debit: party.type === "supplier" ? pmt.amount : "0",
+      credit: party.type === "supplier" ? "0" : pmt.amount,
+    })),
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  let runningBalance = party.openingBalance;
+  const entriesWithBalance = entries.map(e => {
+    runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
+    return { ...e, runningBalance };
+  });
+
+  const totalDebit = money.sum(entries.map(e => e.debit));
+  const totalCredit = money.sum(entries.map(e => e.credit));
+  const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+
+  const pdfBuffer = await generateLedgerPDF({
+    businessName: biz.name,
+    partyName: party.name,
+    partyType: party.type,
+    openingBalance: party.openingBalance,
+    fromDate: fromParam || null,
+    toDate: toParam || null,
+    entries: entriesWithBalance,
+    summary: { totalDebit, totalCredit, closingBalance },
+  });
+
+  const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return new Response(new Uint8Array(pdfBuffer), {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="ledger-${safePartyName}.pdf"`,
+    },
+  });
+});
+
+// ── Public Store API ─────────────────────────────────────────
+// Slug resolution cache: slug → { tenantId, businessId, expires }
+const slugCache = new Map<string, { tenantId: string; businessId: string; expires: number }>();
+
+// ── Cloudflare Turnstile verification ────────────────────────
+async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return true; // Skip in dev if not configured
+
+  const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret,
+      response: token,
+      remoteip: ip || undefined,
+    }),
+  });
+  const data = await res.json() as { success: boolean };
+  return data.success;
+}
+
+// Rate limit for order placement: phone → { count, reset }
+const orderRateMap = new Map<string, { count: number; reset: number }>();
+
+// Clean stale order rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of orderRateMap) {
+    if (now > entry.reset) orderRateMap.delete(key);
+  }
+}, 5 * 60_000).unref();
+
+async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
+  // Validate slug format
+  if (!slug || !/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(slug)) return null;
+
+  const now = Date.now();
+  const cached = slugCache.get(slug);
+  if (cached && now < cached.expires) {
+    return { tenantId: cached.tenantId, businessId: cached.businessId };
+  }
+
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+
+  if (!isMultiTenant) {
+    // Self-hosted: single tenant DB — query directly
+    const db = await getTenantDb("single");
+    const [biz] = await db.select({ id: businesses.id })
+      .from(businesses)
+      .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+      .limit(1);
+
+    if (!biz) return null;
+
+    const resolved = { tenantId: "single", businessId: biz.id };
+    slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
+    return resolved;
+  }
+
+  // Multi-tenant: scan all active tenants to find the business with this slug
+  const activeTenants = await controlDb
+    .select({ id: tenants.id })
+    .from(tenants)
+    .where(eq(tenants.status, "active"));
+
+  for (const tenant of activeTenants) {
+    try {
+      const db = await getTenantDb(tenant.id);
+      const [biz] = await db.select({ id: businesses.id })
+        .from(businesses)
+        .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+        .limit(1);
+
+      if (biz) {
+        const resolved = { tenantId: tenant.id, businessId: biz.id };
+        slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
+        return resolved;
+      }
+    } catch {
+      // Skip tenants with DB connectivity issues
+    }
+  }
+
+  return null;
+}
+
+// Helper: get tenant DB for a resolved slug context
+async function getStoreDb(tenantId: string) {
+  // In self-hosted, tenantId is always "single"
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  return getTenantDb(isMultiTenant ? tenantId : "single");
+}
+
+// GET /store/:slug/catalog.json — public item catalog
+app.get("/store/:slug/catalog.json", async (c) => {
+  const slug = c.req.param("slug");
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  const [biz] = await db.select({
+    id: businesses.id,
+    name: businesses.name,
+    storeTagline: businesses.storeTagline,
+    storeAccentColor: businesses.storeAccentColor,
+    storeMinOrderAmount: businesses.storeMinOrderAmount,
+    storeDeliveryNote: businesses.storeDeliveryNote,
+    storeWhatsappNumber: businesses.storeWhatsappNumber,
+    storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+    currency: businesses.currency,
+    phone: businesses.phone,
+    email: businesses.email,
+    city: businesses.city,
+    state: businesses.state,
+    address: businesses.address,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10)));
+  const category = c.req.query("category");
+  const search = c.req.query("search");
+  const offset = (page - 1) * limit;
+
+  const conditions = [
+    eq(items.businessId, resolved.businessId),
+    eq(items.storeEnabled, true),
+  ];
+  if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
+  if (search) conditions.push(sql`${items.name} ILIKE ${"%" + search + "%"}`);
+
+  // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
+  const [catalog, [{ total }]] = await Promise.all([
+    db.select({
+      id: items.id,
+      name: items.name,
+      description: sql<string | null>`COALESCE(${items.storeDescription}, ${items.description})`,
+      price: sql<string | null>`COALESCE(${items.storePrice}, ${items.salePrice})`,
+      unit: items.unit,
+      category: sql<string | null>`COALESCE(${items.storeCategory}, ${items.category})`,
+      taxPercent: items.taxPercent,
+      taxInclusive: items.taxInclusive,
+      inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
+      stockQty: items.stockQuantity,
+      sortOrder: items.storeSortOrder,
+    }).from(items)
+      .where(and(...conditions))
+      .orderBy(items.storeSortOrder, items.name)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: sql<number>`count(*)::int` }).from(items)
+      .where(and(...conditions)),
+  ]);
+
+  const categories = [...new Set(
+    catalog.map((i) => i.category).filter(Boolean) as string[]
+  )];
+
+  // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
+  const allowNeg = biz.storeAllowNegativeStock;
+  const transformedItems = catalog.map(({ stockQty, ...rest }) => ({
+    ...rest,
+    inStock: rest.inStock || allowNeg,
+    lowStock: allowNeg && !rest.inStock,
+  }));
+
+  return c.json(
+    {
+      business: {
+        name: biz.name,
+        tagline: biz.storeTagline,
+        accentColor: biz.storeAccentColor,
+        minOrderAmount: biz.storeMinOrderAmount,
+        deliveryNote: biz.storeDeliveryNote,
+        whatsappNumber: biz.storeWhatsappNumber,
+        currency: biz.currency,
+        phone: biz.phone,
+        email: biz.email,
+        city: biz.city,
+        state: biz.state,
+        address: biz.address,
+      },
+      items: transformedItems,
+      categories,
+      total,
+      page,
+      limit,
+    },
+    200,
+    { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" },
+  );
+});
+
+// POST /store/:slug/identify — phone-first customer identification (public, no auth)
+app.post("/store/:slug/identify", async (c) => {
+  const slug = c.req.param("slug");
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const { phone, turnstileToken } = body as Record<string, unknown>;
+
+  if (typeof phone !== "string" || typeof turnstileToken !== "string") {
+    return c.json({ error: "phone and turnstileToken are required" }, 400);
+  }
+
+  // Validate Turnstile
+  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const valid = await verifyTurnstile(turnstileToken, ip);
+  if (!valid) return c.json({ error: "Verification failed" }, 403);
+
+  // Resolve slug → business
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  // Normalize to last 10 digits (strip +91, spaces, dashes)
+  const normalizedPhone = phone.replace(/\D/g, "").slice(-10);
+
+  const [party] = await db.select({ name: parties.name })
+    .from(parties)
+    .where(and(
+      eq(parties.businessId, resolved.businessId),
+      sql`REPLACE(REPLACE(${parties.phone}, '+91', ''), ' ', '') LIKE '%' || ${normalizedPhone}`,
+    ))
+    .limit(1);
+
+  if (party) {
+    // Return first name only — don't expose full name to public endpoint
+    const firstName = party.name.split(" ")[0];
+    return c.json({ known: true, name: firstName });
+  }
+
+  return c.json({ known: false });
+});
+
+// POST /store/:slug/order — place an order (public, no auth)
+app.post("/store/:slug/order", async (c) => {
+  const slug = c.req.param("slug");
+
+  // Parse and validate body
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const {
+    turnstileToken: orderTurnstileToken,
+    customerName,
+    customerPhone,
+    customerEmail,
+    deliveryAddress,
+    deliveryCity,
+    deliveryPincode,
+    notes,
+    items: orderItems,
+  } = body as Record<string, unknown>;
+
+  // Validate Turnstile for order submission
+  const orderIp = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const turnstileValid = await verifyTurnstile(
+    typeof orderTurnstileToken === "string" ? orderTurnstileToken : "",
+    orderIp,
+  );
+  if (!turnstileValid) return c.json({ error: "Verification failed. Please try again." }, 403);
+
+  // Basic validation
+  if (typeof customerName !== "string" || customerName.trim().length < 2) {
+    return c.json({ error: "customerName is required (min 2 chars)" }, 400);
+  }
+  if (typeof customerPhone !== "string" || !/^[6-9]\d{9}$/.test(customerPhone)) {
+    return c.json({ error: "customerPhone must be a valid 10-digit Indian mobile number" }, 400);
+  }
+  if (!Array.isArray(orderItems) || orderItems.length === 0) {
+    return c.json({ error: "items array is required and must not be empty" }, 400);
+  }
+  for (const it of orderItems) {
+    if (typeof it !== "object" || it === null) return c.json({ error: "Invalid item in items array" }, 400);
+    const item = it as Record<string, unknown>;
+    if (typeof item.itemId !== "string") return c.json({ error: "Each item must have an itemId" }, 400);
+    const qty = Number(item.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: "Each item must have a positive quantity" }, 400);
+  }
+
+  // Rate limit: 5 orders per phone per minute
+  const now = Date.now();
+  const rateKey = `order:${customerPhone}`;
+  const rateEntry = orderRateMap.get(rateKey);
+  if (!rateEntry || now > rateEntry.reset) {
+    orderRateMap.set(rateKey, { count: 1, reset: now + 60_000 });
+  } else if (rateEntry.count >= 5) {
+    return c.json({ error: "Too many orders. Please wait a moment before trying again." }, 429);
+  } else {
+    rateEntry.count++;
+  }
+
+  // Resolve business
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  const [biz] = await db.select({
+    id: businesses.id,
+    name: businesses.name,
+    storeEnabled: businesses.storeEnabled,
+    storeMinOrderAmount: businesses.storeMinOrderAmount,
+    invoicePrefix: businesses.invoicePrefix,
+    nextInvoiceNumber: businesses.nextInvoiceNumber,
+    storeOrderPrefix: businesses.storeOrderPrefix,
+    nextStoreOrderNumber: businesses.nextStoreOrderNumber,
+    currency: businesses.currency,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  // Validate items exist and are store-enabled
+  const itemIds = (orderItems as Array<{ itemId: string; quantity: number }>).map((i) => i.itemId);
+  const foundItems = await db.select({
+    id: items.id,
+    name: items.name,
+    storeEnabled: items.storeEnabled,
+    storePrice: items.storePrice,
+    salePrice: items.salePrice,
+    taxPercent: items.taxPercent,
+    taxInclusive: items.taxInclusive,
+    stockQuantity: items.stockQuantity,
+    unit: items.unit,
+  }).from(items)
+    .where(and(
+      inArray(items.id, itemIds),
+      eq(items.businessId, resolved.businessId),
+      eq(items.storeEnabled, true),
+    ));
+
+  if (foundItems.length !== itemIds.length) {
+    return c.json({ error: "One or more items are not available in this store" }, 400);
+  }
+
+  const itemMap = new Map(foundItems.map((i) => [i.id, i]));
+
+  // Build line items for calculation
+  const lineItemInputs = (orderItems as Array<{ itemId: string; quantity: number }>).map((oi) => {
+    const item = itemMap.get(oi.itemId)!;
+    const price = item.storePrice ?? item.salePrice ?? "0";
+    return {
+      itemId: oi.itemId,
+      quantity: String(oi.quantity),
+      unitPrice: price,
+      taxPercent: item.taxPercent || "0",
+      discountPercent: "0",
+      taxInclusive: item.taxInclusive,
+      name: item.name,
+      unit: item.unit,
+    };
+  });
+
+  // Calculate totals using shared library
+  const totals = calcInvoiceTotals({
+    lineItems: lineItemInputs.map((li) => ({
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      taxPercent: li.taxPercent,
+      discountPercent: li.discountPercent,
+      taxInclusive: li.taxInclusive,
+    })),
+  });
+
+  // Check minimum order amount
+  if (biz.storeMinOrderAmount) {
+    const minAmount = parseFloat(biz.storeMinOrderAmount);
+    const orderTotal = parseFloat(totals.total);
+    if (orderTotal < minAmount) {
+      return c.json({
+        error: `Minimum order amount is ${biz.currency} ${biz.storeMinOrderAmount}`,
+      }, 400);
+    }
+  }
+
+  // Atomic transaction: increment counters, create invoice + line items + store order
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Lock and increment business counters atomically
+      const [bizLocked] = await tx.select({
+        invoicePrefix: businesses.invoicePrefix,
+        nextInvoiceNumber: businesses.nextInvoiceNumber,
+        storeOrderPrefix: businesses.storeOrderPrefix,
+        nextStoreOrderNumber: businesses.nextStoreOrderNumber,
+      }).from(businesses)
+        .where(eq(businesses.id, resolved.businessId))
+        .for("update");
+
+      const invoiceNumber = `${bizLocked.invoicePrefix}-${String(bizLocked.nextInvoiceNumber).padStart(5, "0")}`;
+      const orderNumber = `${bizLocked.storeOrderPrefix}-${String(bizLocked.nextStoreOrderNumber).padStart(5, "0")}`;
+
+      await tx.update(businesses)
+        .set({
+          nextInvoiceNumber: bizLocked.nextInvoiceNumber + 1,
+          nextStoreOrderNumber: bizLocked.nextStoreOrderNumber + 1,
+        })
+        .where(eq(businesses.id, resolved.businessId));
+
+      // Find or create a "Walk-in Customer" party for online store orders
+      let walkinPartyId: string;
+      const [existingWalkin] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(
+          eq(parties.businessId, resolved.businessId),
+          eq(parties.name, "Walk-in Customer"),
+          eq(parties.type, "customer"),
+        ))
+        .limit(1);
+
+      if (existingWalkin) {
+        walkinPartyId = existingWalkin.id;
+      } else {
+        const [newWalkin] = await tx.insert(parties).values({
+          businessId: resolved.businessId,
+          type: "customer",
+          name: "Walk-in Customer",
+          source: "online_store",
+        }).returning({ id: parties.id });
+        walkinPartyId = newWalkin.id;
+      }
+
+      // Create unfulfilled invoice (online store order awaiting fulfillment)
+      const [invoice] = await tx.insert(invoices).values({
+        businessId: resolved.businessId,
+        partyId: walkinPartyId,
+        type: "sale",
+        status: "unfulfilled",
+        documentType: "invoice",
+        invoiceNumber,
+        invoiceDate: new Date(),
+        subtotal: totals.subtotal,
+        taxAmount: totals.taxTotal,
+        discountAmount: "0",
+        additionalCharges: "0",
+        roundOff: "0",
+        totalAmount: totals.total,
+        amountPaid: "0",
+        notes: typeof notes === "string" ? notes : null,
+        source: "online_store",
+      }).returning();
+
+      // Create invoice line items
+      const processedLineItems = lineItemInputs.map((li, idx) => {
+        const calc = calcLineItem({
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          discountPercent: li.discountPercent,
+          taxInclusive: li.taxInclusive,
+        });
+        return {
+          invoiceId: invoice.id,
+          itemId: li.itemId,
+          description: li.name,
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          taxAmount: calc.taxAmount,
+          discountPercent: "0",
+          totalAmount: calc.total,
+          sortOrder: idx,
+          conversionFactor: "1",
+        };
+      });
+
+      await tx.insert(invoiceItems).values(processedLineItems);
+
+      // Create the store order record
+      const [order] = await tx.insert(storeOrders).values({
+        businessId: resolved.businessId,
+        invoiceId: invoice.id,
+        orderNumber,
+        status: "pending",
+        customerName: customerName.trim(),
+        customerPhone,
+        customerEmail: typeof customerEmail === "string" ? customerEmail.trim() || null : null,
+        deliveryAddress: typeof deliveryAddress === "string" ? deliveryAddress.trim() || null : null,
+        deliveryCity: typeof deliveryCity === "string" ? deliveryCity.trim() || null : null,
+        deliveryPincode: typeof deliveryPincode === "string" ? deliveryPincode.trim() || null : null,
+        deliveryNotes: typeof notes === "string" ? notes.trim() || null : null,
+        totalAmount: totals.total,
+        itemCount: lineItemInputs.length,
+        source: "online_store",
+      }).returning();
+
+      return { order, invoice };
+    });
+
+    return c.json({
+      orderId: result.order.id,
+      orderNumber: result.order.orderNumber,
+      totalAmount: result.order.totalAmount,
+      message: "Order placed successfully! The business will confirm shortly.",
+    }, 201);
+  } catch (err) {
+    console.error("[store/order] Failed to create order:", err);
+    return c.json({ error: "Failed to place order. Please try again." }, 500);
+  }
 });
 
 // ── tRPC handler ───────────────────────────────────────────────
@@ -166,19 +882,102 @@ app.use("/api/trpc/*", async (c) => {
 });
 
 // ── Session cleanup (FINDING 7) ────────────────────────────────
-// Clean up expired sessions every hour
-setInterval(async () => {
+// Clean up expired sessions every hour — unref so it doesn't keep process alive
+const cleanupTimer = setInterval(async () => {
   try {
     await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+    await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
     console.error("[session-cleanup] Failed:", e);
   }
 }, 60 * 60 * 1000);
+cleanupTimer.unref();
+
+// ── Branded HTML pages ────────────────────────────────────────
+function brandedHtml(title: string, heading: string, message: string, status: number) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} — Hisaabo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; background: #f8f9fa; color: #1a1a2e; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .container { text-align: center; padding: 2rem; }
+    .logo { width: 48px; height: 48px; border-radius: 14px; background: #5b5bd6; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1.5rem; }
+    .logo span { color: white; font-weight: 700; font-size: 22px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: #1a1a2e; }
+    p { color: #6b7280; font-size: 0.9rem; line-height: 1.6; max-width: 400px; margin: 0 auto; }
+    .status { font-size: 4rem; font-weight: 800; color: #5b5bd6; opacity: 0.15; margin-bottom: -0.5rem; }
+    a { color: #5b5bd6; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+    .links { margin-top: 1.5rem; display: flex; gap: 1.5rem; justify-content: center; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo"><span>H</span></div>
+    ${status >= 400 ? `<div class="status">${status}</div>` : ""}
+    <h1>${heading}</h1>
+    <p>${message}</p>
+    <div class="links">
+      <a href="https://hisaabo.in">hisaabo.in</a>
+      <a href="https://github.com/hisaabo">GitHub</a>
+      <a href="/health">API Status</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Base page — shows when someone visits the API root
+app.get("/", (c) => {
+  return c.html(brandedHtml(
+    "API",
+    "Hisaabo API",
+    "Professional billing for Indian businesses. This is the API server — the web app is at <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
+    200,
+  ));
+});
+
+// 404 handler — catch-all for unmatched routes
+app.notFound((c) => {
+  // Return JSON for API-like paths
+  if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
+    return c.json({ error: "Not found", path: c.req.path }, 404);
+  }
+  return c.html(brandedHtml(
+    "Not Found",
+    "Page not found",
+    "The page you're looking for doesn't exist. If you're looking for the Hisaabo app, visit <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
+    404,
+  ), 404);
+});
 
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);
 
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`🚀 Hisaabo API running on http://localhost:${info.port}`);
-  console.log(`   tRPC endpoint: http://localhost:${info.port}/api/trpc`);
+const server = serve({ fetch: app.fetch, port }, (info) => {
+  console.log(`Hisaabo API running on http://localhost:${info.port}`);
+  console.log(`  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
 });
+
+// ── Graceful shutdown ─────────────────────────────────────────
+function shutdown(signal: string) {
+  console.log(`\n[${signal}] Shutting down...`);
+  server.close(() => {
+    console.log("[shutdown] HTTP server closed");
+    process.exit(0);
+  });
+  // Force kill if server doesn't close within 5 seconds
+  setTimeout(() => {
+    console.error("[shutdown] Forced exit after timeout");
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

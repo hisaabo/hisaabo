@@ -14,12 +14,14 @@ interface ImportWizardProps {
 }
 
 type Source = "mybillbook" | "tally" | "generic";
-type EntityKey = "parties" | "items" | "invoices" | "payments";
+type EntityKey = "parties" | "items" | "invoices" | "payments" | "cashBank";
 
 interface ParsedFile {
   rows: Record<string, string>[];
   headers: string[];
   fileName: string;
+  rowCount?: number;
+  metadata?: Record<string, string>;
 }
 
 interface ColumnMapping {
@@ -31,11 +33,14 @@ interface ImportResult {
   skipped: number;
   total: number;
   errors?: string[];
+  details?: string[];  // informational messages, not errors
 }
 
 interface StepState {
   source: Source;
   files: Partial<Record<EntityKey, ParsedFile>>;
+  rawFiles: Partial<Record<EntityKey, File>>;
+  fileNames: Partial<Record<EntityKey, string[]>>; // track all file names per category
   enabled: Record<EntityKey, boolean>;
   mappings: Partial<Record<EntityKey, ColumnMapping>>;
   results: Partial<Record<EntityKey, ImportResult>>;
@@ -44,22 +49,24 @@ interface StepState {
 
 // ── Column presets ────────────────────────────────────────────────────────────
 
-const MYBILLBOOK_PARTY_MAP: Record<string, string> = {
-  "Party Name": "name",
-  "Mobile Number": "phone",
-  "Email": "email",
-  "GSTIN": "gstin",
-  "PAN Number": "pan",
-  "Party Type": "type",
-  "Opening Balance": "openingBalance",
-  "Billing Address": "billingAddress",
-  "Shipping Address": "shippingAddress",
-  "City": "city",
+// All Party Balance CSV from myBillBook: Name, GST, Address, State, Pincode, Mob No., Bal., Party Category
+const MYBILLBOOK_PARTY_BALANCE_MAP: Record<string, string> = {
+  "Name": "name",
+  "GST": "gstin",
+  "Address": "billingAddress",
   "State": "state",
   "Pincode": "pincode",
+  "Mob No.": "phone",
+  "Bal.": "openingBalance",
+  "Party Category": "category",
 };
 
+// Rate List CSV: Name, Code, MRP, Price
 const MYBILLBOOK_ITEM_MAP: Record<string, string> = {
+  "Name": "name",
+  "Code": "sku",
+  "Price": "salePrice",
+  // Also keep legacy column names so manual-export files still map
   "Item Name": "name",
   "Item Type": "itemType",
   "Sale Price": "salePrice",
@@ -67,18 +74,39 @@ const MYBILLBOOK_ITEM_MAP: Record<string, string> = {
   "Tax Rate(%)": "taxPercent",
   "HSN/SAC": "hsn",
   "Measuring Unit": "unit",
-  "Opening Stock": "stockQuantity",
+  // "Opening Stock" intentionally not mapped — stock is calculated from invoice line items
   "SKU": "sku",
   "Category": "category",
 };
 
+// Stock Summary CSV: Name, Batch No., Item Code, Purchase Price, Selling Price, Stock Quantity, Stock Value, Item Category Name, MRP
+// Stock Quantity has unit embedded: "-31.5 KGS", "-5.0 PCS"
+const MYBILLBOOK_STOCK_SUMMARY_MAP: Record<string, string> = {
+  "Name": "name",
+  "Item Code": "sku",
+  "Purchase Price": "purchasePrice",
+  "Selling Price": "salePrice",
+  // "Stock Quantity" intentionally not mapped — stock is calculated from invoice line items
+  "Item Category Name": "category",
+  "MRP": "mrp",
+};
+
+// Sales Summary CSV: Invoice No, Invoice Date, Contact Name, Amount, Remaining Amount,
+//                    Invoice Status, Due Date, Invoice Link, Payment Type, Party Category, Created by
 const MYBILLBOOK_INVOICE_MAP: Record<string, string> = {
   "Invoice No": "invoiceNumber",
   "Invoice Date": "invoiceDate",
+  "Contact Name": "partyName",
+  "Amount": "totalAmount",
+  "Remaining Amount": "remainingAmount",
+  "Invoice Status": "status",
   "Due Date": "dueDate",
+  "Payment Type": "paymentMode",
+  "Party Category": "partyCategory",
+  "Created by": "createdByName",
+  // Legacy column names
   "Party Name": "partyName",
   "Type": "type",
-  "Status": "status",
   "Subtotal": "subtotal",
   "Tax Amount": "taxAmount",
   "Discount": "discountAmount",
@@ -94,6 +122,33 @@ const MYBILLBOOK_PAYMENT_MAP: Record<string, string> = {
   "Amount": "amount",
   "Mode": "mode",
   "Reference Number": "referenceNumber",
+  "Notes": "notes",
+};
+
+// Cash & Bank Statement PDF columns (no "Invoice numbers" column)
+const MYBILLBOOK_CASHBANK_MAP: Record<string, string> = {
+  "Date": "paymentDate",
+  "Type": "type",
+  "Txn No": "paymentNumber",
+  "Party": "partyName",
+  "Mode": "mode",
+  "Paid": "paid",
+  "Received": "received",
+  "Balance": "balance",
+  "Notes": "notes",
+};
+
+// Cash & Bank CSV columns — has "Invoice numbers" for exact payment linkage
+const MYBILLBOOK_CASHBANK_CSV_MAP: Record<string, string> = {
+  "Date": "paymentDate",
+  "Type": "type",
+  "Txn No": "paymentNumber",
+  "Party": "partyName",
+  "Invoice numbers": "invoiceNumbers",
+  "Mode": "mode",
+  "Paid": "paid",
+  "Received": "received",
+  "Balance": "balance",
   "Notes": "notes",
 };
 
@@ -129,16 +184,19 @@ const ITEM_FIELDS: Array<{ key: string; label: string; required?: boolean }> = [
 const INVOICE_FIELDS: Array<{ key: string; label: string; required?: boolean }> = [
   { key: "invoiceNumber", label: "Invoice No", required: true },
   { key: "invoiceDate", label: "Invoice Date", required: true },
-  { key: "partyName", label: "Party Name", required: true },
-  { key: "type", label: "Type" },
-  { key: "status", label: "Status" },
+  { key: "partyName", label: "Party Name / Contact Name", required: true },
+  { key: "totalAmount", label: "Amount / Total Amount", required: true },
+  { key: "remainingAmount", label: "Remaining Amount" },
+  { key: "status", label: "Invoice Status" },
   { key: "dueDate", label: "Due Date" },
+  { key: "paymentMode", label: "Payment Type" },
+  { key: "type", label: "Type" },
   { key: "subtotal", label: "Subtotal" },
   { key: "taxAmount", label: "Tax Amount" },
   { key: "discountAmount", label: "Discount" },
-  { key: "totalAmount", label: "Total Amount", required: true },
   { key: "amountPaid", label: "Amount Paid" },
   { key: "notes", label: "Notes" },
+  { key: "createdByName", label: "Created By" },
 ];
 
 const PAYMENT_FIELDS: Array<{ key: string; label: string; required?: boolean }> = [
@@ -156,14 +214,16 @@ const ENTITY_FIELDS: Record<EntityKey, typeof PARTY_FIELDS> = {
   items: ITEM_FIELDS,
   invoices: INVOICE_FIELDS,
   payments: PAYMENT_FIELDS,
+  cashBank: PAYMENT_FIELDS, // not used for mapping UI — cashBank uses raw column names
 };
 
 const PRESET_MAPS: Record<Source, Partial<Record<EntityKey, Record<string, string>>>> = {
   mybillbook: {
-    parties: MYBILLBOOK_PARTY_MAP,
+    parties: MYBILLBOOK_PARTY_BALANCE_MAP,
     items: MYBILLBOOK_ITEM_MAP,
     invoices: MYBILLBOOK_INVOICE_MAP,
     payments: MYBILLBOOK_PAYMENT_MAP,
+    cashBank: MYBILLBOOK_CASHBANK_MAP,
   },
   tally: {},
   generic: {},
@@ -174,6 +234,7 @@ const ENTITY_LABELS: Record<EntityKey, string> = {
   items: "Items",
   invoices: "Invoices",
   payments: "Payments",
+  cashBank: "Cash & Bank",
 };
 
 const ENTITY_DESCRIPTIONS: Record<EntityKey, string> = {
@@ -181,25 +242,38 @@ const ENTITY_DESCRIPTIONS: Record<EntityKey, string> = {
   items: "Products & services",
   invoices: "Sales & purchase invoices",
   payments: "Payment records",
+  cashBank: "Cash & Bank statement",
 };
 
 // ── Normalisation helpers ────────────────────────────────────────────────────
 
 function normalizeUnit(raw: string): string {
   const s = raw.toLowerCase().trim();
-  if (s.includes("piece") || s === "pcs") return "pcs";
-  if (s.includes("kilogram") || s === "kg") return "kg";
-  if (s.includes("gram") || s === "g") return "g";
-  if (s.includes("litre") || s.includes("liter") || s === "l") return "l";
+  // Standard units
+  if (s.includes("piece") || s === "pcs" || s === "each") return "pcs";
+  if (s.includes("kilogram") || s === "kgs" || s === "kg" || s === "k") return "kg";
+  if (s.includes("gram") || s === "gms" || s === "gm" || s === "g") return "g";
+  if (s.includes("litre") || s.includes("liter") || s === "ltr" || s === "l") return "l";
   if (s.includes("millilitre") || s === "ml") return "ml";
   if (s.includes("metre") || s.includes("meter") || s === "m") return "m";
   if (s.includes("centi") || s === "cm") return "cm";
   if (s.includes("feet") || s.includes("foot") || s === "ft") return "ft";
   if (s.includes("inch") || s === "in") return "in";
   if (s.includes("box")) return "box";
-  if (s.includes("dozen")) return "dozen";
+  if (s.includes("dozen") || s === "dzn") return "dozen";
   if (s.includes("pair")) return "pair";
-  if (s.includes("set")) return "set";
+  if (s === "set" || s === "s") return "set";
+  // Indian business units (from myBillBook)
+  if (s === "pkt" || s.includes("packet")) return "pkt";
+  if (s === "bun" || s.includes("bunch")) return "bun";
+  if (s === "poch" || s.includes("pouch")) return "pouch";
+  if (s === "jar") return "jar";
+  if (s === "btl" || s.includes("bottle")) return "btl";
+  if (s === "bag") return "bag";
+  if (s === "ton" || s.includes("tonne")) return "ton";
+  if (s === "pac" || s === "pack") return "pack";
+  if (s === "pet") return "pet";
+  if (s === "person") return "person";
   return "other";
 }
 
@@ -210,10 +284,13 @@ function normalizePartyType(raw: string): "customer" | "supplier" {
 }
 
 function normalizePaymentMode(raw: string): "cash" | "bank" | "upi" | "cheque" | "other" {
-  const s = raw.toLowerCase().trim();
+  const s = (raw || "").toLowerCase().trim();
   if (s === "cash") return "cash";
-  if (s.includes("bank") || s.includes("transfer") || s === "neft" || s === "rtgs" || s === "imps") return "bank";
+  // CSV exports use "Upi" directly; PDF exports use "Online" for UPI/bank transfer
   if (s === "upi" || s.includes("gpay") || s.includes("phonepe") || s.includes("paytm")) return "upi";
+  if (s === "online") return "upi"; // myBillBook Cash & Bank PDF "Online" = UPI/bank transfer
+  // myBillBook CSV uses "Bank"; PDF uses "credit" to mean bank/UPI payment (non-cash)
+  if (s === "bank" || s === "credit" || s.includes("bank transfer") || s === "neft" || s === "rtgs" || s === "imps") return "bank";
   if (s === "cheque" || s === "check") return "cheque";
   return "other";
 }
@@ -241,6 +318,123 @@ function cleanMoney(raw: string): string {
   const num = parseFloat(cleaned);
   if (isNaN(num)) return "0";
   return num.toFixed(2);
+}
+
+// ── Expected headers for smart header-row detection ───────────────────────────
+
+const EXPECTED_HEADERS: Record<EntityKey, string[]> = {
+  items: ["Name", "Price"],
+  invoices: ["Invoice No", "Invoice Date", "Contact Name", "Amount"],
+  parties: ["Name", "Mob No.", "Bal."],
+  payments: ["Payment No", "Date", "Party Name", "Amount"],
+  cashBank: ["Txn No", "Paid", "Received"],
+};
+
+
+// FILE_TYPES descriptor for the single-drop-zone UI
+const FILE_TYPES: Array<{
+  key: EntityKey;
+  icon: string;
+  label: string;
+  description: string;
+  required: boolean;
+}> = [
+  { key: "invoices", icon: "📋", label: "Sales Summary", description: "Invoices with party names, amounts, dates", required: true },
+  { key: "parties", icon: "👥", label: "Party Balance", description: "Customer/supplier details with phone, address", required: false },
+  { key: "items", icon: "📦", label: "Rate List", description: "Product catalog with prices", required: false },
+  { key: "cashBank", icon: "🏦", label: "Cash & Bank Statement", description: "Payment transactions with dates and modes", required: false },
+];
+
+// Parse a GST Sales Report CSV using its own expected headers
+function parseGstReportRawRows(rawRows: string[][], fileName: string): ParsedFile {
+  if (rawRows.length === 0) return { rows: [], headers: [], fileName, rowCount: 0 };
+  // Find header row: look for "Invoice No." (with dot) and "Item Name"
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(rawRows.length, 20); i++) {
+    const row = rawRows[i].map((c) => (c || "").trim().toLowerCase());
+    if (row.some((c) => c === "invoice no.") && row.some((c) => c === "item name")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  const headers = rawRows[headerIdx].map((h) => (h || "").trim());
+  const dataRows = rawRows.slice(headerIdx + 1);
+  const rows = dataRows
+    .map((row) => {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        if (h) obj[h] = (row[i] || "").trim();
+      });
+      return obj;
+    })
+    .filter((row) => Object.values(row).some((v) => v !== ""));
+  return { rows, headers, fileName, rowCount: rows.length };
+}
+
+// Find the row index that contains column headers (handles myBillBook's
+// 8-12 preamble lines before the real header row).
+function findHeaderRow(rows: string[][], expectedColumns: string[]): number {
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const row = rows[i].map((c) => (c || "").trim().toLowerCase());
+    const matches = expectedColumns.filter((col) =>
+      row.some((cell) => cell.includes(col.toLowerCase()))
+    );
+    if (matches.length >= Math.ceil(expectedColumns.length * 0.6)) return i;
+  }
+  return 0; // fall back to first row
+}
+
+// Build a ParsedFile from already-parsed raw rows (used in auto-detection flow).
+function parseRawRowsToFile(rawRows: string[][], entityKey: EntityKey, fileName: string): ParsedFile {
+  if (rawRows.length === 0) return { rows: [], headers: [], fileName, rowCount: 0 };
+  const headerIdx = findHeaderRow(rawRows, EXPECTED_HEADERS[entityKey]);
+  const headers = rawRows[headerIdx].map((h) => (h || "").trim());
+  const dataRows = rawRows.slice(headerIdx + 1);
+  const rows = dataRows
+    .map((row) => {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        if (h) obj[h] = (row[i] || "").trim();
+      });
+      return obj;
+    })
+    .filter((row) => Object.values(row).some((v) => v !== ""));
+  return { rows, headers, fileName, rowCount: rows.length };
+}
+
+// Parse a CSV File, auto-detecting the real header row to skip preamble lines.
+function parseWithSmartHeaders(
+  file: File,
+  entityKey: EntityKey,
+  onComplete: (parsed: ParsedFile) => void
+) {
+  Papa.parse(file, {
+    header: false,
+    skipEmptyLines: true,
+    complete: (results) => {
+      const allRows = results.data as string[][];
+      if (allRows.length === 0) {
+        onComplete({ rows: [], headers: [], fileName: file.name });
+        return;
+      }
+
+      const headerIdx = findHeaderRow(allRows, EXPECTED_HEADERS[entityKey]);
+      const headers = allRows[headerIdx].map((h) => (h || "").trim());
+      const dataRows = allRows.slice(headerIdx + 1);
+
+      const rows = dataRows
+        .map((row) => {
+          const obj: Record<string, string> = {};
+          headers.forEach((h, i) => {
+            if (h) obj[h] = (row[i] || "").trim();
+          });
+          return obj;
+        })
+        .filter((row) => Object.values(row).some((v) => v !== ""));
+
+      onComplete({ rows, headers, fileName: file.name });
+    },
+  });
 }
 
 // ── Auto-mapping logic ────────────────────────────────────────────────────────
@@ -291,24 +485,60 @@ function transformPartyRow(row: Record<string, string>): object {
   };
 }
 
+// Parse Stock Summary "Stock Quantity" which has unit embedded: "-31.5 KGS"
+function parseStockQuantityWithUnit(raw: string): { quantity: string; unit: string } {
+  if (!raw) return { quantity: "0", unit: "pcs" };
+  const match = raw.trim().match(/^(-?[\d.]+)\s+(.+)$/);
+  if (!match) return { quantity: cleanMoney(raw), unit: "pcs" };
+  return {
+    quantity: cleanMoney(match[1]),
+    unit: normalizeUnit(match[2]),
+  };
+}
+
 function transformItemRow(row: Record<string, string>): object {
+  let stockQty = row.stockQuantity || "0";
+  let unit = row.unit || "pcs";
+
+  // Parse unit from stock quantity if embedded (Stock Summary format: "-31.5 KGS")
+  if (stockQty && /[a-zA-Z]/.test(stockQty)) {
+    const parsed = parseStockQuantityWithUnit(stockQty);
+    stockQty = parsed.quantity;
+    unit = parsed.unit;
+  }
+
   return {
     name: row.name || "",
     itemType: row.itemType
       ? row.itemType.toLowerCase().includes("service") ? "service" : "product"
       : "product",
-    salePrice: row.salePrice ? cleanMoney(row.salePrice) : undefined,
-    purchasePrice: row.purchasePrice ? cleanMoney(row.purchasePrice) : undefined,
+    salePrice: row.salePrice && parseFloat(row.salePrice) > 0 ? cleanMoney(row.salePrice) : undefined,
+    purchasePrice: row.purchasePrice && parseFloat(row.purchasePrice) > 0 ? cleanMoney(row.purchasePrice) : undefined,
     taxPercent: row.taxPercent ? cleanMoney(row.taxPercent) : "0",
     hsn: row.hsn || undefined,
-    unit: row.unit ? normalizeUnit(row.unit) : "pcs",
-    stockQuantity: row.stockQuantity ? cleanMoney(row.stockQuantity) : "0",
+    unit: normalizeUnit(unit),
+    // Opening stock defaults to 0 — actual stock is calculated from imported invoices
+    stockQuantity: "0",
     sku: row.sku || undefined,
     category: row.category || undefined,
   };
 }
 
 function transformInvoiceRow(row: Record<string, string>): object {
+  const totalAmount = cleanMoney(row.totalAmount || "0");
+
+  // myBillBook Sales Summary provides "Remaining Amount" instead of "Amount Paid".
+  // Compute amountPaid = totalAmount - remainingAmount.
+  let amountPaid: string;
+  if (row.remainingAmount !== undefined) {
+    const remaining = parseFloat(cleanMoney(row.remainingAmount));
+    const total = parseFloat(totalAmount);
+    const paid = Math.max(0, total - remaining);
+    amountPaid = paid.toFixed(2);
+  } else {
+    amountPaid = row.amountPaid ? cleanMoney(row.amountPaid) : "0";
+  }
+
   return {
     invoiceNumber: row.invoiceNumber || "",
     invoiceDate: row.invoiceDate || "",
@@ -316,12 +546,14 @@ function transformInvoiceRow(row: Record<string, string>): object {
     partyName: row.partyName || "",
     type: row.type ? normalizeInvoiceType(row.type) : "sale",
     status: row.status ? normalizeStatus(row.status) : "sent",
-    subtotal: row.subtotal ? cleanMoney(row.subtotal) : "0",
+    subtotal: row.subtotal ? cleanMoney(row.subtotal) : totalAmount,
     taxAmount: row.taxAmount ? cleanMoney(row.taxAmount) : "0",
     discountAmount: row.discountAmount ? cleanMoney(row.discountAmount) : "0",
-    totalAmount: row.totalAmount ? cleanMoney(row.totalAmount) : "0",
-    amountPaid: row.amountPaid ? cleanMoney(row.amountPaid) : "0",
+    totalAmount,
+    amountPaid,
+    paymentMode: row.paymentMode || undefined,
     notes: row.notes || undefined,
+    createdByName: row.createdByName || undefined,
   };
 }
 
@@ -397,7 +629,7 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
   );
 }
 
-// File drop zone
+// File drop zone (used in generic / tally mode — with checkbox toggle)
 function DropZone({
   entityKey,
   parsedFile,
@@ -416,17 +648,10 @@ function DropZone({
 
   const handleFile = useCallback(
     (file: File) => {
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (result) => {
-          const rows = result.data as Record<string, string>[];
-          const headers = result.meta.fields || [];
-          onFile({ rows, headers, fileName: file.name });
-        },
-      });
+      // Use smart header detection for all uploads
+      parseWithSmartHeaders(file, entityKey, onFile);
     },
-    [onFile]
+    [entityKey, onFile]
   );
 
   return (
@@ -570,8 +795,7 @@ function MappingPanel({
   return (
     <div className="rounded-xl border border-border-light overflow-hidden">
       <div
-        className="px-4 py-2.5 flex items-center justify-between"
-        style={{ background: "var(--surface-1)", borderBottom: "1px solid var(--border-light)" }}
+        className="px-4 py-2.5 flex items-center justify-between bg-surface-1 border-b border-border-light"
       >
         <span className="text-sm font-semibold text-text-primary">
           {ENTITY_LABELS[entityKey]}
@@ -601,7 +825,7 @@ function MappingPanel({
                   onChange({ ...mapping, [field.key]: e.target.value })
                 }
                 className={cn(
-                  "input-field text-sm py-1.5",
+                  "input text-sm py-1.5",
                   field.required && !selectedHeader
                     ? "border-red-300 focus:border-red-400"
                     : ""
@@ -644,8 +868,7 @@ function PreviewTable({
   return (
     <div className="rounded-xl border border-border-light overflow-hidden">
       <div
-        className="px-4 py-2.5 flex items-center justify-between"
-        style={{ background: "var(--surface-1)", borderBottom: "1px solid var(--border-light)" }}
+        className="px-4 py-2.5 flex items-center justify-between bg-surface-1 border-b border-border-light"
       >
         <span className="text-sm font-semibold text-text-primary">
           {ENTITY_LABELS[entityKey]}
@@ -657,7 +880,7 @@ function PreviewTable({
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr style={{ background: "var(--surface-1)" }}>
+            <tr className="bg-surface-1">
               {mappedFields.map((f) => (
                 <th
                   key={f.key}
@@ -785,16 +1008,18 @@ function ImportStepRow({
                   {errorsOpen ? "▲" : "▼"}
                 </button>
               )}
+              {result.details && result.details.length > 0 && (
+                <span className="text-xs text-text-tertiary">
+                  {result.details[0]}
+                </span>
+              )}
             </div>
           )}
         </div>
       </div>
       {errorsOpen && result?.errors && result.errors.length > 0 && (
-        <div
-          className="px-4 pb-3 pt-0"
-          style={{ borderTop: "1px solid var(--border-light)" }}
-        >
-          <ul className="text-xs text-amber-700 space-y-1 font-mono bg-amber-50 rounded-lg p-2.5 max-h-32 overflow-y-auto">
+        <div className="px-4 pb-3 pt-0 border-t border-border-light">
+          <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 font-mono bg-amber-600/[0.08] rounded-lg p-2.5 max-h-32 overflow-y-auto">
             {result.errors.map((err, i) => (
               <li key={i}>{err}</li>
             ))}
@@ -807,17 +1032,23 @@ function ImportStepRow({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-const ENTITY_ORDER: EntityKey[] = ["parties", "items", "invoices", "payments"];
+const ENTITY_ORDER: EntityKey[] = ["parties", "items", "invoices", "payments", "cashBank"];
 
 export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const [state, setState] = useState<StepState>({
     source: "mybillbook",
     files: {},
-    enabled: { parties: true, items: true, invoices: true, payments: false },
+    rawFiles: {},
+    fileNames: {},
+    enabled: { parties: true, items: true, invoices: true, payments: false, cashBank: false },
     mappings: {},
     results: {},
     currentStep: 1,
   });
+
+  // GST Sales Report — separate state (not an EntityKey, enriches invoices with real line items)
+  const [gstReportFile, setGstReportFile] = useState<ParsedFile | null>(null);
+  const [gstReportNames, setGstReportNames] = useState<string[]>([]);
 
   const [importStatuses, setImportStatuses] = useState<
     Partial<Record<EntityKey, "pending" | "running" | "done" | "skipped">>
@@ -828,6 +1059,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const importItemsMut = trpc.import.importItems.useMutation();
   const importInvoicesMut = trpc.import.importInvoices.useMutation();
   const importPaymentsMut = trpc.import.importPayments.useMutation();
+  const importTransfersMut = trpc.import.importTransfers.useMutation();
+  const reconcileDirectMut = trpc.import.reconcileDirectPayments.useMutation();
+  const createExpenseMut = trpc.expense.create.useMutation();
 
   const BATCH_SIZE = 50;
 
@@ -835,11 +1069,15 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     setState({
       source: "mybillbook",
       files: {},
-      enabled: { parties: true, items: true, invoices: true, payments: false },
+      rawFiles: {},
+      fileNames: {},
+      enabled: { parties: true, items: true, invoices: true, payments: false, cashBank: false },
       mappings: {},
       results: {},
       currentStep: 1,
     });
+    setGstReportFile(null);
+    setGstReportNames([]);
     setImportStatuses({});
     setImportDone(false);
   }
@@ -876,6 +1114,187 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     }));
   }
 
+  // ── Single drop-zone for myBillBook (auto-detect) ──────────────────────────
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const multiFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Detect file type from content, then parse and store it.
+  async function detectAndStore(file: File): Promise<void> {
+    if (file.name.toLowerCase().endsWith(".pdf")) {
+      const { parsePdfTable } = await import("@/lib/pdf-table-parser");
+      const result = await parsePdfTable(file);
+      const parsed: ParsedFile = {
+        headers: result.headers,
+        rows: result.rows,
+        rowCount: result.rows.length,
+        fileName: file.name,
+        metadata: result.metadata,
+      };
+      const preset = PRESET_MAPS["mybillbook"]["cashBank"];
+      const mapping = preset ? buildAutoMapping(parsed.headers, preset) : {};
+      setState((s) => {
+        const existing = s.files.cashBank;
+        const existingNames = s.fileNames.cashBank || [];
+        const mergedParsed: ParsedFile = existing
+          ? {
+              ...parsed,
+              rows: [...existing.rows, ...parsed.rows],
+              fileName: `${existingNames.length + 1} files`,
+            }
+          : parsed;
+        return {
+          ...s,
+          rawFiles: { ...s.rawFiles, cashBank: file },
+          files: { ...s.files, cashBank: mergedParsed },
+          fileNames: { ...s.fileNames, cashBank: [...existingNames, file.name] },
+          mappings: { ...s.mappings, cashBank: mapping },
+        };
+      });
+      return;
+    }
+
+    // CSV — parse without headers to find the real header row
+    await new Promise<void>((resolve) => {
+      Papa.parse(file, {
+        header: false,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const rawRows = results.data as string[][];
+
+          // Detect type from header content
+          let detectedType: EntityKey | "unknown" = "unknown";
+          for (let i = 0; i < Math.min(rawRows.length, 15); i++) {
+            const rowText = rawRows[i].join(",").toLowerCase();
+
+            // GST Sales Report: has "item name" + "price/unit" (detect BEFORE Sales Summary
+            // because GST report also contains "invoice no." which would match a loose check)
+            if (rowText.includes("item name") && rowText.includes("price/unit")) {
+              const parsed = parseGstReportRawRows(rawRows, file.name);
+              setGstReportFile((prev) => {
+                if (prev) {
+                  return { ...parsed, rows: [...prev.rows, ...parsed.rows], fileName: "merged" };
+                }
+                return parsed;
+              });
+              setGstReportNames((prev) => [...prev, file.name]);
+              toast.success(`Detected: GST Sales Report (${parsed.rows.length} line items)`);
+              resolve();
+              return;
+            }
+
+            if (rowText.includes("invoice no") && rowText.includes("contact name")) {
+              detectedType = "invoices";
+              break;
+            }
+            if (rowText.includes("mob no") && rowText.includes("bal.")) {
+              detectedType = "parties";
+              break;
+            }
+            // Cash & Bank CSV: has "Invoice numbers" column + "Txn No" + Paid/Received
+            if (rowText.includes("invoice numbers") && rowText.includes("txn no")) {
+              detectedType = "cashBank";
+              break;
+            }
+            // Stock Summary: has "Stock Quantity" (with embedded unit) + "Selling Price"
+            // Wins over Rate List detection
+            if (rowText.includes("stock quantity") && rowText.includes("selling price")) {
+              detectedType = "items";
+              break;
+            }
+            if (
+              rowText.includes("name") &&
+              rowText.includes("code") &&
+              rowText.includes("price") &&
+              !rowText.includes("invoice")
+            ) {
+              detectedType = "items";
+              break;
+            }
+          }
+
+          if (detectedType === "unknown") {
+            toast.error(`Could not identify file: ${file.name}`);
+            resolve();
+            return;
+          }
+
+          const parsed = parseRawRowsToFile(rawRows, detectedType, file.name);
+          // Choose sub-variant preset:
+          // - items: Stock Summary wins over Rate List if "Stock Quantity" header present
+          // - cashBank: CSV variant uses MYBILLBOOK_CASHBANK_CSV_MAP (has "Invoice numbers")
+          let preset: Record<string, string> | undefined = PRESET_MAPS["mybillbook"][detectedType];
+          if (detectedType === "items") {
+            const isStockSummary = parsed.headers.some((h) => h.toLowerCase().includes("stock quantity"));
+            if (isStockSummary) preset = MYBILLBOOK_STOCK_SUMMARY_MAP;
+          } else if (detectedType === "cashBank") {
+            // CSV cash & bank always has "Invoice numbers" column
+            preset = MYBILLBOOK_CASHBANK_CSV_MAP;
+          }
+          const mapping = preset ? buildAutoMapping(parsed.headers, preset) : {};
+          setState((s) => {
+            const existing = s.files[detectedType];
+            const existingNames = s.fileNames[detectedType] || [];
+            // Merge rows if a file of the same category was already dropped
+            const mergedParsed: ParsedFile = existing
+              ? {
+                  ...parsed,
+                  rows: [...existing.rows, ...parsed.rows],
+                  fileName: `${existingNames.length + 1} files`,
+                }
+              : parsed;
+            return {
+              ...s,
+              rawFiles: { ...s.rawFiles, [detectedType]: file },
+              files: { ...s.files, [detectedType]: mergedParsed },
+              fileNames: { ...s.fileNames, [detectedType]: [...existingNames, file.name] },
+              mappings: { ...s.mappings, [detectedType]: mapping },
+            };
+          });
+          resolve();
+        },
+      });
+    });
+  }
+
+  async function processFiles(files: File[]) {
+    setIsProcessing(true);
+    try {
+      for (const file of files) {
+        await detectAndStore(file);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  async function handleMultiDrop(e: { preventDefault(): void; dataTransfer: DataTransfer }) {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    await processFiles(files);
+  }
+
+  async function handleMultiSelect(fileList: FileList | null) {
+    if (!fileList) return;
+    await processFiles(Array.from(fileList));
+  }
+
+  function removeDetectedFile(key: EntityKey) {
+    setState((s) => {
+      const newFiles = { ...s.files };
+      const newRawFiles = { ...s.rawFiles };
+      const newMappings = { ...s.mappings };
+      const newFileNames = { ...s.fileNames };
+      delete newFiles[key];
+      delete newRawFiles[key];
+      delete newMappings[key];
+      delete newFileNames[key];
+      return { ...s, files: newFiles, rawFiles: newRawFiles, mappings: newMappings, fileNames: newFileNames };
+    });
+  }
+
   function toggleEnabled(entityKey: EntityKey) {
     setState((s) => ({
       ...s,
@@ -893,11 +1312,28 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   // ── Step validation ────────────────────────────────────────────────────────
 
   function canProceedFromUpload(): boolean {
+    if (state.source === "mybillbook") {
+      // Sales Summary (invoices) is required; Rate List (items) is optional
+      return !!state.files.invoices;
+    }
     // At least one entity must be enabled and have a file
     return ENTITY_ORDER.some((k) => state.enabled[k] && state.files[k]);
   }
 
   function canProceedFromMapping(): boolean {
+    if (state.source === "mybillbook") {
+      // For myBillBook, only validate the files that were uploaded
+      const keysToCheck: EntityKey[] = ["invoices"];
+      if (state.files.items) keysToCheck.push("items");
+      for (const key of keysToCheck) {
+        const mapping = state.mappings[key] || {};
+        const requiredFields = ENTITY_FIELDS[key].filter((f) => f.required);
+        for (const field of requiredFields) {
+          if (!mapping[field.key]) return false;
+        }
+      }
+      return true;
+    }
     for (const key of ENTITY_ORDER) {
       if (!state.enabled[key] || !state.files[key]) continue;
       const mapping = state.mappings[key] || {};
@@ -915,6 +1351,488 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     setState((s) => ({ ...s, currentStep: 5 }));
     setImportDone(false);
 
+    if (state.source === "mybillbook") {
+      await runMyBillBookImport();
+    } else {
+      await runGenericImport();
+    }
+
+    setImportDone(true);
+  }
+
+  // Smart myBillBook import: Parties → Items → Invoices + Payments → Cash & Bank
+  async function runMyBillBookImport() {
+    const newResults: Partial<Record<EntityKey, ImportResult>> = {};
+    const invoicesFile = state.files.invoices;
+    const itemsFile = state.files.items;
+    const partiesFile = state.files.parties;
+    const cashBankFile = state.files.cashBank;
+
+    // Initialise all statuses
+    setImportStatuses({
+      parties: "pending",
+      items: itemsFile ? "pending" : "skipped",
+      invoices: invoicesFile ? "pending" : "skipped",
+      payments: "skipped", // payments come from Cash & Bank step
+      cashBank: cashBankFile ? "pending" : "skipped",
+    });
+
+    // ── Step 1: Import parties ─────────────────────────────────────────────
+    setImportStatuses((s) => ({ ...s, parties: "running" }));
+    try {
+      let partyBalanceCreated = 0;
+      let fallbackCreated = 0;
+
+      // Step 1a: Import from Party Balance CSV if available (rich data)
+      if (partiesFile) {
+        const partyMapping = state.mappings.parties || {};
+        const mappedRows = partiesFile.rows.map((row) => applyMapping(row, partyMapping));
+        const transformedRows = mappedRows
+          .map((row) => ({
+            name: row.name || "",
+            type: "customer" as const,
+            phone: row.phone || undefined,
+            gstin: row.gstin || undefined,
+            billingAddress: row.billingAddress || undefined,
+            state: row.state || undefined,
+            pincode: row.pincode || undefined,
+            openingBalance: cleanMoney(row.openingBalance || "0"),
+            category: row.category || undefined,
+          }))
+          .filter((r) => r.name.trim() !== "");
+
+        for (let i = 0; i < transformedRows.length; i += BATCH_SIZE) {
+          const batch = transformedRows.slice(i, i + BATCH_SIZE);
+          const res = await importPartiesMut.mutateAsync({ source: "mybillbook", parties: batch });
+          partyBalanceCreated += res.created;
+        }
+      }
+
+      // Step 1b: Extract unique party names from Sales Summary as fallback
+      // (only imports names not already imported — server skips duplicates by name)
+      if (invoicesFile) {
+        const invMapping = state.mappings.invoices || {};
+        const mappedRows = invoicesFile.rows.map((row) => applyMapping(row, invMapping));
+        const seen = new Set<string>();
+        const fallbackParties: Array<{ name: string; type: "customer" }> = [];
+        for (const row of mappedRows) {
+          const name = (row.partyName || "").trim();
+          if (name && !seen.has(name.toLowerCase())) {
+            seen.add(name.toLowerCase());
+            fallbackParties.push({ name, type: "customer" });
+          }
+        }
+
+        if (fallbackParties.length > 0) {
+          for (let i = 0; i < fallbackParties.length; i += BATCH_SIZE) {
+            const batch = fallbackParties.slice(i, i + BATCH_SIZE);
+            const res = await importPartiesMut.mutateAsync({ source: "mybillbook", parties: batch });
+            fallbackCreated += res.created;
+          }
+        }
+      }
+
+      const totalCreated = partyBalanceCreated + fallbackCreated;
+      const details: string[] = [];
+      if (partyBalanceCreated > 0) details.push(`${partyBalanceCreated} from Party Balance`);
+      if (fallbackCreated > 0) details.push(`${fallbackCreated} new from Sales Summary`);
+
+      newResults.parties = {
+        created: totalCreated,
+        skipped: 0,
+        total: totalCreated,
+        errors: [],
+        details: details.length > 0 ? [details.join(", ")] : [],
+      };
+      setImportStatuses((s) => ({ ...s, parties: "done" }));
+      setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      toast.error("Failed to import Parties", message);
+      newResults.parties = { created: 0, skipped: 0, total: 0, errors: [message] };
+      setImportStatuses((s) => ({ ...s, parties: "done" }));
+      setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+    }
+
+    // ── Step 2: Import items from Rate List ────────────────────────────────
+    if (itemsFile) {
+      setImportStatuses((s) => ({ ...s, items: "running" }));
+      try {
+        // Build item-to-unit map from GST report if available (most reliable unit source)
+        const gstUnitMap = new Map<string, string>();
+        if (gstReportFile) {
+          for (const row of gstReportFile.rows) {
+            const name = (row["Item Name"] || "").trim().toLowerCase();
+            if (!name) continue;
+            const parsed = parseStockQuantityWithUnit(row["Quantity"] || "");
+            if (parsed.unit !== "other" && !gstUnitMap.has(name)) {
+              gstUnitMap.set(name, parsed.unit);
+            }
+          }
+        }
+
+        const itemMapping = state.mappings.items || {};
+        const mappedRows = itemsFile.rows.map((row) => applyMapping(row, itemMapping));
+        const transformedRows = mappedRows.map((row) => {
+          const item = transformItemRow(row);
+          // If item unit is still "pcs" (default) and GST report has a better unit, use it
+          const itemObj = item as any;
+          if ((!itemObj.unit || itemObj.unit === "pcs" || itemObj.unit === "other") && gstUnitMap.size > 0) {
+            const gstUnit = gstUnitMap.get((itemObj.name || "").toLowerCase());
+            if (gstUnit) itemObj.unit = gstUnit;
+          }
+          return itemObj;
+        }) as Parameters<typeof importItemsMut.mutateAsync>[0]["items"];
+
+        let created = 0, skipped = 0, total = 0;
+        for (let i = 0; i < transformedRows.length; i += BATCH_SIZE) {
+          const batch = transformedRows.slice(i, i + BATCH_SIZE);
+          const res = await importItemsMut.mutateAsync({ source: "mybillbook", items: batch });
+          created += res.created;
+          skipped += res.skipped;
+          total += res.total;
+        }
+        newResults.items = { created, skipped, total };
+        setImportStatuses((s) => ({ ...s, items: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        toast.error("Failed to import Items", message);
+        newResults.items = { created: 0, skipped: 0, total: 0, errors: [message] };
+        setImportStatuses((s) => ({ ...s, items: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      }
+    }
+
+    // ── Step 3: Import invoices with auto-payment creation ─────────────────
+    if (invoicesFile) {
+      setImportStatuses((s) => ({ ...s, invoices: "running" }));
+      try {
+        const invMapping = state.mappings.invoices || {};
+        const mappedRows = invoicesFile.rows.map((row) => applyMapping(row, invMapping));
+
+        // Build invoice number → line items map from GST Sales Report (if present)
+        const lineItemsByInvoice = new Map<string, Array<{
+          itemName: string;
+          description: string;
+          quantity: string;
+          unitPrice: string;
+          taxPercent: string;
+          discountPercent: string;
+        }>>();
+
+        if (gstReportFile) {
+          for (const row of gstReportFile.rows) {
+            const invoiceNo = (row["Invoice No."] || row["Invoice No"] || "").trim();
+            if (!invoiceNo) continue;
+
+            // Parse quantity with embedded unit: "3.6 KGS" → qty "3.6", unit "kg"
+            const qtyRaw = row["Quantity"] || "1";
+            const qtyParsed = parseStockQuantityWithUnit(qtyRaw);
+            const qty = qtyParsed.quantity.replace(/^-/, ""); // strip negative
+            const _lineUnit = qtyParsed.unit; // normalized unit from the quantity column
+
+            const unitPrice = cleanMoney(row["Price/Unit"] || "0");
+
+            // Combined tax rate: SGST+CGST for intra-state, IGST for inter-state
+            const sgstRate = parseFloat(row["SGST Rate(%)"] || "0");
+            const cgstRate = parseFloat(row["CGST Rate (%)"] || "0");
+            const igstRate = parseFloat(row["IGST Rate (%)"] || "0");
+            const taxPercent = igstRate > 0
+              ? igstRate.toString()
+              : (sgstRate + cgstRate > 0 ? (sgstRate + cgstRate).toString() : "0");
+
+            const itemName = (row["Item Name"] || "").trim();
+            if (!itemName) continue;
+
+            if (!lineItemsByInvoice.has(invoiceNo)) {
+              lineItemsByInvoice.set(invoiceNo, []);
+            }
+            lineItemsByInvoice.get(invoiceNo)!.push({
+              itemName,
+              description: itemName,
+              quantity: qty || "1",
+              unitPrice,
+              taxPercent,
+              discountPercent: "0",
+            });
+          }
+        }
+
+        // Transform and attach line items where available
+        // Also reconcile totals: Sales Summary governs the final amount
+        const transformedRows = mappedRows.map((row) => {
+          const base = transformInvoiceRow(row) as Record<string, unknown>;
+          const invoiceNo = (base.invoiceNumber as string | undefined) || "";
+          const items = invoiceNo ? lineItemsByInvoice.get(invoiceNo) : undefined;
+          if (items && items.length > 0) {
+            const salesTotalStr = (base.totalAmount as string) || "0";
+            const salesTotal = parseFloat(salesTotalStr);
+            const gstLineTotal = items.reduce((sum, li) => {
+              const qty = parseFloat(li.quantity) || 0;
+              const price = parseFloat(li.unitPrice) || 0;
+              const tax = parseFloat(li.taxPercent) || 0;
+              const subtotal = qty * price;
+              const taxAmt = subtotal * (tax / 100);
+              return sum + subtotal + taxAmt;
+            }, 0);
+
+            // Reconcile: Sales Summary total is the truth
+            // Positive diff = shipping/charges, negative diff = discount (including 100% gratis)
+            const diff = salesTotal - gstLineTotal;
+            const charges = diff > 0.5 ? [{ label: "Shipping", amount: diff.toFixed(2) }] : undefined;
+            const discountAmount = diff < -0.5 ? Math.abs(diff).toFixed(2) : undefined;
+
+            return {
+              ...base,
+              lineItems: items,
+              ...(charges ? { charges } : {}),
+              ...(discountAmount ? { discountAmount } : {}),
+            };
+          }
+          return base;
+        }) as Parameters<typeof importInvoicesMut.mutateAsync>[0]["invoices"];
+
+        let created = 0, skipped = 0, total = 0;
+        const errors: string[] = [];
+        for (let i = 0; i < transformedRows.length; i += BATCH_SIZE) {
+          const batch = transformedRows.slice(i, i + BATCH_SIZE);
+          // Never auto-create payments from invoices — payments come from Cash & Bank data only
+          const res = await importInvoicesMut.mutateAsync({
+            source: "mybillbook",
+            autoCreatePayments: false,
+            invoices: batch,
+          });
+          created += res.created;
+          skipped += res.skipped;
+          total += res.total;
+          if (res.errors) errors.push(...res.errors);
+        }
+        newResults.invoices = { created, skipped, total, errors };
+        setImportStatuses((s) => ({ ...s, invoices: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        toast.error("Failed to import Invoices", message);
+        newResults.invoices = { created: 0, skipped: 0, total: 0, errors: [message] };
+        setImportStatuses((s) => ({ ...s, invoices: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      }
+    }
+
+    // Track allocated invoice IDs across all C&B batches for reconciliation
+    let allAllocatedInvoiceIds: string[] = [];
+
+    // ── Step 4: Import payments from Cash & Bank PDF ───────────────────────
+    if (cashBankFile) {
+      setImportStatuses((s) => ({ ...s, cashBank: "running" }));
+      try {
+        const cashBankRows = cashBankFile.rows;
+
+        // Extract account name from PDF metadata (e.g., "Account Display Name: jo.augp@aubank")
+        const accountName = cashBankFile.metadata?.["Account Display Name"] || null;
+
+        // Detect whether this is a CSV (has "Invoice numbers" column) or PDF
+        const isCashBankCsv = cashBankFile.headers.includes("Invoice numbers");
+
+        // ── Extract inter-account transfers (Add Money / Reduce Money pairs) ──
+        // "Add Money" = money received into an account (Received column)
+        // "Reduce Money" = money sent from an account (Paid column)
+        // They come in pairs with matching Txn No — one is the source, other is dest
+        const addMoneyRows = cashBankRows.filter((r) => (r["Type"] || "").toLowerCase() === "add money");
+        const reduceMoneyRows = cashBankRows.filter((r) => (r["Type"] || "").toLowerCase() === "reduce money");
+
+        // Match pairs by Txn No + amount
+        const transfers: Array<{ date: string; amount: string; fromMode: string; toMode: string; notes?: string; txnNo?: string }> = [];
+        for (const addRow of addMoneyRows) {
+          const txnNo = (addRow["Txn No"] || "").trim();
+          const received = parseFloat(cleanMoney(addRow["Received"] || "0"));
+          if (received <= 0) continue;
+
+          // The "Add Money" side receives — its Mode tells us WHERE money went TO
+          const toMode = normalizePaymentMode(addRow["Mode"] || "bank");
+
+          // Find matching "Reduce Money" with same Txn No
+          const matchingReduce = reduceMoneyRows.find((r) => (r["Txn No"] || "").trim() === txnNo);
+          // The "Reduce Money" side pays — its Mode tells us WHERE money came FROM
+          const fromMode = matchingReduce
+            ? normalizePaymentMode(matchingReduce["Mode"] || "cash")
+            : (toMode === "bank" ? "cash" : "bank"); // best guess if no match
+
+          transfers.push({
+            date: addRow["Date"] || "",
+            amount: received.toFixed(2),
+            fromMode: fromMode === "upi" ? "upi" : fromMode === "bank" ? "bank" : "cash",
+            toMode: toMode === "upi" ? "upi" : toMode === "bank" ? "bank" : "cash",
+            notes: (addRow["Notes"] || "").replace(/"/g, "").trim() || undefined,
+            txnNo: txnNo || undefined,
+          });
+        }
+
+        // Import transfers (also auto-creates Cash/Bank/UPI accounts if missing)
+        let transfersCreated = 0;
+        if (transfers.length > 0) {
+          try {
+            const res = await importTransfersMut.mutateAsync({ transfers });
+            transfersCreated = res.created;
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        // Accept all transaction types that involve money movement:
+        // Payment-in, Payment-out, Sales Invoice, Purchase Invoice, etc.
+        // Skip "Opening Balance", "Add Money", "Reduce Money" and summary rows
+        const paymentRows = cashBankRows
+          .filter((row) => {
+            const type = (row["Type"] || "").toLowerCase();
+            // Skip non-transaction rows and transfers (handled separately)
+            if (type.includes("opening balance") || type === "add money" || type === "reduce money" || !type) return false;
+            // Accept payments, invoices marked as received/paid
+            const received = parseFloat(cleanMoney(row["Received"] || "0"));
+            const paid = parseFloat(cleanMoney(row["Paid"] || "0"));
+            return received > 0 || paid > 0;
+          })
+          .map((row) => {
+            const received = parseFloat(cleanMoney(row["Received"] || "0"));
+            const paid = parseFloat(cleanMoney(row["Paid"] || "0"));
+            const isIncoming = received > 0;
+            const amount = isIncoming ? received : paid;
+            const txnNo = (row["Txn No"] || "").trim();
+            const type = (row["Type"] || "").trim();
+
+            // Parse invoice numbers from CSV "Invoice numbers" column (comma-separated)
+            const invoiceNumbers: string[] | undefined = isCashBankCsv
+              ? (row["Invoice numbers"] || "")
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : undefined;
+
+            return {
+              paymentNumber: txnNo || undefined,
+              paymentDate: row["Date"] || "",
+              partyName: row["Party"] || "",
+              amount: amount.toFixed(2),
+              mode: normalizePaymentMode(row["Mode"] || (isCashBankCsv ? "cash" : "online")),
+              notes: [type, accountName, row["Notes"]].filter(Boolean).join(" | ") || undefined,
+              ...(invoiceNumbers && invoiceNumbers.length > 0 ? { invoiceNumbers } : {}),
+            };
+          })
+          .filter((p) => p.partyName && parseFloat(p.amount) > 0);
+
+        // Count expense rows for informational purposes
+        const expenseRows = cashBankRows.filter((row) =>
+          (row["Type"] || "").toLowerCase().includes("expense")
+        );
+
+        let created = 0, skipped = 0;
+        const errors: string[] = [];
+
+        // Collect invoice numbers that were "Paid" in Sales Summary
+        // (used on last batch to create auto-payments for direct-paid invoices)
+        const paidInvoiceNumbers: string[] = [];
+        if (invoicesFile) {
+          const invoiceMapping = state.mappings.invoices || {};
+          for (const row of invoicesFile.rows) {
+            const mapped = applyMapping(row, invoiceMapping);
+            const invNum = mapped.invoiceNumber || "";
+            const status = (mapped.status || "").toLowerCase();
+            if (invNum && status === "paid") {
+              paidInvoiceNumbers.push(invNum);
+            }
+          }
+        }
+
+        const totalBatches = Math.ceil(paymentRows.length / BATCH_SIZE);
+        for (let i = 0; i < paymentRows.length; i += BATCH_SIZE) {
+          const batch = paymentRows.slice(i, i + BATCH_SIZE);
+          const isLastBatch = Math.floor(i / BATCH_SIZE) + 1 === totalBatches;
+          const res = await importPaymentsMut.mutateAsync({
+            source: "mybillbook",
+            payments: batch,
+            // Send paid invoice list on last batch to trigger direct-paid reconciliation
+            ...(isLastBatch ? { paidInvoiceNumbers } : {}),
+          });
+          created += res.created;
+          skipped += res.skipped;
+          if (res.errors) errors.push(...res.errors);
+        }
+
+        // Import expense rows
+        let expensesCreated = 0;
+        for (const row of expenseRows) {
+          try {
+            const paid = parseFloat(cleanMoney(row["Paid"] || "0"));
+            if (paid <= 0) continue;
+
+            const dateStr = row["Date"] || "";
+            const party = (row["Party"] || "").trim();
+            const type = (row["Type"] || "Expense").trim();
+            // Use the party name as description, Type as category
+            const category = type.includes("Expense") ? (party || "General") : type;
+            const description = party && party !== category ? `${type} — ${party}` : type;
+
+            // Parse date to ISO format (myBillBook uses DD/MM/YYYY)
+            let expenseDate: string | undefined;
+            if (dateStr) {
+              const parts = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+              if (parts) {
+                const d = new Date(+parts[3], +parts[2] - 1, +parts[1]);
+                if (!isNaN(d.getTime())) expenseDate = d.toISOString();
+              } else {
+                const iso = new Date(dateStr);
+                if (!isNaN(iso.getTime())) expenseDate = iso.toISOString();
+              }
+            }
+
+            await createExpenseMut.mutateAsync({
+              category,
+              description,
+              amount: paid.toFixed(2),
+              mode: normalizePaymentMode(row["Mode"] || "cash"),
+              expenseDate,
+              referenceNumber: (row["Txn No"] || "").trim() || undefined,
+            });
+            expensesCreated++;
+          } catch (expErr) {
+            // Expense creation failed — non-fatal, continue with next
+            errors.push(`Expense "${row["Party"] || row["Type"]}" failed: ${expErr instanceof Error ? expErr.message : "Unknown"}`);
+          }
+        }
+        if (expensesCreated > 0) {
+          created += expensesCreated;
+        }
+
+        const details: string[] = [];
+        if (transfersCreated > 0) details.push(`${transfersCreated} inter-account transfers`);
+        if (expensesCreated > 0) details.push(`${expensesCreated} expenses`);
+
+        newResults.cashBank = {
+          created: created + transfersCreated,
+          skipped,
+          total: cashBankRows.length,
+          errors,
+          details: details.length > 0 ? details : undefined,
+        };
+        setImportStatuses((s) => ({ ...s, cashBank: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        toast.error("Failed to import Cash & Bank payments", message);
+        newResults.cashBank = { created: 0, skipped: 0, total: 0, errors: [message] };
+        setImportStatuses((s) => ({ ...s, cashBank: "done" }));
+        setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
+      }
+    }
+
+    // NOTE: Auto-creation of payments for direct-paid invoices is disabled until
+    // the import pipeline moves to the backend with proper modular reconciliation.
+    // The C&B payments + invoice amountPaid data is sufficient for now.
+  }
+
+  // Generic import (Tally / custom CSV) — original sequential flow
+  async function runGenericImport() {
     const statuses: Partial<Record<EntityKey, "pending" | "running" | "done" | "skipped">> = {};
     for (const key of ENTITY_ORDER) {
       statuses[key] =
@@ -1011,15 +1929,16 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         setState((s) => ({ ...s, results: { ...s.results, ...newResults } }));
       }
     }
-
-    setImportDone(true);
   }
 
   // ── Step content ──────────────────────────────────────────────────────────
 
-  const activeEntities = ENTITY_ORDER.filter(
-    (k) => state.enabled[k] && state.files[k]
-  );
+  // For generic/tally: entities with a file and enabled toggle (cashBank excluded — not a standard entity)
+  // For myBillBook: whichever files were uploaded (invoices required, items + parties optional)
+  // cashBank is handled separately in preview and import — not part of the standard mapping flow
+  const activeEntities: EntityKey[] = state.source === "mybillbook"
+    ? (["invoices", ...(state.files.items ? ["items"] : [])] as EntityKey[])
+    : ENTITY_ORDER.filter((k) => k !== "cashBank" && state.enabled[k] && state.files[k]);
 
   const step = state.currentStep;
 
@@ -1045,8 +1964,8 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
               className={cn(
                 "w-full text-left rounded-xl border-2 px-5 py-4 transition-all",
                 state.source === src.key
-                  ? "border-brand-400 bg-brand-50"
-                  : "border-border-light hover:border-brand-200 hover:bg-surface-1"
+                  ? "border-brand-500 bg-brand-600/[0.08]"
+                  : "border-border-light hover:border-brand-300 hover:bg-surface-1"
               )}
             >
               <div className="flex items-center justify-between">
@@ -1056,7 +1975,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
                       {src.label}
                     </span>
                     {src.recommended && (
-                      <span className="text-[10px] font-medium bg-brand-100 text-brand-700 rounded px-1.5 py-0.5">
+                      <span className="text-[10px] font-medium bg-brand-600/[0.12] text-brand-600 dark:text-brand-400 rounded px-1.5 py-0.5">
                         Recommended
                       </span>
                     )}
@@ -1083,13 +2002,317 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
     // Step 2: Upload files
     if (step === 2) {
+      if (state.source === "mybillbook") {
+        const detectedFiles = state.files;
+        const detectedCount = Object.keys(detectedFiles).length;
+
+        return (
+          <div className="space-y-4">
+            <p className="text-sm text-text-secondary">
+              Drop all your myBillBook export files at once — the system will auto-identify each one.
+            </p>
+
+            {/* Export guide — collapsible, non-intrusive */}
+            <details className="group rounded-xl border border-border-light overflow-hidden">
+              <summary className="flex items-center justify-between px-4 py-3 cursor-pointer select-none hover:bg-surface-1 transition-colors">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-brand-600 dark:text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm font-medium text-text-primary">How to export from myBillBook</span>
+                </div>
+                <svg className="w-4 h-4 text-text-tertiary transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </summary>
+              <div className="px-4 pb-4 pt-1 border-t border-border-light bg-surface-1/50">
+                <p className="text-xs text-text-tertiary mb-3">
+                  Export these files from myBillBook for a complete import. The more files you provide, the richer your data.
+                </p>
+                <div className="space-y-2.5">
+                  {[
+                    {
+                      icon: "📋",
+                      name: "Sales Summary",
+                      path: "Reports → Sales Summary Report → Download CSV",
+                      what: "Invoice numbers, dates, parties, totals, payment status",
+                      badge: "Required",
+                      badgeColor: "text-red-600 dark:text-red-400 bg-red-600/[0.08]",
+                    },
+                    {
+                      icon: "📊",
+                      name: "GST Sales Report",
+                      path: "Reports → GST Report → Sales → Download CSV",
+                      what: "Line items per invoice — items sold, quantities, prices, GST breakdown",
+                      badge: "Strongly recommended",
+                      badgeColor: "text-amber-600 dark:text-amber-400 bg-amber-600/[0.08]",
+                    },
+                    {
+                      icon: "👥",
+                      name: "All Party Balance",
+                      path: "Parties → ⋮ Menu → Download Report → All Party Balance CSV",
+                      what: "Customer details — phone numbers, addresses, GSTIN, balances",
+                      badge: "Recommended",
+                      badgeColor: "text-brand-600 dark:text-brand-400 bg-brand-600/[0.08]",
+                    },
+                    {
+                      icon: "📦",
+                      name: "Stock Summary",
+                      path: "Items → ⋮ Menu → Download Report → Stock Summary CSV",
+                      what: "Product catalog with units, categories, prices, current stock",
+                      badge: "Recommended",
+                      badgeColor: "text-brand-600 dark:text-brand-400 bg-brand-600/[0.08]",
+                    },
+                    {
+                      icon: "🏦",
+                      name: "Cash & Bank Statement",
+                      path: "Cash & Bank → Select each account → Download CSV",
+                      what: "Payment transactions with dates, modes (Cash/UPI/Bank), invoice linkage",
+                      badge: "Recommended",
+                      badgeColor: "text-brand-600 dark:text-brand-400 bg-brand-600/[0.08]",
+                    },
+                  ].map((file) => (
+                    <div key={file.name} className="flex gap-3">
+                      <span className="text-base shrink-0 mt-0.5">{file.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-semibold text-text-primary">{file.name}</span>
+                          <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", file.badgeColor)}>
+                            {file.badge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-text-tertiary mt-0.5">{file.what}</p>
+                        <p className="text-[11px] text-text-secondary mt-0.5 font-mono">{file.path}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-text-tertiary mt-3 pt-2 border-t border-border-light">
+                  Tip: Export each file for every financial year you want to import. Drop them all at once — duplicates are handled automatically.
+                </p>
+              </div>
+            </details>
+
+            {/* Single drop zone */}
+            <div
+              className={cn(
+                "border-2 border-dashed rounded-xl px-6 py-10 text-center transition-colors cursor-pointer",
+                isDragging
+                  ? "border-brand-500 bg-brand-600/5"
+                  : isProcessing
+                  ? "border-brand-300 bg-brand-50"
+                  : "border-border-light hover:border-brand-400"
+              )}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleMultiDrop}
+              onClick={() => !isProcessing && multiFileInputRef.current?.click()}
+            >
+              <input
+                ref={multiFileInputRef}
+                type="file"
+                multiple
+                accept=".csv,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  handleMultiSelect(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-surface-2 flex items-center justify-center">
+                  {isProcessing ? (
+                    <Spinner size="sm" className="text-brand-500" />
+                  ) : (
+                    <svg className="w-6 h-6 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                    </svg>
+                  )}
+                </div>
+                <div>
+                  {isProcessing ? (
+                    <p className="text-sm font-medium text-text-primary">Detecting files...</p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium text-text-primary">Drop your myBillBook exports here</p>
+                      <p className="text-xs text-text-tertiary mt-1">
+                        CSV files: Sales Summary, GST Sales Report, Stock Summary or Rate List, Party Balance, Cash &amp; Bank
+                        <br />
+                        PDF files: Cash &amp; Bank Statement (CSV preferred)
+                      </p>
+                    </>
+                  )}
+                </div>
+                {!isProcessing && detectedCount === 0 && (
+                  <p className="text-xs text-brand-600 font-medium">or click to browse files</p>
+                )}
+                {!isProcessing && detectedCount > 0 && (
+                  <p className="text-xs text-text-tertiary">Drop more files to add, or click to browse</p>
+                )}
+              </div>
+            </div>
+
+            {/* Detected files checklist */}
+            {detectedCount > 0 && (() => {
+              const regularFileCount = FILE_TYPES.filter(ft => !!detectedFiles[ft.key]).length;
+              const gstFileCount = gstReportFile ? gstReportNames.length : 0;
+              const fileCount = regularFileCount + (gstReportFile ? 1 : 0);
+              const totalRows = FILE_TYPES.reduce((sum, ft) => {
+                const p = detectedFiles[ft.key];
+                return sum + (p ? p.rows.length : 0);
+              }, 0) + (gstReportFile ? gstReportFile.rows.length : 0);
+              return (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-text-secondary">Detected Files</p>
+                  <span className="text-xs tabular-nums text-text-tertiary">
+                    {fileCount} file{fileCount !== 1 ? "s" : ""} · {totalRows.toLocaleString()} rows
+                  </span>
+                </div>
+                {FILE_TYPES.map((ft) => {
+                  const parsed = detectedFiles[ft.key];
+                  const detected = !!parsed;
+                  return (
+                    <div
+                      key={ft.key}
+                      className={cn(
+                        "flex items-center justify-between px-4 py-2.5 rounded-lg border",
+                        detected
+                          ? "border-emerald-200 dark:border-emerald-800 bg-emerald-600/[0.05]"
+                          : "border-border-light"
+                      )}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-base">{ft.icon}</span>
+                        <div>
+                          <p className="text-sm font-medium text-text-primary">{ft.label}</p>
+                          <p className="text-[11px] text-text-tertiary">{ft.description}</p>
+                        </div>
+                      </div>
+                      {detected ? (() => {
+                        const names = state.fileNames[ft.key] || [];
+                        const fileCount = names.length;
+                        const rowCount = parsed.rows.length;
+                        return (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-emerald-600 font-medium tabular-nums">
+                            ✓ {fileCount} file{fileCount !== 1 ? "s" : ""} · {rowCount.toLocaleString()} rows
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); removeDetectedFile(ft.key); }}
+                            className="text-text-tertiary hover:text-red-500 transition-colors"
+                            aria-label="Remove"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                              <path d="M4 4l8 8M12 4l-8 8" />
+                            </svg>
+                          </button>
+                        </div>
+                        );
+                      })() : (
+                        <span className="text-xs text-text-tertiary">{ft.required ? "Required" : "Optional"}</span>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* GST Sales Report — special slot (not an EntityKey, enriches invoices) */}
+                {gstReportFile ? (
+                  <div className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-600/[0.05]">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-base">📊</span>
+                      <div>
+                        <p className="text-sm font-medium text-text-primary">GST Sales Report</p>
+                        <p className="text-[11px] text-text-tertiary">Line items per invoice — items, quantities, prices, GST</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-emerald-600 font-medium tabular-nums">
+                        ✓ {gstFileCount} file{gstFileCount !== 1 ? "s" : ""} · {gstReportFile.rows.length.toLocaleString()} line items
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => { setGstReportFile(null); setGstReportNames([]); }}
+                        className="text-text-tertiary hover:text-red-500 transition-colors"
+                        aria-label="Remove"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                          <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-border-light">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-base">📊</span>
+                      <div>
+                        <p className="text-sm font-medium text-text-primary">GST Sales Report</p>
+                        <p className="text-[11px] text-text-tertiary">Line items per invoice — items, quantities, prices, GST</p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-text-tertiary">Optional</span>
+                  </div>
+                )}
+
+                {/* Warning if Sales Summary is missing */}
+                {!detectedFiles.invoices && (
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600/[0.05] border border-amber-200 dark:border-amber-800">
+                    <span className="text-amber-600 text-xs font-medium">Sales Summary CSV is required to continue</span>
+                  </div>
+                )}
+              </div>
+              );
+            })()}
+
+            {/* What will be imported summary */}
+            {detectedFiles.invoices && (
+              <div className="rounded-lg bg-surface-1 border border-border-light px-4 py-3 text-xs text-text-secondary space-y-1">
+                <p className="font-medium text-text-primary">What will be imported</p>
+                <ul className="list-disc list-inside space-y-0.5 text-text-tertiary">
+                  {detectedFiles.parties
+                    ? <li>Parties — from Party Balance (phone, address, balance) + fallback from Sales Summary</li>
+                    : <li>Parties — unique customers extracted from Contact Name column</li>
+                  }
+                  {detectedFiles.items && (() => {
+                    const isStockSummary = detectedFiles.items!.headers.some((h) => h.toLowerCase().includes("stock quantity"));
+                    return (
+                      <li>
+                        Items — from {isStockSummary ? "Stock Summary (purchase + selling price, stock quantity with unit)" : "Rate List (Price = selling price)"}
+                      </li>
+                    );
+                  })()}
+                  {gstReportFile
+                    ? <li>Invoices — with detailed line items from GST Report (items, quantities, prices, GST breakdowns)</li>
+                    : <li>Invoices — one per row, with a catch-all line item (drop GST Sales Report for item-level detail)</li>
+                  }
+                  <li>Payments — auto-created for each paid invoice</li>
+                  {detectedFiles.cashBank && (() => {
+                    const isCsv = detectedFiles.cashBank!.headers.includes("Invoice numbers");
+                    return (
+                      <li>
+                        Cash &amp; Bank — {isCsv ? "CSV with exact invoice linkage via Invoice numbers column" : "PDF transactions imported as payments"}
+                        {detectedFiles.cashBank!.metadata?.["Account Display Name"] && (
+                          <span className="text-text-tertiary"> (account: {detectedFiles.cashBank!.metadata["Account Display Name"]})</span>
+                        )}
+                      </li>
+                    );
+                  })()}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      }
+
       return (
         <div className="space-y-3">
           <p className="text-sm text-text-secondary mb-5">
             Upload CSV files for each entity. Enable the entities you want to import.
             Import order is: Parties → Items → Invoices → Payments.
           </p>
-          {ENTITY_ORDER.map((key) => (
+          {ENTITY_ORDER.filter((k) => k !== "cashBank").map((key) => (
             <DropZone
               key={key}
               entityKey={key}
@@ -1105,7 +2328,12 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
     // Step 3: Map columns
     if (step === 3) {
-      if (activeEntities.length === 0) {
+      // For myBillBook, only show mapping panels for uploaded files
+      const mappingEntities = state.source === "mybillbook"
+        ? (["invoices", ...(state.files.items ? ["items"] : [])] as EntityKey[])
+        : activeEntities;
+
+      if (mappingEntities.length === 0) {
         return (
           <div className="text-center py-12 text-text-tertiary text-sm">
             No files uploaded. Go back and upload at least one file.
@@ -1119,7 +2347,24 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             <span className="text-red-500">*</span>.
             Auto-detected mappings can be overridden using the dropdowns.
           </p>
-          {activeEntities.map((key) => (
+
+          {/* Info about auto-mapped files */}
+          {state.source === "mybillbook" && (
+            <div className="rounded-lg bg-surface-1 border border-border-light px-4 py-3 text-xs text-text-secondary space-y-1">
+              <p className="font-medium text-text-primary">Auto-mapped (no configuration needed)</p>
+              <ul className="list-disc list-inside space-y-0.5 text-text-tertiary">
+                {state.files.parties && <li>Party Balance — names, phone, address, balance</li>}
+                {state.files.cashBank && <li>Cash & Bank — payment transactions with invoice linkage</li>}
+                {gstReportFile && (
+                  <li>
+                    GST Sales Report — <strong className="text-text-secondary">{gstReportFile.rows.length.toLocaleString()} line items</strong> will be attached to invoices (items, quantities, prices, GST, shipping/discounts auto-reconciled)
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {mappingEntities.map((key) => (
             <MappingPanel
               key={key}
               entityKey={key}
@@ -1134,6 +2379,12 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
     // Step 4: Preview
     if (step === 4) {
+      const cashBankFile = state.files.cashBank;
+      const isCashBankCsv = cashBankFile?.headers.includes("Invoice numbers");
+      const cashBankPreviewHeaders = isCashBankCsv
+        ? ["Date", "Type", "Party", "Invoice numbers", "Mode", "Paid", "Received"]
+        : ["Date", "Type", "Party", "Mode", "Paid", "Received"];
+
       return (
         <div className="space-y-5">
           <p className="text-sm text-text-secondary">
@@ -1147,6 +2398,125 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
               mapping={state.mappings[key] || {}}
             />
           ))}
+          {gstReportFile && gstReportFile.rows.length > 0 && (
+            <div className="rounded-xl border border-border-light overflow-hidden">
+              <div className="px-4 py-2.5 flex items-center justify-between bg-surface-1 border-b border-border-light">
+                <span className="text-sm font-semibold text-text-primary">
+                  GST Sales Report — Line Items
+                </span>
+                <span className="text-xs text-text-tertiary tabular-nums">
+                  {gstReportFile.rows.length.toLocaleString()} line items
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-surface-1">
+                      {["Invoice No.", "Item Name", "Quantity", "Price/Unit", "Amount"].map((h) => (
+                        <th key={h} className="text-left px-3 py-2 text-text-tertiary font-medium border-b border-border-light">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-light">
+                    {gstReportFile.rows.slice(0, 8).map((row, i) => (
+                      <tr key={i} className="hover:bg-surface-1 transition-colors">
+                        <td className="px-3 py-1.5 font-mono text-text-secondary truncate max-w-[120px]">
+                          {row["Invoice No."] || row["Invoice No"] || <span className="text-text-tertiary italic">—</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-text-secondary truncate max-w-[160px]">
+                          {row["Item Name"] || <span className="text-text-tertiary italic">—</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-text-secondary">
+                          {row["Quantity"] || <span className="text-text-tertiary italic">—</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {row["Price/Unit"] || <span className="text-text-tertiary italic">—</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-medium">
+                          {row["Amount"] || <span className="text-text-tertiary italic">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {gstReportFile.rows.length > 8 && (
+                <div className="px-4 py-1.5 text-center text-xs text-text-tertiary bg-surface-1 border-t border-border-light">
+                  First 8 of {gstReportFile.rows.length.toLocaleString()} line items
+                </div>
+              )}
+            </div>
+          )}
+          {cashBankFile && cashBankFile.rows.length > 0 && (
+            <div className="rounded-xl border border-border-light overflow-hidden">
+              <div className="px-4 py-2.5 flex items-center justify-between bg-surface-1 border-b border-border-light">
+                <div>
+                  <span className="text-sm font-semibold text-text-primary">
+                    Cash &amp; Bank Transactions
+                  </span>
+                  {cashBankFile.metadata?.["Account Display Name"] && (
+                    <span className="text-xs text-text-tertiary ml-2">
+                      Account: {cashBankFile.metadata["Account Display Name"]}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-text-tertiary">
+                  First {Math.min(5, cashBankFile.rows.length)} of {cashBankFile.rows.length} rows · {cashBankFile.fileName}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-surface-1">
+                      {cashBankPreviewHeaders.map((h) => (
+                        <th
+                          key={h}
+                          className="text-left px-3 py-2 text-text-tertiary font-medium border-b border-border-light"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-light">
+                    {cashBankFile.rows.slice(0, 5).map((row, i) => (
+                      <tr key={i} className="hover:bg-surface-1 transition-colors">
+                        {cashBankPreviewHeaders.map((h) => (
+                          <td key={h} className="px-3 py-2 text-text-secondary truncate max-w-[180px]">
+                            {row[h] || <span className="text-text-tertiary italic">—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {cashBankFile && cashBankFile.rows.length > 0 && (() => {
+            const types: Record<string, number> = {};
+            for (const row of cashBankFile.rows) {
+              const t = (row["Type"] || "unknown").toLowerCase();
+              if (t.includes("opening balance") || !t) continue;
+              const key = t.includes("expense") ? "Expenses"
+                : t === "add money" || t === "reduce money" ? "Inter-account Transfers"
+                : t.includes("payment-out") ? "Payments Out"
+                : t.includes("sales invoice") ? "Direct-Paid Invoices"
+                : "Payments In";
+              types[key] = (types[key] || 0) + 1;
+            }
+            return (
+              <div className="flex flex-wrap gap-3 mt-2">
+                {Object.entries(types).map(([label, count]) => (
+                  <span key={label} className="text-xs px-2.5 py-1 rounded-lg bg-surface-2 text-text-secondary">
+                    {label}: <span className="font-medium text-text-primary">{count}</span>
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       );
     }
@@ -1158,6 +2528,32 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         0
       );
 
+      const isCashBankCsv = state.files.cashBank?.headers.includes("Invoice numbers");
+      const importStepLabels: Record<EntityKey, string> = state.source === "mybillbook"
+        ? {
+            parties: state.files.parties
+              ? "Importing parties from Party Balance + Sales Summary fallback..."
+              : "Extracting parties from Sales Summary...",
+            items: (() => {
+              const isStockSummary = state.files.items?.headers.some((h) => h.toLowerCase().includes("stock quantity"));
+              return isStockSummary ? "Importing items from Stock Summary..." : "Importing items from Rate List...";
+            })(),
+            invoices: gstReportFile
+              ? `Importing invoices with line items from GST Report (${gstReportFile.rows.length.toLocaleString()} line items)...`
+              : "Importing invoices...",
+            payments: "Payments",
+            cashBank: isCashBankCsv
+              ? "Importing payments from Cash & Bank CSV (with invoice linkage)..."
+              : "Importing payments from Cash & Bank statement...",
+          }
+        : {
+            parties: "Importing Parties...",
+            items: "Importing Items...",
+            invoices: "Importing Invoices...",
+            payments: "Importing Payments...",
+            cashBank: "Importing Cash & Bank Payments...",
+          };
+
       return (
         <div className="space-y-3">
           {!importDone && (
@@ -1166,44 +2562,62 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             </p>
           )}
 
-          {ENTITY_ORDER.map((key) => {
-            const status = importStatuses[key] || "pending";
-            return (
-              <ImportStepRow
-                key={key}
-                label={`Importing ${ENTITY_LABELS[key]}...`}
-                status={status}
-                result={state.results[key]}
-              />
-            );
-          })}
+          {ENTITY_ORDER
+            .filter((key) => {
+              const status = importStatuses[key];
+              // Hide steps that were skipped entirely
+              if (status === "skipped") return false;
+              // Hide cashBank if not started
+              if (key === "cashBank" && status === undefined) return false;
+              return true;
+            })
+            .map((key) => {
+              const status = importStatuses[key] || "pending";
+              return (
+                <ImportStepRow
+                  key={key}
+                  label={importStepLabels[key]}
+                  status={status}
+                  result={state.results[key]}
+                />
+              );
+            })}
 
           {importDone && (
-            <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-5">
-              <div className="flex items-center gap-3 mb-3">
-                <svg
-                  className="w-6 h-6 text-green-500 shrink-0"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <span className="text-sm font-semibold text-green-800">
-                  Import complete — {totalCreated.toLocaleString()} records imported
-                </span>
+            <div className="mt-6 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 p-6 text-center">
+              {/* Celebration animation */}
+              <div className="relative w-16 h-16 mx-auto mb-4">
+                {/* Pulsing ring */}
+                <div className="absolute inset-0 rounded-full bg-emerald-100 dark:bg-emerald-900/40 animate-ping opacity-20" />
+                {/* Checkmark */}
+                <div className="relative w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center animate-scale-in">
+                  <svg className="w-8 h-8 text-emerald-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                {/* Confetti-like particles */}
+                <div className="absolute -top-2 left-1/2 w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0.1s" }} />
+                <div className="absolute -top-1 left-1/4 w-1 h-1 rounded-full bg-brand-400 animate-bounce" style={{ animationDelay: "0.3s" }} />
+                <div className="absolute -top-2 right-1/4 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: "0.2s" }} />
+                <div className="absolute top-0 right-1/6 w-1 h-1 rounded-full bg-rose-400 animate-bounce" style={{ animationDelay: "0.4s" }} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+
+              <h3 className="text-lg font-bold text-emerald-800 dark:text-emerald-300 mb-1">
+                Import Complete!
+              </h3>
+              <p className="text-sm text-emerald-700 dark:text-emerald-400 mb-3">
+                {totalCreated.toLocaleString()} records imported successfully
+              </p>
+
+              {/* Per-entity breakdown */}
+              <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto">
                 {ENTITY_ORDER.filter((k) => state.results[k]).map((k) => {
                   const r = state.results[k]!;
                   return (
-                    <div key={k} className="text-xs text-green-700">
+                    <div key={k} className="text-xs text-emerald-700 dark:text-emerald-400">
                       <span className="font-medium">{ENTITY_LABELS[k]}:</span>{" "}
-                      {r.created} created
-                      {r.skipped > 0 ? `, ${r.skipped} skipped` : ""}
+                      {r.created}
+                      {r.skipped > 0 ? ` (${r.skipped} skipped)` : ""}
                     </div>
                   );
                 })}
@@ -1221,6 +2635,10 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
   function renderFooter() {
     if (step === 5) {
+      if (!importDone) {
+        // Import is running — no buttons
+        return null;
+      }
       return (
         <div className="flex gap-3">
           <button
@@ -1235,9 +2653,12 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           <button
             type="button"
             className="btn-primary flex-1"
-            onClick={handleClose}
+            onClick={() => {
+              handleClose();
+              window.location.href = "/";
+            }}
           >
-            Done
+            View Dashboard
           </button>
         </div>
       );

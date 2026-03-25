@@ -24,25 +24,30 @@ export interface RecordPaymentPanelProps {
 
 function accountTypeIcon(type: string): string {
   switch (type) {
-    case "cash":    return "💵";
-    case "current": return "🏦";
-    case "savings": return "🏦";
-    default:        return "💳";
+    case "cash":        return "💵";
+    case "current":     return "🏦";
+    case "savings":     return "🏦";
+    case "upi":         return "📱";
+    case "credit_card": return "💳";
+    default:            return "💳";
   }
 }
 
 function accountTypeLabel(type: string): string {
   switch (type) {
-    case "savings": return "Savings";
-    case "current": return "Current";
-    case "cash":    return "Cash";
-    default:        return type;
+    case "savings":     return "Savings";
+    case "current":     return "Current";
+    case "cash":        return "Cash";
+    case "upi":         return "UPI";
+    case "credit_card": return "Credit Card";
+    default:            return type;
   }
 }
 
 // Map account type to payment mode
 function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "other" {
   if (type === "cash") return "cash";
+  if (type === "upi") return "upi";
   return "bank";
 }
 
@@ -677,8 +682,7 @@ export function RecordPaymentPanel({
 
         {/* ── Reference & Notes Disclosure ───────────────────────────────── */}
         <div
-          className="rounded-xl border"
-          style={{ borderColor: "var(--border-light)" }}
+          className="rounded-xl border border-border-light"
         >
           <Disclosure
             label="Reference & Notes"

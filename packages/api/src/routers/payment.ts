@@ -1,25 +1,36 @@
-import { eq, and, sql, desc, gte, lte, notInArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, notInArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { payments, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 
 export const paymentRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
-      partyId: z.string().uuid().optional(),
-      invoiceId: z.string().uuid().optional(),
-      fromDate: z.string().datetime().optional(),
-      toDate: z.string().datetime().optional(),
+      partyId: z.string().uuid().nullish(),
+      invoiceId: z.string().uuid().nullish(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
+      search: z.string().nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
-      const conditions = [eq(payments.businessId, ctx.businessId)];
+      requireCan(ctx.ability, "read", "Payment");
+      const conditions = [eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)];
       if (input.partyId) conditions.push(eq(payments.partyId, input.partyId));
       if (input.invoiceId) conditions.push(eq(payments.invoiceId, input.invoiceId));
       if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      if (input.search) {
+        conditions.push(
+          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          ))`
+        );
+      }
 
       const offset = (input.page - 1) * input.limit;
 
@@ -51,9 +62,10 @@ export const paymentRouter = router({
     }),
 
   // Return all unpaid/partially-paid invoices for a given party
-  unpaidInvoices: businessProcedure
+  unpaidInvoices: viewerProcedure
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const rows = await ctx.db.select({
         id: invoices.id,
         invoiceNumber: invoices.invoiceNumber,
@@ -81,8 +93,9 @@ export const paymentRouter = router({
     }),
 
   // Return the default/most-recently-used bank account for this business
-  defaultAccount: businessProcedure
+  defaultAccount: viewerProcedure
     .query(async ({ ctx }) => {
+      requireCan(ctx.ability, "read", "BankAccount");
       // Look at the last 5 payments that have a bankAccountId
       const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
         .from(payments)
@@ -142,8 +155,10 @@ export const paymentRouter = router({
       return account ?? null;
     }),
 
-  create: businessProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
-    return ctx.db.transaction(async (tx) => {
+  create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Payment");
+    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+    const payment = await ctx.db.transaction(async (tx) => {
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,
@@ -176,6 +191,8 @@ export const paymentRouter = router({
         notes: input.notes,
         paymentNumber,
         bankAccountId: input.bankAccountId || null,
+        createdByUserId: ctx.user!.id,
+        createdByName: ctx.user!.name,
       }).returning();
 
       // ── Invoice allocation logic ─────────────────────────────────────────
@@ -186,29 +203,31 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of effectiveAllocations) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        // Auto-update invoice status based on new amountPaid
-        const [inv] = await tx.select({
+        // Overpayment guard: fetch invoice before applying allocation
+        const [invBefore] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
         }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
 
-        if (inv) {
-          const total = parseFloat(inv.totalAmount);
-          const paid = parseFloat(inv.amountPaid);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : undefined;
-          if (newStatus) {
-            await tx.update(invoices)
-              .set({ status: newStatus })
-              .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
+        if (invBefore) {
+          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
+          if (money.toNumber(alloc.amount) > money.toNumber(balance)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
           }
         }
+
+        // Single SQL: update amountPaid and status atomically
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = amount_paid::numeric + ${alloc.amount}::numeric,
+            status = CASE
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) >= total_amount::numeric THEN 'paid'
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) > 0 THEN 'partial'
+              ELSE status
+            END,
+            updated_at = NOW()
+          WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // ── Bank account transaction ─────────────────────────────────────────
@@ -226,9 +245,6 @@ export const paymentRouter = router({
           .limit(1);
 
         if (account) {
-          const currentBalance = parseFloat(account.currentBalance);
-          const amount = parseFloat(input.amount);
-
           // Determine direction: sale payments are deposits, purchase payments are withdrawals.
           // Check the type of the first linked invoice if any.
           let txType: "deposit" | "withdrawal" = "deposit";
@@ -241,7 +257,9 @@ export const paymentRouter = router({
           }
 
           const newBalance =
-            txType === "deposit" ? currentBalance + amount : currentBalance - amount;
+            txType === "deposit"
+              ? money.add(account.currentBalance, input.amount)
+              : money.sub(account.currentBalance, input.amount);
 
           await tx.insert(bankTransactions).values({
             businessId: ctx.businessId,
@@ -251,23 +269,36 @@ export const paymentRouter = router({
             description: `Payment ${paymentNumber}`,
             referenceType: "payment",
             referenceId: payment.id,
-            balanceAfter: newBalance.toFixed(2),
+
             transactionDate: payment.paymentDate,
           });
 
           await tx.update(bankAccounts)
-            .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+            .set({ currentBalance: newBalance, updatedAt: new Date() })
             .where(eq(bankAccounts.id, input.bankAccountId));
         }
       }
 
       return payment;
     });
+
+    await logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "payment.create",
+      entityType: "payment",
+      entityId: payment.id,
+      metadata: { paymentNumber: payment.paymentNumber, amount: payment.amount, mode: payment.mode },
+      ipAddress,
+    });
+
+    return payment;
   }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Payment");
       const [payment] = await ctx.db.select({
         id: payments.id,
         paymentNumber: payments.paymentNumber,
@@ -288,19 +319,33 @@ export const paymentRouter = router({
 
       if (!payment) return null;
 
-      // Find all invoices this payment was allocated to.
-      // For now, the payment only stores one invoiceId (primary). In future we may add
-      // a payment_allocations join table. For now, return the single linked invoice.
-      const linkedInvoices: Array<{
-        invoiceId: string;
-        invoiceNumber: string;
-        invoiceDate: Date;
-        totalAmount: string;
-        amountPaid: string;
-        status: string;
-        amount: string;
-      }> = [];
-      if (payment.invoiceId) {
+      // Find all invoices this payment was allocated to via the allocations table
+      const allocations = await ctx.db
+        .select({
+          invoiceId: paymentAllocations.invoiceId,
+          allocAmount: paymentAllocations.amount,
+          invoiceNumber: invoices.invoiceNumber,
+          invoiceDate: invoices.invoiceDate,
+          totalAmount: invoices.totalAmount,
+          amountPaid: invoices.amountPaid,
+          status: invoices.status,
+        })
+        .from(paymentAllocations)
+        .innerJoin(invoices, eq(invoices.id, paymentAllocations.invoiceId))
+        .where(eq(paymentAllocations.paymentId, input.id));
+
+      // Fall back to single invoice_id if no allocations exist (legacy payments)
+      let linkedInvoices = allocations.map(a => ({
+        invoiceId: a.invoiceId,
+        invoiceNumber: a.invoiceNumber,
+        invoiceDate: a.invoiceDate,
+        totalAmount: a.totalAmount,
+        amountPaid: a.amountPaid,
+        status: a.status,
+        amount: a.allocAmount,
+      }));
+
+      if (linkedInvoices.length === 0 && payment.invoiceId) {
         const [inv] = await ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
@@ -308,9 +353,9 @@ export const paymentRouter = router({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
           status: invoices.status,
-        }).from(invoices).where(eq(invoices.id, payment.invoiceId)).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, payment.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
         if (inv) {
-          linkedInvoices.push({
+          linkedInvoices = [{
             invoiceId: inv.id,
             invoiceNumber: inv.invoiceNumber,
             invoiceDate: inv.invoiceDate,
@@ -318,14 +363,15 @@ export const paymentRouter = router({
             amountPaid: inv.amountPaid,
             status: inv.status,
             amount: payment.amount,
-          });
+          }];
         }
       }
 
       return { ...payment, linkedInvoices };
     }),
 
-  update: businessProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
+  update: memberProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "update", "Payment");
     return ctx.db.transaction(async (tx) => {
       // 1. Fetch the existing payment
       const [existing] = await tx.select()
@@ -338,26 +384,19 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
-      // 2. Reverse old invoice allocation
+      // 2. Reverse old invoice allocation (single SQL: update amountPaid and status atomically)
       if (existing.invoiceId) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`GREATEST(${invoices.amountPaid}::numeric - ${existing.amount}::numeric, 0)`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        // Recompute old invoice status
-        const [oldInv] = await tx.select({
-          totalAmount: invoices.totalAmount,
-          amountPaid: invoices.amountPaid,
-        }).from(invoices).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
-        if (oldInv) {
-          const paid = parseFloat(oldInv.amountPaid);
-          const total = parseFloat(oldInv.totalAmount);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : "sent";
-          await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, existing.invoiceId), eq(invoices.businessId, ctx.businessId)));
-        }
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0),
+            status = CASE
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) > 0 THEN 'partial'
+              ELSE 'sent'
+            END,
+            updated_at = NOW()
+          WHERE id = ${existing.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // 3. Reverse old bank transaction
@@ -377,11 +416,11 @@ export const paymentRouter = router({
             .for("update").limit(1);
 
           if (account) {
-            const bal = parseFloat(account.currentBalance);
-            const amt = parseFloat(bankTxn.amount);
-            const revBal = bankTxn.type === "deposit" ? bal - amt : bal + amt;
+            const revBal = bankTxn.type === "deposit"
+              ? money.sub(account.currentBalance, bankTxn.amount)
+              : money.add(account.currentBalance, bankTxn.amount);
             await tx.update(bankAccounts)
-              .set({ currentBalance: revBal.toFixed(2), updatedAt: new Date() })
+              .set({ currentBalance: revBal, updatedAt: new Date() })
               .where(eq(bankAccounts.id, existing.bankAccountId));
           }
 
@@ -413,7 +452,7 @@ export const paymentRouter = router({
           paymentDate: newDate,
           invoiceId: primaryInvoiceId,
         })
-        .where(eq(payments.id, input.id))
+        .where(and(eq(payments.id, input.id), eq(payments.businessId, ctx.businessId)))
         .returning();
 
       // 5. Apply new allocations
@@ -424,25 +463,31 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of newAllocations) {
-        await tx.update(invoices)
-          .set({
-            amountPaid: sql`${invoices.amountPaid}::numeric + ${alloc.amount}::numeric`,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
-
-        const [inv] = await tx.select({
+        // Overpayment guard: fetch invoice before applying allocation
+        const [invBefore] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
         }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
-        if (inv) {
-          const total = parseFloat(inv.totalAmount);
-          const paid = parseFloat(inv.amountPaid);
-          const newStatus = paid >= total ? "paid" : paid > 0 ? "partial" : undefined;
-          if (newStatus) {
-            await tx.update(invoices).set({ status: newStatus }).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId)));
+
+        if (invBefore) {
+          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
+          if (money.toNumber(alloc.amount) > money.toNumber(balance)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
           }
         }
+
+        // Single SQL: update amountPaid and status atomically
+        await tx.execute(sql`
+          UPDATE invoices SET
+            amount_paid = amount_paid::numeric + ${alloc.amount}::numeric,
+            status = CASE
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) >= total_amount::numeric THEN 'paid'
+              WHEN (amount_paid::numeric + ${alloc.amount}::numeric) > 0 THEN 'partial'
+              ELSE status
+            END,
+            updated_at = NOW()
+          WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+        `);
       }
 
       // 6. Create new bank transaction if bank account set
@@ -453,15 +498,15 @@ export const paymentRouter = router({
           .for("update").limit(1);
 
         if (account) {
-          const bal = parseFloat(account.currentBalance);
-          const amt = parseFloat(newAmount);
           let txType: "deposit" | "withdrawal" = "deposit";
           if (newAllocations.length > 0) {
             const [inv] = await tx.select({ type: invoices.type }).from(invoices)
               .where(eq(invoices.id, newAllocations[0].invoiceId)).limit(1);
             if (inv?.type === "purchase") txType = "withdrawal";
           }
-          const newBal = txType === "deposit" ? bal + amt : bal - amt;
+          const newBal = txType === "deposit"
+            ? money.add(account.currentBalance, newAmount)
+            : money.sub(account.currentBalance, newAmount);
 
           await tx.insert(bankTransactions).values({
             businessId: ctx.businessId,
@@ -471,12 +516,12 @@ export const paymentRouter = router({
             description: `Payment ${existing.paymentNumber} (edited)`,
             referenceType: "payment",
             referenceId: existing.id,
-            balanceAfter: newBal.toFixed(2),
+
             transactionDate: newDate,
           });
 
           await tx.update(bankAccounts)
-            .set({ currentBalance: newBal.toFixed(2), updatedAt: new Date() })
+            .set({ currentBalance: newBal, updatedAt: new Date() })
             .where(eq(bankAccounts.id, newBankAccountId));
         }
       }
@@ -485,16 +530,21 @@ export const paymentRouter = router({
     });
   }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return ctx.db.transaction(async (tx) => {
+      requireCan(ctx.ability, "delete", "Payment");
+      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+      const result = await ctx.db.transaction(async (tx) => {
         const [payment] = await tx.select()
           .from(payments)
           .where(and(eq(payments.id, input.id), eq(payments.businessId, ctx.businessId)))
           .limit(1);
 
-        if (!payment) return { success: false };
+        if (!payment) return { success: false, payment: null };
+
+        // Already soft-deleted — return early
+        if (payment.deletedAt) return { success: true, payment: null };
 
         // Reverse the invoice amount if linked
         if (payment.invoiceId) {
@@ -529,16 +579,13 @@ export const paymentRouter = router({
               .limit(1);
 
             if (bankTxn) {
-              const currentBalance = parseFloat(account.currentBalance);
-              const amount = parseFloat(bankTxn.amount);
               // Reverse: if it was a deposit, now subtract; if withdrawal, now add
-              const newBalance =
-                bankTxn.type === "deposit"
-                  ? currentBalance - amount
-                  : currentBalance + amount;
+              const newBalance = bankTxn.type === "deposit"
+                ? money.sub(account.currentBalance, bankTxn.amount)
+                : money.add(account.currentBalance, bankTxn.amount);
 
               await tx.update(bankAccounts)
-                .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+                .set({ currentBalance: newBalance, updatedAt: new Date() })
                 .where(eq(bankAccounts.id, payment.bankAccountId));
 
               // Delete the associated bank transaction
@@ -552,8 +599,195 @@ export const paymentRouter = router({
           }
         }
 
-        await tx.delete(payments).where(eq(payments.id, input.id));
-        return { success: true };
+        // Soft delete: set deletedAt timestamp
+        await tx.update(payments)
+          .set({ deletedAt: new Date() })
+          .where(eq(payments.id, input.id));
+        return { success: true, payment };
+      });
+
+      if (result.success && result.payment) {
+        await logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: "payment.delete",
+          entityType: "payment",
+          entityId: input.id,
+          metadata: { paymentNumber: result.payment.paymentNumber, amount: result.payment.amount },
+          ipAddress,
+        });
+      }
+
+      return { success: result.success };
+    }),
+
+  // Payments with no bank account assigned
+  untrackedPayments: viewerProcedure
+    .input(z.object({
+      search: z.string().nullish(),
+      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).nullish(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
+      ...paginationSchema.shape,
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Payment");
+      const offset = (input.page - 1) * input.limit;
+
+      const conditions = [
+        eq(payments.businessId, ctx.businessId),
+        sql`${payments.bankAccountId} IS NULL`,
+      ];
+      if (input.search) {
+        conditions.push(
+          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          ))`
+        );
+      }
+      if (input.mode) conditions.push(eq(payments.mode, input.mode));
+      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+
+      const [data, [{ count }]] = await Promise.all([
+        ctx.db.select({
+          id: payments.id,
+          paymentNumber: payments.paymentNumber,
+          amount: payments.amount,
+          mode: payments.mode,
+          paymentDate: payments.paymentDate,
+          referenceNumber: payments.referenceNumber,
+          partyName: parties.name,
+          partyId: parties.id,
+        }).from(payments)
+          .innerJoin(parties, eq(parties.id, payments.partyId))
+          .where(and(...conditions))
+          .orderBy(desc(payments.paymentDate))
+          .limit(input.limit)
+          .offset(offset),
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
+          .where(and(...conditions)),
+      ]);
+
+      return { data, total: count, page: input.page, limit: input.limit };
+    }),
+
+  // Assign a bank account to untracked payments — by specific IDs or by filter (bulk all matching)
+  assignAccount: memberProcedure
+    .input(z.object({
+      paymentIds: z.array(z.string().uuid()).optional(), // specific IDs
+      allMatching: z.boolean().optional(), // true = assign ALL untracked matching filters
+      search: z.string().nullish(),
+      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).nullish(),
+      bankAccountId: z.string().uuid(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Payment");
+      return ctx.db.transaction(async (tx) => {
+        // Verify bank account exists and belongs to this business
+        const [account] = await tx.select({
+          id: bankAccounts.id,
+          currentBalance: bankAccounts.currentBalance,
+        })
+          .from(bankAccounts)
+          .where(and(
+            eq(bankAccounts.id, input.bankAccountId),
+            eq(bankAccounts.businessId, ctx.businessId),
+          ))
+          .for("update")
+          .limit(1);
+
+        if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+
+        let totalDeposited = "0.00";
+
+        // Resolve payment IDs — either from explicit list or by querying all matching untracked
+        let paymentIds = input.paymentIds || [];
+        if (input.allMatching) {
+          const matchConditions = [
+            eq(payments.businessId, ctx.businessId),
+            sql`${payments.bankAccountId} IS NULL`,
+          ];
+          if (input.search) {
+            matchConditions.push(
+              sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
+                SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+              ))`
+            );
+          }
+          if (input.mode) matchConditions.push(eq(payments.mode, input.mode));
+
+          const allMatching = await tx.select({ id: payments.id })
+            .from(payments)
+            .where(and(...matchConditions));
+          paymentIds = allMatching.map(p => p.id);
+        }
+
+        if (paymentIds.length === 0) return { assigned: 0 };
+
+        for (const paymentId of paymentIds) {
+          // Get the payment (only if untracked and owned by this business)
+          const [pmt] = await tx.select({
+            id: payments.id,
+            amount: payments.amount,
+            paymentDate: payments.paymentDate,
+            paymentNumber: payments.paymentNumber,
+            invoiceId: payments.invoiceId,
+          }).from(payments)
+            .where(and(
+              eq(payments.id, paymentId),
+              eq(payments.businessId, ctx.businessId),
+              sql`${payments.bankAccountId} IS NULL`,
+            ))
+            .limit(1);
+
+          if (!pmt) continue; // already assigned or not found
+
+          // Update payment with bank account
+          await tx.update(payments)
+            .set({ bankAccountId: input.bankAccountId })
+            .where(eq(payments.id, paymentId));
+
+          // Determine deposit/withdrawal based on linked invoice type
+          let txType: "deposit" | "withdrawal" = "deposit";
+          if (pmt.invoiceId) {
+            const [inv] = await tx.select({ type: invoices.type })
+              .from(invoices)
+              .where(eq(invoices.id, pmt.invoiceId))
+              .limit(1);
+            if (inv?.type === "purchase") txType = "withdrawal";
+          }
+
+          totalDeposited = txType === "deposit"
+            ? money.add(totalDeposited, pmt.amount)
+            : money.sub(totalDeposited, pmt.amount);
+
+          // Calculate running balance after this transaction
+          const currentBal = money.add(account.currentBalance, totalDeposited);
+
+          // Create bank transaction
+          await tx.insert(bankTransactions).values({
+            businessId: ctx.businessId,
+            bankAccountId: input.bankAccountId,
+            type: txType,
+            amount: pmt.amount,
+            description: `Payment ${pmt.paymentNumber || pmt.id} (assigned)`,
+            referenceType: "payment",
+            referenceId: pmt.id,
+
+            transactionDate: pmt.paymentDate,
+          });
+        }
+
+        // Update account balance once with net change
+        await tx.update(bankAccounts)
+          .set({
+            currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${totalDeposited}::numeric`,
+            updatedAt: new Date(),
+          })
+          .where(eq(bankAccounts.id, input.bankAccountId));
+
+        return { assigned: paymentIds.length };
       });
     }),
 });

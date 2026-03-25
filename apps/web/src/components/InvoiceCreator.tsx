@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { getBusinessId } from "@/lib/trpc";
 
 interface LineItem {
@@ -47,6 +47,10 @@ export function InvoiceCreator({ type, onClose }: Props) {
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
   const [items, setItems] = useState<LineItem[]>([newLineItem()]);
+
+  // Role check: sellers cannot edit tax/discount fields (flow from item)
+  const { data: session } = trpc.auth.me.useQuery();
+  const isSeller = session?.role === "seller" || session?.role === "member";
 
   const { data: partiesData } = trpc.party.list.useQuery({
     type: type === "sale" ? "customer" : "supplier",
@@ -210,7 +214,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
 
               {/* Line item rows */}
               <div className="divide-y" style={{ borderColor: "var(--border-light)" }}>
-                {items.map((li, idx) => {
+                {items.map((li, _idx) => {
                   const calc = calcLine(li);
                   return (
                     <div
@@ -264,18 +268,20 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
 
-                      {/* Tax % */}
+                      {/* Tax % — disabled for seller role, auto-populated from item */}
                       <input
                         type="number"
                         value={li.taxPercent}
                         onChange={(e) => updateItem(li.id, "taxPercent", e.target.value)}
                         min="0"
                         step="0.01"
-                        className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums"
+                        disabled={isSeller}
+                        title={isSeller ? "Tax rate is set from the item. Contact admin to change." : undefined}
+                        className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums disabled:opacity-60 disabled:cursor-not-allowed"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
 
-                      {/* Discount % */}
+                      {/* Discount % — disabled for seller role */}
                       <input
                         type="number"
                         value={li.discountPercent}
@@ -283,7 +289,9 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         min="0"
                         max="100"
                         step="0.01"
-                        className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums"
+                        disabled={isSeller}
+                        title={isSeller ? "Discount is managed by admin. Contact admin to change." : undefined}
+                        className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums disabled:opacity-60 disabled:cursor-not-allowed"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
 

@@ -1,5 +1,5 @@
 import { createTRPCReact } from "@trpc/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpBatchLink, splitLink, httpLink } from "@trpc/client";
 import { QueryClient } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
@@ -15,22 +15,31 @@ export function getBusinessId() {
   return currentBusinessId;
 }
 
+function commonOptions() {
+  return {
+    transformer: superjson,
+    headers() {
+      const headers: Record<string, string> = {};
+      if (currentBusinessId) {
+        headers["x-business-id"] = currentBusinessId;
+      }
+      return headers;
+    },
+    fetch(url: URL | RequestInfo, options?: RequestInit) {
+      return fetch(url, { ...options, credentials: "include" as RequestCredentials });
+    },
+  };
+}
+
 export function createTRPCClient() {
   return trpc.createClient({
     links: [
-      httpBatchLink({
-        url: "/api/trpc",
-        transformer: superjson,
-        headers() {
-          const headers: Record<string, string> = {};
-          if (currentBusinessId) {
-            headers["x-business-id"] = currentBusinessId;
-          }
-          return headers;
-        },
-        fetch(url, options) {
-          return fetch(url, { ...options, credentials: "include" });
-        },
+      // Mutations go through a non-batching link to avoid SuperJSON parse failures
+      // when large mutation responses get combined with background query responses
+      splitLink({
+        condition: (op) => op.type === "mutation",
+        true: httpLink({ url: "/api/trpc", ...commonOptions() }),
+        false: httpBatchLink({ url: "/api/trpc", ...commonOptions() }),
       }),
     ],
   });

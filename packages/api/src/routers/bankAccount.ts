@@ -8,13 +8,16 @@ import {
   createBankTransactionSchema,
   bankTransferSchema,
   paginationSchema,
+  money,
 } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 
 export const bankAccountRouter = router({
   // ── Accounts ────────────────────────────────────────────────
 
-  list: businessProcedure.query(async ({ ctx }) => {
+  list: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "BankAccount");
     return ctx.db
       .select()
       .from(bankAccounts)
@@ -22,9 +25,10 @@ export const bankAccountRouter = router({
       .orderBy(desc(bankAccounts.isDefault), asc(bankAccounts.accountName));
   }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankAccount");
       const [account] = await ctx.db
         .select()
         .from(bankAccounts)
@@ -48,9 +52,10 @@ export const bankAccountRouter = router({
       return { ...account, recentTransactions };
     }),
 
-  create: businessProcedure
+  create: memberProcedure
     .input(createBankAccountSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         // If new account is default, clear existing defaults
         if (input.isDefault) {
@@ -80,9 +85,10 @@ export const bankAccountRouter = router({
       });
     }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateBankAccountSchema }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         // Verify ownership
         const [existing] = await tx
@@ -128,9 +134,10 @@ export const bankAccountRouter = router({
       });
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "BankAccount");
       return ctx.db.transaction(async (tx) => {
         const [account] = await tx
           .select({ id: bankAccounts.id })
@@ -175,7 +182,7 @@ export const bankAccountRouter = router({
 
   // ── Transactions ────────────────────────────────────────────
 
-  listTransactions: businessProcedure
+  listTransactions: viewerProcedure
     .input(
       z.object({
         bankAccountId: z.string().uuid(),
@@ -186,6 +193,7 @@ export const bankAccountRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankTransaction");
       // Verify account belongs to business
       const [account] = await ctx.db
         .select({ id: bankAccounts.id })
@@ -214,9 +222,37 @@ export const bankAccountRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
+      // Get the opening balance for running total calculation
+      const [acct] = await ctx.db
+        .select({ openingBalance: bankAccounts.openingBalance })
+        .from(bankAccounts)
+        .where(eq(bankAccounts.id, input.bankAccountId))
+        .limit(1);
+
       const [data, [{ count }]] = await Promise.all([
         ctx.db
-          .select()
+          .select({
+            id: bankTransactions.id,
+            businessId: bankTransactions.businessId,
+            bankAccountId: bankTransactions.bankAccountId,
+            type: bankTransactions.type,
+            amount: bankTransactions.amount,
+            description: bankTransactions.description,
+            referenceType: bankTransactions.referenceType,
+            referenceId: bankTransactions.referenceId,
+            transactionDate: bankTransactions.transactionDate,
+            createdAt: bankTransactions.createdAt,
+            // Running balance: opening_balance + cumulative deposits - cumulative withdrawals
+            balanceAfter: sql<string>`(
+              ${acct.openingBalance}::numeric + SUM(
+                CASE WHEN ${bankTransactions.type} = 'deposit' THEN ${bankTransactions.amount}::numeric
+                     ELSE -${bankTransactions.amount}::numeric END
+              ) OVER (
+                ORDER BY ${bankTransactions.transactionDate} ASC, ${bankTransactions.createdAt} ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+              )
+            )::text`.as("balance_after"),
+          })
           .from(bankTransactions)
           .where(and(...conditions))
           .orderBy(desc(bankTransactions.transactionDate))
@@ -231,9 +267,10 @@ export const bankAccountRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  addTransaction: businessProcedure
+  addTransaction: memberProcedure
     .input(createBankTransactionSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankTransaction");
       return ctx.db.transaction(async (tx) => {
         // Lock account row for atomic balance update
         const [account] = await tx
@@ -255,13 +292,10 @@ export const bankAccountRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
         }
 
-        const currentBalance = parseFloat(account.currentBalance);
-        const amount = parseFloat(input.amount);
-
         const newBalance =
           input.type === "deposit" || input.type === "transfer"
-            ? currentBalance + amount
-            : currentBalance - amount;
+            ? money.add(account.currentBalance, input.amount)
+            : money.sub(account.currentBalance, input.amount);
 
         const [txn] = await tx
           .insert(bankTransactions)
@@ -273,7 +307,7 @@ export const bankAccountRouter = router({
             description: input.description,
             referenceType: input.referenceType,
             referenceId: input.referenceId,
-            balanceAfter: newBalance.toFixed(2),
+
             transactionDate: input.transactionDate
               ? new Date(input.transactionDate)
               : new Date(),
@@ -282,16 +316,17 @@ export const bankAccountRouter = router({
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.bankAccountId));
 
         return txn;
       });
     }),
 
-  transfer: businessProcedure
+  transfer: memberProcedure
     .input(bankTransferSchema)
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankTransaction");
       if (input.fromAccountId === input.toAccountId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -344,12 +379,8 @@ export const bankAccountRouter = router({
         const toAccount =
           firstAccount.id === input.toAccountId ? firstAccount : secondAccount;
 
-        const amount = parseFloat(input.amount);
-        const fromBalance = parseFloat(fromAccount.currentBalance);
-        const toBalance = parseFloat(toAccount.currentBalance);
-
-        const newFromBalance = fromBalance - amount;
-        const newToBalance = toBalance + amount;
+        const newFromBalance = money.sub(fromAccount.currentBalance, input.amount);
+        const newToBalance = money.add(toAccount.currentBalance, input.amount);
 
         const txnDate = input.transactionDate ? new Date(input.transactionDate) : new Date();
 
@@ -363,7 +394,7 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer to account ${input.toAccountId}`,
             referenceType: "transfer",
             referenceId: input.toAccountId,
-            balanceAfter: newFromBalance.toFixed(2),
+
             transactionDate: txnDate,
           })
           .returning();
@@ -378,26 +409,27 @@ export const bankAccountRouter = router({
             description: input.description ?? `Transfer from account ${input.fromAccountId}`,
             referenceType: "transfer",
             referenceId: input.fromAccountId,
-            balanceAfter: newToBalance.toFixed(2),
+
             transactionDate: txnDate,
           })
           .returning();
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newFromBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newFromBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.fromAccountId));
 
         await tx
           .update(bankAccounts)
-          .set({ currentBalance: newToBalance.toFixed(2), updatedAt: new Date() })
+          .set({ currentBalance: newToBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.toAccountId));
 
         return { withdrawal: withdrawalTxn, deposit: depositTxn };
       });
     }),
 
-  summary: businessProcedure.query(async ({ ctx }) => {
+  summary: viewerProcedure.query(async ({ ctx }) => {
+    requireCan(ctx.ability, "read", "BankAccount");
     const [result] = await ctx.db
       .select({
         totalBalance: sql<string>`coalesce(sum(${bankAccounts.currentBalance}::numeric), 0)::text`,

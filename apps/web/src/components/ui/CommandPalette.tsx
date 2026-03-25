@@ -107,31 +107,27 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] px-4">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-[60] flex items-start justify-center px-4 pt-[18vh]">
+      {/* Backdrop — full screen cover */}
       <div
-        className="fixed inset-0 bg-black/40 animate-fade-in"
+        className="fixed inset-0 bg-black/50 animate-fade-in"
         onClick={onClose}
         aria-hidden="true"
       />
 
       {/* Panel */}
       <div
-        className="relative z-10 w-full max-w-lg mt-[20vh] mx-auto rounded-xl shadow-modal animate-scale-in overflow-hidden"
-        style={{ background: "var(--surface-0)" }}
+        className="relative z-10 w-full max-w-lg rounded-2xl shadow-modal border border-border-light animate-scale-in overflow-hidden bg-surface-0"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
       >
         {/* Search field */}
         <div
-          className="flex items-center gap-3 px-4"
+          className="flex items-center gap-3 px-4 bg-surface-0"
           style={{ borderBottom: "1px solid var(--border-light)" }}
         >
-          <SearchIcon
-            className="w-4 h-4 shrink-0"
-            style={{ color: "var(--text-tertiary)" }}
-          />
+          <SearchIcon className="w-4 h-4 shrink-0 text-text-tertiary" />
           <input
             ref={inputRef}
             role="combobox"
@@ -148,15 +144,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
-            placeholder="Search commands… "
+            placeholder="Search commands…"
             autoComplete="off"
             spellCheck={false}
-            className="flex-1 py-3.5 text-sm bg-transparent outline-none"
-            style={{ color: "var(--text-primary)" }}
+            className="flex-1 py-4 text-sm bg-transparent outline-none text-text-primary placeholder:text-text-tertiary"
           />
           <KbdShortcut
             keys={["⌘", "K"]}
-            className="shrink-0 opacity-60"
+            className="shrink-0 opacity-50"
           />
         </div>
 
@@ -166,23 +161,36 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           id="command-palette-listbox"
           role="listbox"
           aria-label="Commands"
-          className="max-h-80 overflow-y-auto py-1"
+          className="max-h-[300px] overflow-y-auto py-1.5"
         >
           {filtered.length === 0 ? (
             <li
-              className="px-4 py-8 text-center text-sm"
-              style={{ color: "var(--text-tertiary)" }}
+              className="px-4 py-10 text-center text-sm text-text-tertiary"
               role="option"
               aria-selected={false}
             >
-              No results found
+              <div className="flex flex-col items-center gap-2">
+                <svg
+                  className="w-8 h-8 opacity-30"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+                <span>No results for &ldquo;{query}&rdquo;</span>
+              </div>
             </li>
           ) : (
             Object.entries(sections).map(([section, cmds]) => (
               <li key={section}>
                 <p
-                  className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest"
-                  style={{ color: "var(--text-tertiary)" }}
+                  className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary"
                   role="presentation"
                 >
                   {section}
@@ -199,25 +207,19 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                         aria-selected={isActive}
                         data-active={isActive ? "true" : undefined}
                         className={cn(
-                          "mx-1 px-3 py-2.5 rounded-lg flex items-center justify-between cursor-pointer transition-colors",
+                          "mx-1.5 px-3 py-2.5 rounded-lg flex items-center justify-between cursor-pointer transition-colors",
                           isActive
-                            ? "bg-surface-2"
-                            : "hover:bg-surface-1"
+                            ? "bg-brand-600/10 text-brand-700"
+                            : "text-text-primary hover:bg-surface-1"
                         )}
                         onMouseEnter={() => setActiveIndex(globalIdx)}
                         onClick={() => executeCommand(cmd)}
                       >
-                        <span
-                          className="text-sm"
-                          style={{ color: "var(--text-primary)" }}
-                        >
+                        <span className="text-sm font-medium">
                           {cmd.label}
                         </span>
                         {isActive && (
-                          <EnterIcon
-                            className="w-3.5 h-3.5 shrink-0"
-                            style={{ color: "var(--text-tertiary)" }}
-                          />
+                          <EnterIcon className="w-3.5 h-3.5 shrink-0 opacity-60" />
                         )}
                       </li>
                     );
@@ -230,23 +232,22 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         {/* Footer hint */}
         <div
-          className="px-4 py-2 flex items-center gap-4 text-[11px]"
+          className="px-4 py-2.5 flex items-center gap-4 text-[11px] text-text-tertiary"
           style={{
             borderTop: "1px solid var(--border-light)",
             background: "var(--surface-1)",
-            color: "var(--text-tertiary)",
           }}
         >
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1.5">
             <KbdShortcut keys={["↑"]} />
             <KbdShortcut keys={["↓"]} />
             navigate
           </span>
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1.5">
             <KbdShortcut keys={["↵"]} />
             select
           </span>
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1.5">
             <KbdShortcut keys={["Esc"]} />
             close
           </span>
@@ -259,15 +260,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
 function SearchIcon({
   className,
-  style,
 }: {
   className?: string;
-  style?: React.CSSProperties;
 }) {
   return (
     <svg
       className={className}
-      style={style}
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -285,15 +283,12 @@ function SearchIcon({
 
 function EnterIcon({
   className,
-  style,
 }: {
   className?: string;
-  style?: React.CSSProperties;
 }) {
   return (
     <svg
       className={className}
-      style={style}
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

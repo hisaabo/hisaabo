@@ -33,18 +33,35 @@ export const registerSchema = z.object({
   path: ["confirmPassword"],
 });
 
+export const magicLinkRequestSchema = z.object({
+  email: z.string().email().max(255),
+});
+
+export const magicLinkVerifySchema = z.object({
+  token: z.string().min(1).max(128),
+});
+
+export const completeProfileSchema = z.object({
+  name: z.string().min(2).max(100),
+});
+
 // ── Business ───────────────────────────────────────────────────
+
+export const gstRegistrationTypes = ["regular", "composition", "unregistered"] as const;
+export type GstRegistrationType = (typeof gstRegistrationTypes)[number];
 
 export const createBusinessSchema = z.object({
   name: z.string().min(1).max(200),
   legalName: z.string().max(200).optional(),
+  gstRegistrationType: z.enum(gstRegistrationTypes).default("unregistered"),
   gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
-  pan: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).optional().or(z.literal("")),
-  phone: z.string().max(15).optional(),
+  pan: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/),
+  phone: z.string().min(1).max(15),
   email: z.string().email().optional().or(z.literal("")),
-  address: z.string().max(500).optional(),
+  address: z.string().min(1).max(500),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
+  stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
   invoicePrefix: z.string().min(1).max(10).default("INV"),
   currency: z.string().length(3).default("INR"),
@@ -56,6 +73,11 @@ export const createBusinessSchema = z.object({
 });
 
 export const updateBusinessSchema = createBusinessSchema.partial();
+
+export const updateSequenceNumberSchema = z.object({
+  documentType: z.enum(["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"]),
+  newNumber: z.number().int().min(1),
+});
 
 // ── Party ──────────────────────────────────────────────────────
 
@@ -79,12 +101,13 @@ export const createPartySchema = z.object({
   name: z.string().min(1).max(200),
   phone: z.string().max(15).optional(),
   email: z.string().email().optional().or(z.literal("")),
-  gstin: z.string().optional().or(z.literal("")),
+  gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().optional().or(z.literal("")),
   billingAddress: z.string().max(500).optional(),
   shippingAddress: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
+  stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
   openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   category: z.string().max(100).optional(),
@@ -101,8 +124,17 @@ export const updatePartySchema = createPartySchema.partial().omit({ type: true }
 
 // ── Item ───────────────────────────────────────────────────────
 
-export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
 export type Unit = (typeof units)[number];
+
+export const unitVariantSchema = z.object({
+  unit: z.string().min(1).max(50),
+  conversionFactor: z.number().positive(),
+  salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+});
+
+export type UnitVariant = z.infer<typeof unitVariantSchema>;
 
 export const createItemSchema = z.object({
   name: z.string().min(1).max(200),
@@ -118,6 +150,7 @@ export const createItemSchema = z.object({
   itemType: z.enum(itemTypes).default("product"),
   category: z.string().max(100).optional(),
   taxInclusive: z.boolean().default(false),
+  unitVariants: z.array(unitVariantSchema).optional(),
 });
 
 export const updateItemSchema = createItemSchema.partial();
@@ -125,7 +158,7 @@ export const updateItemSchema = createItemSchema.partial();
 // ── Invoice ────────────────────────────────────────────────────
 
 export const invoiceTypes = ["sale", "purchase"] as const;
-export const invoiceStatuses = ["draft", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
 
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),
@@ -135,10 +168,12 @@ export const invoiceChargeSchema = z.object({
 export const invoiceLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
   description: z.string().min(1).max(500),
-  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/),
+  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
   unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
-  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 56, { message: "Tax percent cannot exceed 56%" }),
+  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
+  selectedUnit: z.string().nullish(),
+  conversionFactor: z.string().nullish(), // stored as string like all numerics
 });
 
 export const createInvoiceSchema = z.object({
@@ -151,6 +186,8 @@ export const createInvoiceSchema = z.object({
   termsAndConditions: z.string().max(2000).optional(),
   additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
   charges: z.array(invoiceChargeSchema).optional(),
+  invoiceDiscount: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  invoiceDiscountType: z.enum(["amount", "percent"]).default("amount"),
   roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   referenceDocumentId: z.string().uuid().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1),

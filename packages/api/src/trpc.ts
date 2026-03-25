@@ -3,6 +3,7 @@ import superjson from "superjson";
 import type { Context } from "./context.js";
 import { getTenantDb, type TenantDatabase, controlDb, businesses, tenantMembers } from "@hisaabo/db";
 import { eq, and } from "drizzle-orm";
+import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.js";
 
 // ── Middleware context shape interfaces ────────────────────────
 // These represent the enriched context after each middleware runs.
@@ -72,7 +73,7 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
   return next({
     ctx: {
       ...ctx,
-      businessId: ctx.businessId,
+      businessId: ctx.businessId as string,
     },
   });
 });
@@ -81,35 +82,59 @@ export const protectedProcedure = t.procedure.use(isAuthenticated);
 export const tenantProcedure = t.procedure.use(isAuthenticated).use(hasTenantAccess);
 export const businessProcedure = t.procedure.use(isAuthenticated).use(hasTenantAccess).use(hasBusinessAccess);
 
-// ── FINDING 4: Role-based access control ──────────────────────────────────
-// Role check middleware factory
-function requireRole(...allowedRoles: string[]) {
+// ── CASL-based permission middleware ──────────────────────────────────────────
+// Looks up the caller's membership role, maps it to the new permission role,
+// builds a CASL ability object and attaches it (plus the resolved role) to ctx.
+function withPermissions() {
   return t.middleware(async ({ ctx, next }) => {
-    // Query control plane for user's role in current tenant
-    const tenantCtx = ctx as unknown as TenantCtx;
+    const user = ctx.user as NonNullable<Context["user"]>;
+    const tenantId = ctx.tenantId as string;
+    const businessId = ctx.businessId as string;
+
     const [membership] = await controlDb
       .select({ role: tenantMembers.role })
       .from(tenantMembers)
       .where(and(
-        eq(tenantMembers.tenantId, tenantCtx.tenantId),
-        eq(tenantMembers.userId, tenantCtx.user.id),
+        eq(tenantMembers.tenantId, tenantId),
+        eq(tenantMembers.userId, user.id),
       ))
       .limit(1);
 
-    if (!membership || !allowedRoles.includes(membership.role)) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "Insufficient permissions" });
+    if (!membership) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "No membership found" });
     }
 
-    return next({ ctx: { ...ctx, role: membership.role } });
+    const permissionRole = mapDbRole(membership.role);
+    const ability = defineAbilityFor({ userId: user.id, role: permissionRole });
+
+    return next({
+      ctx: {
+        ...ctx,
+        user,
+        tenantId,
+        businessId,
+        role: permissionRole,
+        ability,
+      },
+    });
   });
 }
 
-// Viewers can read, everyone above can too
-export const viewerProcedure = businessProcedure.use(requireRole("owner", "admin", "member", "viewer"));
-// Members can mutate, admins and owners too
-export const memberProcedure = businessProcedure.use(requireRole("owner", "admin", "member"));
-// Only admins and owners for sensitive operations
-export const adminProcedure = businessProcedure.use(requireRole("owner", "admin"));
+// All procedures that need CASL: get ability + role in context.
+// Permission checks happen per-endpoint via requireCan().
+export const authorizedProcedure = t.procedure
+  .use(isAuthenticated)
+  .use(hasTenantAccess)
+  .use(hasBusinessAccess)
+  .use(withPermissions());
+
+// Keep old names as aliases for backward compatibility (avoids changing every router import)
+export const viewerProcedure = authorizedProcedure;
+export const memberProcedure = authorizedProcedure;
+export const adminProcedure = authorizedProcedure;
+
+// Re-export permission types so routers can import requireCan + types from trpc.js
+export type { AppAbility };
 
 // Re-export TenantDatabase type for use in lib functions
 export type { TenantDatabase };

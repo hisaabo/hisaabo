@@ -1,5 +1,5 @@
 import { createRootRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
@@ -77,12 +77,13 @@ const navSections = [
     items: [
       { to: "/payments", label: "Payments", icon: PaymentIcon },
       { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
+      { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
     ],
   },
   {
     label: "COMPLIANCE",
     items: [
-      { to: "/gst", label: "GST Reports", icon: GSTIcon },
+      { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
     ],
   },
 ] as const;
@@ -151,7 +152,7 @@ function TenantPicker({
 
 function RootLayout() {
   const utils = trpc.useUtils();
-  const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
+  const { data: session, isLoading: sessionLoading, isFetching: sessionFetching } = trpc.auth.me.useQuery();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
     enabled: !!session?.user && !session?.tenantId,
   });
@@ -203,6 +204,7 @@ function RootLayout() {
     { key: "t", alt: true, shift: true, handler: () => navigate({ to: "/items" }), description: "Items", scope: "navigation" },
     { key: "m", alt: true, shift: true, handler: () => navigate({ to: "/payments" }), description: "Payments", scope: "navigation" },
     { key: "b", alt: true, shift: true, handler: () => navigate({ to: "/cash-and-bank" }), description: "Cash & Bank", scope: "navigation" },
+    { key: "e", alt: true, shift: true, handler: () => navigate({ to: "/expenses" }), description: "Expenses", scope: "navigation" },
     { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Reports", scope: "navigation" },
     { key: "s", alt: true, shift: true, handler: () => navigate({ to: "/settings" }), description: "Settings", scope: "navigation" },
   ]);
@@ -215,11 +217,36 @@ function RootLayout() {
     }
   }, [businesses, currentBusinessId]);
 
-  // Redirect to login if not authenticated
-  const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && window.location.pathname !== "/login";
+  // Single consolidated redirect — priority order matters
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change"];
   useEffect(() => {
-    if (needsRedirect) navigate({ to: "/login" });
-  }, [needsRedirect, navigate]);
+    if (sessionLoading || sessionFetching) return;
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
+
+    // Priority 1: Not authenticated → login
+    if (!session?.user) {
+      if (!publicPaths.some((p) => path.startsWith(p))) {
+        navigate({ to: "/login" });
+      }
+      return;
+    }
+
+    // Priority 2: No name → complete profile
+    if ((session as any)?.needsProfile) {
+      if (path !== "/auth/complete-profile") {
+        navigate({ to: "/auth/complete-profile" });
+      }
+      return;
+    }
+
+    // Priority 3: Authenticated with name but no business → settings
+    if (session?.tenantId && businesses !== undefined && businesses.length === 0) {
+      if (path !== "/settings") {
+        navigate({ to: "/settings" });
+      }
+      return;
+    }
+  }, [sessionLoading, sessionFetching, session, businesses, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select single tenant
   const shouldAutoSelectTenant = !!(session?.user && !session?.tenantId && tenantList?.length === 1 && !selectTenantMutation.isPending && !selectTenantMutation.isSuccess);
@@ -247,7 +274,9 @@ function RootLayout() {
 
   // Not authenticated
   if (!session?.user) {
-    if (needsRedirect) return null;
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
+    const isPublic = publicPaths.some((p) => path.startsWith(p));
+    if (!isPublic) return null; // redirect in flight
     return <Outlet />;
   }
 
@@ -290,9 +319,10 @@ function RootLayout() {
     );
   }
 
-  const initials = session.user.name
+  const displayName = session.user.name || session.user.email.split("@")[0];
+  const initials = displayName
     .split(" ")
-    .map((w) => w[0])
+    .map((w: string) => w[0])
     .slice(0, 2)
     .join("")
     .toUpperCase();
@@ -305,6 +335,10 @@ function RootLayout() {
     setCurrentBusinessId(id);
     queryClient.invalidateQueries();
   }
+
+  const activeBusiness = businesses?.find((b) => b.id === (currentBusinessId ?? businesses?.[0]?.id)) ?? businesses?.[0];
+  const isGstRegistered =
+    activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
@@ -354,30 +388,40 @@ function RootLayout() {
 
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2">
-          {navSections.map((section) => (
-            <div key={section.label}>
-              <p className="px-3 pt-5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
-                {section.label}
-              </p>
-              {section.items.map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
-                  activeProps={{
-                    className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
-                  }}
-                  inactiveProps={{
-                    className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
-                  }}
-                  activeOptions={{ exact: "exact" in item ? item.exact : false }}
-                >
-                  <item.icon />
-                  {item.label}
-                </Link>
-              ))}
-            </div>
-          ))}
+          {navSections.map((section) => {
+            const visibleItems = section.items.map((item) => {
+              // Rename reports label based on GST status (always visible)
+              if (item.to === "/gst") {
+                return { ...item, label: (isGstRegistered ? "GST Reports" : "Reports") as typeof item.label };
+              }
+              return item;
+            });
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={section.label}>
+                <p className="px-3 pt-5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
+                  {section.label}
+                </p>
+                {visibleItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
+                    activeProps={{
+                      className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
+                    }}
+                    inactiveProps={{
+                      className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
+                    }}
+                    activeOptions={{ exact: "exact" in item ? item.exact : false }}
+                  >
+                    <item.icon />
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Bottom: Settings + User card */}
@@ -406,7 +450,7 @@ function RootLayout() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-medium truncate text-text-primary">
-                  {session.user.name}
+                  {displayName}
                 </p>
                 <p className="text-[11px] truncate text-text-tertiary">
                   {session.user.email}
@@ -420,29 +464,8 @@ function RootLayout() {
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden bg-surface-1">
         {/* Top bar */}
-        <div className="h-14 border-b border-border-light flex items-center justify-between px-6 shrink-0 bg-surface-0">
-          <div />
+        <div className="h-14 border-b border-border-light flex items-center justify-end px-6 shrink-0 bg-surface-0">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowPalette(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              Search...
-              <KbdShortcut keys={["⌘", "K"]} />
-            </button>
             <ThemeToggle />
             <button
               onClick={() => setShowShortcuts(true)}
@@ -457,7 +480,7 @@ function RootLayout() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-[1200px] mx-auto px-6 py-6">
+          <div className="max-w-[1400px] mx-auto px-6 py-6">
             <Outlet />
           </div>
         </div>
@@ -489,7 +512,7 @@ function ThemeToggle() {
   const { theme, setTheme } = useTheme();
 
   const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
-  const icons: Record<Theme, JSX.Element> = {
+  const icons: Record<Theme, React.ReactNode> = {
     system: <MonitorIcon />,
     light: <SunIcon />,
     dark: <MoonIcon />,
@@ -551,11 +574,12 @@ function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void
     items: "Items",
     payments: "Payments",
     invoices: "Invoices",
+    expenses: "Expenses",
     general: "General",
   };
 
   // Sort scopes: global first, navigation second, then page-specific
-  const scopeOrder = ["global", "navigation", "parties", "items", "payments", "invoices", "general"];
+  const scopeOrder = ["global", "navigation", "parties", "items", "payments", "invoices", "expenses", "general"];
 
   return (
     <Modal open={open} onClose={onClose} title="Keyboard Shortcuts" className="max-w-md">
@@ -699,6 +723,15 @@ function SalesReturnIcon() {
       <path d="M3 2.5h10a1 1 0 011 1v9a1 1 0 01-1 1H3a1 1 0 01-1-1v-9a1 1 0 011-1z" />
       <path d="M6 6l-2 2 2 2" />
       <path d="M4 8h5.5a1.5 1.5 0 000-3H9" />
+    </svg>
+  );
+}
+
+function ExpenseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="1.5" width="10" height="13" rx="1" />
+      <path d="M6 5h4M6 8h4M6 11h2" />
     </svg>
   );
 }

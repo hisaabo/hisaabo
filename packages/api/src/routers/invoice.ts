@@ -1,27 +1,33 @@
-import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
-import { router, businessProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 
 export const invoiceRouter = router({
-  list: businessProcedure
+  list: viewerProcedure
     .input(z.object({
-      type: z.enum(["sale", "purchase"]).optional(),
-      status: z.enum(["draft", "sent", "paid", "partial", "overdue", "cancelled"]).optional(),
-      partyId: z.string().uuid().optional(),
+      type: z.enum(["sale", "purchase"]).nullish(),
+      status: z.enum(["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
+      partyId: z.string().uuid().nullish(),
       documentType: z.enum(documentTypes).default("invoice"),
-      fromDate: z.string().datetime().optional(),
-      toDate: z.string().datetime().optional(),
-      itemId: z.string().uuid().optional(),
-      search: z.string().optional(),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
+      itemId: z.string().uuid().nullish(),
+      search: z.string().nullish(),
+      sortBy: z.enum(["date", "amount", "number"]).nullish(),
+      sortDir: z.enum(["asc", "desc"]).nullish(),
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, input.documentType),
+        isNull(invoices.deletedAt),
       ];
       if (input.type) conditions.push(eq(invoices.type, input.type));
       if (input.status) conditions.push(eq(invoices.status, input.status));
@@ -65,10 +71,17 @@ export const invoiceRouter = router({
           amountPaid: invoices.amountPaid,
           partyName: parties.name,
           partyId: parties.id,
+          createdByName: invoices.createdByName,
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(and(...conditions))
-          .orderBy(desc(invoices.invoiceDate))
+          .orderBy(
+            input.sortBy === "amount"
+              ? (input.sortDir === "asc" ? sql`${invoices.totalAmount}::numeric ASC` : sql`${invoices.totalAmount}::numeric DESC`)
+              : input.sortBy === "number"
+                ? (input.sortDir === "asc" ? invoices.invoiceNumber : desc(invoices.invoiceNumber))
+                : (input.sortDir === "asc" ? invoices.invoiceDate : desc(invoices.invoiceDate))
+          )
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(invoices)
@@ -78,9 +91,10 @@ export const invoiceRouter = router({
       return { data, total: count, page: input.page, limit: input.limit };
     }),
 
-  getById: businessProcedure
+  getById: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Invoice");
       const [invoice] = await ctx.db.select().from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
@@ -98,8 +112,10 @@ export const invoiceRouter = router({
       return { ...invoice, lineItems, party: party ?? null };
     }),
 
-  create: businessProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
-    return ctx.db.transaction(async (tx) => {
+  create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
+    requireCan(ctx.ability, "create", "Invoice");
+    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+    const invoice = await ctx.db.transaction(async (tx) => {
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
         prefix: businesses.invoicePrefix,
@@ -132,6 +148,8 @@ export const invoiceRouter = router({
           discountPercent: li.discountPercent || "0",
           totalAmount: calc.total,
           sortOrder: idx,
+          selectedUnit: li.selectedUnit || null,
+          conversionFactor: li.conversionFactor || "1",
         };
       });
 
@@ -144,7 +162,9 @@ export const invoiceRouter = router({
           discountPercent: li.discountPercent || "0",
         })),
         charges: charges.length > 0 ? charges : undefined,
-        roundOff: charges.length > 0 ? (input.roundOff || "0") : undefined,
+        invoiceDiscount: input.invoiceDiscount || "0",
+        invoiceDiscountType: input.invoiceDiscountType || "amount",
+        roundOff: input.roundOff || "0",
       });
       const additionalCharges = charges.length > 0
         ? totals.chargesTotal
@@ -161,7 +181,7 @@ export const invoiceRouter = router({
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
         subtotal: totals.subtotal,
         taxAmount: totals.taxTotal,
-        discountAmount: "0.00",
+        discountAmount: totals.invoiceDiscountAmount,
         charges: charges.length > 0 ? charges : null,
         additionalCharges,
         roundOff,
@@ -169,6 +189,8 @@ export const invoiceRouter = router({
         notes: input.notes,
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
+        createdByUserId: ctx.user!.id,
+        createdByName: ctx.user!.name,
       }).returning();
 
       if (processedItems.length > 0) {
@@ -177,38 +199,45 @@ export const invoiceRouter = router({
         );
       }
 
-      // Update stock quantities for sale invoices
-      if (input.type === "sale") {
-        for (const li of input.lineItems) {
-          if (li.itemId) {
-            await tx.update(items)
-              .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric - ${li.quantity}::numeric`,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, li.itemId));
-          }
+      // Update stock quantities for sale/purchase invoices (adjusted for unit conversion)
+      // Group by itemId and sum quantities to avoid redundant per-row updates
+      const stockMap = new Map<string, number>();
+      for (const li of input.lineItems) {
+        if (li.itemId) {
+          const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+          stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
         }
-      } else if (input.type === "purchase") {
-        for (const li of input.lineItems) {
-          if (li.itemId) {
-            await tx.update(items)
-              .set({
-                stockQuantity: sql`${items.stockQuantity}::numeric + ${li.quantity}::numeric`,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, li.itemId));
-          }
-        }
+      }
+      for (const [itemId, totalQty] of stockMap) {
+        const qtyStr = totalQty.toFixed(3);
+        await tx.update(items).set({
+          stockQuantity: input.type === "sale"
+            ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+            : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(items.id, itemId));
       }
 
       return invoice;
     });
+
+    await logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "invoice.create",
+      entityType: "invoice",
+      entityId: invoice.id,
+      metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
+      ipAddress,
+    });
+
+    return invoice;
   }),
 
-  updateStatus: businessProcedure
+  updateStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Invoice");
       const [invoice] = await ctx.db.update(invoices)
         .set({ status: input.status, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
@@ -216,7 +245,7 @@ export const invoiceRouter = router({
       return invoice;
     }),
 
-  update: businessProcedure
+  update: memberProcedure
     .input(z.object({
       id: z.string().uuid(),
       partyId: z.string().uuid().optional(),
@@ -225,10 +254,13 @@ export const invoiceRouter = router({
       notes: z.string().max(2000).optional().nullable(),
       termsAndConditions: z.string().max(2000).optional().nullable(),
       charges: z.array(invoiceChargeSchema).optional(),
+      invoiceDiscount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      invoiceDiscountType: z.enum(["amount", "percent"]).optional(),
       roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
       lineItems: z.array(invoiceLineItemSchema).min(1).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Invoice");
       return ctx.db.transaction(async (tx) => {
         // 1. Fetch existing invoice
         const [existing] = await tx.select()
@@ -258,10 +290,35 @@ export const invoiceRouter = router({
 
         // 4. Handle line items — delete old, insert new, recalculate totals
         if (input.lineItems) {
-          // Delete existing line items
+          // Step 1: Read old line items to reverse their stock impact
+          const oldLineItems = await tx.select({
+            itemId: invoiceItems.itemId,
+            quantity: invoiceItems.quantity,
+            conversionFactor: invoiceItems.conversionFactor,
+          }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
+
+          // Step 2: Reverse old stock adjustments (grouped by itemId)
+          const oldStockMap = new Map<string, number>();
+          for (const li of oldLineItems) {
+            if (li.itemId) {
+              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+              oldStockMap.set(li.itemId, (oldStockMap.get(li.itemId) || 0) + qty);
+            }
+          }
+          for (const [itemId, totalQty] of oldStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(items).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`  // reverse: add back
+                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`, // reverse: subtract back
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
+          }
+
+          // Step 3: Delete existing line items
           await tx.delete(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Process and insert new line items using fixed-point arithmetic
+          // Step 4: Process and insert new line items using fixed-point arithmetic
           const processedItems = input.lineItems.map((li, idx) => {
             const calc = calcLineItem({
               quantity: li.quantity,
@@ -280,6 +337,8 @@ export const invoiceRouter = router({
               discountPercent: li.discountPercent || "0",
               totalAmount: calc.total,
               sortOrder: idx,
+              selectedUnit: li.selectedUnit || null,
+              conversionFactor: li.conversionFactor || "1",
             };
           });
 
@@ -287,10 +346,25 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
+          // Step 5: Apply new stock adjustments (grouped by itemId)
+          const newStockMap = new Map<string, number>();
+          for (const li of input.lineItems) {
+            if (li.itemId) {
+              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
+              newStockMap.set(li.itemId, (newStockMap.get(li.itemId) || 0) + qty);
+            }
+          }
+          for (const [itemId, totalQty] of newStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(items).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
+                : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(items.id, itemId));
+          }
+
           // Recalculate totals using fixed-point arithmetic
-          const additionalChargesStr = input.charges
-            ? money.sum(input.charges.map((c) => c.amount))
-            : existing.additionalCharges;
           const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
           const totals = calcInvoiceTotals({
             lineItems: input.lineItems.map((li) => ({
@@ -300,15 +374,15 @@ export const invoiceRouter = router({
               discountPercent: li.discountPercent || "0",
             })),
             charges: input.charges ? input.charges : undefined,
+            invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
+            invoiceDiscountType: input.invoiceDiscountType || "amount",
             roundOff: roundOffStr,
           });
 
           updates.subtotal = totals.subtotal;
           updates.taxAmount = totals.taxTotal;
-          updates.totalAmount = money.add(
-            money.add(totals.subtotal, totals.taxTotal),
-            money.add(additionalChargesStr, roundOffStr)
-          );
+          updates.discountAmount = totals.invoiceDiscountAmount;
+          updates.totalAmount = totals.total;
         }
 
         // 5. Apply update
@@ -321,20 +395,45 @@ export const invoiceRouter = router({
       });
     }),
 
-  delete: businessProcedure
+  delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const [inv] = await ctx.db.select({ status: invoices.status })
+      requireCan(ctx.ability, "delete", "Invoice");
+
+      const [inv] = await ctx.db.select({ status: invoices.status, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
 
-      if (inv && inv.status !== "draft") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Only draft invoices can be deleted" });
+      if (!inv) return { success: true };
+      if (inv.deletedAt) return { success: true }; // already soft-deleted
+
+      // seller_manager: can only delete unpaid invoices created within the last 2 hours
+      if (ctx.role === "seller_manager") {
+        if (inv.status === "paid") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Cannot delete paid invoices" });
+        }
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        if (inv.createdAt < twoHoursAgo) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Can only delete invoices within 2 hours of creation" });
+        }
       }
 
-      await ctx.db.delete(invoices)
+      await ctx.db.update(invoices)
+        .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
+
+      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+      await logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "invoice.delete",
+        entityType: "invoice",
+        entityId: input.id,
+        metadata: { invoiceNumber: inv.invoiceNumber, previousStatus: inv.status },
+        ipAddress,
+      });
+
       return { success: true };
     }),
 });

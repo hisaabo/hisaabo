@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { invoices, invoiceItems } from "@hisaabo/db";
 import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@hisaabo/shared";
-import { router, businessProcedure, createCallerFactory } from "../trpc.js";
+import { router, memberProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
 
 // ── Per-document-type routers ───────────────────────────────────
@@ -71,7 +71,7 @@ export const documentRouter = router({
    * Copies all line items from the source document and creates a new
    * document of the target type, linked via referenceDocumentId.
    */
-  convert: businessProcedure
+  convert: memberProcedure
     .input(convertDocumentSchema)
     .mutation(async ({ input, ctx }) => {
       // 1. Fetch source document with line items
