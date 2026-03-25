@@ -1,6 +1,6 @@
-import { eq, and, ilike, sql, desc, asc } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, gte, lte } from "drizzle-orm";
 import { z } from "zod";
-import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
+import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -12,6 +12,7 @@ export const partyRouter = router({
   list: viewerProcedure
     .input(z.object({
       type: z.enum(["customer", "supplier"]).nullish(),
+      filter: z.enum(["all", "customer", "supplier", "outstanding", "overdue"]).nullish(),
       search: z.string().nullish(),
       category: z.string().nullish(),
       sortBy: z.enum(["name", "balance"]).nullish(),
@@ -21,7 +22,34 @@ export const partyRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Party");
       const conditions = [eq(parties.businessId, ctx.businessId)];
-      if (input.type) conditions.push(eq(parties.type, input.type));
+
+      // Support both legacy `type` param and new `filter` param
+      const effectiveFilter = input.filter ?? (input.type ? input.type : "all");
+      if (effectiveFilter === "customer") {
+        conditions.push(eq(parties.type, "customer"));
+      } else if (effectiveFilter === "supplier") {
+        conditions.push(eq(parties.type, "supplier"));
+      } else if (effectiveFilter === "outstanding") {
+        // Parties where opening_balance + unpaid invoice balance > 0
+        conditions.push(sql`(
+          ${parties.openingBalance}::numeric + COALESCE((
+            SELECT SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+            FROM ${invoices}
+            WHERE ${invoices.partyId} = ${parties.id}
+              AND ${invoices.businessId} = ${parties.businessId}
+              AND ${invoices.status} NOT IN ('paid', 'cancelled')
+          ), 0)
+        ) > 0`);
+      } else if (effectiveFilter === "overdue") {
+        // Parties that have at least one overdue invoice
+        conditions.push(sql`EXISTS (
+          SELECT 1 FROM ${invoices}
+          WHERE ${invoices.partyId} = ${parties.id}
+            AND ${invoices.businessId} = ${parties.businessId}
+            AND ${invoices.status} = 'overdue'
+        )`);
+      }
+
       if (input.search) conditions.push(ilike(parties.name, `%${input.search}%`));
       if (input.category) conditions.push(eq(parties.category, input.category));
 
@@ -214,6 +242,378 @@ export const partyRouter = router({
       });
 
       return { success: result.success, mergedInto: result.mergedInto };
+    }),
+
+  /**
+   * ledgerReport — aggregated ledger for a party with date range, returns full list
+   * plus summary totals and closing balance.
+   */
+  ledgerReport: viewerProcedure
+    .input(z.object({
+      partyId: z.string().uuid(),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const [party] = await ctx.db.select().from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!party) return null;
+
+      const invoiceConditions = [
+        eq(invoices.partyId, input.partyId),
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.documentType, "invoice"),
+      ];
+      const paymentConditions = [
+        eq(payments.partyId, input.partyId),
+        eq(payments.businessId, ctx.businessId),
+      ];
+
+      if (input.fromDate) {
+        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+      }
+      if (input.toDate) {
+        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      }
+
+      const [partyInvoices, partyPayments] = await Promise.all([
+        ctx.db.select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          date: invoices.invoiceDate,
+          type: invoices.type,
+          totalAmount: invoices.totalAmount,
+          status: invoices.status,
+        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate),
+        ctx.db.select({
+          id: payments.id,
+          paymentNumber: payments.paymentNumber,
+          date: payments.paymentDate,
+          amount: payments.amount,
+          mode: payments.mode,
+        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate),
+      ]);
+
+      // Build ledger entries interleaved by date.
+      // For a customer (sale): invoice is a debit (money owed to us), payment is a credit.
+      // For a supplier (purchase): invoice is a credit (money we owe), payment is a debit.
+      const entries = [
+        ...partyInvoices.map(inv => ({
+          date: inv.date,
+          type: "invoice" as const,
+          number: inv.invoiceNumber,
+          description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
+          debit: inv.type === "sale" ? inv.totalAmount : "0",
+          credit: inv.type === "sale" ? "0" : inv.totalAmount,
+          status: inv.status,
+          documentId: inv.id,
+        })),
+        ...partyPayments.map(pmt => ({
+          date: pmt.date,
+          type: "payment" as const,
+          number: pmt.paymentNumber || "",
+          description: `Payment (${pmt.mode})`,
+          // Payment received from customer = credit; payment made to supplier = debit
+          debit: party.type === "supplier" ? pmt.amount : "0",
+          credit: party.type === "supplier" ? "0" : pmt.amount,
+          status: null as string | null,
+          documentId: pmt.id,
+        })),
+      ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      // Compute running balance and summary using the money module
+      let runningBalance = party.openingBalance;
+      const entriesWithBalance = entries.map(e => {
+        runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
+        return { ...e, runningBalance };
+      });
+
+      const totalDebit = money.sum(entries.map(e => e.debit));
+      const totalCredit = money.sum(entries.map(e => e.credit));
+      const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+
+      return {
+        party: {
+          name: party.name,
+          type: party.type,
+          openingBalance: party.openingBalance,
+          gstin: party.gstin,
+          phone: party.phone,
+          city: party.city,
+          state: party.state,
+        },
+        entries: entriesWithBalance,
+        summary: {
+          totalDebit,
+          totalCredit,
+          closingBalance,
+        },
+      };
+    }),
+
+  /**
+   * ledgerReportCSV — same data as above but serialized as a CSV string.
+   */
+  ledgerReportCSV: viewerProcedure
+    .input(z.object({
+      partyId: z.string().uuid(),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const [party] = await ctx.db.select().from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!party) return null;
+
+      const invoiceConditions = [
+        eq(invoices.partyId, input.partyId),
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.documentType, "invoice"),
+      ];
+      const paymentConditions = [
+        eq(payments.partyId, input.partyId),
+        eq(payments.businessId, ctx.businessId),
+      ];
+
+      if (input.fromDate) {
+        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+      }
+      if (input.toDate) {
+        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      }
+
+      const [partyInvoices, partyPayments] = await Promise.all([
+        ctx.db.select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          date: invoices.invoiceDate,
+          type: invoices.type,
+          totalAmount: invoices.totalAmount,
+          status: invoices.status,
+        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate),
+        ctx.db.select({
+          id: payments.id,
+          paymentNumber: payments.paymentNumber,
+          date: payments.paymentDate,
+          amount: payments.amount,
+          mode: payments.mode,
+        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate),
+      ]);
+
+      const entries = [
+        ...partyInvoices.map(inv => ({
+          date: inv.date,
+          number: inv.invoiceNumber,
+          description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
+          debit: inv.type === "sale" ? inv.totalAmount : "0",
+          credit: inv.type === "sale" ? "0" : inv.totalAmount,
+        })),
+        ...partyPayments.map(pmt => ({
+          date: pmt.date,
+          number: pmt.paymentNumber || "",
+          description: `Payment (${pmt.mode})`,
+          debit: party.type === "supplier" ? pmt.amount : "0",
+          credit: party.type === "supplier" ? "0" : pmt.amount,
+        })),
+      ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      function fmtDate(d: Date): string {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const yyyy = d.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      }
+      function csvCell(v: string): string {
+        return `"${v.replace(/"/g, '""')}"`;
+      }
+
+      let runningBalance = party.openingBalance;
+      const rows: string[] = [];
+
+      // Opening balance row
+      rows.push([
+        csvCell(fmtDate(new Date(input.fromDate || new Date(0).toISOString()))),
+        csvCell("Opening Balance"),
+        csvCell(""),
+        csvCell(""),
+        csvCell(""),
+        csvCell(runningBalance),
+      ].join(","));
+
+      for (const e of entries) {
+        runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
+        rows.push([
+          csvCell(fmtDate(new Date(e.date))),
+          csvCell(e.description),
+          csvCell(e.number),
+          csvCell(e.debit),
+          csvCell(e.credit),
+          csvCell(runningBalance),
+        ].join(","));
+      }
+
+      const header = "Date,Description,Document #,Debit,Credit,Balance";
+      const csv = [header, ...rows].join("\n");
+      const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const dateSuffix = input.fromDate
+        ? `_${input.fromDate.slice(0, 10)}`
+        : "";
+
+      return {
+        csv,
+        filename: `ledger_${safePartyName}${dateSuffix}.csv`,
+      };
+    }),
+
+  /**
+   * tallyExport — generates a Tally-compatible CSV of all vouchers
+   * (sales invoices, purchase invoices, payments, expenses) for the period.
+   */
+  tallyExport: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      function formatTallyDate(d: Date): string {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const yyyy = d.getFullYear();
+        return `${dd}-${mm}-${yyyy}`;
+      }
+
+      const invoiceConditions = [eq(invoices.businessId, ctx.businessId), eq(invoices.documentType, "invoice")];
+      const paymentConditions = [eq(payments.businessId, ctx.businessId)];
+      const expenseConditions = [eq(expenses.businessId, ctx.businessId)];
+
+      if (input.fromDate) {
+        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+        expenseConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
+      }
+      if (input.toDate) {
+        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+        expenseConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      }
+
+      const [allInvoices, allPayments, allExpenses] = await Promise.all([
+        ctx.db.select({
+          invoiceDate: invoices.invoiceDate,
+          invoiceNumber: invoices.invoiceNumber,
+          type: invoices.type,
+          totalAmount: invoices.totalAmount,
+          partyName: parties.name,
+        }).from(invoices)
+          .innerJoin(parties, eq(parties.id, invoices.partyId))
+          .where(and(...invoiceConditions))
+          .orderBy(invoices.invoiceDate),
+
+        ctx.db.select({
+          paymentDate: payments.paymentDate,
+          paymentNumber: payments.paymentNumber,
+          amount: payments.amount,
+          mode: payments.mode,
+          partyName: parties.name,
+          partyType: parties.type,
+        }).from(payments)
+          .innerJoin(parties, eq(parties.id, payments.partyId))
+          .where(and(...paymentConditions))
+          .orderBy(payments.paymentDate),
+
+        ctx.db.select({
+          expenseDate: expenses.expenseDate,
+          category: expenses.category,
+          description: expenses.description,
+          amount: expenses.amount,
+          mode: expenses.mode,
+        }).from(expenses)
+          .where(and(...expenseConditions))
+          .orderBy(expenses.expenseDate),
+      ]);
+
+      type TallyVoucher = {
+        date: string;
+        vchType: string;
+        vchNo: string;
+        debitLedger: string;
+        creditLedger: string;
+        amount: string;
+        sortKey: number;
+      };
+
+      const vouchers: TallyVoucher[] = [];
+
+      for (const inv of allInvoices) {
+        vouchers.push({
+          date: formatTallyDate(new Date(inv.invoiceDate)),
+          vchType: inv.type === "sale" ? "Sales" : "Purchase",
+          vchNo: inv.invoiceNumber,
+          debitLedger: inv.type === "sale" ? inv.partyName : "Purchase Account",
+          creditLedger: inv.type === "sale" ? "Sales Account" : inv.partyName,
+          amount: inv.totalAmount,
+          sortKey: new Date(inv.invoiceDate).getTime(),
+        });
+      }
+
+      for (const pmt of allPayments) {
+        const accountName = pmt.mode === "cash" ? "Cash" : "Bank";
+        const isSalePayment = pmt.partyType === "customer";
+        vouchers.push({
+          date: formatTallyDate(new Date(pmt.paymentDate)),
+          vchType: isSalePayment ? "Receipt" : "Payment",
+          vchNo: pmt.paymentNumber || "",
+          debitLedger: isSalePayment ? accountName : pmt.partyName,
+          creditLedger: isSalePayment ? pmt.partyName : accountName,
+          amount: pmt.amount,
+          sortKey: new Date(pmt.paymentDate).getTime(),
+        });
+      }
+
+      for (const exp of allExpenses) {
+        const expAccountName = exp.mode === "cash" ? "Cash" : "Bank";
+        vouchers.push({
+          date: formatTallyDate(new Date(exp.expenseDate)),
+          vchType: "Payment",
+          vchNo: "",
+          debitLedger: exp.category,
+          creditLedger: expAccountName,
+          amount: exp.amount,
+          sortKey: new Date(exp.expenseDate).getTime(),
+        });
+      }
+
+      vouchers.sort((a, b) => a.sortKey - b.sortKey);
+
+      function csvCell(v: string): string {
+        return `"${v.replace(/"/g, '""')}"`;
+      }
+
+      const header = "Date,Vch Type,Vch No.,Debit Ledger,Credit Ledger,Amount";
+      const rows = vouchers.map(v =>
+        [csvCell(v.date), csvCell(v.vchType), csvCell(v.vchNo), csvCell(v.debitLedger), csvCell(v.creditLedger), csvCell(v.amount)].join(",")
+      );
+      const csv = [header, ...rows].join("\n");
+
+      const dateSuffix = input.fromDate ? `_${input.fromDate.slice(0, 10)}` : "_all";
+      return {
+        csv,
+        filename: `tally-export${dateSuffix}.csv`,
+        rowCount: vouchers.length,
+        preview: vouchers.slice(0, 10),
+      };
     }),
 
   /**

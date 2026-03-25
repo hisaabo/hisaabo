@@ -2584,31 +2584,40 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             })}
 
           {importDone && (
-            <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-5">
-              <div className="flex items-center gap-3 mb-3">
-                <svg
-                  className="w-6 h-6 text-green-500 shrink-0"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <span className="text-sm font-semibold text-green-800">
-                  Import complete — {totalCreated.toLocaleString()} records imported
-                </span>
+            <div className="mt-6 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 p-6 text-center">
+              {/* Celebration animation */}
+              <div className="relative w-16 h-16 mx-auto mb-4">
+                {/* Pulsing ring */}
+                <div className="absolute inset-0 rounded-full bg-emerald-100 dark:bg-emerald-900/40 animate-ping opacity-20" />
+                {/* Checkmark */}
+                <div className="relative w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center animate-scale-in">
+                  <svg className="w-8 h-8 text-emerald-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                {/* Confetti-like particles */}
+                <div className="absolute -top-2 left-1/2 w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0.1s" }} />
+                <div className="absolute -top-1 left-1/4 w-1 h-1 rounded-full bg-brand-400 animate-bounce" style={{ animationDelay: "0.3s" }} />
+                <div className="absolute -top-2 right-1/4 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: "0.2s" }} />
+                <div className="absolute top-0 right-1/6 w-1 h-1 rounded-full bg-rose-400 animate-bounce" style={{ animationDelay: "0.4s" }} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+
+              <h3 className="text-lg font-bold text-emerald-800 dark:text-emerald-300 mb-1">
+                Import Complete!
+              </h3>
+              <p className="text-sm text-emerald-700 dark:text-emerald-400 mb-3">
+                {totalCreated.toLocaleString()} records imported successfully
+              </p>
+
+              {/* Per-entity breakdown */}
+              <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto">
                 {ENTITY_ORDER.filter((k) => state.results[k]).map((k) => {
                   const r = state.results[k]!;
                   return (
-                    <div key={k} className="text-xs text-green-700">
+                    <div key={k} className="text-xs text-emerald-700 dark:text-emerald-400">
                       <span className="font-medium">{ENTITY_LABELS[k]}:</span>{" "}
-                      {r.created} created
-                      {r.skipped > 0 ? `, ${r.skipped} skipped` : ""}
+                      {r.created}
+                      {r.skipped > 0 ? ` (${r.skipped} skipped)` : ""}
                     </div>
                   );
                 })}

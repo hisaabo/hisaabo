@@ -38,7 +38,7 @@ function SettingsPage() {
   if (!biz && !showWhatsNext) {
     return (
       <div>
-        <PageHeader title="Set Up Your Business" description="Create your first business to get started" />
+        <PageHeader title="Almost there!" description="Set up your business to start creating invoices" />
         <BusinessForm
           onDone={(name) => {
             if (name) setNewBizName(name);

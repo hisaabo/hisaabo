@@ -24,10 +24,12 @@ export const Route = createFileRoute("/parties")({
   component: PartiesPage,
 });
 
-const TYPE_TABS = [
+const PARTY_FILTERS = [
   { value: "all", label: "All" },
   { value: "customer", label: "Customers" },
   { value: "supplier", label: "Suppliers" },
+  { value: "outstanding", label: "Outstanding" },
+  { value: "overdue", label: "Overdue" },
 ];
 
 const PARTIES_PAGE_SIZE = 20;
@@ -38,7 +40,7 @@ function countFilled(...values: string[]): number {
 
 function PartiesPage() {
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [partyFilter, setPartyFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"name" | "balance">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -56,11 +58,11 @@ function PartiesPage() {
   }
 
   // Reset to page 1 whenever filters/sort change
-  useEffect(() => { setPage(1); }, [debouncedSearch, typeFilter, sortBy, sortDir]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, partyFilter, sortBy, sortDir]);
 
   const { data, isLoading } = trpc.party.list.useQuery({
     search: debouncedSearch || undefined,
-    type: typeFilter !== "all" ? (typeFilter as PartyType) : undefined,
+    filter: partyFilter as any,
     sortBy,
     sortDir,
     page,
@@ -78,7 +80,7 @@ function PartiesPage() {
       while (hasMore) {
         const result = await utils.party.list.fetch({
           search: debouncedSearch || undefined,
-          type: typeFilter !== "all" ? (typeFilter as PartyType) : undefined,
+          filter: partyFilter as any,
           page: pg,
           limit: 100,
         });
@@ -97,7 +99,7 @@ function PartiesPage() {
         p.openingBalance || "0",
       ]);
 
-      downloadCSV(`parties_${typeFilter}`, headers, rows);
+      downloadCSV(`parties_${partyFilter}`, headers, rows);
     } finally {
       setExporting(false);
     }
@@ -133,47 +135,52 @@ function PartiesPage() {
         title="Parties"
         description="Manage your customers and suppliers"
         actions={
-          <div className="flex items-center gap-2">
-            {data && data.total > 0 && (
-              <button
-                onClick={exportPartiesCSV}
-                disabled={exporting}
-                className="btn-secondary text-sm flex items-center gap-1.5"
-              >
-                {exporting ? (
-                  <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-                  </svg>
-                )}
-                {exporting ? "Preparing..." : "Export CSV"}
-              </button>
-            )}
-            <button
-              className="btn-primary inline-flex items-center gap-2"
-              onClick={() => setShowAddModal(true)}
-            >
-              + Add Party
-              <KbdShortcut keys={["N"]} className="opacity-60" />
-            </button>
-          </div>
+          <button
+            className="btn-primary inline-flex items-center gap-2"
+            onClick={() => setShowAddModal(true)}
+          >
+            + Add Party
+            <KbdShortcut keys={["N"]} className="opacity-60" />
+          </button>
         }
       />
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <SearchInput
           value={search}
           onChange={setSearch}
           placeholder="Search by name..."
           className="max-w-xs"
         />
-        <SegmentedControl
-          tabs={TYPE_TABS}
-          value={typeFilter}
-          onChange={setTypeFilter}
+        <PillTabs
+          tabs={PARTY_FILTERS}
+          value={partyFilter}
+          onChange={setPartyFilter}
         />
+        <div className="ml-auto">
+          {data && data.total > 0 && (
+            <button
+              onClick={exportPartiesCSV}
+              disabled={exporting}
+              className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 shrink-0"
+            >
+              {exporting ? (
+                <>
+                  <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Preparing...
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+                  </svg>
+                  Export CSV
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -767,7 +774,7 @@ function MergePartyModal({
   const [targetSearch, setTargetSearch] = useState("");
   const [confirmed, setConfirmed] = useState(false);
 
-  const { data: partiesData } = trpc.party.list.useQuery({ page: 1, limit: 500 });
+  const { data: partiesData, isLoading: partiesLoading } = trpc.party.list.useQuery({ page: 1, limit: 100, filter: "all" });
   const { data: sourceStats } = trpc.party.getStats.useQuery({ id: sourceId });
   const { data: targetStats } = trpc.party.getStats.useQuery(
     { id: targetId },
@@ -841,7 +848,7 @@ function MergePartyModal({
             "rounded-xl border-2 p-3 space-y-1 transition-colors",
             selectedTarget
               ? "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30"
-              : "border-dashed border-border-default bg-surface-1"
+              : "border-dashed border-border-light bg-surface-1"
           )}>
             <p className={cn(
               "text-[10px] font-bold uppercase tracking-wider",
@@ -878,13 +885,16 @@ function MergePartyModal({
           </label>
           <input
             type="text"
-            className="input-field w-full mb-2"
+            className="input w-full mb-2"
             placeholder="Search parties..."
             value={targetSearch}
             onChange={(e) => setTargetSearch(e.target.value)}
+            autoFocus
           />
-          <div className="border border-border-light rounded-lg overflow-hidden max-h-40 overflow-y-auto">
-            {filteredOptions.length === 0 ? (
+          <div className="border border-border-light rounded-lg overflow-hidden max-h-40 overflow-y-auto bg-surface-0">
+            {partiesLoading ? (
+              <p className="text-sm text-text-tertiary px-3 py-2">Loading parties...</p>
+            ) : filteredOptions.length === 0 ? (
               <p className="text-sm text-text-tertiary px-3 py-2 italic">No parties found</p>
             ) : (
               filteredOptions.map((p) => (

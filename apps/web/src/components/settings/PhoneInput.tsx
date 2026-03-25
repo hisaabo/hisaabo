@@ -2,14 +2,15 @@ interface PhoneInputProps {
   value: string;
   onChange: (value: string) => void;
   error?: string;
+  label?: string;
 }
 
-export function PhoneInput({ value, onChange, error }: PhoneInputProps) {
+export function PhoneInput({ value, onChange, error, label = "Phone" }: PhoneInputProps) {
   const digits = value.replace(/^\+91/, "").replace(/\D/g, "");
 
   return (
     <div>
-      <label className="label">Phone</label>
+      <label className="label">{label}</label>
       <div className="flex">
         <span
           className="inline-flex items-center px-3 rounded-l-lg border border-r-0 text-sm font-medium bg-surface-1 text-text-secondary border-border-light"

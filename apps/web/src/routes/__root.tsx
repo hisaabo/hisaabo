@@ -217,26 +217,36 @@ function RootLayout() {
     }
   }, [businesses, currentBusinessId]);
 
-  // Redirect to /settings if authenticated but no business exists yet
-  const noBusiness = !!session?.tenantId && businesses !== undefined && businesses.length === 0
-    && typeof window !== "undefined" && window.location.pathname !== "/settings";
+  // Single consolidated redirect — priority order matters
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change"];
   useEffect(() => {
-    if (noBusiness) navigate({ to: "/settings" });
-  }, [noBusiness, navigate]);
+    if (sessionLoading || sessionFetching) return;
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
 
-  // Redirect to login if not authenticated
-  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile"];
-  const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && !publicPaths.some(p => window.location.pathname.startsWith(p));
-  useEffect(() => {
-    if (needsRedirect) navigate({ to: "/login" });
-  }, [needsRedirect, navigate]);
+    // Priority 1: Not authenticated → login
+    if (!session?.user) {
+      if (!publicPaths.some((p) => path.startsWith(p))) {
+        navigate({ to: "/login" });
+      }
+      return;
+    }
 
-  // Redirect to complete profile if name is missing (magic link first sign-in)
-  // Don't redirect while session is refetching — stale data may have needsProfile=true after profile was just completed
-  const needsProfile = !sessionLoading && !sessionFetching && !!session?.user && !!(session as { needsProfile?: boolean })?.needsProfile && typeof window !== "undefined" && window.location.pathname !== "/auth/complete-profile";
-  useEffect(() => {
-    if (needsProfile) navigate({ to: "/auth/complete-profile" });
-  }, [needsProfile, navigate]);
+    // Priority 2: No name → complete profile
+    if ((session as any)?.needsProfile) {
+      if (path !== "/auth/complete-profile") {
+        navigate({ to: "/auth/complete-profile" });
+      }
+      return;
+    }
+
+    // Priority 3: Authenticated with name but no business → settings
+    if (session?.tenantId && businesses !== undefined && businesses.length === 0) {
+      if (path !== "/settings") {
+        navigate({ to: "/settings" });
+      }
+      return;
+    }
+  }, [sessionLoading, sessionFetching, session, businesses, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select single tenant
   const shouldAutoSelectTenant = !!(session?.user && !session?.tenantId && tenantList?.length === 1 && !selectTenantMutation.isPending && !selectTenantMutation.isSuccess);
@@ -264,7 +274,9 @@ function RootLayout() {
 
   // Not authenticated
   if (!session?.user) {
-    if (needsRedirect) return null;
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
+    const isPublic = publicPaths.some((p) => path.startsWith(p));
+    if (!isPublic) return null; // redirect in flight
     return <Outlet />;
   }
 

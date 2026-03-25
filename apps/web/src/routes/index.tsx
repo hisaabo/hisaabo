@@ -13,7 +13,7 @@ import {
   Cell,
 } from "recharts";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 
@@ -514,6 +514,10 @@ function DashboardPage() {
     from || to ? { fromDate: from, toDate: to } : undefined
   );
 
+  const { data: statusBreakdown } = trpc.dashboard.invoiceStatusBreakdown.useQuery(
+    from || to ? { fromDate: from, toDate: to } : {}
+  );
+
   if (isLoading) return <PageSkeleton />;
 
   if (!data) {
@@ -530,6 +534,15 @@ function DashboardPage() {
     );
   }
 
+  // Compute gross & net profit from summary data
+  const grossProfit = parseFloat(data.totalSales) - parseFloat(data.totalPurchases);
+  const netProfit = grossProfit - parseFloat(data.totalExpenses);
+
+  // Find overdue invoices from status breakdown
+  const overdueEntry = statusBreakdown?.find((s) => s.status === "overdue");
+  const overdueCount = overdueEntry?.count ?? 0;
+  const overdueAmount = overdueEntry?.total ?? "0";
+
   return (
     <div>
       <PageHeader
@@ -545,6 +558,48 @@ function DashboardPage() {
       />
 
       <SummaryCards data={data} period={period} />
+
+      {/* Profit indicator cards */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="card px-4 py-3">
+          <p className="text-[11px] font-medium text-text-tertiary mb-1">Gross Profit</p>
+          <p className={cn(
+            "text-lg font-bold tabular-nums",
+            grossProfit >= 0 ? "text-emerald-600" : "text-red-600"
+          )}>
+            {formatCurrency(String(grossProfit))}
+          </p>
+        </div>
+        <div className="card px-4 py-3">
+          <p className="text-[11px] font-medium text-text-tertiary mb-1">Net Profit</p>
+          <p className={cn(
+            "text-lg font-bold tabular-nums",
+            netProfit >= 0 ? "text-emerald-600" : "text-red-600"
+          )}>
+            {formatCurrency(String(netProfit))}
+          </p>
+        </div>
+      </div>
+
+      {/* Overdue invoices alert */}
+      {overdueCount > 0 && (
+        <div className="mb-4 px-4 py-3 rounded-xl border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+            </svg>
+            <div>
+              <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                {overdueCount} overdue invoice{overdueCount > 1 ? "s" : ""} totaling {formatCurrency(overdueAmount)}
+              </p>
+              <p className="text-xs text-red-600/70 dark:text-red-400/60">Past due date with outstanding balance</p>
+            </div>
+          </div>
+          <Link to="/invoices" className="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 shrink-0">
+            View →
+          </Link>
+        </div>
+      )}
 
       {/* Charts grid — all charts respect the selected period */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

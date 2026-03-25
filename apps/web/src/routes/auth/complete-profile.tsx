@@ -12,8 +12,6 @@ function CompleteProfilePage() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
 
-  const session = trpc.auth.me.useQuery();
-
   const [saved, setSaved] = useState(false);
 
   const mutation = trpc.auth.completeProfile.useMutation({
@@ -25,18 +23,6 @@ function CompleteProfilePage() {
     },
     onError: (e) => setError(e.message),
   });
-
-  // Redirect to login if not authenticated
-  if (!session.isLoading && !session.data?.user) {
-    navigate({ to: "/login" });
-    return null;
-  }
-
-  // Already has a name — skip
-  if (session.data?.user?.name) {
-    navigate({ to: "/" });
-    return null;
-  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

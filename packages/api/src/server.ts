@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, inArray, sql } from "drizzle-orm";
+import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,8 +12,9 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
+import { generateLedgerPDF } from "./lib/ledger-pdf.js";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 const app = new Hono();
 
@@ -200,6 +201,140 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+    },
+  });
+});
+
+// ── Party Ledger PDF endpoint ─────────────────────────────────
+// GET /api/parties/:id/ledger.pdf?from=...&to=...
+app.get("/api/parties/:id/ledger.pdf", async (c) => {
+  const partyId = c.req.param("id");
+
+  // Auth check — same pattern as invoice PDF
+  const cookies = c.req.header("cookie") || "";
+  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
+
+  const sessionId = decodeURIComponent(sessionMatch[1]);
+
+  const [sessionRow] = await controlDb
+    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+
+  if (!sessionRow) return c.json({ error: "Unauthorized" }, 401);
+  if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
+
+  const [tenant] = await controlDb.select({ status: tenants.status })
+    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
+  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+
+  const businessId = c.req.header("x-business-id");
+  if (!businessId) return c.json({ error: "No business selected" }, 400);
+
+  const db = await getTenantDb(sessionRow.tenantId);
+
+  // Validate party belongs to this business
+  const [party] = await db.select().from(parties)
+    .where(and(eq(parties.id, partyId), eq(parties.businessId, businessId)))
+    .limit(1);
+  if (!party) return c.json({ error: "Party not found" }, 404);
+
+  const [biz] = await db.select().from(businesses)
+    .where(eq(businesses.id, businessId)).limit(1);
+  if (!biz) return c.json({ error: "Business not found" }, 404);
+
+  // Parse optional date range query params
+  const fromParam = c.req.query("from");
+  const toParam = c.req.query("to");
+  const fromDate = fromParam ? new Date(fromParam) : null;
+  const toDate = toParam ? new Date(toParam) : null;
+
+  // Build conditions for invoices and payments
+  const invoiceConditions = [
+    eq(invoices.partyId, partyId),
+    eq(invoices.businessId, businessId),
+    eq(invoices.documentType, "invoice"),
+  ] as Parameters<typeof and>[0][];
+  const paymentConditions = [
+    eq(payments.partyId, partyId),
+    eq(payments.businessId, businessId),
+  ] as Parameters<typeof and>[0][];
+
+  if (fromDate) {
+    invoiceConditions.push(gte(invoices.invoiceDate, fromDate));
+    paymentConditions.push(gte(payments.paymentDate, fromDate));
+  }
+  if (toDate) {
+    invoiceConditions.push(lte(invoices.invoiceDate, toDate));
+    paymentConditions.push(lte(payments.paymentDate, toDate));
+  }
+
+  const [partyInvoices, partyPayments] = await Promise.all([
+    db.select({
+      id: invoices.id,
+      invoiceNumber: invoices.invoiceNumber,
+      date: invoices.invoiceDate,
+      type: invoices.type,
+      totalAmount: invoices.totalAmount,
+      status: invoices.status,
+    }).from(invoices).where(and(...invoiceConditions as [any, ...any[]])).orderBy(invoices.invoiceDate),
+    db.select({
+      id: payments.id,
+      paymentNumber: payments.paymentNumber,
+      date: payments.paymentDate,
+      amount: payments.amount,
+      mode: payments.mode,
+    }).from(payments).where(and(...paymentConditions as [any, ...any[]])).orderBy(payments.paymentDate),
+  ]);
+
+  // Build ledger entries (same logic as ledgerReport tRPC procedure)
+  const entries = [
+    ...partyInvoices.map(inv => ({
+      date: inv.date as Date,
+      type: "invoice" as const,
+      number: inv.invoiceNumber,
+      description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
+      debit: inv.type === "sale" ? inv.totalAmount : "0",
+      credit: inv.type === "sale" ? "0" : inv.totalAmount,
+    })),
+    ...partyPayments.map(pmt => ({
+      date: pmt.date as Date,
+      type: "payment" as const,
+      number: pmt.paymentNumber || "",
+      description: `Payment (${pmt.mode})`,
+      debit: party.type === "supplier" ? pmt.amount : "0",
+      credit: party.type === "supplier" ? "0" : pmt.amount,
+    })),
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  let runningBalance = party.openingBalance;
+  const entriesWithBalance = entries.map(e => {
+    runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
+    return { ...e, runningBalance };
+  });
+
+  const totalDebit = money.sum(entries.map(e => e.debit));
+  const totalCredit = money.sum(entries.map(e => e.credit));
+  const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+
+  const pdfBuffer = await generateLedgerPDF({
+    businessName: biz.name,
+    partyName: party.name,
+    partyType: party.type,
+    openingBalance: party.openingBalance,
+    fromDate: fromParam || null,
+    toDate: toParam || null,
+    entries: entriesWithBalance,
+    summary: { totalDebit, totalCredit, closingBalance },
+  });
+
+  const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return new Response(new Uint8Array(pdfBuffer), {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="ledger-${safePartyName}.pdf"`,
     },
   });
 });

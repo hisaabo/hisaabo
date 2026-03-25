@@ -2,6 +2,8 @@ import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { cn, formatCurrency } from "@/lib/utils";
+import { Modal } from "@/components/ui/Modal";
+import { PhoneInput } from "./PhoneInput";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -151,15 +153,12 @@ function StoreSettingsCard() {
         />
       </div>
 
-      {/* WhatsApp number */}
+      {/* WhatsApp number — uses PhoneInput (+91 prefix, stores as +91XXXXXXXXXX) */}
       <div className="mb-4">
-        <label className="label">WhatsApp Number</label>
-        <input
-          className="input"
+        <PhoneInput
+          label="WhatsApp Number"
           value={effectiveWhatsapp}
-          onChange={(e) => setWhatsapp(e.target.value)}
-          placeholder="+919876543210"
-          maxLength={15}
+          onChange={(v) => setWhatsapp(v)}
         />
       </div>
 
@@ -199,35 +198,35 @@ function StoreSettingsCard() {
 }
 
 // ---------------------------------------------------------------------------
-// Store Items card
+// Store Items modal
 // ---------------------------------------------------------------------------
 
-function StoreItemsCard() {
+interface StoreItemsModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
   const utils = trpc.useUtils();
-
-  const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery({ limit: 500 });
-  const items = itemsResponse?.data ?? [];
-
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  // local storePrice overrides: itemId -> string
-  const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({});
+  const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
 
-  const toggleItemMutation = trpc.store.bulkToggleItems.useMutation({
+  // Fetch all items — API limit max is 100; fetch page 1 + page 2 if needed.
+  // For simplicity we fetch with limit=100 (schema max) which covers most catalogues.
+  const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery(
+    { limit: 100, page: 1 },
+    { enabled: open },
+  );
+  const items: any[] = itemsResponse?.data ?? [];
+
+  const toggleMut = trpc.store.bulkToggleItems.useMutation({
     onSuccess: () => {
       utils.store.listStoreItems.invalidate();
     },
     onError: (err) => toast.error("Failed to update items", err.message),
   });
 
-  const updateItemMutation = trpc.store.updateItemStoreSettings.useMutation({
-    onSuccess: () => {
-      utils.store.listStoreItems.invalidate();
-    },
-    onError: (err) => toast.error("Failed to update price", err.message),
-  });
-
-  const filtered = useMemo(() => {
+  const filteredItems = useMemo(() => {
     const q = search.toLowerCase().trim();
     if (!q) return items;
     return items.filter(
@@ -237,206 +236,210 @@ function StoreItemsCard() {
     );
   }, [items, search]);
 
-  const enabledCount = items.filter((item: any) => item.storeEnabled).length;
-  const totalCount = items.length;
-
-  const allFilteredSelected =
-    filtered.length > 0 && filtered.every((item: any) => selected.has(item.id));
-
-  function toggleSelectAll() {
-    if (allFilteredSelected) {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        filtered.forEach((item: any) => next.delete(item.id));
-        return next;
-      });
-    } else {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        filtered.forEach((item: any) => next.add(item.id));
-        return next;
-      });
-    }
+  function getEffectiveEnabled(item: { id: string; storeEnabled: boolean }): boolean {
+    return pendingChanges.has(item.id)
+      ? pendingChanges.get(item.id)!
+      : item.storeEnabled;
   }
 
-  function toggleSelect(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  function toggleItem(id: string, currentlyEnabled: boolean) {
+    setPendingChanges((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) {
+        next.delete(id); // undo pending change
+      } else {
+        next.set(id, !currentlyEnabled);
+      }
       return next;
     });
   }
 
-  function enableSelected() {
-    const ids = Array.from(selected);
-    if (!ids.length) return;
-    toggleItemMutation.mutate({ itemIds: ids, storeEnabled: true });
-    setSelected(new Set());
+  const changeCount = pendingChanges.size;
+
+  async function applyChanges() {
+    const toEnable = [...pendingChanges.entries()]
+      .filter(([, v]) => v)
+      .map(([id]) => id);
+    const toDisable = [...pendingChanges.entries()]
+      .filter(([, v]) => !v)
+      .map(([id]) => id);
+
+    if (toEnable.length > 0) {
+      await toggleMut.mutateAsync({ itemIds: toEnable, storeEnabled: true });
+    }
+    if (toDisable.length > 0) {
+      await toggleMut.mutateAsync({ itemIds: toDisable, storeEnabled: false });
+    }
+
+    setPendingChanges(new Map());
+    onClose();
   }
 
-  function disableSelected() {
-    const ids = Array.from(selected);
-    if (!ids.length) return;
-    toggleItemMutation.mutate({ itemIds: ids, storeEnabled: false });
-    setSelected(new Set());
-  }
-
-  function toggleItem(id: string, currentEnabled: boolean) {
-    toggleItemMutation.mutate({ itemIds: [id], storeEnabled: !currentEnabled });
-  }
-
-  function commitPriceOverride(item: any) {
-    const raw = priceOverrides[item.id];
-    if (raw === undefined) return;
-    const val = raw.trim();
-    // empty string = clear override
-    updateItemMutation.mutate({
-      itemId: item.id,
-      storePrice: val === "" ? null : val,
-    });
+  function handleClose() {
+    setPendingChanges(new Map());
+    onClose();
   }
 
   return (
-    <div className="card overflow-hidden mt-6">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-border-light flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-text-primary">Store Items</h3>
-          <p className="text-xs text-text-tertiary">
-            Select which items to show on your online store
-          </p>
-        </div>
-        {!isLoading && (
-          <span className="text-xs text-text-tertiary">
-            {enabledCount} of {totalCount} items enabled
-          </span>
-        )}
-      </div>
-
-      {/* Search + bulk actions */}
-      <div className="px-4 py-3 border-b border-border-light flex items-center gap-3">
+    <Modal open={open} onClose={handleClose} title="Manage Store Items" className="max-w-xl">
+      {/* Search */}
+      <div className="mb-4">
         <input
-          className="input flex-1"
-          placeholder="Search items…"
+          className="input w-full"
+          placeholder="Search items..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          autoFocus
         />
-        <button
-          className="btn-secondary btn-sm"
-          onClick={enableSelected}
-          disabled={selected.size === 0 || toggleItemMutation.isPending}
-        >
-          Enable Selected
-        </button>
-        <button
-          className="btn-ghost btn-sm"
-          onClick={disableSelected}
-          disabled={selected.size === 0 || toggleItemMutation.isPending}
-        >
-          Disable Selected
-        </button>
       </div>
 
-      {/* Table header with select-all */}
-      {!isLoading && filtered.length > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2 bg-surface-1 border-b border-border-light">
-          <input
-            type="checkbox"
-            className="rounded border-border-color"
-            checked={allFilteredSelected}
-            onChange={toggleSelectAll}
-            aria-label="Select all visible items"
-          />
-          <span className="text-xs text-text-tertiary flex-1">
-            {selected.size > 0
-              ? `${selected.size} selected`
-              : `${filtered.length} item${filtered.length !== 1 ? "s" : ""}`}
-          </span>
-          <span className="text-xs text-text-tertiary w-20 text-right">Store price</span>
-          <span className="text-xs text-text-tertiary w-9 text-center">Show</span>
-        </div>
-      )}
-
-      {/* Item rows */}
-      <div className="max-h-[400px] overflow-y-auto">
+      {/* Item list */}
+      <div className="max-h-[400px] overflow-y-auto -mx-6 px-6 divide-y divide-border-light">
         {isLoading ? (
-          <div className="px-4 py-6 space-y-3">
+          <div className="py-6 space-y-3">
             {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="skeleton h-9 rounded-lg" />
+              <div key={i} className="skeleton h-12 rounded-lg" />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-text-tertiary">
+        ) : filteredItems.length === 0 ? (
+          <div className="py-8 text-center text-sm text-text-tertiary">
             {search ? "No items match your search" : "No items found"}
           </div>
         ) : (
-          filtered.map((item: any) => {
-            const overrideRaw = priceOverrides[item.id];
-            const overrideValue =
-              overrideRaw !== undefined ? overrideRaw : item.storePrice ?? "";
-
+          filteredItems.map((item: any) => {
+            const enabled = getEffectiveEnabled(item);
+            const isPending = pendingChanges.has(item.id);
             return (
               <div
                 key={item.id}
-                className="flex items-center gap-3 px-4 py-2.5 border-b border-border-light hover:bg-surface-1"
+                onClick={() => toggleItem(item.id, item.storeEnabled)}
+                className={cn(
+                  "flex items-center gap-3 py-3 cursor-pointer transition-colors",
+                  isPending ? "bg-brand-600/5" : "hover:bg-surface-1",
+                )}
               >
-                {/* Row checkbox */}
-                <input
-                  type="checkbox"
-                  className="rounded border-border-color shrink-0"
-                  checked={selected.has(item.id)}
-                  onChange={() => toggleSelect(item.id)}
-                  aria-label={`Select ${item.name}`}
-                />
-
-                {/* Name + meta */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-text-primary truncate">{item.name}</p>
-                  <p className="text-xs text-text-tertiary">
-                    {item.category || "Uncategorized"} ·{" "}
-                    {formatCurrency(item.salePrice ?? "0")}
-                  </p>
-                </div>
-
-                {/* Store price override */}
-                <div className="w-20 shrink-0">
-                  {item.storeEnabled && (
-                    <input
-                      className="input py-1 text-xs w-full text-right"
-                      placeholder={item.salePrice ?? "price"}
-                      value={overrideValue}
-                      onChange={(e) =>
-                        setPriceOverrides((prev) => ({
-                          ...prev,
-                          [item.id]: e.target.value,
-                        }))
-                      }
-                      onBlur={() => commitPriceOverride(item)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitPriceOverride(item);
-                      }}
-                      title="Override store price (leave blank to use sale price)"
-                      inputMode="decimal"
-                    />
+                {/* Checkbox */}
+                <div
+                  className={cn(
+                    "w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
+                    enabled ? "bg-brand-600 border-brand-600" : "border-border-light",
+                  )}
+                >
+                  {enabled && (
+                    <svg
+                      className="w-3 h-3 text-white"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                    >
+                      <path d="M2 6l3 3 5-5" />
+                    </svg>
                   )}
                 </div>
 
-                {/* Per-item toggle */}
-                <div className="w-9 shrink-0 flex justify-center">
-                  <ToggleSwitch
-                    checked={item.storeEnabled}
-                    onChange={() => toggleItem(item.id, item.storeEnabled)}
-                    label={`Toggle ${item.name} on store`}
-                    disabled={toggleItemMutation.isPending}
-                  />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-text-primary truncate">{item.name}</p>
+                  <p className="text-xs text-text-tertiary">
+                    {item.category || "Uncategorized"} · {formatCurrency(item.salePrice ?? "0")} / {item.unit}
+                  </p>
                 </div>
+
+                {isPending && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                    {enabled ? "Adding" : "Removing"}
+                  </span>
+                )}
               </div>
             );
           })
         )}
       </div>
-    </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-4 mt-4 border-t border-border-light">
+        <p className="text-xs text-text-tertiary">
+          {changeCount > 0
+            ? `${changeCount} change${changeCount > 1 ? "s" : ""} pending`
+            : "Click items to add or remove"}
+        </p>
+        <div className="flex gap-2">
+          <button className="btn-ghost" onClick={handleClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={applyChanges}
+            disabled={changeCount === 0 || toggleMut.isPending}
+          >
+            {toggleMut.isPending
+              ? "Saving..."
+              : `Apply ${changeCount} Change${changeCount !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Store Items card (summary + modal trigger)
+// ---------------------------------------------------------------------------
+
+function StoreItemsCard() {
+  const [showModal, setShowModal] = useState(false);
+
+  const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery({
+    limit: 100,
+    page: 1,
+  });
+  const items: any[] = itemsResponse?.data ?? [];
+
+  const enabledItems = items.filter((item: any) => item.storeEnabled);
+  const enabledCount = enabledItems.length;
+  const totalCount = items.length;
+
+  return (
+    <>
+      <div className="card p-6 mt-6">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Store Items</h3>
+            {isLoading ? (
+              <div className="skeleton h-3 w-32 mt-1" />
+            ) : (
+              <p className="text-xs text-text-tertiary">
+                {enabledCount} of {totalCount} items on your store
+              </p>
+            )}
+          </div>
+          <button className="btn-primary" onClick={() => setShowModal(true)}>
+            Manage Items
+          </button>
+        </div>
+
+        {/* Quick preview: show first 8 enabled items */}
+        {enabledItems.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {enabledItems.slice(0, 8).map((item: any) => (
+              <span
+                key={item.id}
+                className="text-xs px-2.5 py-1 rounded-lg bg-brand-600/10 text-brand-700 dark:text-brand-400"
+              >
+                {item.name}
+              </span>
+            ))}
+            {enabledItems.length > 8 && (
+              <span className="text-xs px-2.5 py-1 rounded-lg bg-surface-2 text-text-tertiary">
+                +{enabledItems.length - 8} more
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <StoreItemsModal open={showModal} onClose={() => setShowModal(false)} />
+    </>
   );
 }
 

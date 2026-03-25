@@ -140,7 +140,7 @@ function PaymentsPage() {
         }
       />
 
-      {/* Search + Date Range */}
+      {/* Filters */}
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         <SearchInput
           value={search}

@@ -5,6 +5,7 @@ import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 
+
 export const dashboardRouter = router({
   summary: viewerProcedure
     .input(z.object({
@@ -352,5 +353,172 @@ export const dashboardRouter = router({
         .where(and(...conditions))
         .groupBy(invoices.status)
         .orderBy(sql`COUNT(*) DESC`);
+    }),
+
+  profitAndLoss: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const invConditions: any[] = [eq(invoices.businessId, ctx.businessId)];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const expConditions: any[] = [eq(expenses.businessId, ctx.businessId)];
+
+      if (input.fromDate) {
+        invConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+        expConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
+      }
+      if (input.toDate) {
+        invConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+        expConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      }
+
+      const [
+        [sales],
+        [purchases],
+        [expenseTotal],
+        expenseBreakdown,
+      ] = await Promise.all([
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices)
+          .where(and(...invConditions, eq(invoices.type, "sale"), eq(invoices.documentType, "invoice"), sql`${invoices.status} != 'cancelled'`)),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices)
+          .where(and(...invConditions, eq(invoices.type, "purchase"), eq(invoices.documentType, "invoice"), sql`${invoices.status} != 'cancelled'`)),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
+        }).from(expenses)
+          .where(and(...expConditions)),
+
+        ctx.db.select({
+          category: expenses.category,
+          total: sql<string>`SUM(${expenses.amount}::numeric)::text`,
+        }).from(expenses)
+          .where(and(...expConditions))
+          .groupBy(expenses.category)
+          .orderBy(sql`SUM(${expenses.amount}::numeric) DESC`),
+      ]);
+
+      const revenue = sales.total;
+      const cogs = purchases.total;
+      const grossProfit = money.sub(revenue, cogs);
+      const totalExpenses = expenseTotal.total;
+      const netProfit = money.sub(grossProfit, totalExpenses);
+
+      return {
+        revenue,
+        cogs,
+        grossProfit,
+        grossMarginPercent: money.toNumber(revenue) > 0
+          ? ((money.toNumber(grossProfit) / money.toNumber(revenue)) * 100).toFixed(1)
+          : "0.0",
+        expenses: expenseBreakdown,
+        totalExpenses,
+        netProfit,
+        netMarginPercent: money.toNumber(revenue) > 0
+          ? ((money.toNumber(netProfit) / money.toNumber(revenue)) * 100).toFixed(1)
+          : "0.0",
+      };
+    }),
+
+  receivablesAging: viewerProcedure
+    .query(async ({ ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const unpaidInvoices = await ctx.db.select({
+        partyId: invoices.partyId,
+        partyName: parties.name,
+        invoiceNumber: invoices.invoiceNumber,
+        invoiceDate: invoices.invoiceDate,
+        dueDate: invoices.dueDate,
+        totalAmount: invoices.totalAmount,
+        amountPaid: invoices.amountPaid,
+      }).from(invoices)
+        .innerJoin(parties, eq(parties.id, invoices.partyId))
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`,
+        ))
+        .orderBy(invoices.invoiceDate);
+
+      const now = new Date();
+
+      const partyBuckets = new Map<string, {
+        partyName: string;
+        current: number;
+        days31_60: number;
+        days61_90: number;
+        days90Plus: number;
+        total: number;
+      }>();
+
+      for (const inv of unpaidInvoices) {
+        const outstanding = parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
+        if (outstanding <= 0) continue;
+
+        const refDate = inv.dueDate || inv.invoiceDate;
+        const daysOld = Math.floor((now.getTime() - new Date(refDate).getTime()) / (1000 * 60 * 60 * 24));
+
+        const existing = partyBuckets.get(inv.partyId) ?? {
+          partyName: inv.partyName,
+          current: 0,
+          days31_60: 0,
+          days61_90: 0,
+          days90Plus: 0,
+          total: 0,
+        };
+
+        if (daysOld <= 30) existing.current += outstanding;
+        else if (daysOld <= 60) existing.days31_60 += outstanding;
+        else if (daysOld <= 90) existing.days61_90 += outstanding;
+        else existing.days90Plus += outstanding;
+        existing.total += outstanding;
+
+        partyBuckets.set(inv.partyId, existing);
+      }
+
+      const rows = [...partyBuckets.entries()]
+        .map(([partyId, data]) => ({ partyId, ...data }))
+        .sort((a, b) => b.total - a.total);
+
+      const summary = rows.reduce(
+        (acc, r) => ({
+          current: acc.current + r.current,
+          days31_60: acc.days31_60 + r.days31_60,
+          days61_90: acc.days61_90 + r.days61_90,
+          days90Plus: acc.days90Plus + r.days90Plus,
+          total: acc.total + r.total,
+        }),
+        { current: 0, days31_60: 0, days61_90: 0, days90Plus: 0, total: 0 }
+      );
+
+      return {
+        rows: rows.map((r) => ({
+          partyId: r.partyId,
+          partyName: r.partyName,
+          current: r.current.toFixed(2),
+          days31_60: r.days31_60.toFixed(2),
+          days61_90: r.days61_90.toFixed(2),
+          days90Plus: r.days90Plus.toFixed(2),
+          total: r.total.toFixed(2),
+        })),
+        summary: {
+          current: summary.current.toFixed(2),
+          days31_60: summary.days31_60.toFixed(2),
+          days61_90: summary.days61_90.toFixed(2),
+          days90Plus: summary.days90Plus.toFixed(2),
+          total: summary.total.toFixed(2),
+        },
+      };
     }),
 });
