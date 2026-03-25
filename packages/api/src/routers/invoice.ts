@@ -67,6 +67,7 @@ export const invoiceRouter = router({
           amountPaid: invoices.amountPaid,
           partyName: parties.name,
           partyId: parties.id,
+          createdByName: invoices.createdByName,
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(and(...conditions))
@@ -181,6 +182,8 @@ export const invoiceRouter = router({
         notes: input.notes,
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
+        createdByUserId: ctx.user!.id,
+        createdByName: ctx.user!.name,
       }).returning();
 
       if (processedItems.length > 0) {

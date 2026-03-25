@@ -33,6 +33,18 @@ export const registerSchema = z.object({
   path: ["confirmPassword"],
 });
 
+export const magicLinkRequestSchema = z.object({
+  email: z.string().email().max(255),
+});
+
+export const magicLinkVerifySchema = z.object({
+  token: z.string().min(1).max(128),
+});
+
+export const completeProfileSchema = z.object({
+  name: z.string().min(2).max(100),
+});
+
 // ── Business ───────────────────────────────────────────────────
 
 export const createBusinessSchema = z.object({
@@ -101,7 +113,7 @@ export const updatePartySchema = createPartySchema.partial().omit({ type: true }
 
 // ── Item ───────────────────────────────────────────────────────
 
-export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
 export type Unit = (typeof units)[number];
 
 export const unitVariantSchema = z.object({

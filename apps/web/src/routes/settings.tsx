@@ -229,7 +229,7 @@ function TeamSection() {
                           {/* Role change dropdown */}
                           <div className="w-28">
                             <Listbox
-                              value={m.role === "owner" ? "member" : m.role}
+                              value={m.role}
                               onChange={(role) =>
                                 updateRole.mutate({ userId: m.userId, role: role as "admin" | "member" | "viewer" })
                               }

@@ -24,6 +24,8 @@ import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans
 import { Route as CreditNotesRouteImport } from './routes/credit-notes'
 import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
+import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
@@ -100,6 +102,16 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthVerifyRoute = AuthVerifyRouteImport.update({
+  id: '/auth/verify',
+  path: '/auth/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
+  id: '/auth/complete-profile',
+  path: '/auth/complete-profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -117,6 +129,8 @@ export interface FileRoutesByFullPath {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -134,6 +148,8 @@ export interface FileRoutesByTo {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -152,6 +168,8 @@ export interface FileRoutesById {
   '/quotations': typeof QuotationsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/verify': typeof AuthVerifyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -171,6 +189,8 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -188,6 +208,8 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   id:
     | '__root__'
     | '/'
@@ -205,6 +227,8 @@ export interface FileRouteTypes {
     | '/quotations'
     | '/sales-returns'
     | '/settings'
+    | '/auth/complete-profile'
+    | '/auth/verify'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -223,6 +247,8 @@ export interface RootRouteChildren {
   QuotationsRoute: typeof QuotationsRoute
   SalesReturnsRoute: typeof SalesReturnsRoute
   SettingsRoute: typeof SettingsRoute
+  AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
+  AuthVerifyRoute: typeof AuthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -332,6 +358,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/verify': {
+      id: '/auth/verify'
+      path: '/auth/verify'
+      fullPath: '/auth/verify'
+      preLoaderRoute: typeof AuthVerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/complete-profile': {
+      id: '/auth/complete-profile'
+      path: '/auth/complete-profile'
+      fullPath: '/auth/complete-profile'
+      preLoaderRoute: typeof AuthCompleteProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -351,6 +391,8 @@ const rootRouteChildren: RootRouteChildren = {
   QuotationsRoute: QuotationsRoute,
   SalesReturnsRoute: SalesReturnsRoute,
   SettingsRoute: SettingsRoute,
+  AuthCompleteProfileRoute: AuthCompleteProfileRoute,
+  AuthVerifyRoute: AuthVerifyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

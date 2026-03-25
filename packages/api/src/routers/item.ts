@@ -63,6 +63,76 @@ export const itemRouter = router({
     return item;
   }),
 
+  // Switch the base unit of an item — converts stock, moves old base to variants
+  switchBaseUnit: businessProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      newUnit: z.string().min(1),
+      conversionFactor: z.number().positive(), // how many NEW units = 1 OLD unit
+    }))
+    .mutation(async ({ input, ctx }) => {
+      return ctx.db.transaction(async (tx) => {
+        const [item] = await tx.select().from(items)
+          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+          .for("update")
+          .limit(1);
+
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+
+        const oldUnit = item.unit;
+        const oldSalePrice = item.salePrice;
+        const oldPurchasePrice = item.purchasePrice;
+        const oldStock = parseFloat(item.stockQuantity || "0");
+        const factor = input.conversionFactor;
+
+        // Convert stock: if 1 old unit = factor new units, then stock * factor = new stock
+        const newStock = (oldStock * factor).toFixed(3);
+
+        // Convert prices: if 1 old unit = factor new units, price per new unit = old price / factor
+        const newSalePrice = oldSalePrice ? (parseFloat(oldSalePrice) / factor).toFixed(2) : null;
+        const newPurchasePrice = oldPurchasePrice ? (parseFloat(oldPurchasePrice) / factor).toFixed(2) : null;
+
+        // Move old base unit to variants (with reverse conversion factor)
+        const existingVariants = (item.unitVariants as any[] || []);
+        // Remove the new unit from variants if it was already there
+        const filteredVariants = existingVariants.filter(
+          (v: any) => v.unit.toLowerCase() !== input.newUnit.toLowerCase()
+        );
+        // Add old base unit as a variant
+        const oldBaseAsVariant = {
+          unit: oldUnit,
+          conversionFactor: 1 / factor, // 1 old unit = 1/factor of the new base
+          salePrice: oldSalePrice || "0",
+          purchasePrice: oldPurchasePrice || undefined,
+        };
+
+        const updatedVariants = [oldBaseAsVariant, ...filteredVariants];
+
+        // Update the item
+        const [updated] = await tx.update(items).set({
+          unit: input.newUnit as any,
+          salePrice: newSalePrice,
+          purchasePrice: newPurchasePrice,
+          stockQuantity: newStock,
+          unitVariants: updatedVariants,
+          updatedAt: new Date(),
+        }).where(eq(items.id, input.id)).returning();
+
+        // Update conversionFactor on all existing invoice line items for this item
+        // Old line items were in the old unit. Now base is new unit.
+        // If a line item had conversionFactor=1 (was in old base), it should now be 1/factor
+        // If it had a custom factor, multiply by 1/factor
+        await tx.execute(sql`
+          UPDATE invoice_items SET
+            conversion_factor = COALESCE(conversion_factor, 1) * ${(1 / factor).toFixed(6)}
+          WHERE item_id = ${input.id}
+            AND (selected_unit IS NULL OR selected_unit = ${oldUnit})
+        `);
+
+        return updated;
+      });
+    }),
+
   update: businessProcedure
     .input(z.object({ id: z.string().uuid(), data: updateItemSchema }))
     .mutation(async ({ input, ctx }) => {

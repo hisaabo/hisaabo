@@ -101,6 +101,8 @@ const MYBILLBOOK_INVOICE_MAP: Record<string, string> = {
   "Invoice Status": "status",
   "Due Date": "dueDate",
   "Payment Type": "paymentMode",
+  "Party Category": "partyCategory",
+  "Created by": "createdByName",
   // Legacy column names
   "Party Name": "partyName",
   "Type": "type",
@@ -193,6 +195,7 @@ const INVOICE_FIELDS: Array<{ key: string; label: string; required?: boolean }> 
   { key: "discountAmount", label: "Discount" },
   { key: "amountPaid", label: "Amount Paid" },
   { key: "notes", label: "Notes" },
+  { key: "createdByName", label: "Created By" },
 ];
 
 const PAYMENT_FIELDS: Array<{ key: string; label: string; required?: boolean }> = [
@@ -245,10 +248,11 @@ const ENTITY_DESCRIPTIONS: Record<EntityKey, string> = {
 
 function normalizeUnit(raw: string): string {
   const s = raw.toLowerCase().trim();
+  // Standard units
   if (s.includes("piece") || s === "pcs" || s === "each") return "pcs";
-  if (s.includes("kilogram") || s === "kg" || s === "kgs") return "kg";
-  if (s.includes("gram") || s === "g" || s === "gm" || s === "gms") return "g";
-  if (s.includes("litre") || s.includes("liter") || s === "l" || s === "ltr") return "l";
+  if (s.includes("kilogram") || s === "kgs" || s === "kg" || s === "k") return "kg";
+  if (s.includes("gram") || s === "gms" || s === "gm" || s === "g") return "g";
+  if (s.includes("litre") || s.includes("liter") || s === "ltr" || s === "l") return "l";
   if (s.includes("millilitre") || s === "ml") return "ml";
   if (s.includes("metre") || s.includes("meter") || s === "m") return "m";
   if (s.includes("centi") || s === "cm") return "cm";
@@ -257,9 +261,18 @@ function normalizeUnit(raw: string): string {
   if (s.includes("box")) return "box";
   if (s.includes("dozen") || s === "dzn") return "dozen";
   if (s.includes("pair")) return "pair";
-  if (s.includes("set")) return "set";
-  // Non-standard myBillBook units: pac, poch, pkt, bun, jar, btl, bag, pet, ton
-  if (s === "pac" || s === "poch" || s === "pkt" || s === "bun" || s === "jar" || s === "btl" || s === "bag" || s === "pet" || s === "ton") return "other";
+  if (s === "set" || s === "s") return "set";
+  // Indian business units (from myBillBook)
+  if (s === "pkt" || s.includes("packet")) return "pkt";
+  if (s === "bun" || s.includes("bunch")) return "bun";
+  if (s === "poch" || s.includes("pouch")) return "pouch";
+  if (s === "jar") return "jar";
+  if (s === "btl" || s.includes("bottle")) return "btl";
+  if (s === "bag") return "bag";
+  if (s === "ton" || s.includes("tonne")) return "ton";
+  if (s === "pac" || s === "pack") return "pack";
+  if (s === "pet") return "pet";
+  if (s === "person") return "person";
   return "other";
 }
 
@@ -538,6 +551,7 @@ function transformInvoiceRow(row: Record<string, string>): object {
     amountPaid,
     paymentMode: row.paymentMode || undefined,
     notes: row.notes || undefined,
+    createdByName: row.createdByName || undefined,
   };
 }
 
@@ -1046,6 +1060,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
       source: "mybillbook",
       files: {},
       rawFiles: {},
+      fileNames: {},
       enabled: { parties: true, items: true, invoices: true, payments: false, cashBank: false },
       mappings: {},
       results: {},
@@ -1432,11 +1447,31 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     if (itemsFile) {
       setImportStatuses((s) => ({ ...s, items: "running" }));
       try {
+        // Build item-to-unit map from GST report if available (most reliable unit source)
+        const gstUnitMap = new Map<string, string>();
+        if (gstReportFile) {
+          for (const row of gstReportFile.rows) {
+            const name = (row["Item Name"] || "").trim().toLowerCase();
+            if (!name) continue;
+            const parsed = parseStockQuantityWithUnit(row["Quantity"] || "");
+            if (parsed.unit !== "other" && !gstUnitMap.has(name)) {
+              gstUnitMap.set(name, parsed.unit);
+            }
+          }
+        }
+
         const itemMapping = state.mappings.items || {};
         const mappedRows = itemsFile.rows.map((row) => applyMapping(row, itemMapping));
-        const transformedRows = mappedRows.map(transformItemRow) as Parameters<
-          typeof importItemsMut.mutateAsync
-        >[0]["items"];
+        const transformedRows = mappedRows.map((row) => {
+          const item = transformItemRow(row);
+          // If item unit is still "pcs" (default) and GST report has a better unit, use it
+          const itemObj = item as any;
+          if ((!itemObj.unit || itemObj.unit === "pcs" || itemObj.unit === "other") && gstUnitMap.size > 0) {
+            const gstUnit = gstUnitMap.get((itemObj.name || "").toLowerCase());
+            if (gstUnit) itemObj.unit = gstUnit;
+          }
+          return itemObj;
+        }) as Parameters<typeof importItemsMut.mutateAsync>[0]["items"];
 
         let created = 0, skipped = 0, total = 0;
         for (let i = 0; i < transformedRows.length; i += BATCH_SIZE) {
@@ -1480,10 +1515,11 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             const invoiceNo = (row["Invoice No."] || row["Invoice No"] || "").trim();
             if (!invoiceNo) continue;
 
-            // Parse quantity with embedded unit: "3.6 KGS" → "3.6"
+            // Parse quantity with embedded unit: "3.6 KGS" → qty "3.6", unit "kg"
             const qtyRaw = row["Quantity"] || "1";
-            const qtyMatch = qtyRaw.match(/^([\d.]+)/);
-            const qty = qtyMatch ? qtyMatch[1] : "1";
+            const qtyParsed = parseStockQuantityWithUnit(qtyRaw);
+            const qty = qtyParsed.quantity.replace(/^-/, ""); // strip negative
+            const _lineUnit = qtyParsed.unit; // normalized unit from the quantity column
 
             const unitPrice = cleanMoney(row["Price/Unit"] || "0");
 

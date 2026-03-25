@@ -8,7 +8,7 @@ import { eq, and, gt, lt } from "drizzle-orm";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import { generateInvoicePDF, type InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants, magicLinkTokens } from "@hisaabo/db";
 
 const app = new Hono();
 
@@ -170,6 +170,7 @@ app.use("/api/trpc/*", async (c) => {
 setInterval(async () => {
   try {
     await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+    await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
     console.error("[session-cleanup] Failed:", e);
   }

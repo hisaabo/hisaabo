@@ -285,6 +285,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               notes: input.notes,
               termsAndConditions: input.termsAndConditions,
               referenceDocumentId: input.referenceDocumentId || null,
+              createdByUserId: ctx.user!.id,
+              createdByName: ctx.user!.name,
             })
             .returning();
 

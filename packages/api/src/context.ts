@@ -6,7 +6,7 @@ import { eq, gt, and } from "drizzle-orm";
 export async function createContext(opts: FetchCreateContextFnOptions) {
   const sessionId = getCookie(opts.req, "session_id");
 
-  let user: { id: string; email: string; name: string } | null = null;
+  let user: { id: string; email: string; name: string | null } | null = null;
   let tenantId: string | null = null;
 
   if (sessionId) {

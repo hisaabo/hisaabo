@@ -1,5 +1,5 @@
 import { createRootRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
@@ -218,10 +218,17 @@ function RootLayout() {
   }, [businesses, currentBusinessId]);
 
   // Redirect to login if not authenticated
-  const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && window.location.pathname !== "/login";
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile"];
+  const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && !publicPaths.some(p => window.location.pathname.startsWith(p));
   useEffect(() => {
     if (needsRedirect) navigate({ to: "/login" });
   }, [needsRedirect, navigate]);
+
+  // Redirect to complete profile if name is missing (magic link first sign-in)
+  const needsProfile = !sessionLoading && !!session?.user && !!(session as { needsProfile?: boolean })?.needsProfile && typeof window !== "undefined" && window.location.pathname !== "/auth/complete-profile";
+  useEffect(() => {
+    if (needsProfile) navigate({ to: "/auth/complete-profile" });
+  }, [needsProfile, navigate]);
 
   // Auto-select single tenant
   const shouldAutoSelectTenant = !!(session?.user && !session?.tenantId && tenantList?.length === 1 && !selectTenantMutation.isPending && !selectTenantMutation.isSuccess);
@@ -292,9 +299,10 @@ function RootLayout() {
     );
   }
 
-  const initials = session.user.name
+  const displayName = session.user.name || session.user.email.split("@")[0];
+  const initials = displayName
     .split(" ")
-    .map((w) => w[0])
+    .map((w: string) => w[0])
     .slice(0, 2)
     .join("")
     .toUpperCase();
@@ -408,7 +416,7 @@ function RootLayout() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-medium truncate text-text-primary">
-                  {session.user.name}
+                  {displayName}
                 </p>
                 <p className="text-[11px] truncate text-text-tertiary">
                   {session.user.email}
@@ -491,7 +499,7 @@ function ThemeToggle() {
   const { theme, setTheme } = useTheme();
 
   const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
-  const icons: Record<Theme, JSX.Element> = {
+  const icons: Record<Theme, React.ReactNode> = {
     system: <MonitorIcon />,
     light: <SunIcon />,
     dark: <MoonIcon />,

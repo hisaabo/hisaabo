@@ -7,7 +7,7 @@ export const partyTypeEnum = pgEnum("party_type", ["customer", "supplier"]);
 export const invoiceTypeEnum = pgEnum("invoice_type", ["sale", "purchase"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "sent", "paid", "partial", "overdue", "cancelled"]);
 export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other"]);
-export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"]);
+export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"]);
 export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
 export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"]);
 export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card"]);
@@ -140,6 +140,9 @@ export const invoices = pgTable("invoices", {
   notes: text("notes"),
   termsAndConditions: text("terms_and_conditions"),
   referenceDocumentId: uuid("reference_document_id"),
+  // No FK to users — plain UUID, users live in control schema (different DB in cloud mode)
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"), // denormalized for display + imports
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -190,6 +193,8 @@ export const payments = pgTable("payments", {
   paymentDate: timestamp("payment_date", { withTimezone: true }).defaultNow().notNull(),
   notes: text("notes"),
   bankAccountId: uuid("bank_account_id"),
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"),
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
@@ -211,6 +216,8 @@ export const expenses = pgTable("expenses", {
   mode: paymentModeEnum("mode").notNull(),
   expenseDate: timestamp("expense_date", { withTimezone: true }).defaultNow().notNull(),
   referenceNumber: text("reference_number"),
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("expenses_business_idx").on(t.businessId),

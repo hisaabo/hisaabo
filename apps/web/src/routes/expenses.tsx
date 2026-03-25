@@ -518,7 +518,7 @@ function ExpensesPage() {
 
       <ConfirmDialog
         open={!!deleteId}
-        onClose={() => setDeleteId(null)}
+        onCancel={() => setDeleteId(null)}
         onConfirm={() => deleteId && deleteMutation.mutate({ id: deleteId })}
         title="Delete Expense"
         description="This will permanently delete this expense. This action cannot be undone."

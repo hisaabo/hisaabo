@@ -48,6 +48,8 @@ export const expenseRouter = router({
       ...input,
       businessId: ctx.businessId,
       expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
+      createdByUserId: ctx.user!.id,
+      createdByName: ctx.user!.name,
     }).returning();
     return expense;
   }),

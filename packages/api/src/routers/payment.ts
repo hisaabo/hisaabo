@@ -184,6 +184,8 @@ export const paymentRouter = router({
         notes: input.notes,
         paymentNumber,
         bankAccountId: input.bankAccountId || null,
+        createdByUserId: ctx.user!.id,
+        createdByName: ctx.user!.name,
       }).returning();
 
       // ── Invoice allocation logic ─────────────────────────────────────────

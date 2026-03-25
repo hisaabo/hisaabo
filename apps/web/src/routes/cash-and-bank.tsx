@@ -533,7 +533,7 @@ function CashAndBankPage() {
               <h3 className="text-sm font-semibold text-text-primary">
                 Untracked Payments
                 <span className="ml-2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-amber-600/[0.08] text-amber-700 dark:text-amber-400 text-[11px] font-bold">
-                  {untrackedData.total}
+                  {untrackedData?.total ?? 0}
                 </span>
               </h3>
               <p className="text-xs text-text-tertiary mt-0.5">
@@ -818,7 +818,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
       accountName: accountName.trim(),
       accountType: accountType as "savings" | "current" | "cash" | "upi" | "credit_card",
       accountNumber: accountNumber || undefined,
-      ifscCode: ifsc || undefined,
+      ifsc: ifsc || undefined,
       bankName: bankName || undefined,
       openingBalance: openingBalance || "0",
       isDefault,

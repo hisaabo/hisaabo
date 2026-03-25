@@ -4,7 +4,7 @@ import { useShortcutFlash } from "@/hooks/useHotkeys";
 
 export function ShortcutIndicator() {
   const { flash, dismiss } = useShortcutFlash();
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     if (!flash) return;

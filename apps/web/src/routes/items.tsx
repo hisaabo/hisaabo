@@ -44,6 +44,16 @@ const UNIT_OPTIONS = [
   { value: "dozen", label: "Dozen" },
   { value: "pair", label: "Pair" },
   { value: "set", label: "Set" },
+  { value: "pkt", label: "Packet (PKT)" },
+  { value: "bun", label: "Bunch (BUN)" },
+  { value: "pouch", label: "Pouch" },
+  { value: "jar", label: "Jar" },
+  { value: "btl", label: "Bottle (BTL)" },
+  { value: "bag", label: "Bag" },
+  { value: "ton", label: "Tonne (TON)" },
+  { value: "pack", label: "Pack" },
+  { value: "pet", label: "Pet Bottle (PET)" },
+  { value: "person", label: "Person" },
   { value: "other", label: "Other" },
 ];
 
@@ -997,6 +1007,7 @@ const DETAIL_TABS = [
 function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose: () => void; onEdit: (id: string) => void }) {
   const [tab, setTab] = useState("overview");
   const [showMerge, setShowMerge] = useState(false);
+  const [showSwitchUnit, setShowSwitchUnit] = useState(false);
   const navigate = useNavigate();
 
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
@@ -1037,12 +1048,22 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
       }
       footer={
         <div className="flex items-center justify-between">
-          <button
-            onClick={() => setShowMerge(true)}
-            className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800 transition-colors"
-          >
-            Merge
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowMerge(true)}
+              className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-600/[0.08] border border-amber-200 dark:border-amber-800 transition-colors"
+            >
+              Merge
+            </button>
+            {item.itemType === "product" && (
+              <button
+                onClick={() => setShowSwitchUnit(true)}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+              >
+                Switch Unit
+              </button>
+            )}
+          </div>
           <button
             onClick={() => {
               onClose();
@@ -1466,7 +1487,173 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
         }}
       />
     )}
+    {showSwitchUnit && (
+      <SwitchUnitModal
+        itemId={itemId}
+        itemName={item.name}
+        currentUnit={item.unit}
+        unitVariants={item.unitVariants as any[] || []}
+        onClose={() => {
+          setShowSwitchUnit(false);
+          onClose();
+        }}
+      />
+    )}
     </>
+  );
+}
+
+// ── Switch Base Unit Modal ──────────────────────────────────────
+
+function SwitchUnitModal({
+  itemId,
+  itemName,
+  currentUnit,
+  unitVariants,
+  onClose,
+}: {
+  itemId: string;
+  itemName: string;
+  currentUnit: string;
+  unitVariants: Array<{ unit: string; conversionFactor: number; salePrice: string }>;
+  onClose: () => void;
+}) {
+  const [newUnit, setNewUnit] = useState("");
+  const [conversionFactor, setConversionFactor] = useState("");
+  const [isCustom, setIsCustom] = useState(false);
+  const utils = trpc.useUtils();
+
+  const switchMutation = trpc.item.switchBaseUnit.useMutation({
+    onSuccess: () => {
+      utils.item.list.invalidate();
+      utils.item.getById.invalidate({ id: itemId });
+      toast.success(`Base unit switched to ${newUnit.toUpperCase()}`);
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // When selecting an existing variant, pre-fill the conversion factor
+  function selectVariant(unit: string) {
+    const variant = unitVariants.find((v) => v.unit === unit);
+    if (variant) {
+      setNewUnit(unit);
+      setConversionFactor(String(variant.conversionFactor));
+      setIsCustom(false);
+    }
+  }
+
+  function selectCustom() {
+    setNewUnit("");
+    setConversionFactor("");
+    setIsCustom(true);
+  }
+
+  const factor = parseFloat(conversionFactor) || 0;
+
+  return (
+    <Modal open={true} onClose={onClose} title="Switch Base Unit" className="max-w-md">
+      <div className="space-y-4">
+        <p className="text-sm text-text-secondary">
+          Change the base unit of <strong>{itemName}</strong>. Current base: <strong>{currentUnit.toUpperCase()}</strong>.
+          Stock and prices will be automatically converted.
+        </p>
+
+        {/* Variant options */}
+        {unitVariants.length > 0 && (
+          <div>
+            <p className="label mb-2">Switch to an existing variant</p>
+            <div className="space-y-1.5">
+              {unitVariants.map((v) => (
+                <button
+                  key={v.unit}
+                  type="button"
+                  onClick={() => selectVariant(v.unit)}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 rounded-lg border transition-all text-sm",
+                    newUnit === v.unit && !isCustom
+                      ? "border-brand-500 bg-brand-600/[0.08]"
+                      : "border-border-light hover:border-brand-300"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{v.unit.toUpperCase()}</span>
+                    <span className="text-xs text-text-tertiary">
+                      1 {currentUnit.toUpperCase()} = {v.conversionFactor} {v.unit.toUpperCase()}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Custom option */}
+        <div>
+          <button
+            type="button"
+            onClick={selectCustom}
+            className={cn(
+              "w-full text-left px-3 py-2.5 rounded-lg border transition-all text-sm",
+              isCustom
+                ? "border-brand-500 bg-brand-600/[0.08]"
+                : "border-border-light hover:border-brand-300"
+            )}
+          >
+            <span className="font-medium">Custom unit...</span>
+          </button>
+          {isCustom && (
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <InputField
+                label="New unit name"
+                value={newUnit}
+                onChange={(e) => setNewUnit(e.target.value)}
+                placeholder="e.g. box, pack"
+                autoFocus
+              />
+              <InputField
+                label={`1 ${currentUnit.toUpperCase()} = ? new units`}
+                type="number"
+                step="any"
+                min="0.001"
+                value={conversionFactor}
+                onChange={(e) => setConversionFactor(e.target.value)}
+                placeholder="Conversion factor"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Preview */}
+        {newUnit && factor > 0 && (
+          <div className="rounded-lg bg-surface-1 border border-border-light px-4 py-3 text-xs space-y-1">
+            <p className="font-medium text-text-primary">Preview</p>
+            <p className="text-text-secondary">
+              1 {currentUnit.toUpperCase()} = {factor} {newUnit.toUpperCase()}
+            </p>
+            <p className="text-text-secondary">
+              Old base ({currentUnit.toUpperCase()}) becomes a unit variant
+            </p>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-3 border-t border-border-light">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={() => switchMutation.mutate({
+              id: itemId,
+              newUnit: newUnit.toLowerCase(),
+              conversionFactor: factor,
+            })}
+            disabled={!newUnit || factor <= 0 || switchMutation.isPending}
+          >
+            {switchMutation.isPending ? "Switching..." : "Switch Unit"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

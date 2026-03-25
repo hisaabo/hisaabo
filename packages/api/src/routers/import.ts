@@ -155,6 +155,7 @@ export const importRouter = router({
         charges: z.array(z.object({ label: z.string(), amount: z.string() })).optional(),
         paymentMode: z.string().optional(),
         notes: z.string().optional(),
+        createdByName: z.string().optional(),
         lineItems: z.array(z.object({
           itemName: z.string().optional(),
           description: z.string(),
@@ -239,6 +240,8 @@ export const importRouter = router({
               totalAmount: inv.totalAmount,
               amountPaid: inv.amountPaid,
               notes: inv.notes || null,
+              createdByUserId: ctx.user!.id,
+              createdByName: inv.createdByName || ctx.user!.name,
               source: input.source,
             })
             .returning();
@@ -316,8 +319,7 @@ export const importRouter = router({
               if (!foundItem) continue;
 
               const qty = parseFloat(li.quantity || "1");
-              const factor = parseFloat(li.conversionFactor || "1");
-              const baseQty = (qty * factor).toFixed(3);
+              const baseQty = qty.toFixed(3);
 
               if (inv.type === "sale") {
                 await tx.update(items).set({
@@ -346,6 +348,8 @@ export const importRouter = router({
               mode,
               paymentDate: invoiceDate,
               notes: `Imported payment for ${inv.invoiceNumber}`,
+              createdByUserId: ctx.user!.id,
+              createdByName: inv.createdByName || ctx.user!.name,
               source: input.source,
             });
           }
@@ -531,6 +535,8 @@ export const importRouter = router({
             referenceNumber: pmt.referenceNumber || null,
             paymentDate,
             notes: pmt.notes || null,
+            createdByUserId: ctx.user!.id,
+            createdByName: ctx.user!.name,
             source: input.source,
           });
         });
