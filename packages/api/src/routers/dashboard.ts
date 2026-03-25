@@ -187,4 +187,126 @@ export const dashboardRouter = router({
         net: money.sub(shippingCharged.total || "0", shippingExpenses.total || "0"),
       };
     }),
+
+  salesTrend: viewerProcedure
+    .input(z.object({ months: z.number().int().min(3).max(24).default(6) }))
+    .query(async ({ input, ctx }) => {
+      // Generate list of months going back N months from today
+      // For each month: total invoiced (sale invoices) + total payments received
+      const results = await ctx.db.execute(sql`
+        WITH months AS (
+          SELECT generate_series(
+            date_trunc('month', NOW() - (${input.months - 1} || ' months')::interval),
+            date_trunc('month', NOW()),
+            '1 month'::interval
+          ) as month_start
+        )
+        SELECT
+          m.month_start,
+          COALESCE((
+            SELECT SUM(total_amount::numeric)
+            FROM invoices
+            WHERE business_id = ${ctx.businessId}
+              AND type = 'sale' AND document_type = 'invoice'
+              AND invoice_date >= m.month_start
+              AND invoice_date < m.month_start + '1 month'::interval
+          ), 0)::text as invoiced,
+          COALESCE((
+            SELECT SUM(amount::numeric)
+            FROM payments
+            WHERE business_id = ${ctx.businessId}
+              AND payment_date >= m.month_start
+              AND payment_date < m.month_start + '1 month'::interval
+          ), 0)::text as collected
+        FROM months m
+        ORDER BY m.month_start ASC
+      `);
+
+      return (results as unknown as Array<{ month_start: Date; invoiced: string; collected: string }>).map(r => ({
+        month: new Date(r.month_start).toISOString(),
+        invoiced: r.invoiced,
+        collected: r.collected,
+      }));
+    }),
+
+  topOutstanding: viewerProcedure
+    .input(z.object({ limit: z.number().int().min(3).max(20).default(5) }))
+    .query(async ({ input, ctx }) => {
+      const results = await ctx.db
+        .select({
+          partyId: parties.id,
+          partyName: parties.name,
+          outstanding: sql<string>`(
+            COALESCE(${parties.openingBalance}::numeric, 0) +
+            COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric ELSE 0 END), 0)
+          )::text`,
+        })
+        .from(parties)
+        .leftJoin(invoices, and(
+          eq(invoices.partyId, parties.id),
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.documentType, sql`'invoice'`),
+          sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        ))
+        .where(and(eq(parties.businessId, ctx.businessId), eq(parties.type, "customer")))
+        .groupBy(parties.id, parties.name, parties.openingBalance)
+        .having(sql`(
+          COALESCE(${parties.openingBalance}::numeric, 0) +
+          COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric ELSE 0 END), 0)
+        ) > 0`)
+        .orderBy(sql`(
+          COALESCE(${parties.openingBalance}::numeric, 0) +
+          COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric ELSE 0 END), 0)
+        ) DESC`)
+        .limit(input.limit);
+
+      return results;
+    }),
+
+  expensesByCategory: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      const conditions = [eq(expenses.businessId, ctx.businessId)];
+      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+
+      return ctx.db
+        .select({
+          category: expenses.category,
+          total: sql<string>`SUM(${expenses.amount}::numeric)::text`,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(expenses)
+        .where(and(...conditions))
+        .groupBy(expenses.category)
+        .orderBy(sql`SUM(${expenses.amount}::numeric) DESC`);
+    }),
+
+  invoiceStatusBreakdown: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      const conditions = [
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.documentType, sql`'invoice'`),
+      ];
+      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+
+      return ctx.db
+        .select({
+          status: invoices.status,
+          count: sql<number>`COUNT(*)::int`,
+          total: sql<string>`SUM(${invoices.totalAmount}::numeric)::text`,
+        })
+        .from(invoices)
+        .where(and(...conditions))
+        .groupBy(invoices.status)
+        .orderBy(sql`COUNT(*) DESC`);
+    }),
 });
