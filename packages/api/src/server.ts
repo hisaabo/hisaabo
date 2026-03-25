@@ -365,20 +365,47 @@ async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; busin
   }
 
   const isMultiTenant = process.env.MULTI_TENANT === "true";
-  const tenantId = isMultiTenant ? "multi" : "single";
 
-  // In self-hosted mode, query the single tenant DB directly
-  const db = await getTenantDb(tenantId === "multi" ? "__store_slug_resolve__" : tenantId);
-  const [biz] = await db.select({ id: businesses.id })
-    .from(businesses)
-    .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
-    .limit(1);
+  if (!isMultiTenant) {
+    // Self-hosted: single tenant DB — query directly
+    const db = await getTenantDb("single");
+    const [biz] = await db.select({ id: businesses.id })
+      .from(businesses)
+      .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+      .limit(1);
 
-  if (!biz) return null;
+    if (!biz) return null;
 
-  const resolved = { tenantId, businessId: biz.id };
-  slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
-  return resolved;
+    const resolved = { tenantId: "single", businessId: biz.id };
+    slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
+    return resolved;
+  }
+
+  // Multi-tenant: scan all active tenants to find the business with this slug
+  const activeTenants = await controlDb
+    .select({ id: tenants.id })
+    .from(tenants)
+    .where(eq(tenants.status, "active"));
+
+  for (const tenant of activeTenants) {
+    try {
+      const db = await getTenantDb(tenant.id);
+      const [biz] = await db.select({ id: businesses.id })
+        .from(businesses)
+        .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+        .limit(1);
+
+      if (biz) {
+        const resolved = { tenantId: tenant.id, businessId: biz.id };
+        slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
+        return resolved;
+      }
+    } catch {
+      // Skip tenants with DB connectivity issues
+    }
+  }
+
+  return null;
 }
 
 // Helper: get tenant DB for a resolved slug context

@@ -32,6 +32,20 @@ export const storeRouter = router({
 
   // ── Store Settings ───────────────────────────────────────────
 
+  checkSlug: viewerProcedure
+    .input(z.object({ slug: z.string().min(3).max(50) }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Store");
+      const [existing] = await ctx.db.select({ id: businesses.id })
+        .from(businesses)
+        .where(and(
+          eq(businesses.storeSlug, input.slug),
+          sql`${businesses.id} != ${ctx.businessId}`,
+        ))
+        .limit(1);
+      return { available: !existing };
+    }),
+
   getSettings: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "Store");
     const [biz] = await ctx.db.select({

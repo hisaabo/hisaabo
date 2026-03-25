@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { cn, formatCurrency } from "@/lib/utils";
+import { useDebounce } from "@/hooks/useDebounce";
 import { Modal } from "@/components/ui/Modal";
 import { PhoneInput } from "./PhoneInput";
 
@@ -10,7 +11,7 @@ import { PhoneInput } from "./PhoneInput";
 // ---------------------------------------------------------------------------
 
 const IS_DEV = import.meta.env.DEV;
-const STORE_PREFIX = IS_DEV ? "localhost:3000/store/" : "store.hisaabo.in/";
+const STORE_PREFIX = IS_DEV ? "localhost:5174/store/" : "store.hisaabo.in/";
 
 function buildStoreUrl(slug: string) {
   const origin = IS_DEV ? "http://localhost:3000" : "https://store.hisaabo.in";
@@ -76,6 +77,29 @@ function StoreSettingsCard() {
   const effectiveMinOrder = minOrder ?? settings?.storeMinOrderAmount ?? "";
   const effectiveDeliveryNote = deliveryNote ?? settings?.storeDeliveryNote ?? "";
 
+  // Slug is locked once saved — cannot be changed
+  const isSlugLocked = !!settings?.storeSlug;
+
+  // Debounce slug for availability check (only when not locked)
+  const debouncedSlug = useDebounce(effectiveSlug, 500);
+  const { data: slugCheck, isFetching: slugChecking } = trpc.store.checkSlug.useQuery(
+    { slug: debouncedSlug },
+    {
+      enabled: !isSlugLocked && debouncedSlug.length >= 3,
+    },
+  );
+
+  const slugStatus: "idle" | "checking" | "available" | "taken" =
+    isSlugLocked
+      ? "idle"
+      : debouncedSlug.length < 3
+        ? "idle"
+        : slugChecking || slugCheck === undefined
+          ? "checking"
+          : slugCheck.available
+            ? "available"
+            : "taken";
+
   const updateMutation = trpc.store.updateSettings.useMutation({
     onSuccess: () => {
       toast.success("Store settings saved");
@@ -130,15 +154,66 @@ function StoreSettingsCard() {
           <span className="inline-flex items-center px-3 py-2 rounded-l-lg border border-r-0 border-border-color bg-surface-1 text-text-tertiary text-sm select-none whitespace-nowrap">
             {STORE_PREFIX}
           </span>
-          <input
-            className="input rounded-l-none"
-            value={effectiveSlug}
-            onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-            placeholder="your-business"
-            maxLength={50}
-          />
+          <div className="relative flex-1">
+            <input
+              className={cn(
+                "input rounded-l-none w-full",
+                isSlugLocked && "bg-surface-1 text-text-tertiary cursor-not-allowed",
+              )}
+              value={effectiveSlug}
+              onChange={(e) => !isSlugLocked && setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+              placeholder="your-business"
+              maxLength={50}
+              disabled={isSlugLocked}
+              readOnly={isSlugLocked}
+            />
+            {/* Slug status indicator */}
+            {!isSlugLocked && slugStatus !== "idle" && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
+                {slugStatus === "checking" && (
+                  <svg className="w-4 h-4 text-text-tertiary animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                )}
+                {slugStatus === "available" && (
+                  <svg className="w-4 h-4 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                )}
+                {slugStatus === "taken" && (
+                  <svg className="w-4 h-4 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </span>
+            )}
+            {isSlugLocked && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                </svg>
+              </span>
+            )}
+          </div>
         </div>
-        <p className="text-[11px] text-text-tertiary mt-1">This will be your public store URL</p>
+        {isSlugLocked ? (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+            Store URL cannot be changed once set
+          </p>
+        ) : slugStatus === "taken" ? (
+          <p className="text-[11px] text-red-500 mt-1">
+            This URL is already taken. Please choose a different one.
+          </p>
+        ) : slugStatus === "available" ? (
+          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1">
+            This URL is available!
+          </p>
+        ) : (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+            Choose carefully — this cannot be changed later
+          </p>
+        )}
       </div>
 
       {/* Tagline */}
@@ -211,10 +286,11 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
   const [search, setSearch] = useState("");
   const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
 
-  // Fetch all items — API limit max is 100; fetch page 1 + page 2 if needed.
-  // For simplicity we fetch with limit=100 (schema max) which covers most catalogues.
+  const debouncedSearch = useDebounce(search, 300);
+
+  // Server-side filtered items — passes search term to API so results aren't capped at 100 items
   const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery(
-    { limit: 100, page: 1 },
+    { limit: 100, page: 1, search: debouncedSearch || undefined },
     { enabled: open },
   );
   const items: any[] = itemsResponse?.data ?? [];
@@ -226,15 +302,8 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
     onError: (err) => toast.error("Failed to update items", err.message),
   });
 
-  const filteredItems = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return items;
-    return items.filter(
-      (item: any) =>
-        item.name.toLowerCase().includes(q) ||
-        (item.category ?? "").toLowerCase().includes(q),
-    );
-  }, [items, search]);
+  // Items are already filtered server-side; no client-side filter needed
+  const filteredItems = useMemo(() => items, [items]);
 
   function getEffectiveEnabled(item: { id: string; storeEnabled: boolean }): boolean {
     return pendingChanges.has(item.id)

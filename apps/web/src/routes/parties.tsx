@@ -774,7 +774,14 @@ function MergePartyModal({
   const [targetSearch, setTargetSearch] = useState("");
   const [confirmed, setConfirmed] = useState(false);
 
-  const { data: partiesData, isLoading: partiesLoading } = trpc.party.list.useQuery({ page: 1, limit: 100, filter: "all" });
+  const debouncedTargetSearch = useDebounce(targetSearch, 300);
+
+  const { data: partiesData, isLoading: partiesLoading } = trpc.party.list.useQuery({
+    page: 1,
+    limit: 100,
+    filter: "all",
+    search: debouncedTargetSearch || undefined,
+  });
   const { data: sourceStats } = trpc.party.getStats.useQuery({ id: sourceId });
   const { data: targetStats } = trpc.party.getStats.useQuery(
     { id: targetId },
@@ -792,14 +799,10 @@ function MergePartyModal({
     onError: (err) => toast.error(err.message),
   });
 
-  const allOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
-  const filteredOptions = targetSearch.trim()
-    ? allOptions.filter((p) =>
-        p.name.toLowerCase().includes(targetSearch.toLowerCase())
-      )
-    : allOptions;
+  // Server-side search already filters results; exclude only the source party client-side
+  const filteredOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
 
-  const selectedTarget = allOptions.find((p) => p.id === targetId);
+  const selectedTarget = filteredOptions.find((p) => p.id === targetId);
 
   const totalInvoices = (sourceStats?.invoiceCount ?? 0) + (targetStats?.invoiceCount ?? 0);
   const totalPayments = (sourceStats?.paymentCount ?? 0) + (targetStats?.paymentCount ?? 0);
