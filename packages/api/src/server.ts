@@ -794,6 +794,70 @@ const cleanupTimer = setInterval(async () => {
 }, 60 * 60 * 1000);
 cleanupTimer.unref();
 
+// ── Branded HTML pages ────────────────────────────────────────
+function brandedHtml(title: string, heading: string, message: string, status: number) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} — Hisaabo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; background: #f8f9fa; color: #1a1a2e; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .container { text-align: center; padding: 2rem; }
+    .logo { width: 48px; height: 48px; border-radius: 14px; background: #5b5bd6; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1.5rem; }
+    .logo span { color: white; font-weight: 700; font-size: 22px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: #1a1a2e; }
+    p { color: #6b7280; font-size: 0.9rem; line-height: 1.6; max-width: 400px; margin: 0 auto; }
+    .status { font-size: 4rem; font-weight: 800; color: #5b5bd6; opacity: 0.15; margin-bottom: -0.5rem; }
+    a { color: #5b5bd6; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+    .links { margin-top: 1.5rem; display: flex; gap: 1.5rem; justify-content: center; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo"><span>H</span></div>
+    ${status >= 400 ? `<div class="status">${status}</div>` : ""}
+    <h1>${heading}</h1>
+    <p>${message}</p>
+    <div class="links">
+      <a href="https://hisaabo.in">hisaabo.in</a>
+      <a href="https://github.com/hisaabo">GitHub</a>
+      <a href="/health">API Status</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Base page — shows when someone visits the API root
+app.get("/", (c) => {
+  return c.html(brandedHtml(
+    "API",
+    "Hisaabo API",
+    "Professional billing for Indian businesses. This is the API server — the web app is at <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
+    200,
+  ));
+});
+
+// 404 handler — catch-all for unmatched routes
+app.notFound((c) => {
+  // Return JSON for API-like paths
+  if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
+    return c.json({ error: "Not found", path: c.req.path }, 404);
+  }
+  return c.html(brandedHtml(
+    "Not Found",
+    "Page not found",
+    "The page you're looking for doesn't exist. If you're looking for the Hisaabo app, visit <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
+    404,
+  ), 404);
+});
+
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);
 

@@ -27,3 +27,6 @@ SECURITY_PENDING.md
 screens/
 
 *.csv
+
+# Backups
+backups/

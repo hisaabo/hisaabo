@@ -1,0 +1,38 @@
+# Dependencies (rebuilt inside container)
+node_modules/
+.pnpm-store/
+
+# Git
+.git/
+.gitignore
+
+# Frontend apps (not needed in API image)
+apps/
+
+# Build artifacts (rebuilt inside container)
+dist/
+.turbo/
+
+# Environment files (secrets injected at runtime)
+.env
+.env.*
+!.env.example
+
+# Dev tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Backups and data
+backups/
+*.csv
+*.sql
+
+# Desktop app
+src-tauri/

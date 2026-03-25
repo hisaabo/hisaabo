@@ -799,17 +799,19 @@ function MergePartyModal({
     onError: (err) => toast.error(err.message),
   });
 
-  // Server-side search already filters results; exclude only the source party client-side
-  const filteredOptions = (partiesData?.data || []).filter((p) => p.id !== sourceId);
+  // Server-side search filters results; exclude only the source party client-side
+  const allParties = (partiesData?.data || []).filter((p) => p.id !== sourceId);
 
-  const selectedTarget = filteredOptions.find((p) => p.id === targetId);
-
-  const totalInvoices = (sourceStats?.invoiceCount ?? 0) + (targetStats?.invoiceCount ?? 0);
-  const totalPayments = (sourceStats?.paymentCount ?? 0) + (targetStats?.paymentCount ?? 0);
+  // Keep a stable reference to the selected target — don't lose it when search results change
+  const [selectedTargetCache, setSelectedTargetCache] = useState<{ id: string; name: string; type: string } | null>(null);
+  const selectedTarget = selectedTargetCache && targetId === selectedTargetCache.id
+    ? selectedTargetCache
+    : allParties.find((p) => p.id === targetId) || null;
 
   function handleSelectTarget(id: string) {
+    const party = allParties.find((p) => p.id === id);
+    if (party) setSelectedTargetCache({ id: party.id, name: party.name, type: party.type });
     setTargetId(id);
-    setTargetSearch("");
     setConfirmed(false);
   }
 
@@ -883,24 +885,42 @@ function MergePartyModal({
 
         {/* Target party selector */}
         <div>
-          <label className="text-sm font-medium text-text-primary block mb-1.5">
-            Select target party <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            className="input w-full mb-2"
-            placeholder="Search parties..."
-            value={targetSearch}
-            onChange={(e) => setTargetSearch(e.target.value)}
-            autoFocus
-          />
+          {selectedTarget ? (
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium text-text-primary">
+                Target: <span className="text-emerald-600">{selectedTarget.name}</span>
+              </label>
+              <button
+                type="button"
+                className="text-xs text-brand-600 hover:text-brand-700"
+                onClick={() => { setTargetId(""); setSelectedTargetCache(null); setConfirmed(false); }}
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <>
+              <label className="text-sm font-medium text-text-primary block mb-1.5">
+                Select target party <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                className="input w-full mb-2"
+                placeholder="Search parties..."
+                value={targetSearch}
+                onChange={(e) => setTargetSearch(e.target.value)}
+                autoFocus
+              />
+            </>
+          )}
+          {!selectedTarget && (
           <div className="border border-border-light rounded-lg overflow-hidden max-h-40 overflow-y-auto bg-surface-0">
             {partiesLoading ? (
               <p className="text-sm text-text-tertiary px-3 py-2">Loading parties...</p>
-            ) : filteredOptions.length === 0 ? (
+            ) : allParties.length === 0 ? (
               <p className="text-sm text-text-tertiary px-3 py-2 italic">No parties found</p>
             ) : (
-              filteredOptions.map((p) => (
+              allParties.map((p) => (
                 <button
                   key={p.id}
                   type="button"
@@ -918,6 +938,7 @@ function MergePartyModal({
               ))
             )}
           </div>
+          )}
         </div>
 
         {/* Preview: what will happen */}
@@ -940,15 +961,29 @@ function MergePartyModal({
                   details (address, phone, GSTIN)
                 </span>
               </li>
-              {(sourceStats || targetStats) && (
+              {sourceStats && (
                 <li className="flex items-start gap-1.5">
                   <span className="text-brand-500 mt-0.5">→</span>
                   <span>
-                    <span className="font-medium text-text-primary">{totalInvoices} invoice{totalInvoices !== 1 ? "s" : ""}</span>
+                    <span className="font-medium text-text-primary">{sourceStats.invoiceCount} invoice{sourceStats.invoiceCount !== 1 ? "s" : ""}</span>
                     {" and "}
-                    <span className="font-medium text-text-primary">{totalPayments} payment{totalPayments !== 1 ? "s" : ""}</span>
-                    {" "}will be moved to{" "}
+                    <span className="font-medium text-text-primary">{sourceStats.paymentCount} payment{sourceStats.paymentCount !== 1 ? "s" : ""}</span>
+                    {" from "}
+                    <span className="font-medium text-text-primary">{sourceName}</span>
+                    {" will be moved to "}
                     <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                  </span>
+                </li>
+              )}
+              {targetStats && (
+                <li className="flex items-start gap-1.5">
+                  <span className="text-text-tertiary mt-0.5">•</span>
+                  <span>
+                    <span className="font-medium text-text-primary">{selectedTarget.name}</span>
+                    {" already has "}
+                    {targetStats.invoiceCount} invoice{targetStats.invoiceCount !== 1 ? "s" : ""}
+                    {" and "}
+                    {targetStats.paymentCount} payment{targetStats.paymentCount !== 1 ? "s" : ""}
                   </span>
                 </li>
               )}

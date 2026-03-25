@@ -1,0 +1,44 @@
+name: Deploy Store
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/store/**"
+
+concurrency:
+  group: deploy-store
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy Store to Cloudflare Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build store app
+        run: pnpm --filter @hisaabo/store build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy apps/store/dist --project-name=hisaabo-store

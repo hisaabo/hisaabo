@@ -14,7 +14,7 @@ const IS_DEV = import.meta.env.DEV;
 const STORE_PREFIX = IS_DEV ? "localhost:5174/store/" : "store.hisaabo.in/";
 
 function buildStoreUrl(slug: string) {
-  const origin = IS_DEV ? "http://localhost:3000" : "https://store.hisaabo.in";
+  const origin = IS_DEV ? "http://localhost:5174" : "https://store.hisaabo.in";
   return `${origin}/store/${slug}`;
 }
 
@@ -32,21 +32,22 @@ interface ToggleSwitchProps {
 function ToggleSwitch({ checked, onChange, label, disabled }: ToggleSwitchProps) {
   return (
     <button
+      type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
-        checked ? "bg-brand-600" : "bg-surface-3",
+        "relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
+        checked ? "bg-brand-600" : "bg-border-light dark:bg-surface-3",
         disabled && "opacity-50 cursor-not-allowed",
       )}
     >
       <span
         className={cn(
-          "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform",
-          checked ? "translate-x-4" : "translate-x-0.5",
+          "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-0 transition-transform",
+          checked ? "translate-x-5" : "translate-x-0",
         )}
       />
     </button>
@@ -341,6 +342,8 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
     }
 
     setPendingChanges(new Map());
+    // Invalidate ALL store item queries so the parent card refreshes counts + pills
+    await utils.store.listStoreItems.invalidate();
     onClose();
   }
 
@@ -463,10 +466,16 @@ function StoreItemsCard() {
     page: 1,
   });
   const items: any[] = itemsResponse?.data ?? [];
+  const totalCount = itemsResponse?.total ?? items.length; // use server total, not capped array length
 
   const enabledItems = items.filter((item: any) => item.storeEnabled);
-  const enabledCount = enabledItems.length;
-  const totalCount = items.length;
+  // For enabled count, also use the total from a filtered query if available
+  const { data: enabledResponse } = trpc.store.listStoreItems.useQuery({
+    limit: 1,
+    page: 1,
+    storeEnabled: true,
+  });
+  const enabledCount = enabledResponse?.total ?? enabledItems.length;
 
   return (
     <>
