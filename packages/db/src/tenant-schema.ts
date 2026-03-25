@@ -205,6 +205,19 @@ export const payments = pgTable("payments", {
   index("payments_party_date_idx").on(t.businessId, t.partyId, t.paymentDate),
 ]);
 
+// ── Payment Allocations (M:N link between payments and invoices) ──
+
+export const paymentAllocations = pgTable("payment_allocations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("payment_alloc_payment_idx").on(t.paymentId),
+  index("payment_alloc_invoice_idx").on(t.invoiceId),
+]);
+
 // ── Expenses ───────────────────────────────────────────────────
 
 export const expenses = pgTable("expenses", {

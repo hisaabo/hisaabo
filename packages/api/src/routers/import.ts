@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parties, items, invoices, invoiceItems, payments, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, adminProcedure } from "../trpc.js";
 import { calcLineItem, money } from "@hisaabo/shared";
@@ -242,7 +242,8 @@ export const importRouter = router({
           invoiceNumber: inv.invoiceNumber,
           invoiceDate,
           dueDate,
-          status: inv.status,
+          // Status starts as "sent" — payment allocation will update to paid/partial
+          status: "sent" as const,
           subtotal: inv.subtotal,
           taxAmount: inv.taxAmount,
           discountAmount: inv.discountAmount,
@@ -252,7 +253,8 @@ export const importRouter = router({
             : "0",
           roundOff: "0",
           totalAmount: inv.totalAmount,
-          amountPaid: inv.amountPaid,
+          // amountPaid starts at 0 — built up by payment import allocation
+          amountPaid: "0",
           notes: inv.notes || null,
           createdByUserId: ctx.user!.id,
           createdByName: inv.createdByName || ctx.user!.name,
@@ -394,6 +396,9 @@ export const importRouter = router({
   importPayments: adminProcedure
     .input(z.object({
       source: z.string().default("mybillbook"),
+      // Invoice numbers that were marked "Paid" in the source system.
+      // After C&B allocation, any of these still without full payment get auto-payments.
+      paidInvoiceNumbers: z.array(z.string()).default([]),
       payments: z.array(z.object({
         paymentNumber: z.string().optional(),
         paymentDate: z.string(),
@@ -468,6 +473,7 @@ export const importRouter = router({
       };
 
       type InvoiceAllocation = {
+        paymentId: string;
         invoiceId: string;
         allocAmount: number;
       };
@@ -496,34 +502,37 @@ export const importRouter = router({
         let remaining = money.toNumber(pmt.amount);
 
         if (pmt.invoiceNumbers?.length) {
-          // CSV path: link to the explicitly named invoice first
+          // CSV path: allocate to the EXPLICITLY named invoices first
           for (const invNum of pmt.invoiceNumbers) {
+            if (remaining <= 0) break;
             const inv = invoiceByNumber.get(invNum);
             if (!inv) continue;
             if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+
+            const balance = balanceTracker.get(inv.id) || 0;
+            if (balance <= 0) continue;
+
+            const allocAmt = Math.min(remaining, balance);
+            allAllocations.push({ paymentId, invoiceId: inv.id, allocAmount: allocAmt });
+            balanceTracker.set(inv.id, balance - allocAmt);
+            remaining -= allocAmt;
           }
         }
 
-        // Chronological allocation: walk this party's invoices oldest-first,
-        // consuming the payment amount. This covers:
-        // - Single-invoice payments (links + allocates the named invoice)
-        // - Multi-invoice bulk payments (covers named invoice + subsequent ones)
-        // - Payments without invoice numbers (pure chronological)
-        //
-        // The balanceTracker uses amountPaid from invoice import, so invoices
-        // already marked as fully paid (balance=0) are skipped. As payments
-        // allocate, balances decrease, naturally flowing to the next invoice.
-        const partyInvs = unpaidByParty.get(partyId) || [];
-        for (const inv of partyInvs) {
-          if (remaining <= 0) break;
-          const balance = balanceTracker.get(inv.id) || 0;
-          if (balance <= 0) continue;
+        // If there's remaining amount (or no invoice numbers), allocate chronologically
+        if (remaining > 0) {
+          const partyInvs = unpaidByParty.get(partyId) || [];
+          for (const inv of partyInvs) {
+            if (remaining <= 0) break;
+            const balance = balanceTracker.get(inv.id) || 0;
+            if (balance <= 0) continue;
 
-          const allocAmt = Math.min(remaining, balance);
-          if (!primaryInvoiceId) primaryInvoiceId = inv.id;
-          allAllocations.push({ invoiceId: inv.id, allocAmount: allocAmt });
-          balanceTracker.set(inv.id, balance - allocAmt);
-          remaining -= allocAmt;
+            const allocAmt = Math.min(remaining, balance);
+            if (!primaryInvoiceId) primaryInvoiceId = inv.id;
+            allAllocations.push({ paymentId, invoiceId: inv.id, allocAmount: allocAmt });
+            balanceTracker.set(inv.id, balance - allocAmt);
+            remaining -= allocAmt;
+          }
         }
 
         const needsAutoNumber = !pmt.paymentNumber;
@@ -609,12 +618,108 @@ export const importRouter = router({
               WHERE id = ${invoiceId} AND business_id = ${ctx.businessId}
             `);
           }
+
+          // Bulk insert payment allocation records
+          if (allAllocations.length > 0) {
+            const allocRows = allAllocations.map(a => ({
+              paymentId: a.paymentId,
+              invoiceId: a.invoiceId,
+              amount: a.allocAmount.toFixed(2),
+            }));
+            for (let i = 0; i < allocRows.length; i += 500) {
+              await tx.insert(paymentAllocations).values(allocRows.slice(i, i + 500));
+            }
+          }
         });
       }
 
-      // Return allocated invoice IDs so reconcileDirectPayments can exclude them
-      const allocatedInvoiceIds = [...new Set(allAllocations.map(a => a.invoiceId))];
-      return { created, skipped, total: input.payments.length, errors, allocatedInvoiceIds };
+      // ── Phase 3: Auto-create payments for direct-paid invoices ──
+      // Invoices marked "Paid" in the source but not fully covered by C&B allocation.
+      let directCreated = 0;
+
+      if (input.paidInvoiceNumbers.length > 0) {
+        const paidSet = new Set(input.paidInvoiceNumbers);
+
+        // Re-fetch these invoices to get current amountPaid after C&B allocation
+        const freshInvs = await ctx.db
+          .select({
+            id: invoices.id,
+            invoiceNumber: invoices.invoiceNumber,
+            partyId: invoices.partyId,
+            totalAmount: invoices.totalAmount,
+            amountPaid: invoices.amountPaid,
+            invoiceDate: invoices.invoiceDate,
+          })
+          .from(invoices)
+          .where(and(eq(invoices.businessId, ctx.businessId), eq(invoices.source, input.source)));
+
+        // Filter to only "Paid" invoices with a shortfall, sorted REVERSE chronologically
+        // (newest first — direct-paid invoices are more likely to be recent)
+        const needsPayment = freshInvs
+          .filter((inv) => {
+            if (!paidSet.has(inv.invoiceNumber)) return false;
+            const shortfall = money.toNumber(inv.totalAmount) - money.toNumber(inv.amountPaid);
+            return shortfall > 0.01;
+          })
+          .sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime());
+
+        if (needsPayment.length > 0) {
+          const [biz2] = await ctx.db
+            .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+            .from(businesses)
+            .where(eq(businesses.id, ctx.businessId))
+            .for("update");
+
+          let counter2 = biz2.nextNum;
+          const directPaymentRows = needsPayment.map((inv) => {
+            const shortfall = money.sub(inv.totalAmount, inv.amountPaid);
+            const paymentNumber = `${biz2.prefix}-${String(counter2).padStart(5, "0")}`;
+            counter2++;
+            return {
+              id: crypto.randomUUID(),
+              businessId: ctx.businessId,
+              partyId: inv.partyId,
+              invoiceId: inv.id,
+              paymentNumber,
+              amount: shortfall,
+              discount: "0",
+              mode: "cash" as const,
+              paymentDate: inv.invoiceDate,
+              notes: `Auto-created for direct-paid invoice ${inv.invoiceNumber}`,
+              createdByUserId: ctx.user!.id,
+              createdByName: ctx.user!.name,
+              source: input.source,
+            };
+          });
+
+          await ctx.db.update(businesses)
+            .set({ nextPaymentNumber: counter2 })
+            .where(eq(businesses.id, ctx.businessId));
+
+          for (let i = 0; i < directPaymentRows.length; i += 500) {
+            await ctx.db.insert(payments).values(directPaymentRows.slice(i, i + 500));
+          }
+
+          // Update amountPaid + status on these invoices
+          for (const dp of directPaymentRows) {
+            await ctx.db.execute(sql`
+              UPDATE invoices SET
+                amount_paid = amount_paid::numeric + ${dp.amount}::numeric,
+                status = CASE
+                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) >= total_amount::numeric THEN 'paid'
+                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) > 0 THEN 'partial'
+                  ELSE status
+                END,
+                updated_at = NOW()
+              WHERE id = ${dp.invoiceId} AND business_id = ${ctx.businessId}
+            `);
+          }
+
+          directCreated = directPaymentRows.length;
+        }
+      }
+
+      return { created: created + directCreated, skipped, total: input.payments.length, errors, directCreated };
     }),
 
   // ── Create payments for directly-paid invoices that lack a payment record ──

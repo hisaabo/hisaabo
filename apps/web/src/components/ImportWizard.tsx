@@ -74,7 +74,7 @@ const MYBILLBOOK_ITEM_MAP: Record<string, string> = {
   "Tax Rate(%)": "taxPercent",
   "HSN/SAC": "hsn",
   "Measuring Unit": "unit",
-  "Opening Stock": "stockQuantity",
+  // "Opening Stock" intentionally not mapped — stock is calculated from invoice line items
   "SKU": "sku",
   "Category": "category",
 };
@@ -86,7 +86,7 @@ const MYBILLBOOK_STOCK_SUMMARY_MAP: Record<string, string> = {
   "Item Code": "sku",
   "Purchase Price": "purchasePrice",
   "Selling Price": "salePrice",
-  "Stock Quantity": "stockQuantity", // parsed: "-31.5 KGS" → qty + unit
+  // "Stock Quantity" intentionally not mapped — stock is calculated from invoice line items
   "Item Category Name": "category",
   "MRP": "mrp",
 };
@@ -1729,16 +1729,34 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
         let created = 0, skipped = 0;
         const errors: string[] = [];
 
+        // Collect invoice numbers that were "Paid" in Sales Summary
+        // (used on last batch to create auto-payments for direct-paid invoices)
+        const paidInvoiceNumbers: string[] = [];
+        if (invoicesFile) {
+          const invoiceMapping = state.mappings.invoices || {};
+          for (const row of invoicesFile.rows) {
+            const mapped = applyMapping(row, invoiceMapping);
+            const invNum = mapped.invoiceNumber || "";
+            const status = (mapped.status || "").toLowerCase();
+            if (invNum && status === "paid") {
+              paidInvoiceNumbers.push(invNum);
+            }
+          }
+        }
+
+        const totalBatches = Math.ceil(paymentRows.length / BATCH_SIZE);
         for (let i = 0; i < paymentRows.length; i += BATCH_SIZE) {
           const batch = paymentRows.slice(i, i + BATCH_SIZE);
+          const isLastBatch = Math.floor(i / BATCH_SIZE) + 1 === totalBatches;
           const res = await importPaymentsMut.mutateAsync({
             source: "mybillbook",
             payments: batch,
+            // Send paid invoice list on last batch to trigger direct-paid reconciliation
+            ...(isLastBatch ? { paidInvoiceNumbers } : {}),
           });
           created += res.created;
           skipped += res.skipped;
           if (res.errors) errors.push(...res.errors);
-          if (res.allocatedInvoiceIds) allAllocatedInvoiceIds.push(...res.allocatedInvoiceIds);
         }
 
         // Import expense rows

@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, gte, lte, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { payments, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 
@@ -299,19 +299,33 @@ export const paymentRouter = router({
 
       if (!payment) return null;
 
-      // Find all invoices this payment was allocated to.
-      // For now, the payment only stores one invoiceId (primary). In future we may add
-      // a payment_allocations join table. For now, return the single linked invoice.
-      const linkedInvoices: Array<{
-        invoiceId: string;
-        invoiceNumber: string;
-        invoiceDate: Date;
-        totalAmount: string;
-        amountPaid: string;
-        status: string;
-        amount: string;
-      }> = [];
-      if (payment.invoiceId) {
+      // Find all invoices this payment was allocated to via the allocations table
+      const allocations = await ctx.db
+        .select({
+          invoiceId: paymentAllocations.invoiceId,
+          allocAmount: paymentAllocations.amount,
+          invoiceNumber: invoices.invoiceNumber,
+          invoiceDate: invoices.invoiceDate,
+          totalAmount: invoices.totalAmount,
+          amountPaid: invoices.amountPaid,
+          status: invoices.status,
+        })
+        .from(paymentAllocations)
+        .innerJoin(invoices, eq(invoices.id, paymentAllocations.invoiceId))
+        .where(eq(paymentAllocations.paymentId, input.id));
+
+      // Fall back to single invoice_id if no allocations exist (legacy payments)
+      let linkedInvoices = allocations.map(a => ({
+        invoiceId: a.invoiceId,
+        invoiceNumber: a.invoiceNumber,
+        invoiceDate: a.invoiceDate,
+        totalAmount: a.totalAmount,
+        amountPaid: a.amountPaid,
+        status: a.status,
+        amount: a.allocAmount,
+      }));
+
+      if (linkedInvoices.length === 0 && payment.invoiceId) {
         const [inv] = await ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
@@ -321,7 +335,7 @@ export const paymentRouter = router({
           status: invoices.status,
         }).from(invoices).where(and(eq(invoices.id, payment.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
         if (inv) {
-          linkedInvoices.push({
+          linkedInvoices = [{
             invoiceId: inv.id,
             invoiceNumber: inv.invoiceNumber,
             invoiceDate: inv.invoiceDate,
@@ -329,7 +343,7 @@ export const paymentRouter = router({
             amountPaid: inv.amountPaid,
             status: inv.status,
             amount: payment.amount,
-          });
+          }];
         }
       }
 
