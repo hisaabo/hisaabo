@@ -21,6 +21,7 @@ import {
 } from "./routers/document.js";
 import { bankAccountRouter } from "./routers/bankAccount.js";
 import { importRouter } from "./routers/import.js";
+import { storeRouter } from "./routers/store.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -43,6 +44,7 @@ export const appRouter = router({
   document: documentRouter,
   bankAccount: bankAccountRouter,
   import: importRouter,
+  store: storeRouter,
 });
 
 export type AppRouter = typeof appRouter;

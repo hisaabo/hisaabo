@@ -9,6 +9,7 @@ import { TeamTab } from "@/components/settings/TeamTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { DataTab } from "@/components/settings/DataTab";
 import { AccountTab } from "@/components/settings/AccountTab";
+import { StoreTab } from "@/components/settings/StoreTab";
 import { WhatsNextModal } from "@/components/settings/WhatsNextModal";
 import { ImportWizard } from "@/components/ImportWizard";
 
@@ -82,6 +83,7 @@ function SettingsPage() {
           {tab === "appearance" && <AppearanceTab />}
           {tab === "data" && <DataTab />}
           {tab === "account" && <AccountTab />}
+          {tab === "store" && <StoreTab />}
         </div>
       </div>
     </div>

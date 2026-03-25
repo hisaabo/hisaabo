@@ -113,7 +113,7 @@ function ItemsPage() {
         return item.itemType === typeFilter;
       });
 
-      const headers = ["Name", "Type", "SKU", "HSN", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
+      const headers = ["Name", "Type", "SKU", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
       const rows = filtered.map((item: any) => [
         item.name,
         item.itemType,
@@ -244,12 +244,9 @@ function ItemsPage() {
             <thead>
               <tr>
                 <th>Item</th>
-                <th>Type</th>
-                <th>HSN</th>
                 <th className="text-right">Sale Price</th>
                 <th className="text-right">Stock</th>
                 <th>Unit</th>
-                <th>Tax %</th>
                 <th></th>
               </tr>
             </thead>
@@ -261,24 +258,20 @@ function ItemsPage() {
                 return (
                   <tr key={item.id} className="group cursor-pointer" onClick={() => setSelectedItemId(item.id)}>
                     <td>
-                      <p className="font-medium">{item.name}</p>
-                      {item.sku && (
-                        <p className="text-xs text-text-tertiary">SKU: {item.sku}</p>
-                      )}
-                    </td>
-                    <td>
-                      <span
-                        className={cn(
-                          "inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium",
-                          item.itemType === "service"
-                            ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
-                            : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                      <div className="flex items-center gap-2">
+                        {item.itemType === "service" && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400 shrink-0">
+                            SVC
+                          </span>
                         )}
-                      >
-                        {item.itemType === "service" ? "Service" : "Product"}
-                      </span>
+                        <div>
+                          <p className="font-medium">{item.name}</p>
+                          {item.sku && (
+                            <p className="text-xs text-text-tertiary">SKU: {item.sku}</p>
+                          )}
+                        </div>
+                      </div>
                     </td>
-                    <td className="text-text-secondary text-xs">{item.hsn || "—"}</td>
                     <td className="text-right tabular-nums">
                       {item.salePrice ? formatCurrency(item.salePrice) : "—"}
                     </td>
@@ -291,9 +284,6 @@ function ItemsPage() {
                       {parseFloat(item.stockQuantity).toLocaleString()}
                     </td>
                     <td className="text-text-secondary text-xs">{item.unit}</td>
-                    <td className="text-text-secondary tabular-nums">
-                      {item.taxPercent}%
-                    </td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
                       <button
                         className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"

@@ -9,6 +9,7 @@ export type Resource =
   | "Invoice" | "Payment" | "Party" | "Item" | "Expense"
   | "BankAccount" | "BankTransaction"
   | "Business" | "Team" | "Import" | "Report" | "GstReport"
+  | "Store"
   | "all";
 
 export type AppAbility = PureAbility<[Action, Resource]>;
@@ -55,6 +56,10 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("read", "BankTransaction");
       can("read", "Business");
       can("read", "Report");
+      // Store: create/read/update (toggle items, confirm orders)
+      can("create", "Store");
+      can("read", "Store");
+      can("update", "Store");
       break;
 
     case "seller":
@@ -73,6 +78,8 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("update", "Payment"); // API enforces: own + <2hrs
       // View basics
       can("read", "Business");
+      // Store: read only (view orders)
+      can("read", "Store");
       break;
 
     case "accountant":
@@ -93,6 +100,8 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("read", "Party");
       can("read", "Item");
       can("read", "Business");
+      // Store: read only (view orders for reconciliation)
+      can("read", "Store");
       break;
 
     default:

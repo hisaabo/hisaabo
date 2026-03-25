@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, inArray } from "drizzle-orm";
+import { eq, and, gt, lt, inArray, sql } from "drizzle-orm";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,7 +12,8 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders } from "@hisaabo/db";
+import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
 
 const app = new Hono();
 
@@ -201,6 +202,406 @@ app.get("/api/invoices/:id/pdf", async (c) => {
       "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
     },
   });
+});
+
+// ── Public Store API ─────────────────────────────────────────
+// Slug resolution cache: slug → { tenantId, businessId, expires }
+const slugCache = new Map<string, { tenantId: string; businessId: string; expires: number }>();
+
+// Rate limit for order placement: phone → { count, reset }
+const orderRateMap = new Map<string, { count: number; reset: number }>();
+
+// Clean stale order rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of orderRateMap) {
+    if (now > entry.reset) orderRateMap.delete(key);
+  }
+}, 5 * 60_000).unref();
+
+async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
+  // Validate slug format
+  if (!slug || !/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(slug)) return null;
+
+  const now = Date.now();
+  const cached = slugCache.get(slug);
+  if (cached && now < cached.expires) {
+    return { tenantId: cached.tenantId, businessId: cached.businessId };
+  }
+
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  const tenantId = isMultiTenant ? "multi" : "single";
+
+  // In self-hosted mode, query the single tenant DB directly
+  const db = await getTenantDb(tenantId === "multi" ? "__store_slug_resolve__" : tenantId);
+  const [biz] = await db.select({ id: businesses.id })
+    .from(businesses)
+    .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return null;
+
+  const resolved = { tenantId, businessId: biz.id };
+  slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
+  return resolved;
+}
+
+// Helper: get tenant DB for a resolved slug context
+async function getStoreDb(tenantId: string) {
+  // In self-hosted, tenantId is always "single"
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  return getTenantDb(isMultiTenant ? tenantId : "single");
+}
+
+// GET /store/:slug/catalog.json — public item catalog
+app.get("/store/:slug/catalog.json", async (c) => {
+  const slug = c.req.param("slug");
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  const [biz] = await db.select({
+    id: businesses.id,
+    name: businesses.name,
+    storeTagline: businesses.storeTagline,
+    storeAccentColor: businesses.storeAccentColor,
+    storeMinOrderAmount: businesses.storeMinOrderAmount,
+    storeDeliveryNote: businesses.storeDeliveryNote,
+    storeWhatsappNumber: businesses.storeWhatsappNumber,
+    currency: businesses.currency,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10)));
+  const category = c.req.query("category");
+  const search = c.req.query("search");
+  const offset = (page - 1) * limit;
+
+  const conditions = [
+    eq(items.businessId, resolved.businessId),
+    eq(items.storeEnabled, true),
+  ];
+  if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
+  if (search) conditions.push(sql`${items.name} ILIKE ${"%" + search + "%"}`);
+
+  // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
+  const [catalog, [{ total }]] = await Promise.all([
+    db.select({
+      id: items.id,
+      name: items.name,
+      description: sql<string | null>`COALESCE(${items.storeDescription}, ${items.description})`,
+      price: sql<string | null>`COALESCE(${items.storePrice}, ${items.salePrice})`,
+      unit: items.unit,
+      category: sql<string | null>`COALESCE(${items.storeCategory}, ${items.category})`,
+      taxPercent: items.taxPercent,
+      taxInclusive: items.taxInclusive,
+      inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
+      sortOrder: items.storeSortOrder,
+    }).from(items)
+      .where(and(...conditions))
+      .orderBy(items.storeSortOrder, items.name)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: sql<number>`count(*)::int` }).from(items)
+      .where(and(...conditions)),
+  ]);
+
+  const categories = [...new Set(
+    catalog.map((i) => i.category).filter(Boolean) as string[]
+  )];
+
+  return c.json(
+    {
+      business: {
+        name: biz.name,
+        tagline: biz.storeTagline,
+        accentColor: biz.storeAccentColor,
+        minOrderAmount: biz.storeMinOrderAmount,
+        deliveryNote: biz.storeDeliveryNote,
+        whatsappNumber: biz.storeWhatsappNumber,
+        currency: biz.currency,
+      },
+      items: catalog,
+      categories,
+      total,
+      page,
+      limit,
+    },
+    200,
+    { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" },
+  );
+});
+
+// POST /store/:slug/order — place an order (public, no auth)
+app.post("/store/:slug/order", async (c) => {
+  const slug = c.req.param("slug");
+
+  // Parse and validate body
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const {
+    customerName,
+    customerPhone,
+    customerEmail,
+    deliveryAddress,
+    deliveryCity,
+    deliveryPincode,
+    notes,
+    items: orderItems,
+  } = body as Record<string, unknown>;
+
+  // Basic validation
+  if (typeof customerName !== "string" || customerName.trim().length < 2) {
+    return c.json({ error: "customerName is required (min 2 chars)" }, 400);
+  }
+  if (typeof customerPhone !== "string" || !/^[6-9]\d{9}$/.test(customerPhone)) {
+    return c.json({ error: "customerPhone must be a valid 10-digit Indian mobile number" }, 400);
+  }
+  if (!Array.isArray(orderItems) || orderItems.length === 0) {
+    return c.json({ error: "items array is required and must not be empty" }, 400);
+  }
+  for (const it of orderItems) {
+    if (typeof it !== "object" || it === null) return c.json({ error: "Invalid item in items array" }, 400);
+    const item = it as Record<string, unknown>;
+    if (typeof item.itemId !== "string") return c.json({ error: "Each item must have an itemId" }, 400);
+    const qty = Number(item.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: "Each item must have a positive quantity" }, 400);
+  }
+
+  // Rate limit: 5 orders per phone per minute
+  const now = Date.now();
+  const rateKey = `order:${customerPhone}`;
+  const rateEntry = orderRateMap.get(rateKey);
+  if (!rateEntry || now > rateEntry.reset) {
+    orderRateMap.set(rateKey, { count: 1, reset: now + 60_000 });
+  } else if (rateEntry.count >= 5) {
+    return c.json({ error: "Too many orders. Please wait a moment before trying again." }, 429);
+  } else {
+    rateEntry.count++;
+  }
+
+  // Resolve business
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  const [biz] = await db.select({
+    id: businesses.id,
+    name: businesses.name,
+    storeEnabled: businesses.storeEnabled,
+    storeMinOrderAmount: businesses.storeMinOrderAmount,
+    invoicePrefix: businesses.invoicePrefix,
+    nextInvoiceNumber: businesses.nextInvoiceNumber,
+    storeOrderPrefix: businesses.storeOrderPrefix,
+    nextStoreOrderNumber: businesses.nextStoreOrderNumber,
+    currency: businesses.currency,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  // Validate items exist and are store-enabled
+  const itemIds = (orderItems as Array<{ itemId: string; quantity: number }>).map((i) => i.itemId);
+  const foundItems = await db.select({
+    id: items.id,
+    name: items.name,
+    storeEnabled: items.storeEnabled,
+    storePrice: items.storePrice,
+    salePrice: items.salePrice,
+    taxPercent: items.taxPercent,
+    taxInclusive: items.taxInclusive,
+    stockQuantity: items.stockQuantity,
+    unit: items.unit,
+  }).from(items)
+    .where(and(
+      inArray(items.id, itemIds),
+      eq(items.businessId, resolved.businessId),
+      eq(items.storeEnabled, true),
+    ));
+
+  if (foundItems.length !== itemIds.length) {
+    return c.json({ error: "One or more items are not available in this store" }, 400);
+  }
+
+  const itemMap = new Map(foundItems.map((i) => [i.id, i]));
+
+  // Build line items for calculation
+  const lineItemInputs = (orderItems as Array<{ itemId: string; quantity: number }>).map((oi) => {
+    const item = itemMap.get(oi.itemId)!;
+    const price = item.storePrice ?? item.salePrice ?? "0";
+    return {
+      itemId: oi.itemId,
+      quantity: String(oi.quantity),
+      unitPrice: price,
+      taxPercent: item.taxPercent || "0",
+      discountPercent: "0",
+      taxInclusive: item.taxInclusive,
+      name: item.name,
+      unit: item.unit,
+    };
+  });
+
+  // Calculate totals using shared library
+  const totals = calcInvoiceTotals({
+    lineItems: lineItemInputs.map((li) => ({
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      taxPercent: li.taxPercent,
+      discountPercent: li.discountPercent,
+      taxInclusive: li.taxInclusive,
+    })),
+  });
+
+  // Check minimum order amount
+  if (biz.storeMinOrderAmount) {
+    const minAmount = parseFloat(biz.storeMinOrderAmount);
+    const orderTotal = parseFloat(totals.total);
+    if (orderTotal < minAmount) {
+      return c.json({
+        error: `Minimum order amount is ${biz.currency} ${biz.storeMinOrderAmount}`,
+      }, 400);
+    }
+  }
+
+  // Atomic transaction: increment counters, create invoice + line items + store order
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Lock and increment business counters atomically
+      const [bizLocked] = await tx.select({
+        invoicePrefix: businesses.invoicePrefix,
+        nextInvoiceNumber: businesses.nextInvoiceNumber,
+        storeOrderPrefix: businesses.storeOrderPrefix,
+        nextStoreOrderNumber: businesses.nextStoreOrderNumber,
+      }).from(businesses)
+        .where(eq(businesses.id, resolved.businessId))
+        .for("update");
+
+      const invoiceNumber = `${bizLocked.invoicePrefix}-${String(bizLocked.nextInvoiceNumber).padStart(5, "0")}`;
+      const orderNumber = `${bizLocked.storeOrderPrefix}-${String(bizLocked.nextStoreOrderNumber).padStart(5, "0")}`;
+
+      await tx.update(businesses)
+        .set({
+          nextInvoiceNumber: bizLocked.nextInvoiceNumber + 1,
+          nextStoreOrderNumber: bizLocked.nextStoreOrderNumber + 1,
+        })
+        .where(eq(businesses.id, resolved.businessId));
+
+      // Find or create a "Walk-in Customer" party for online store orders
+      let walkinPartyId: string;
+      const [existingWalkin] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(
+          eq(parties.businessId, resolved.businessId),
+          eq(parties.name, "Walk-in Customer"),
+          eq(parties.type, "customer"),
+        ))
+        .limit(1);
+
+      if (existingWalkin) {
+        walkinPartyId = existingWalkin.id;
+      } else {
+        const [newWalkin] = await tx.insert(parties).values({
+          businessId: resolved.businessId,
+          type: "customer",
+          name: "Walk-in Customer",
+          source: "online_store",
+        }).returning({ id: parties.id });
+        walkinPartyId = newWalkin.id;
+      }
+
+      // Create the draft invoice
+      const [invoice] = await tx.insert(invoices).values({
+        businessId: resolved.businessId,
+        partyId: walkinPartyId,
+        type: "sale",
+        status: "draft",
+        documentType: "invoice",
+        invoiceNumber,
+        invoiceDate: new Date(),
+        subtotal: totals.subtotal,
+        taxAmount: totals.taxTotal,
+        discountAmount: "0",
+        additionalCharges: "0",
+        roundOff: "0",
+        totalAmount: totals.total,
+        amountPaid: "0",
+        notes: typeof notes === "string" ? notes : null,
+        source: "online_store",
+      }).returning();
+
+      // Create invoice line items
+      const processedLineItems = lineItemInputs.map((li, idx) => {
+        const calc = calcLineItem({
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          discountPercent: li.discountPercent,
+          taxInclusive: li.taxInclusive,
+        });
+        return {
+          invoiceId: invoice.id,
+          itemId: li.itemId,
+          description: li.name,
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          taxAmount: calc.taxAmount,
+          discountPercent: "0",
+          totalAmount: calc.total,
+          sortOrder: idx,
+          conversionFactor: "1",
+        };
+      });
+
+      await tx.insert(invoiceItems).values(processedLineItems);
+
+      // Create the store order record
+      const [order] = await tx.insert(storeOrders).values({
+        businessId: resolved.businessId,
+        invoiceId: invoice.id,
+        orderNumber,
+        status: "pending",
+        customerName: customerName.trim(),
+        customerPhone,
+        customerEmail: typeof customerEmail === "string" ? customerEmail.trim() || null : null,
+        deliveryAddress: typeof deliveryAddress === "string" ? deliveryAddress.trim() || null : null,
+        deliveryCity: typeof deliveryCity === "string" ? deliveryCity.trim() || null : null,
+        deliveryPincode: typeof deliveryPincode === "string" ? deliveryPincode.trim() || null : null,
+        deliveryNotes: typeof notes === "string" ? notes.trim() || null : null,
+        totalAmount: totals.total,
+        itemCount: lineItemInputs.length,
+        source: "online_store",
+      }).returning();
+
+      return { order, invoice };
+    });
+
+    return c.json({
+      orderId: result.order.id,
+      orderNumber: result.order.orderNumber,
+      totalAmount: result.order.totalAmount,
+      message: "Order placed successfully! The business will confirm shortly.",
+    }, 201);
+  } catch (err) {
+    console.error("[store/order] Failed to create order:", err);
+    return c.json({ error: "Failed to place order. Please try again." }, 500);
+  }
 });
 
 // ── tRPC handler ───────────────────────────────────────────────

@@ -47,10 +47,21 @@ export const businesses = pgTable("businesses", {
   nextProformaNumber: integer("next_proforma_number").default(1).notNull(),
   financialYearStart: integer("financial_year_start_month").default(4).notNull(), // April
   currency: text("currency").default("INR").notNull(),
+  // ── Online Store settings ──
+  storeEnabled: boolean("store_enabled").default(false).notNull(),
+  storeSlug: text("store_slug"),
+  storeTagline: text("store_tagline"),
+  storeAccentColor: text("store_accent_color"),
+  storeMinOrderAmount: numeric("store_min_order_amount", { precision: 15, scale: 2 }),
+  storeDeliveryNote: text("store_delivery_note"),
+  storeWhatsappNumber: text("store_whatsapp_number"),
+  nextStoreOrderNumber: integer("next_store_order_number").default(1).notNull(),
+  storeOrderPrefix: text("store_order_prefix").default("ORD").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("businesses_owner_idx").on(t.createdByUserId),
+  uniqueIndex("businesses_store_slug_idx").on(t.storeSlug),
 ]);
 
 // ── Parties (Customers / Suppliers) ────────────────────────────
@@ -113,12 +124,19 @@ export const items = pgTable("items", {
   category: text("category"),
   taxInclusive: boolean("tax_inclusive").default(false).notNull(),
   source: text("source"),
+  // ── Online Store fields ──
+  storeEnabled: boolean("store_enabled").default(false).notNull(),
+  storePrice: numeric("store_price", { precision: 15, scale: 2 }),
+  storeSortOrder: integer("store_sort_order").default(0).notNull(),
+  storeCategory: text("store_category"),
+  storeDescription: text("store_description"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("items_business_idx").on(t.businessId),
   index("items_name_idx").on(t.businessId, t.name),
   index("items_sku_idx").on(t.businessId, t.sku),
+  index("items_store_idx").on(t.businessId, t.storeEnabled),
 ]);
 
 // ── Invoices ───────────────────────────────────────────────────
@@ -303,6 +321,44 @@ export const auditLog = pgTable("audit_log", {
   index("audit_log_date_idx").on(t.businessId, t.createdAt),
 ]);
 
+// ── Store Orders ───────────────────────────────────────────────
+
+export const storeOrderStatusEnum = pgEnum("store_order_status", [
+  "pending", "confirmed", "preparing", "ready", "delivered", "cancelled",
+]);
+
+export const storeOrders = pgTable("store_orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  orderNumber: text("order_number").notNull(),
+  status: storeOrderStatusEnum("status").default("pending").notNull(),
+  // Customer info (not a party — anonymous store customer)
+  customerName: text("customer_name").notNull(),
+  customerPhone: text("customer_phone").notNull(),
+  customerEmail: text("customer_email"),
+  deliveryAddress: text("delivery_address"),
+  deliveryCity: text("delivery_city"),
+  deliveryPincode: text("delivery_pincode"),
+  deliveryNotes: text("delivery_notes"),
+  // Totals (denormalized from invoice for quick display)
+  totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  itemCount: integer("item_count").default(0).notNull(),
+  source: text("source").default("online_store").notNull(), // extensible: "whatsapp", "shopify"
+  // Lifecycle timestamps
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  cancellationReason: text("cancellation_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("store_orders_business_idx").on(t.businessId),
+  index("store_orders_status_idx").on(t.businessId, t.status),
+  index("store_orders_date_idx").on(t.businessId, t.createdAt),
+  index("store_orders_phone_idx").on(t.businessId, t.customerPhone),
+  uniqueIndex("store_orders_number_idx").on(t.businessId, t.orderNumber),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({
@@ -312,6 +368,7 @@ export const businessesRelations = relations(businesses, ({ many }) => ({
   payments: many(payments),
   expenses: many(expenses),
   bankAccounts: many(bankAccounts),
+  storeOrders: many(storeOrders),
 }));
 
 export const partiesRelations = relations(parties, ({ one, many }) => ({
@@ -357,4 +414,9 @@ export const bankAccountsRelations = relations(bankAccounts, ({ one, many }) => 
 export const bankTransactionsRelations = relations(bankTransactions, ({ one }) => ({
   business: one(businesses, { fields: [bankTransactions.businessId], references: [businesses.id] }),
   bankAccount: one(bankAccounts, { fields: [bankTransactions.bankAccountId], references: [bankAccounts.id] }),
+}));
+
+export const storeOrdersRelations = relations(storeOrders, ({ one }) => ({
+  business: one(businesses, { fields: [storeOrders.businessId], references: [businesses.id] }),
+  invoice: one(invoices, { fields: [storeOrders.invoiceId], references: [invoices.id] }),
 }));

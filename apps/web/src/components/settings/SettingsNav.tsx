@@ -62,6 +62,16 @@ function UserIcon() {
   );
 }
 
+function StoreIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+      <path d="M3 6h18" />
+      <path d="M16 10a4 4 0 01-8 0" />
+    </svg>
+  );
+}
+
 const SETTINGS_TABS: SettingsTab[] = [
   { value: "business", label: "Business", icon: <BuildingIcon /> },
   { value: "documents", label: "Documents", icon: <DocumentIcon /> },
@@ -69,6 +79,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "appearance", label: "Appearance", icon: <PaletteIcon /> },
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
+  { value: "store", label: "Online Store", icon: <StoreIcon /> },
 ];
 
 interface SettingsNavProps {
