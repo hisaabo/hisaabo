@@ -21,6 +21,7 @@ const updateStoreSettingsSchema = z.object({
   storeMinOrderAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   storeDeliveryNote: z.string().max(500).optional().nullable(),
   storeWhatsappNumber: z.string().max(15).optional().nullable(),
+  storeAllowNegativeStock: z.boolean().optional(),
   storeOrderPrefix: z.string().min(1).max(10).optional(),
 });
 
@@ -56,6 +57,7 @@ export const storeRouter = router({
       storeMinOrderAmount: businesses.storeMinOrderAmount,
       storeDeliveryNote: businesses.storeDeliveryNote,
       storeWhatsappNumber: businesses.storeWhatsappNumber,
+      storeAllowNegativeStock: businesses.storeAllowNegativeStock,
       storeOrderPrefix: businesses.storeOrderPrefix,
       nextStoreOrderNumber: businesses.nextStoreOrderNumber,
       currency: businesses.currency,
@@ -105,6 +107,7 @@ export const storeRouter = router({
           storeMinOrderAmount: businesses.storeMinOrderAmount,
           storeDeliveryNote: businesses.storeDeliveryNote,
           storeWhatsappNumber: businesses.storeWhatsappNumber,
+          storeAllowNegativeStock: businesses.storeAllowNegativeStock,
           storeOrderPrefix: businesses.storeOrderPrefix,
         });
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { OrderResult, StoreConfig } from "../types";
 
 interface OrderConfirmationProps {
@@ -12,41 +13,65 @@ export function OrderConfirmation({
   onContinueShopping,
 }: OrderConfirmationProps) {
   const { business } = config;
-  const symbol = business.currency === "INR" ? "₹" : business.currency;
+  const symbol = business.currency === "INR" ? "\u20B9" : business.currency;
+  const accent = business.accentColor || "var(--store-accent)";
 
   const whatsappUrl = business.whatsappNumber
-    ? buildWhatsAppUrl(business.whatsappNumber, result.orderNumber, business.name)
+    ? buildWhatsAppUrl(
+        business.whatsappNumber,
+        result.orderNumber,
+        business.name
+      )
     : null;
 
   return (
-    <div className="flex items-center justify-center min-h-[70dvh] px-4 py-8 animate-fade-in">
+    <div
+      className="min-h-dvh flex items-center justify-center px-4 py-8"
+      style={{ background: "var(--store-bg-secondary)" }}
+    >
+      <ConfettiEffect accent={accent} />
+
       <div
-        className="w-full max-w-sm rounded-2xl p-8 text-center"
+        className="w-full max-w-sm rounded-2xl p-8 text-center animate-scale-in relative z-10"
         style={{
           background: "var(--store-bg)",
-          boxShadow: "0 8px 32px rgb(0 0 0 / 0.10)",
-          border: "1px solid var(--store-border)",
+          boxShadow: "var(--store-shadow-lg)",
         }}
       >
-        {/* Checkmark */}
-        <div
-          className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5 animate-bounce-in"
-          style={{ background: "var(--store-success-bg)" }}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            width="40"
-            height="40"
-            style={{ color: "var(--store-success)" }}
+        {/* Success animation */}
+        <div className="relative mx-auto mb-6 w-24 h-24">
+          {/* Pulse ring */}
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              background: "var(--store-success-bg)",
+              animation: "pulse-ring 1.5s ease-out",
+            }}
+          />
+          {/* Circle */}
+          <div
+            className="relative w-24 h-24 rounded-full flex items-center justify-center animate-bounce-in"
+            style={{ background: "var(--store-success-bg)" }}
           >
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              width="44"
+              height="44"
+              style={{
+                color: "var(--store-success)",
+                strokeDasharray: 40,
+                animation: "check-draw 0.5s ease-out 0.3s both",
+              }}
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
         </div>
 
         <h2
@@ -55,23 +80,53 @@ export function OrderConfirmation({
         >
           Order Placed!
         </h2>
-        <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
+        <p
+          className="text-sm mb-6"
+          style={{ color: "var(--store-muted)" }}
+        >
           Your order has been received successfully
         </p>
 
         {/* Order details */}
         <div
-          className="rounded-xl p-4 mb-5 text-left space-y-2"
+          className="rounded-xl p-4 mb-6 text-left space-y-3"
           style={{
-            background: "var(--store-bg-alt)",
-            border: "1px solid var(--store-border)",
+            background: "var(--store-bg-secondary)",
           }}
         >
-          <DetailRow label="Order Number" value={result.orderNumber} accent />
-          <DetailRow
-            label="Total Amount"
-            value={`${symbol}${parseFloat(result.totalAmount).toFixed(2)}`}
+          <div className="flex justify-between items-center">
+            <span
+              className="text-xs font-medium uppercase tracking-wider"
+              style={{ color: "var(--store-muted)" }}
+            >
+              Order No.
+            </span>
+            <span
+              className="text-sm font-bold tabular-nums"
+              style={{ color: accent }}
+            >
+              {result.orderNumber}
+            </span>
+          </div>
+          <div
+            className="h-px"
+            style={{ background: "var(--store-border-light)" }}
           />
+          <div className="flex justify-between items-center">
+            <span
+              className="text-xs font-medium uppercase tracking-wider"
+              style={{ color: "var(--store-muted)" }}
+            >
+              Total Amount
+            </span>
+            <span
+              className="text-sm font-bold tabular-nums"
+              style={{ color: "var(--store-text)" }}
+            >
+              {symbol}
+              {parseFloat(result.totalAmount).toFixed(2)}
+            </span>
+          </div>
         </div>
 
         {/* Message */}
@@ -79,21 +134,23 @@ export function OrderConfirmation({
           className="text-sm leading-relaxed mb-6"
           style={{ color: "var(--store-text-secondary)" }}
         >
-          <strong style={{ color: "var(--store-text)" }}>{business.name}</strong>{" "}
+          <span className="font-semibold" style={{ color: "var(--store-text)" }}>
+            {business.name}
+          </span>{" "}
           will confirm your order shortly.{" "}
           {business.whatsappNumber
-            ? "You'll receive updates on WhatsApp."
-            : "They'll be in touch soon."}
+            ? "You can reach out on WhatsApp for updates."
+            : "They will be in touch soon."}
         </p>
 
         {/* Actions */}
-        <div className="space-y-2.5">
+        <div className="space-y-3">
           {whatsappUrl && (
             <a
               href={whatsappUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-sm text-white"
+              className="flex items-center justify-center gap-2.5 w-full py-3 rounded-xl font-semibold text-sm text-white transition-transform active:scale-98"
               style={{ background: "#25D366" }}
             >
               <WhatsAppIcon />
@@ -105,7 +162,10 @@ export function OrderConfirmation({
             className="btn-ghost w-full py-3"
             style={
               business.accentColor
-                ? { color: business.accentColor, borderColor: business.accentColor }
+                ? {
+                    color: business.accentColor,
+                    borderColor: business.accentColor,
+                  }
                 : undefined
             }
           >
@@ -117,24 +177,40 @@ export function OrderConfirmation({
   );
 }
 
-function DetailRow({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
+/** Lightweight confetti effect using CSS-only particles */
+function ConfettiEffect({ accent }: { accent: string }) {
+  const [particles, setParticles] = useState<
+    Array<{ id: number; left: string; color: string; delay: string; size: number }>
+  >([]);
+
+  useEffect(() => {
+    const colors = [accent, "#f59e0b", "#10b981", "#ec4899", "#6366f1", "#f97316"];
+    const items = Array.from({ length: 24 }, (_, i) => ({
+      id: i,
+      left: `${Math.random() * 100}%`,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      delay: `${Math.random() * 0.8}s`,
+      size: 6 + Math.random() * 6,
+    }));
+    setParticles(items);
+  }, [accent]);
+
   return (
-    <div className="flex justify-between items-center text-sm">
-      <span style={{ color: "var(--store-muted)" }}>{label}</span>
-      <span
-        className="font-bold tabular-nums"
-        style={{ color: accent ? "var(--store-accent)" : "var(--store-text)" }}
-      >
-        {value}
-      </span>
+    <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+      {particles.map((p) => (
+        <div
+          key={p.id}
+          className="absolute top-0"
+          style={{
+            left: p.left,
+            width: p.size,
+            height: p.size,
+            background: p.color,
+            borderRadius: Math.random() > 0.5 ? "50%" : "2px",
+            animation: `confetti-fall ${1.5 + Math.random() * 1.5}s ease-in ${p.delay} forwards`,
+          }}
+        />
+      ))}
     </div>
   );
 }
@@ -153,7 +229,11 @@ function WhatsAppIcon() {
   );
 }
 
-function buildWhatsAppUrl(phone: string, orderNumber: string, businessName: string): string {
+function buildWhatsAppUrl(
+  phone: string,
+  orderNumber: string,
+  businessName: string
+): string {
   const cleaned = phone.replace(/\D/g, "");
   const number = cleaned.startsWith("91") ? cleaned : `91${cleaned}`;
   const msg = encodeURIComponent(

@@ -24,10 +24,13 @@ export const Route = createFileRoute("/parties")({
   component: PartiesPage,
 });
 
-const PARTY_FILTERS = [
+const PARTY_TYPE_TABS = [
   { value: "all", label: "All" },
   { value: "customer", label: "Customers" },
   { value: "supplier", label: "Suppliers" },
+];
+
+const PARTY_STATUS_FILTERS = [
   { value: "outstanding", label: "Outstanding" },
   { value: "overdue", label: "Overdue" },
 ];
@@ -154,11 +157,16 @@ function PartiesPage() {
           className="max-w-xs"
         />
         <PillTabs
-          tabs={PARTY_FILTERS}
-          value={partyFilter}
+          tabs={PARTY_TYPE_TABS}
+          value={["all", "customer", "supplier"].includes(partyFilter) ? partyFilter : "all"}
           onChange={setPartyFilter}
         />
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1.5">
+          <PillTabs
+            tabs={PARTY_STATUS_FILTERS}
+            value={partyFilter}
+            onChange={(v) => setPartyFilter(partyFilter === v ? "all" : v)}
+          />
           {data && data.total > 0 && (
             <button
               onClick={exportPartiesCSV}

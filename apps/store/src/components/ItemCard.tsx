@@ -19,112 +19,175 @@ export function ItemCard({
 }: ItemCardProps) {
   const cartEntry = cart.find((c) => c.item.id === item.id);
   const qty = cartEntry?.quantity ?? 0;
-  const symbol = currency === "INR" ? "₹" : currency;
+  const symbol = currency === "INR" ? "\u20B9" : currency;
+  const accent = accentColor || "var(--store-accent)";
+  const outOfStock = !item.inStock && !item.lowStock;
+  const lowStock = item.lowStock === true;
 
   return (
     <div
-      className="bg-white rounded-xl overflow-hidden flex flex-col"
-      style={{
-        boxShadow: "var(--store-card-shadow)",
-        border: "1px solid var(--store-border)",
-        transition: "box-shadow 0.15s ease, transform 0.15s ease",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.boxShadow =
-          "var(--store-card-shadow-hover)";
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.boxShadow =
-          "var(--store-card-shadow)";
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
-      }}
+      className="product-card"
+      style={{ opacity: outOfStock ? 0.55 : 1 }}
     >
-      {/* Image placeholder */}
-      <div
-        className="aspect-square flex items-center justify-center text-4xl"
-        style={{ background: "var(--store-bg-alt)" }}
-      >
-        🛍️
-      </div>
+      <div className="flex flex-col p-3.5 flex-1">
+        {/* Category tag */}
+        {item.category && (
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wider mb-1.5"
+            style={{ color: "var(--store-muted)" }}
+          >
+            {item.category}
+          </span>
+        )}
 
-      {/* Info */}
-      <div className="p-3 flex flex-col gap-1 flex-1">
-        <p
-          className="text-sm font-semibold leading-snug line-clamp-2"
-          style={{ color: "var(--store-text)" }}
+        {/* Item name */}
+        <h3
+          className="text-[13.5px] font-semibold leading-snug line-clamp-2 mb-0.5"
+          style={{ color: "var(--store-text)", letterSpacing: "-0.01em" }}
         >
           {item.name}
-        </p>
+        </h3>
+
+        {/* Description */}
         {item.description && (
           <p
-            className="text-xs line-clamp-2 leading-relaxed"
+            className="text-[11px] leading-relaxed line-clamp-2 mt-0.5"
             style={{ color: "var(--store-muted)" }}
           >
             {item.description}
           </p>
         )}
-        <div className="mt-auto pt-2 flex items-end justify-between gap-1">
+
+        {/* Spacer pushes price + action to bottom */}
+        <div className="flex-1 min-h-3" />
+
+        {/* Price row */}
+        <div className="flex items-end justify-between gap-2 mt-2">
           <div>
             <p
-              className="text-base font-bold leading-tight"
-              style={{ color: accentColor || "var(--store-accent)" }}
+              className="text-[15px] font-bold tracking-tight leading-tight"
+              style={{ color: "var(--store-text)" }}
             >
-              {symbol}
-              {parseFloat(item.price).toFixed(0)}
+              {symbol}{formatPrice(item.price)}
             </p>
-            <p className="text-xs" style={{ color: "var(--store-muted)" }}>
+            <p
+              className="text-[10px] mt-0.5"
+              style={{ color: "var(--store-muted)" }}
+            >
               per {item.unit}
             </p>
           </div>
 
-          {/* Add / Qty control */}
-          {!item.inStock ? (
-            <span
-              className="text-xs font-medium px-2 py-1 rounded-lg"
-              style={{
-                background: "var(--store-bg-alt)",
-                color: "var(--store-muted)",
-              }}
-            >
-              Out of stock
-            </span>
+          {/* Action */}
+          {outOfStock ? (
+            <span className="badge badge-sold-out">Sold out</span>
+          ) : lowStock ? (
+            <div className="flex flex-col items-end gap-1">
+              <span className="badge badge-low-stock">Low stock</span>
+              {qty === 0 ? (
+                <button
+                  onClick={() => onAdd(item)}
+                  className="add-btn"
+                  style={{ borderColor: accent, color: accent }}
+                  aria-label={`Add ${item.name}`}
+                >
+                  ADD
+                </button>
+              ) : (
+                <QuantityStepper
+                  qty={qty}
+                  accent={accent}
+                  onAdd={() => onAdd(item)}
+                  onRemove={() => onRemove(item.id)}
+                />
+              )}
+            </div>
           ) : qty === 0 ? (
             <button
               onClick={() => onAdd(item)}
-              className="text-xs font-bold px-3 py-1.5 rounded-lg text-white flex-shrink-0"
-              style={{ background: accentColor || "var(--store-accent)" }}
+              className="add-btn"
+              style={{ borderColor: accent, color: accent }}
+              aria-label={`Add ${item.name}`}
             >
-              + Add
+              ADD
             </button>
           ) : (
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                onClick={() => onRemove(item.id)}
-                className="qty-btn text-sm"
-                style={{ background: accentColor || "var(--store-accent)" }}
-                aria-label="Remove one"
-              >
-                −
-              </button>
-              <span
-                className="w-6 text-center text-sm font-bold tabular-nums"
-                style={{ color: "var(--store-text)" }}
-              >
-                {qty}
-              </span>
-              <button
-                onClick={() => onAdd(item)}
-                className="qty-btn text-sm"
-                style={{ background: accentColor || "var(--store-accent)" }}
-                aria-label="Add one"
-              >
-                +
-              </button>
-            </div>
+            <QuantityStepper
+              qty={qty}
+              accent={accent}
+              onAdd={() => onAdd(item)}
+              onRemove={() => onRemove(item.id)}
+            />
           )}
         </div>
       </div>
     </div>
   );
+}
+
+function QuantityStepper({
+  qty,
+  accent,
+  onAdd,
+  onRemove,
+}: {
+  qty: number;
+  accent: string;
+  onAdd: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="qty-stepper" style={{ borderColor: accent }}>
+      <button
+        onClick={onRemove}
+        style={{ color: accent }}
+        aria-label="Remove"
+      >
+        {qty === 1 ? (
+          <TrashIcon size={13} color={accent} />
+        ) : (
+          <span>&minus;</span>
+        )}
+      </button>
+      <span className="qty-value" style={{ color: accent }}>
+        {qty}
+      </span>
+      <button
+        onClick={onAdd}
+        className="qty-add"
+        style={{ background: accent }}
+        aria-label="Add more"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+function TrashIcon({ size, color }: { size: number; color: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      width={size}
+      height={size}
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+    </svg>
+  );
+}
+
+function formatPrice(price: string): string {
+  const num = parseFloat(price);
+  if (Number.isInteger(num)) return num.toLocaleString("en-IN");
+  return num.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }

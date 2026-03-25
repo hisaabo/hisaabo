@@ -3,7 +3,7 @@ import type { StoreConfig, OrderResult } from "./types";
 const BASE = import.meta.env.VITE_API_URL || "";
 
 export async function fetchCatalog(slug: string): Promise<StoreConfig> {
-  const res = await fetch(`${BASE}/store/${slug}/api/catalog`);
+  const res = await fetch(`${BASE}/store/${slug}/catalog.json`);
   if (!res.ok) throw new Error("Store not found");
   return res.json();
 }
@@ -19,9 +19,10 @@ export async function placeOrder(
     deliveryPincode?: string;
     deliveryNotes?: string;
     items: Array<{ itemId: string; quantity: number }>;
+    turnstileToken?: string;
   }
 ): Promise<OrderResult> {
-  const res = await fetch(`${BASE}/store/${slug}/api/orders`, {
+  const res = await fetch(`${BASE}/store/${slug}/order`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(order),

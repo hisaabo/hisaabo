@@ -69,6 +69,7 @@ function StoreSettingsCard() {
   const [whatsapp, setWhatsapp] = useState<string | null>(null);
   const [minOrder, setMinOrder] = useState<string | null>(null);
   const [deliveryNote, setDeliveryNote] = useState<string | null>(null);
+  const [allowNegativeStock, setAllowNegativeStock] = useState<boolean | null>(null);
 
   // Use server state as source of truth until the user edits
   const effectiveEnabled = enabled ?? settings?.storeEnabled ?? false;
@@ -77,6 +78,7 @@ function StoreSettingsCard() {
   const effectiveWhatsapp = whatsapp ?? settings?.storeWhatsappNumber ?? "";
   const effectiveMinOrder = minOrder ?? settings?.storeMinOrderAmount ?? "";
   const effectiveDeliveryNote = deliveryNote ?? settings?.storeDeliveryNote ?? "";
+  const effectiveAllowNegativeStock = allowNegativeStock ?? settings?.storeAllowNegativeStock ?? false;
 
   // Slug is locked once saved — cannot be changed
   const isSlugLocked = !!settings?.storeSlug;
@@ -101,10 +103,28 @@ function StoreSettingsCard() {
             ? "available"
             : "taken";
 
+  // Track dirty state — only enable save when something actually changed
+  const isDirty =
+    enabled !== null ||
+    slug !== null ||
+    tagline !== null ||
+    whatsapp !== null ||
+    minOrder !== null ||
+    deliveryNote !== null ||
+    allowNegativeStock !== null;
+
   const updateMutation = trpc.store.updateSettings.useMutation({
     onSuccess: () => {
       toast.success("Store settings saved");
       utils.store.getSettings.invalidate();
+      // Reset dirty state
+      setEnabled(null);
+      setSlug(null);
+      setTagline(null);
+      setWhatsapp(null);
+      setMinOrder(null);
+      setDeliveryNote(null);
+      setAllowNegativeStock(null);
     },
     onError: (err) => toast.error("Failed to save settings", err.message),
   });
@@ -117,6 +137,7 @@ function StoreSettingsCard() {
       storeWhatsappNumber: effectiveWhatsapp || undefined,
       storeMinOrderAmount: effectiveMinOrder || undefined,
       storeDeliveryNote: effectiveDeliveryNote || undefined,
+      storeAllowNegativeStock: effectiveAllowNegativeStock,
     });
   }
 
@@ -262,12 +283,25 @@ function StoreSettingsCard() {
         />
       </div>
 
+      {/* Allow orders with negative stock */}
+      <div className="flex items-center justify-between mb-5 pt-3 border-t border-border-light">
+        <div>
+          <p className="text-sm font-medium text-text-primary">Allow orders with low stock</p>
+          <p className="text-xs text-text-tertiary">Accept orders even when stock is low or zero. Items show a "Low Stock" indicator.</p>
+        </div>
+        <ToggleSwitch
+          checked={effectiveAllowNegativeStock}
+          onChange={setAllowNegativeStock}
+          label="Allow orders with negative stock"
+        />
+      </div>
+
       <button
         className="btn-primary mt-2"
         onClick={handleSave}
-        disabled={updateMutation.isPending}
+        disabled={!isDirty || updateMutation.isPending || slugStatus === "taken"}
       >
-        {updateMutation.isPending ? "Saving…" : "Save Settings"}
+        {updateMutation.isPending ? "Saving…" : isDirty ? "Save Settings" : "No changes"}
       </button>
     </div>
   );

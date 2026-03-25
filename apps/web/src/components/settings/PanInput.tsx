@@ -14,7 +14,7 @@ export function PanInput({ value, onChange, error }: PanInputProps) {
 
   return (
     <div>
-      <label className="label">PAN</label>
+      <label className="label">PAN <span className="text-red-500">*</span></label>
       <input
         className={`input font-mono tracking-wide ${showError || error ? "border-red-500" : ""}`}
         value={value}

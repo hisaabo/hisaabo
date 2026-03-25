@@ -139,7 +139,7 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
         {/* Business Info */}
         <div className="grid grid-cols-2 gap-4">
           <InputField
-            label="Business Name"
+            label="Business Name *"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -183,7 +183,7 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
 
         {/* Contact */}
         <div className="grid grid-cols-2 gap-4">
-          <PhoneInput value={phone} onChange={setPhone} />
+          <PhoneInput value={phone} onChange={setPhone} required />
           <InputField
             label="Email"
             value={email}
@@ -194,9 +194,10 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
 
         {/* Address */}
         <InputField
-          label="Address"
+          label="Address *"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
+          required
         />
         <div className="grid grid-cols-3 gap-4">
           <PincodeInput

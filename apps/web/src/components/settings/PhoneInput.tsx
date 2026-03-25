@@ -3,14 +3,15 @@ interface PhoneInputProps {
   onChange: (value: string) => void;
   error?: string;
   label?: string;
+  required?: boolean;
 }
 
-export function PhoneInput({ value, onChange, error, label = "Phone" }: PhoneInputProps) {
+export function PhoneInput({ value, onChange, error, label = "Phone", required }: PhoneInputProps) {
   const digits = value.replace(/^\+91/, "").replace(/\D/g, "");
 
   return (
     <div>
-      <label className="label">{label}</label>
+      <label className="label">{label}{required && <span className="text-red-500"> *</span>}</label>
       <div className="flex">
         <span
           className="inline-flex items-center px-3 rounded-l-lg border border-r-0 text-sm font-medium bg-surface-1 text-text-secondary border-border-light"

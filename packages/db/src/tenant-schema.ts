@@ -55,6 +55,7 @@ export const businesses = pgTable("businesses", {
   storeMinOrderAmount: numeric("store_min_order_amount", { precision: 15, scale: 2 }),
   storeDeliveryNote: text("store_delivery_note"),
   storeWhatsappNumber: text("store_whatsapp_number"),
+  storeAllowNegativeStock: boolean("store_allow_negative_stock").default(false).notNull(),
   nextStoreOrderNumber: integer("next_store_order_number").default(1).notNull(),
   storeOrderPrefix: text("store_order_prefix").default("ORD").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

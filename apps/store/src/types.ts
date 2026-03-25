@@ -7,6 +7,11 @@ export interface StoreConfig {
     deliveryNote?: string;
     whatsappNumber?: string;
     currency: string;
+    phone?: string;
+    email?: string;
+    city?: string;
+    state?: string;
+    address?: string;
   };
   items: StoreItem[];
   categories: string[];
@@ -20,6 +25,7 @@ export interface StoreItem {
   unit: string;
   category?: string;
   inStock: boolean;
+  lowStock?: boolean;
   sortOrder: number;
 }
 

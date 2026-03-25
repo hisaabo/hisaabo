@@ -343,6 +343,24 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 // Slug resolution cache: slug → { tenantId, businessId, expires }
 const slugCache = new Map<string, { tenantId: string; businessId: string; expires: number }>();
 
+// ── Cloudflare Turnstile verification ────────────────────────
+async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return true; // Skip in dev if not configured
+
+  const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret,
+      response: token,
+      remoteip: ip || undefined,
+    }),
+  });
+  const data = await res.json() as { success: boolean };
+  return data.success;
+}
+
 // Rate limit for order placement: phone → { count, reset }
 const orderRateMap = new Map<string, { count: number; reset: number }>();
 
@@ -431,7 +449,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
     storeMinOrderAmount: businesses.storeMinOrderAmount,
     storeDeliveryNote: businesses.storeDeliveryNote,
     storeWhatsappNumber: businesses.storeWhatsappNumber,
+    storeAllowNegativeStock: businesses.storeAllowNegativeStock,
     currency: businesses.currency,
+    phone: businesses.phone,
+    email: businesses.email,
+    city: businesses.city,
+    state: businesses.state,
+    address: businesses.address,
   }).from(businesses)
     .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
     .limit(1);
@@ -463,6 +487,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
       taxPercent: items.taxPercent,
       taxInclusive: items.taxInclusive,
       inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
+      stockQty: items.stockQuantity,
       sortOrder: items.storeSortOrder,
     }).from(items)
       .where(and(...conditions))
@@ -477,6 +502,14 @@ app.get("/store/:slug/catalog.json", async (c) => {
     catalog.map((i) => i.category).filter(Boolean) as string[]
   )];
 
+  // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
+  const allowNeg = biz.storeAllowNegativeStock;
+  const transformedItems = catalog.map(({ stockQty, ...rest }) => ({
+    ...rest,
+    inStock: rest.inStock || allowNeg,
+    lowStock: allowNeg && !rest.inStock,
+  }));
+
   return c.json(
     {
       business: {
@@ -487,8 +520,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
         deliveryNote: biz.storeDeliveryNote,
         whatsappNumber: biz.storeWhatsappNumber,
         currency: biz.currency,
+        phone: biz.phone,
+        email: biz.email,
+        city: biz.city,
+        state: biz.state,
+        address: biz.address,
       },
-      items: catalog,
+      items: transformedItems,
       categories,
       total,
       page,
@@ -497,6 +535,58 @@ app.get("/store/:slug/catalog.json", async (c) => {
     200,
     { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" },
   );
+});
+
+// POST /store/:slug/identify — phone-first customer identification (public, no auth)
+app.post("/store/:slug/identify", async (c) => {
+  const slug = c.req.param("slug");
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const { phone, turnstileToken } = body as Record<string, unknown>;
+
+  if (typeof phone !== "string" || typeof turnstileToken !== "string") {
+    return c.json({ error: "phone and turnstileToken are required" }, 400);
+  }
+
+  // Validate Turnstile
+  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const valid = await verifyTurnstile(turnstileToken, ip);
+  if (!valid) return c.json({ error: "Verification failed" }, 403);
+
+  // Resolve slug → business
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+
+  // Normalize to last 10 digits (strip +91, spaces, dashes)
+  const normalizedPhone = phone.replace(/\D/g, "").slice(-10);
+
+  const [party] = await db.select({ name: parties.name })
+    .from(parties)
+    .where(and(
+      eq(parties.businessId, resolved.businessId),
+      sql`REPLACE(REPLACE(${parties.phone}, '+91', ''), ' ', '') LIKE '%' || ${normalizedPhone}`,
+    ))
+    .limit(1);
+
+  if (party) {
+    // Return first name only — don't expose full name to public endpoint
+    const firstName = party.name.split(" ")[0];
+    return c.json({ known: true, name: firstName });
+  }
+
+  return c.json({ known: false });
 });
 
 // POST /store/:slug/order — place an order (public, no auth)
@@ -516,6 +606,7 @@ app.post("/store/:slug/order", async (c) => {
   }
 
   const {
+    turnstileToken: orderTurnstileToken,
     customerName,
     customerPhone,
     customerEmail,
@@ -525,6 +616,14 @@ app.post("/store/:slug/order", async (c) => {
     notes,
     items: orderItems,
   } = body as Record<string, unknown>;
+
+  // Validate Turnstile for order submission
+  const orderIp = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const turnstileValid = await verifyTurnstile(
+    typeof orderTurnstileToken === "string" ? orderTurnstileToken : "",
+    orderIp,
+  );
+  if (!turnstileValid) return c.json({ error: "Verification failed. Please try again." }, 403);
 
   // Basic validation
   if (typeof customerName !== "string" || customerName.trim().length < 2) {
