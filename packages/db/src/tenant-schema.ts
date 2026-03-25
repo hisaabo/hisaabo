@@ -5,7 +5,7 @@ import { relations } from "drizzle-orm";
 
 export const partyTypeEnum = pgEnum("party_type", ["customer", "supplier"]);
 export const invoiceTypeEnum = pgEnum("invoice_type", ["sale", "purchase"]);
-export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "sent", "paid", "partial", "overdue", "cancelled"]);
+export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]);
 export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other"]);
 export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"]);
 export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);

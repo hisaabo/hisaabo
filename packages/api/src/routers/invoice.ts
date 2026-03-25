@@ -11,7 +11,7 @@ export const invoiceRouter = router({
   list: viewerProcedure
     .input(z.object({
       type: z.enum(["sale", "purchase"]).nullish(),
-      status: z.enum(["draft", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
+      status: z.enum(["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
       partyId: z.string().uuid().nullish(),
       documentType: z.enum(documentTypes).default("invoice"),
       fromDate: z.string().datetime().nullish(),

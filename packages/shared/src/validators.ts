@@ -158,7 +158,7 @@ export const updateItemSchema = createItemSchema.partial();
 // ── Invoice ────────────────────────────────────────────────────
 
 export const invoiceTypes = ["sale", "purchase"] as const;
-export const invoiceStatuses = ["draft", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
 
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),

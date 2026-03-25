@@ -22,6 +22,11 @@ const statusConfig: Record<string, StatusConfig> = {
     text: "text-gray-600",
     dot: "bg-gray-400",
   },
+  unfulfilled: {
+    bg: "bg-orange-50",
+    text: "text-orange-700",
+    dot: "bg-orange-500",
+  },
   partial: {
     bg: "bg-amber-50",
     text: "text-amber-700",

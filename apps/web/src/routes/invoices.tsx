@@ -28,6 +28,7 @@ export const Route = createFileRoute("/invoices")({
 const statusTabs = [
   { value: "", label: "All" },
   { value: "draft", label: "Draft" },
+  { value: "unfulfilled", label: "Unfulfilled" },
   { value: "sent", label: "Sent" },
   { value: "partial", label: "Partial" },
   { value: "paid", label: "Paid" },
@@ -164,6 +165,8 @@ function InvoiceDetailPanel({
     invoice.status !== "cancelled" &&
     invoice.status !== "paid";
 
+  const isDraftLike = invoice?.status === "draft" || invoice?.status === "unfulfilled";
+
   return (
     <SlideOver
       open={!!invoiceId}
@@ -185,13 +188,13 @@ function InvoiceDetailPanel({
                   Edit
                 </button>
               )}
-              {invoice.status === "draft" && (
+              {isDraftLike && (
                 <button
                   onClick={() => updateStatus.mutate({ id: invoice.id, status: "sent" })}
                   disabled={updateStatus.isPending}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors disabled:opacity-50"
                 >
-                  Mark Sent
+                  {invoice.status === "unfulfilled" ? "Mark Fulfilled" : "Mark Sent"}
                 </button>
               )}
             </div>
@@ -337,7 +340,7 @@ function InvoiceDetailPanel({
                   <span className="tabular-nums text-emerald-600">{formatCurrency(invoice.amountPaid)}</span>
                 </div>
               )}
-              {balance > 0 && invoice.status !== "draft" && (
+              {balance > 0 && !isDraftLike && (
                 <div className="flex justify-between text-sm font-semibold">
                   <span className="text-amber-600">Balance Due</span>
                   <span className="tabular-nums text-amber-600">{formatCurrency(balance)}</span>
@@ -427,7 +430,7 @@ function InvoiceDetailPanel({
           )}
 
           {/* No payments yet message for unpaid invoices */}
-          {invoicePayments && invoicePayments.data.length === 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && (
+          {invoicePayments && invoicePayments.data.length === 0 && !isDraftLike && invoice.status !== "cancelled" && (
             <div className="text-center py-4">
               <p className="text-xs text-text-tertiary">No payments recorded for this invoice</p>
             </div>
@@ -725,12 +728,12 @@ function InvoicesPage() {
                           />
                           {/* Context actions — visible on hover */}
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            {inv.status === "draft" && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
                               <button
                                 onClick={() =>
                                   updateStatus.mutate({ id: inv.id, status: "sent" })
                                 }
-                                title="Mark as sent"
+                                title={inv.status === "unfulfilled" ? "Mark fulfilled" : "Mark as sent"}
                                 className="p-1.5 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors"
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -739,6 +742,7 @@ function InvoicesPage() {
                               </button>
                             )}
                             {inv.status !== "draft" &&
+                              inv.status !== "unfulfilled" &&
                               inv.status !== "cancelled" &&
                               inv.status !== "paid" && (
                                 <button
@@ -757,7 +761,7 @@ function InvoicesPage() {
                                   </svg>
                                 </button>
                               )}
-                            {inv.status === "draft" && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
                               <button
                                 onClick={() =>
                                   confirmDelete(inv.id, inv.invoiceNumber)

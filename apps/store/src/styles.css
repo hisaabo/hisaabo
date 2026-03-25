@@ -1,62 +1,62 @@
 @import "tailwindcss";
 
-:root {
-  --store-accent: #5b5bd6;
-  --store-accent-hover: #4e4ec2;
-  --store-accent-light: #eef0ff;
-  --store-accent-text: #ffffff;
-  --store-bg: #ffffff;
-  --store-bg-page: #f6f6f9;
-  --store-bg-secondary: #f8f8fb;
-  --store-bg-alt: #f1f1f5;
-  --store-text: #18181b;
-  --store-text-secondary: #52525b;
-  --store-muted: #a1a1aa;
-  --store-border: #e4e4e7;
-  --store-border-light: #f0f0f3;
-  --store-success: #16a34a;
-  --store-success-bg: #f0fdf4;
-  --store-danger: #dc2626;
-  --store-danger-bg: #fef2f2;
-  --store-warning: #d97706;
-  --store-warning-bg: #fffbeb;
-  --store-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.03);
-  --store-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
-  --store-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
-  --store-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.03);
-  --store-shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.03);
-  --store-radius-sm: 8px;
-  --store-radius: 12px;
-  --store-radius-lg: 16px;
-  --store-radius-xl: 20px;
-  --store-radius-full: 9999px;
-}
+@layer base {
+  :root {
+    --store-accent: #5b5bd6;
+    --store-accent-hover: #4e4ec2;
+    --store-accent-light: #eef0ff;
+    --store-accent-text: #ffffff;
+    --store-bg: #ffffff;
+    --store-bg-page: #f4f4f8;
+    --store-bg-secondary: #f7f7fb;
+    --store-bg-alt: #ededf3;
+    --store-text: #18181b;
+    --store-text-secondary: #52525b;
+    --store-muted: #a1a1aa;
+    --store-border: #d4d4d8;
+    --store-border-light: #e4e4e7;
+    --store-success: #16a34a;
+    --store-success-bg: #f0fdf4;
+    --store-danger: #dc2626;
+    --store-danger-bg: #fef2f2;
+    --store-warning: #d97706;
+    --store-warning-bg: #fffbeb;
+    --store-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --store-shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
+    --store-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.04);
+    --store-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+    --store-shadow-xl: 0 20px 50px rgba(0, 0, 0, 0.1), 0 4px 12px rgba(0, 0, 0, 0.04);
+    --store-radius-sm: 8px;
+    --store-radius: 12px;
+    --store-radius-lg: 16px;
+    --store-radius-xl: 20px;
+    --store-radius-full: 9999px;
+  }
 
-/* ---- Reset + Base ---- */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+  html {
+    font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: var(--store-bg-page);
+    color: var(--store-text);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-html {
-  font-family: "DM Sans", system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background: var(--store-bg-page);
-  color: var(--store-text);
-  font-size: 16px;
-  line-height: 1.5;
-  -webkit-text-size-adjust: 100%;
-  -webkit-tap-highlight-color: transparent;
-}
-
-body {
-  min-height: 100vh;
-  min-height: 100dvh;
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
 }
 
 /* ---- Scrollbar ---- */
@@ -87,29 +87,30 @@ button, a, input, textarea {
 .product-card {
   background: var(--store-bg);
   border-radius: var(--store-radius);
-  border: 1px solid var(--store-border-light);
+  border: 1px solid var(--store-border);
+  box-shadow: var(--store-shadow-sm);
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .product-card:hover {
   box-shadow: var(--store-shadow-md);
-  border-color: var(--store-border);
+  transform: translateY(-1px);
 }
 
-/* ---- ADD Button (outlined style like Swiggy/Zepto) ---- */
+/* ---- ADD Button ---- */
 
 .add-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 20px;
+  padding: 6px 18px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
   border: 1.5px solid var(--store-accent);
   border-radius: var(--store-radius-sm);
   background: var(--store-bg);
@@ -118,6 +119,7 @@ button, a, input, textarea {
   user-select: none;
   touch-action: manipulation;
   white-space: nowrap;
+  text-transform: uppercase;
 }
 
 .add-btn:hover {
@@ -265,7 +267,7 @@ button, a, input, textarea {
 .store-input:focus {
   outline: none;
   border-color: var(--store-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--store-accent) 10%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--store-accent) 12%, transparent);
 }
 
 .store-input::placeholder {
@@ -279,8 +281,8 @@ button, a, input, textarea {
   align-items: center;
   padding: 2px 8px;
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   border-radius: var(--store-radius-full);
   white-space: nowrap;
   text-transform: uppercase;

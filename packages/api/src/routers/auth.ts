@@ -376,9 +376,10 @@ export const authRouter = router({
 
   // ── Me ───────────────────────────────────────────────────────
   me: publicProcedure.query(async ({ ctx }) => {
-    if (!ctx.user) return { user: null, tenantId: null, tenantName: null, needsProfile: false };
+    if (!ctx.user) return { user: null, tenantId: null, tenantName: null, role: null, needsProfile: false };
 
     let tenantName: string | null = null;
+    let role: string | null = null;
     if (ctx.tenantId) {
       const [t] = await controlDb
         .select({ name: tenants.name })
@@ -386,9 +387,19 @@ export const authRouter = router({
         .where(eq(tenants.id, ctx.tenantId))
         .limit(1);
       tenantName = t?.name ?? null;
+
+      const [membership] = await controlDb
+        .select({ role: tenantMembers.role })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, ctx.tenantId),
+          eq(tenantMembers.userId, ctx.user.id),
+        ))
+        .limit(1);
+      role = membership?.role ?? null;
     }
 
-    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, needsProfile: !ctx.user.name };
+    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, role, needsProfile: !ctx.user.name };
   }),
 });
 

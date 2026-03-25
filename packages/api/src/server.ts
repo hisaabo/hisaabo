@@ -786,12 +786,12 @@ app.post("/store/:slug/order", async (c) => {
         walkinPartyId = newWalkin.id;
       }
 
-      // Create the draft invoice
+      // Create unfulfilled invoice (online store order awaiting fulfillment)
       const [invoice] = await tx.insert(invoices).values({
         businessId: resolved.businessId,
         partyId: walkinPartyId,
         type: "sale",
-        status: "draft",
+        status: "unfulfilled",
         documentType: "invoice",
         invoiceNumber,
         invoiceDate: new Date(),
