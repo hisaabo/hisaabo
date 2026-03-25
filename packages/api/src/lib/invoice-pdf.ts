@@ -65,6 +65,12 @@ export interface InvoicePDFData {
   bankName?: string;
   upiId?: string;        // e.g., "business@upi"
   upiQrDataUrl?: string; // pre-generated QR code as data URL
+
+  // GST
+  gstRegistrationType?: "regular" | "composition" | "unregistered";
+  businessStateCode?: string; // 2-digit state code
+  partyStateCode?: string;
+  lineItemHsn?: string[]; // HSN/SAC code per line item (parallel array)
 }
 
 type PDFFormat = "a5-landscape" | "a4" | "thermal";
@@ -119,6 +125,15 @@ function numberToWords(num: number): string {
   return words + " Only";
 }
 
+// ── GST helpers ────────────────────────────────────────────────
+
+function getInvoiceTitle(data: InvoicePDFData): string {
+  if (data.type === "purchase") return "PURCHASE INVOICE";
+  if (!data.gstRegistrationType || data.gstRegistrationType === "unregistered") return "INVOICE";
+  if (data.gstRegistrationType === "composition") return "BILL OF SUPPLY";
+  return "TAX INVOICE";
+}
+
 // ── A4 Invoice ─────────────────────────────────────────────────
 
 function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoicePDFData) {
@@ -161,7 +176,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   }
 
   // GSTIN / PAN (left)
-  if (data.businessGstin) {
+  if (data.businessGstin && data.gstRegistrationType !== "unregistered") {
     doc.fontSize(8).fillColor(colorSecondary).font("NotoSans-Bold")
       .text(`GSTIN: ${data.businessGstin}`, margin, y);
     y += 11;
@@ -173,7 +188,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   }
 
   // Invoice title + number (right side, at top)
-  const titleLabel = data.type === "sale" ? "TAX INVOICE" : "PURCHASE INVOICE";
+  const titleLabel = getInvoiceTitle(data);
   doc.fontSize(11).fillColor(colorAccent).font("NotoSans-Bold")
     .text(titleLabel, margin + contentW * 0.6, margin, { width: contentW * 0.4, align: "right" });
 
@@ -216,9 +231,14 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 16;
 
   // ── Items Table ──────────────────────────────────────────────
+  const showHsn = (data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition")
+    && data.lineItemHsn?.some(h => h);
+  const hsnColW = 50;
+
   const colX = {
     idx: margin,
-    desc: margin + 28,
+    hsn: margin + 28,
+    desc: showHsn ? margin + 28 + hsnColW : margin + 28,
     qty: margin + contentW * 0.52,
     rate: margin + contentW * 0.62,
     tax: margin + contentW * 0.76,
@@ -229,6 +249,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   doc.rect(margin, y, contentW, 22).fill(colorBg);
   doc.fontSize(7.5).fillColor(colorSecondary).font("NotoSans-Bold");
   doc.text("#", colX.idx + 4, y + 7);
+  if (showHsn) doc.text("HSN", colX.hsn, y + 7, { width: hsnColW });
   doc.text("DESCRIPTION", colX.desc, y + 7);
   doc.text("QTY", colX.qty, y + 7, { width: contentW * 0.1, align: "right" });
   doc.text("RATE", colX.rate, y + 7, { width: contentW * 0.12, align: "right" });
@@ -247,8 +268,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     }
 
     const rowY = y + 6;
+    const descW = showHsn ? contentW * 0.4 - hsnColW : contentW * 0.4;
     doc.text(`${i + 1}`, colX.idx + 4, rowY);
-    doc.text(item.description, colX.desc, rowY, { width: contentW * 0.4 });
+    if (showHsn) doc.text(data.lineItemHsn?.[i] || "", colX.hsn, rowY, { width: hsnColW });
+    doc.text(item.description, colX.desc, rowY, { width: descW });
     doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), colX.qty, rowY, { width: contentW * 0.1, align: "right" });
     doc.text(fmt(item.unitPrice), colX.rate, rowY, { width: contentW * 0.12, align: "right" });
     doc.text(`${item.taxPercent}%`, colX.tax, rowY, { width: contentW * 0.1, align: "right" });
@@ -305,63 +328,71 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += 20;
 
   // ── GST Breakdown ────────────────────────────────────────────
-  const gstRates = new Map<string, { taxable: number; cgst: number; sgst: number; igst: number }>();
+  const isGstRegistered = data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition";
 
-  const isSameState = data.businessState && data.partyState &&
-    data.businessState.toLowerCase() === data.partyState.toLowerCase();
+  if (isGstRegistered && parseFloat(data.taxAmount) > 0) {
+    const gstRates = new Map<string, { taxable: number; cgst: number; sgst: number; igst: number }>();
 
-  for (const item of data.lineItems) {
-    const rate = item.taxPercent;
-    const taxable = parseFloat(item.totalAmount) - parseFloat(item.taxAmount);
-    const taxAmt = parseFloat(item.taxAmount);
+    // Use state codes for inter/intra-state detection; fall back to state names
+    const isSameState = data.businessStateCode && data.partyStateCode
+      ? data.businessStateCode === data.partyStateCode
+      : (data.businessState && data.partyState
+          ? data.businessState.toLowerCase() === data.partyState.toLowerCase()
+          : false);
 
-    if (!gstRates.has(rate)) {
-      gstRates.set(rate, { taxable: 0, cgst: 0, sgst: 0, igst: 0 });
-    }
-    const entry = gstRates.get(rate)!;
-    entry.taxable += taxable;
+    for (const item of data.lineItems) {
+      const rate = item.taxPercent;
+      const taxable = parseFloat(item.totalAmount) - parseFloat(item.taxAmount);
+      const taxAmt = parseFloat(item.taxAmount);
 
-    if (isSameState) {
-      entry.cgst += taxAmt / 2;
-      entry.sgst += taxAmt / 2;
-    } else {
-      entry.igst += taxAmt;
-    }
-  }
-
-  if (gstRates.size > 0 && parseFloat(data.taxAmount) > 0) {
-    y += 8;
-    doc.fontSize(8).fillColor(colorMuted).font("NotoSans-Bold")
-      .text("TAX BREAKDOWN", margin, y);
-    y += 14;
-
-    // Header
-    doc.rect(margin, y, contentW, 18).fill(colorBg);
-    doc.fontSize(7).fillColor(colorSecondary).font("NotoSans-Bold");
-    doc.text("TAX RATE", margin + 4, y + 5);
-    doc.text("TAXABLE", margin + 100, y + 5, { width: 80, align: "right" });
-    if (isSameState) {
-      doc.text("CGST", margin + 200, y + 5, { width: 70, align: "right" });
-      doc.text("SGST", margin + 290, y + 5, { width: 70, align: "right" });
-    } else {
-      doc.text("IGST", margin + 200, y + 5, { width: 70, align: "right" });
-    }
-    doc.text("TOTAL TAX", margin + 380, y + 5, { width: 80, align: "right" });
-    y += 18;
-
-    doc.font("NotoSans").fontSize(7.5).fillColor(colorPrimary);
-    for (const [rate, amounts] of gstRates) {
-      const totalTax = amounts.cgst + amounts.sgst + amounts.igst;
-      doc.text(`${rate}%`, margin + 4, y + 4);
-      doc.text(fmt(amounts.taxable), margin + 100, y + 4, { width: 80, align: "right" });
-      if (isSameState) {
-        doc.text(fmt(amounts.cgst), margin + 200, y + 4, { width: 70, align: "right" });
-        doc.text(fmt(amounts.sgst), margin + 290, y + 4, { width: 70, align: "right" });
-      } else {
-        doc.text(fmt(amounts.igst), margin + 200, y + 4, { width: 70, align: "right" });
+      if (!gstRates.has(rate)) {
+        gstRates.set(rate, { taxable: 0, cgst: 0, sgst: 0, igst: 0 });
       }
-      doc.text(fmt(totalTax), margin + 380, y + 4, { width: 80, align: "right" });
-      y += 16;
+      const entry = gstRates.get(rate)!;
+      entry.taxable += taxable;
+
+      if (isSameState) {
+        entry.cgst += taxAmt / 2;
+        entry.sgst += taxAmt / 2;
+      } else {
+        entry.igst += taxAmt;
+      }
+    }
+
+    if (gstRates.size > 0) {
+      y += 8;
+      doc.fontSize(8).fillColor(colorMuted).font("NotoSans-Bold")
+        .text("TAX BREAKDOWN", margin, y);
+      y += 14;
+
+      // Header
+      doc.rect(margin, y, contentW, 18).fill(colorBg);
+      doc.fontSize(7).fillColor(colorSecondary).font("NotoSans-Bold");
+      doc.text("TAX RATE", margin + 4, y + 5);
+      doc.text("TAXABLE", margin + 100, y + 5, { width: 80, align: "right" });
+      if (isSameState) {
+        doc.text("CGST", margin + 200, y + 5, { width: 70, align: "right" });
+        doc.text("SGST", margin + 290, y + 5, { width: 70, align: "right" });
+      } else {
+        doc.text("IGST", margin + 200, y + 5, { width: 70, align: "right" });
+      }
+      doc.text("TOTAL TAX", margin + 380, y + 5, { width: 80, align: "right" });
+      y += 18;
+
+      doc.font("NotoSans").fontSize(7.5).fillColor(colorPrimary);
+      for (const [rate, amounts] of gstRates) {
+        const totalTax = amounts.cgst + amounts.sgst + amounts.igst;
+        doc.text(`${rate}%`, margin + 4, y + 4);
+        doc.text(fmt(amounts.taxable), margin + 100, y + 4, { width: 80, align: "right" });
+        if (isSameState) {
+          doc.text(fmt(amounts.cgst), margin + 200, y + 4, { width: 70, align: "right" });
+          doc.text(fmt(amounts.sgst), margin + 290, y + 4, { width: 70, align: "right" });
+        } else {
+          doc.text(fmt(amounts.igst), margin + 200, y + 4, { width: 70, align: "right" });
+        }
+        doc.text(fmt(totalTax), margin + 380, y + 4, { width: 80, align: "right" });
+        y += 16;
+      }
     }
   }
 
@@ -506,7 +537,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
     y += 9;
   }
 
-  if (data.businessGstin) {
+  if (data.businessGstin && data.gstRegistrationType !== "unregistered") {
     doc.fontSize(6).font("Courier-Bold")
       .text(`GSTIN: ${data.businessGstin}`, margin, y, { width: contentW, align: "center" });
     y += 9;
@@ -517,7 +548,7 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
 
   // Invoice info
   doc.fontSize(8).fillColor(colorBlack).font("Courier-Bold")
-    .text(data.type === "sale" ? "TAX INVOICE" : "PURCHASE", margin, y, { width: contentW, align: "center" });
+    .text(getInvoiceTitle(data), margin, y, { width: contentW, align: "center" });
   y += 12;
 
   doc.fontSize(6).font("NotoSans").fillColor(colorBlack);
@@ -634,7 +665,7 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
     y += 9;
   }
 
-  if (data.businessGstin) {
+  if (data.businessGstin && data.gstRegistrationType !== "unregistered") {
     doc.fontSize(7).fillColor(colorSecondary).font("NotoSans-Bold")
       .text(`GSTIN: ${data.businessGstin}`, margin, y, { width: contentW * 0.55 });
     y += 9;
@@ -648,7 +679,7 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
   // Right: invoice title and details
   const rightX = margin + contentW * 0.6;
   const rightW = contentW * 0.4;
-  const titleLabel = data.type === "sale" ? "TAX INVOICE" : "PURCHASE INVOICE";
+  const titleLabel = getInvoiceTitle(data);
   doc.fontSize(11).fillColor(colorAccent).font("NotoSans-Bold")
     .text(titleLabel, rightX, margin, { width: rightW, align: "right" });
   doc.fontSize(8.5).fillColor(colorPrimary).font("NotoSans-Bold")
@@ -688,9 +719,14 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
   y += 10;
 
   // ── Items Table ──────────────────────────────────────────────
+  const showHsn = (data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition")
+    && data.lineItemHsn?.some(h => h);
+  const hsnColW = 40;
+
   const colX = {
     idx: margin,
-    desc: margin + 20,
+    hsn: margin + 20,
+    desc: showHsn ? margin + 20 + hsnColW : margin + 20,
     qty: margin + contentW * 0.52,
     rate: margin + contentW * 0.63,
     tax: margin + contentW * 0.76,
@@ -701,6 +737,7 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
   doc.rect(margin, y, contentW, 17).fill(colorBg);
   doc.fontSize(6.5).fillColor(colorSecondary).font("NotoSans-Bold");
   doc.text("#", colX.idx + 3, y + 5);
+  if (showHsn) doc.text("HSN", colX.hsn, y + 5, { width: hsnColW });
   doc.text("DESCRIPTION", colX.desc, y + 5);
   doc.text("QTY", colX.qty, y + 5, { width: contentW * 0.1, align: "right" });
   doc.text("RATE", colX.rate, y + 5, { width: contentW * 0.12, align: "right" });
@@ -717,8 +754,10 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
       doc.fillColor(colorPrimary);
     }
     const rowY = y + 4;
+    const descW = showHsn ? contentW * 0.38 - hsnColW : contentW * 0.38;
     doc.text(`${i + 1}`, colX.idx + 3, rowY);
-    doc.text(item.description, colX.desc, rowY, { width: contentW * 0.38 });
+    if (showHsn) doc.text(data.lineItemHsn?.[i] || "", colX.hsn, rowY, { width: hsnColW });
+    doc.text(item.description, colX.desc, rowY, { width: descW });
     doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), colX.qty, rowY, { width: contentW * 0.1, align: "right" });
     doc.text(fmt(item.unitPrice), colX.rate, rowY, { width: contentW * 0.12, align: "right" });
     doc.text(`${item.taxPercent}%`, colX.tax, rowY, { width: contentW * 0.1, align: "right" });
@@ -844,29 +883,71 @@ function generateA5LandscapeInvoice(doc: InstanceType<typeof PDFDocument>, data:
   }
 
   // ── GST Breakdown (compact, below bottom section) ─────────────
-  const gstRates = new Map<string, { taxable: number; cgst: number; sgst: number; igst: number }>();
-  const isSameState = data.businessState && data.partyState &&
-    data.businessState.toLowerCase() === data.partyState.toLowerCase();
+  const isGstRegistered = data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition";
+  let gstBottomY = Math.max(ty, bottomY) + 10;
 
-  for (const item of data.lineItems) {
-    const rate = item.taxPercent;
-    const taxable = parseFloat(item.totalAmount) - parseFloat(item.taxAmount);
-    const taxAmt = parseFloat(item.taxAmount);
-    if (!gstRates.has(rate)) {
-      gstRates.set(rate, { taxable: 0, cgst: 0, sgst: 0, igst: 0 });
+  if (isGstRegistered && parseFloat(data.taxAmount) > 0) {
+    const gstRates = new Map<string, { taxable: number; cgst: number; sgst: number; igst: number }>();
+
+    // Use state codes for inter/intra-state detection; fall back to state names
+    const isSameState = data.businessStateCode && data.partyStateCode
+      ? data.businessStateCode === data.partyStateCode
+      : (data.businessState && data.partyState
+          ? data.businessState.toLowerCase() === data.partyState.toLowerCase()
+          : false);
+
+    for (const item of data.lineItems) {
+      const rate = item.taxPercent;
+      const taxable = parseFloat(item.totalAmount) - parseFloat(item.taxAmount);
+      const taxAmt = parseFloat(item.taxAmount);
+      if (!gstRates.has(rate)) {
+        gstRates.set(rate, { taxable: 0, cgst: 0, sgst: 0, igst: 0 });
+      }
+      const entry = gstRates.get(rate)!;
+      entry.taxable += taxable;
+      if (isSameState) {
+        entry.cgst += taxAmt / 2;
+        entry.sgst += taxAmt / 2;
+      } else {
+        entry.igst += taxAmt;
+      }
     }
-    const entry = gstRates.get(rate)!;
-    entry.taxable += taxable;
-    if (isSameState) {
-      entry.cgst += taxAmt / 2;
-      entry.sgst += taxAmt / 2;
-    } else {
-      entry.igst += taxAmt;
+
+    if (gstRates.size > 0) {
+      doc.fontSize(6.5).fillColor(colorMuted).font("NotoSans-Bold")
+        .text("TAX BREAKDOWN", margin, gstBottomY);
+      gstBottomY += 10;
+
+      doc.rect(margin, gstBottomY, contentW * 0.55, 14).fill(colorBg);
+      doc.fontSize(6).fillColor(colorSecondary).font("NotoSans-Bold");
+      doc.text("RATE", margin + 3, gstBottomY + 4);
+      doc.text("TAXABLE", margin + 60, gstBottomY + 4, { width: 60, align: "right" });
+      if (isSameState) {
+        doc.text("CGST", margin + 140, gstBottomY + 4, { width: 50, align: "right" });
+        doc.text("SGST", margin + 200, gstBottomY + 4, { width: 50, align: "right" });
+      } else {
+        doc.text("IGST", margin + 140, gstBottomY + 4, { width: 50, align: "right" });
+      }
+      gstBottomY += 14;
+
+      doc.font("NotoSans").fontSize(6).fillColor(colorPrimary);
+      for (const [rate, amounts] of gstRates) {
+        doc.text(`${rate}%`, margin + 3, gstBottomY + 2);
+        doc.text(fmt(amounts.taxable), margin + 60, gstBottomY + 2, { width: 60, align: "right" });
+        if (isSameState) {
+          doc.text(fmt(amounts.cgst), margin + 140, gstBottomY + 2, { width: 50, align: "right" });
+          doc.text(fmt(amounts.sgst), margin + 200, gstBottomY + 2, { width: 50, align: "right" });
+        } else {
+          doc.text(fmt(amounts.igst), margin + 140, gstBottomY + 2, { width: 50, align: "right" });
+        }
+        gstBottomY += 11;
+      }
+      gstBottomY += 4;
     }
   }
 
   // ── Notes / Terms (compact) ───────────────────────────────────
-  let notesY = Math.max(ty, bottomY) + 10;
+  let notesY = gstBottomY;
 
   if (data.notes) {
     doc.fontSize(6.5).fillColor(colorMuted).font("NotoSans-Bold").text("Notes", margin, notesY);

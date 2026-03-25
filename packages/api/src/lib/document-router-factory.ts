@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -93,6 +93,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         const conditions = [
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.documentType, docType as DocumentType),
+          isNull(invoices.deletedAt),
         ];
 
         if (input.type) conditions.push(eq(invoices.type, input.type));
@@ -374,6 +375,9 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
           }
 
+          // Already soft-deleted — return early
+          if (doc.deletedAt) return { success: true };
+
           // Reverse stock effects on delete (using stored conversionFactor)
           if (config.stockEffect !== "none") {
             const lineItems = await tx
@@ -407,9 +411,10 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             }
           }
 
-          // Cascade on invoice_items is handled by FK, but we already fetched line items above
+          // Soft delete: set deletedAt + cancel the document
           await tx
-            .delete(invoices)
+            .update(invoices)
+            .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
             .where(
               and(
                 eq(invoices.id, input.id),

@@ -2,12 +2,19 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { InputField } from "@/components/ui/FormField";
 import { Combobox } from "@/components/ui/Combobox";
+import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
 import { GstinInput } from "./GstinInput";
 import { PanInput } from "./PanInput";
 import { PhoneInput } from "./PhoneInput";
 import { PincodeInput } from "./PincodeInput";
 import { INDIAN_STATES } from "@/lib/indian-states";
+
+const GST_REG_OPTIONS = [
+  { value: "unregistered", label: "Not GST Registered" },
+  { value: "regular", label: "GST Regular" },
+  { value: "composition", label: "GST Composition Scheme" },
+];
 
 interface BusinessTabProps {
   biz: any;
@@ -61,7 +68,9 @@ function BusinessCard({ biz, onEdit }: { biz: any; onEdit: () => void }) {
 export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (name?: string) => void }) {
   const [name, setName] = useState(existing?.name || "");
   const [legalName, setLegalName] = useState(existing?.legalName || "");
+  const [gstRegType, setGstRegType] = useState(existing?.gstRegistrationType || "unregistered");
   const [gstin, setGstin] = useState(existing?.gstin || "");
+  const [stateCode, setStateCode] = useState(existing?.stateCode || "");
   const [pan, setPan] = useState(existing?.pan || "");
   const [phone, setPhone] = useState(existing?.phone || "");
   const [email, setEmail] = useState(existing?.email || "");
@@ -103,7 +112,9 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
     const data = {
       name,
       legalName: legalName || undefined,
-      gstin: gstin || undefined,
+      gstRegistrationType: gstRegType as "unregistered" | "regular" | "composition",
+      gstin: gstRegType !== "unregistered" ? (gstin || undefined) : undefined,
+      stateCode: stateCode || undefined,
       pan: pan || undefined,
       phone: phone || undefined,
       email: email || undefined,
@@ -143,15 +154,32 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
 
         {/* Tax Info */}
         <div className="grid grid-cols-2 gap-4">
-          <GstinInput
-            value={gstin}
-            onChange={setGstin}
-            onPanDetected={(detectedPan) => {
-              if (!pan) setPan(detectedPan);
-            }}
-          />
+          <div>
+            <Listbox
+              label="GST Registration"
+              value={gstRegType}
+              onChange={setGstRegType}
+              options={GST_REG_OPTIONS}
+            />
+          </div>
           <PanInput value={pan} onChange={setPan} />
         </div>
+        {gstRegType !== "unregistered" && (
+          <div className="grid grid-cols-2 gap-4">
+            <GstinInput
+              value={gstin}
+              onChange={(val) => {
+                setGstin(val);
+                if (val.length === 15) {
+                  setStateCode(val.slice(0, 2));
+                }
+              }}
+              onPanDetected={(detectedPan) => {
+                if (!pan) setPan(detectedPan);
+              }}
+            />
+          </div>
+        )}
 
         {/* Contact */}
         <div className="grid grid-cols-2 gap-4">

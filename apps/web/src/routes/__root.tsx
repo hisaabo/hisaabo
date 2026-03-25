@@ -324,6 +324,9 @@ function RootLayout() {
     queryClient.invalidateQueries();
   }
 
+  const activeBusiness = businesses?.find((b) => b.id === (currentBusinessId ?? businesses?.[0]?.id)) ?? businesses?.[0];
+  const isGstRegistered = activeBusiness?.gstRegistrationType !== "unregistered";
+
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
       {/* Sidebar */}
@@ -372,30 +375,38 @@ function RootLayout() {
 
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2">
-          {navSections.map((section) => (
-            <div key={section.label}>
-              <p className="px-3 pt-5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
-                {section.label}
-              </p>
-              {section.items.map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
-                  activeProps={{
-                    className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
-                  }}
-                  inactiveProps={{
-                    className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
-                  }}
-                  activeOptions={{ exact: "exact" in item ? item.exact : false }}
-                >
-                  <item.icon />
-                  {item.label}
-                </Link>
-              ))}
-            </div>
-          ))}
+          {navSections.map((section) => {
+            const visibleItems = section.items.filter((item) => {
+              // Hide GST Reports for non-GST-registered businesses
+              if (item.to === "/gst" && !isGstRegistered) return false;
+              return true;
+            });
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={section.label}>
+                <p className="px-3 pt-5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
+                  {section.label}
+                </p>
+                {visibleItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
+                    activeProps={{
+                      className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
+                    }}
+                    inactiveProps={{
+                      className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
+                    }}
+                    activeOptions={{ exact: "exact" in item ? item.exact : false }}
+                  >
+                    <item.icon />
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Bottom: Settings + User card */}
@@ -438,29 +449,8 @@ function RootLayout() {
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden bg-surface-1">
         {/* Top bar */}
-        <div className="h-14 border-b border-border-light flex items-center justify-between px-6 shrink-0 bg-surface-0">
-          <div />
+        <div className="h-14 border-b border-border-light flex items-center justify-end px-6 shrink-0 bg-surface-0">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowPalette(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              Search...
-              <KbdShortcut keys={["⌘", "K"]} />
-            </button>
             <ThemeToggle />
             <button
               onClick={() => setShowShortcuts(true)}

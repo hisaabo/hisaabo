@@ -94,6 +94,15 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   cancelled: "#d1d5db",
 };
 
+const INVOICE_STATUS_LABELS: Record<string, string> = {
+  paid: "Paid",
+  partial: "Partial",
+  sent: "Unpaid",
+  overdue: "Overdue",
+  draft: "Draft",
+  cancelled: "Cancelled",
+};
+
 const EXPENSE_COLORS = [
   "#5b5bd6",
   "#10b981",
@@ -135,11 +144,11 @@ function ChartCard({
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
 
-function SalesTrendChart() {
-  const { data: raw } = trpc.dashboard.salesTrend.useQuery({ months: 6 });
+function SalesTrendChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
+  const { data: raw } = trpc.dashboard.salesTrend.useQuery({ months: 6, fromDate, toDate });
 
   const data = raw?.map((r) => ({
-    month: new Date(r.month).toLocaleString("en-IN", { month: "short" }),
+    month: new Date(r.month).toLocaleString("en-IN", { month: "short", year: "2-digit" }),
     invoiced: parseFloat(r.invoiced),
     collected: parseFloat(r.collected),
   }));
@@ -208,9 +217,9 @@ function InvoiceStatusChart({ fromDate, toDate }: { fromDate?: string; toDate?: 
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={data}
+                  data={data.map(d => ({ ...d, label: INVOICE_STATUS_LABELS[d.status] || d.status }))}
                   dataKey="count"
-                  nameKey="status"
+                  nameKey="label"
                   cx="50%"
                   cy="50%"
                   innerRadius={52}
@@ -249,7 +258,7 @@ function InvoiceStatusChart({ fromDate, toDate }: { fromDate?: string; toDate?: 
                     background: INVOICE_STATUS_COLORS[entry.status] ?? "#94a3b8",
                   }}
                 />
-                {entry.status} ({entry.count})
+                {INVOICE_STATUS_LABELS[entry.status] || entry.status} ({entry.count})
               </span>
             ))}
           </div>
@@ -420,6 +429,12 @@ function PeriodSelector({
 
 // ─── Summary cards ────────────────────────────────────────────────────────────
 
+function getFYLabel(fyStartIso: string): string {
+  const fyStart = new Date(fyStartIso);
+  const startYear = fyStart.getFullYear();
+  return `FY ${startYear}–${String(startYear + 1).slice(-2)}`;
+}
+
 function SummaryCards({
   data,
 }: {
@@ -430,8 +445,11 @@ function SummaryCards({
     payable: string;
     cashInHand: string;
     totalExpenses: string;
+    fyStart: string;
   };
 }) {
+  const fyLabel = getFYLabel(data.fyStart);
+
   const cards = [
     { label: "Sales", value: data.totalSales, color: "text-emerald-600" },
     { label: "Purchases", value: data.totalPurchases, color: "text-blue-600" },
@@ -442,15 +460,18 @@ function SummaryCards({
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-      {cards.map((c) => (
-        <div key={c.label} className="card px-4 py-3">
-          <p className="text-[11px] font-medium text-text-tertiary mb-1 truncate">{c.label}</p>
-          <p className={`text-base font-bold tabular-nums truncate ${c.color}`}>
-            {formatCurrency(c.value)}
-          </p>
-        </div>
-      ))}
+    <div className="mb-6">
+      <p className="text-[11px] font-medium text-text-tertiary mb-2">{fyLabel} — Financial Year totals</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {cards.map((c) => (
+          <div key={c.label} className="card px-4 py-3">
+            <p className="text-[11px] font-medium text-text-tertiary mb-1 truncate">{c.label}</p>
+            <p className={`text-base font-bold tabular-nums truncate ${c.color}`}>
+              {formatCurrency(c.value)}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -513,12 +534,12 @@ function DashboardPage() {
         }
       />
 
-      {/* Summary cards — always This FY via the summary query */}
+      {/* Summary cards — always show This FY totals (receivable/payable are current-balance metrics) */}
       <SummaryCards data={data} />
 
-      {/* Charts grid */}
+      {/* Charts grid — all charts respect the selected period */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SalesTrendChart />
+        <SalesTrendChart fromDate={from} toDate={to} />
         <InvoiceStatusChart fromDate={from} toDate={to} />
         <TopOutstandingChart />
         <ExpensesByCategoryChart fromDate={from} toDate={to} />

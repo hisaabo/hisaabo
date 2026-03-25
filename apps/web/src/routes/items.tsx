@@ -1,7 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -12,7 +13,6 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField } from "@/components/ui/FormField";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Listbox } from "@/components/ui/Listbox";
@@ -996,19 +996,339 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
 
 // ── Item Detail Panel ────────────────────────────────────────────
 
+// Sub-components for Price History and Stock Movements tabs
+
+type PriceHistoryRow = {
+  invoiceDate: Date | string;
+  invoiceNumber: string;
+  invoiceType: string;
+  unitPrice: string;
+  quantity: string;
+  taxPercent: string;
+  totalAmount: string;
+  partyName: string;
+  selectedUnit: string | null;
+  conversionFactor: string | null;
+};
+
+type StockMovementRow = {
+  invoiceDate: Date | string;
+  invoiceNumber: string;
+  invoiceType: string;
+  quantity: string;
+  partyName: string;
+  direction: "in" | "out";
+  selectedUnit: string | null;
+  conversionFactor: string | null;
+};
+
+function PriceHistoryTab({
+  priceHistory,
+  period,
+  onPeriodChange,
+}: {
+  priceHistory: PriceHistoryRow[];
+  period: PeriodFilter;
+  onPeriodChange: (v: PeriodFilter) => void;
+}) {
+  const filtered = useMemo(() => filterByPeriod(priceHistory, period), [priceHistory, period]);
+
+  // Build chart data: chronological, sales only, max 10 points if "all"
+  const chartData = useMemo(() => {
+    const chronological = [...filtered].reverse();
+    const limited = period === "all" && chronological.length > 10
+      ? chronological.slice(-10)
+      : chronological;
+    return limited.map((h) => ({
+      date: formatDate(h.invoiceDate),
+      price: parseFloat(h.unitPrice),
+      invoiceNumber: h.invoiceNumber,
+    }));
+  }, [filtered, period]);
+
+  // Price-changed rows: only invoices where unit price differs from the previous entry
+  const priceChangedRows = useMemo(() => {
+    const chronological = [...filtered].reverse();
+    return chronological.filter((h, i) => {
+      if (i === 0) return true;
+      return parseFloat(h.unitPrice) !== parseFloat(chronological[i - 1].unitPrice);
+    }).reverse(); // show newest first
+  }, [filtered]);
+
+  if (!priceHistory.length) {
+    return (
+      <EmptyState
+        title="No price history"
+        description="Prices will appear here as this item is used in invoices."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-text-secondary">Price Over Time</p>
+        <PeriodToggle value={period} onChange={onPeriodChange} />
+      </div>
+
+      {chartData.length > 1 ? (
+        <div className="rounded-xl border border-border-light bg-surface-0 p-4">
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(v) => `₹${v}`}
+                width={55}
+              />
+              <Tooltip
+                {...CHART_TOOLTIP_STYLE}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={(value: any) => [`₹${Number(value ?? 0).toFixed(2)}`, "Unit Price"]}
+              />
+              <Line
+                type="monotone"
+                dataKey="price"
+                stroke="#5b5bd6"
+                strokeWidth={2}
+                dot={{ r: 3, fill: "#5b5bd6", strokeWidth: 0 }}
+                activeDot={{ r: 5 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border-light bg-surface-1 px-4 py-3 text-xs text-text-tertiary">
+          Not enough data points to draw a chart.
+        </div>
+      )}
+
+      {priceChangedRows.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-text-secondary mb-2">Price Changes</p>
+          <div className="rounded-xl border border-border-light overflow-hidden">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Invoice #</th>
+                  <th className="text-right">Unit Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {priceChangedRows.map((h, i) => (
+                  <tr key={i}>
+                    <td className="font-mono text-[13px] text-brand-600">{h.invoiceNumber}</td>
+                    <td className="text-right tabular-nums font-medium">{formatCurrency(h.unitPrice)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StockMovementsTab({
+  stockMovements,
+  period,
+  onPeriodChange,
+  currentStock,
+}: {
+  stockMovements: StockMovementRow[];
+  period: PeriodFilter;
+  onPeriodChange: (v: PeriodFilter) => void;
+  currentStock: number;
+}) {
+  const filtered = useMemo(() => filterByPeriod(stockMovements, period), [stockMovements, period]);
+
+  // Build running stock data (oldest first for chart)
+  const { chartData, tableRows } = useMemo(() => {
+    const chronological = [...filtered].reverse();
+
+    // Compute running balance backwards from current stock
+    // Sum all qty changes (+ for in, - for out) in the filtered window
+    const totalChange = chronological.reduce((acc, m) => {
+      const qty = parseFloat(m.quantity);
+      return acc + (m.direction === "in" ? qty : -qty);
+    }, 0);
+
+    // Starting stock = currentStock - totalChange in this window
+    let running = currentStock - totalChange;
+    const rows: { date: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
+
+    for (const m of chronological) {
+      const qty = parseFloat(m.quantity);
+      const delta = m.direction === "in" ? qty : -qty;
+      running += delta;
+      rows.push({
+        date: formatDate(m.invoiceDate),
+        invoiceNumber: m.invoiceNumber,
+        qtyChange: delta,
+        running,
+      });
+    }
+
+    // Table shows newest first (reverse of rows)
+    const tableRows = [...rows].reverse();
+
+    const chartData = rows.map((r) => ({
+      date: r.date,
+      stock: r.running,
+    }));
+
+    return { chartData, tableRows };
+  }, [filtered, currentStock]);
+
+  if (!stockMovements.length) {
+    return (
+      <EmptyState
+        title="No stock movements"
+        description="Stock changes will appear here as invoices are created."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-text-secondary">Stock Over Time</p>
+        <PeriodToggle value={period} onChange={onPeriodChange} />
+      </div>
+
+      {chartData.length > 1 ? (
+        <div className="rounded-xl border border-border-light bg-surface-0 p-4">
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
+                tickLine={false}
+                axisLine={false}
+                width={40}
+              />
+              <Tooltip
+                {...CHART_TOOLTIP_STYLE}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={(value: any) => [Number(value ?? 0).toLocaleString(), "Stock"]}
+              />
+              <Line
+                type="monotone"
+                dataKey="stock"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={{ r: 3, fill: "#10b981", strokeWidth: 0 }}
+                activeDot={{ r: 5 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border-light bg-surface-1 px-4 py-3 text-xs text-text-tertiary">
+          Not enough data points to draw a chart.
+        </div>
+      )}
+
+      <div className="rounded-xl border border-border-light overflow-hidden">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th className="text-right">Qty Change</th>
+              <th className="text-right">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tableRows.map((r, i) => (
+              <tr key={i}>
+                <td className="text-text-secondary text-xs">{r.date}</td>
+                <td className={cn(
+                  "text-right tabular-nums font-medium",
+                  r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
+                )}>
+                  {r.qtyChange > 0 ? "+" : ""}{r.qtyChange.toLocaleString()}
+                </td>
+                <td className="text-right tabular-nums text-text-secondary">{r.running.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const DETAIL_TABS = [
   { value: "overview", label: "Overview" },
   { value: "prices", label: "Price History" },
-  { value: "stock", label: "Stock History" },
-  { value: "invoices", label: "Invoices" },
-  { value: "buyers", label: "Top Buyers" },
+  { value: "stock", label: "Stock Movements" },
 ];
+
+const CHART_TOOLTIP_STYLE = {
+  contentStyle: {
+    background: "var(--surface-0)",
+    border: "1px solid var(--border-light)",
+    borderRadius: "8px",
+    fontSize: "12px",
+  },
+};
+
+type PeriodFilter = "6m" | "1y" | "all";
+
+function filterByPeriod<T extends { invoiceDate: Date | string }>(data: T[], period: PeriodFilter): T[] {
+  if (period === "all") return data;
+  const now = new Date();
+  const cutoff = new Date(now);
+  if (period === "6m") cutoff.setMonth(cutoff.getMonth() - 6);
+  else cutoff.setFullYear(cutoff.getFullYear() - 1);
+  return data.filter((d) => new Date(d.invoiceDate) >= cutoff);
+}
+
+function PeriodToggle({ value, onChange }: { value: PeriodFilter; onChange: (v: PeriodFilter) => void }) {
+  const opts: { value: PeriodFilter; label: string }[] = [
+    { value: "6m", label: "Last 6M" },
+    { value: "1y", label: "Last 1Y" },
+    { value: "all", label: "All" },
+  ];
+  return (
+    <div className="flex gap-1">
+      {opts.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+            value === o.value
+              ? "bg-brand-600 text-white"
+              : "bg-surface-1 text-text-secondary hover:bg-surface-2 border border-border-light"
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose: () => void; onEdit: (id: string) => void }) {
   const [tab, setTab] = useState("overview");
   const [showMerge, setShowMerge] = useState(false);
   const [showSwitchUnit, setShowSwitchUnit] = useState(false);
-  const navigate = useNavigate();
+  const [pricePeriod, setPricePeriod] = useState<PeriodFilter>("all");
+  const [stockPeriod, setStockPeriod] = useState<PeriodFilter>("all");
 
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
   const { data: priceHistory } = trpc.item.priceHistory.useQuery(
@@ -1017,16 +1337,10 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
   );
   const { data: stockMovements } = trpc.item.stockMovements.useQuery(
     { id: itemId },
-    { enabled: tab === "stock" }
+    { enabled: tab === "stock" || tab === "overview" }
   );
-  const { data: relatedInvoices } = trpc.item.relatedInvoices.useQuery(
-    { id: itemId, page: 1, limit: 20 },
-    { enabled: tab === "invoices" }
-  );
-  const { data: topBuyers } = trpc.item.topBuyers.useQuery(
-    { id: itemId },
-    { enabled: tab === "buyers" || tab === "overview" }
-  );
+  // Sales stats are aggregated server-side (no row-limit truncation)
+  const { data: salesStats } = trpc.item.salesStats.useQuery({ id: itemId });
 
   if (!item) return null;
 
@@ -1083,51 +1397,46 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
         {/* ── Overview ─────────────────────────────────────── */}
         {tab === "overview" && (
           <div className="space-y-4">
-            {/* Key metrics */}
+            {/* Sales metrics row */}
             <div className="grid grid-cols-3 gap-3">
               <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Sale Price</p>
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Total Sales</p>
                 <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
-                  {item.salePrice ? formatCurrency(item.salePrice) : "—"}
-                </p>
-                {item.taxInclusive && (
-                  <p className="text-[11px] text-text-tertiary">Incl. tax</p>
-                )}
-              </div>
-              <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Purchase Price</p>
-                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
-                  {item.purchasePrice ? formatCurrency(item.purchasePrice) : "—"}
+                  {salesStats ? formatCurrency(salesStats.totalSaleAmount) : "—"}
                 </p>
               </div>
               <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Stock</p>
-                <p className={cn(
-                  "text-lg font-bold tabular-nums mt-1",
-                  isLow ? "text-amber-600" : "text-text-primary"
-                )}>
-                  {parseFloat(item.stockQuantity).toLocaleString()} {item.unit}
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Avg Sale Price</p>
+                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
+                  {salesStats ? formatCurrency(salesStats.avgSalePrice) : "—"}
                 </p>
-                {isLow && (
-                  <p className="text-[11px] text-amber-600 font-medium">Low stock</p>
-                )}
+              </div>
+              <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Total Qty Sold</p>
+                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
+                  {salesStats ? parseFloat(salesStats.totalSaleQty).toLocaleString() : "—"}
+                </p>
+                {salesStats && <p className="text-[11px] text-text-tertiary">{item.unit}</p>}
               </div>
             </div>
 
-            {/* Details grid */}
+            {/* Compact item info grid */}
             <div className="rounded-xl border border-border-light overflow-hidden">
               <table className="w-full text-sm">
                 <tbody>
                   {[
-                    ["Category", item.category || "—"],
+                    ["Sale Price", item.salePrice ? `${formatCurrency(item.salePrice)}${item.taxInclusive ? " (incl. tax)" : ""}` : "—"],
+                    ["Purchase Price", item.purchasePrice ? formatCurrency(item.purchasePrice) : "—"],
+                    ["Current Stock", `${parseFloat(item.stockQuantity).toLocaleString()} ${item.unit}${isLow ? " ⚠ Low" : ""}`],
                     ["Tax %", `${item.taxPercent}%`],
                     ["Unit", item.unit.toUpperCase()],
-                    ["Low Stock Alert", item.lowStockAlert ?? "—"],
-                    ["Description", item.description || "—"],
+                    ...(item.hsn ? [["HSN / SAC", item.hsn]] : []),
+                    ...(item.sku ? [["SKU", item.sku]] : []),
+                    ...(item.category ? [["Category", item.category]] : []),
                   ].map(([label, value]) => (
                     <tr key={label} className="border-b border-border-light last:border-0">
-                      <td className="px-4 py-2.5 text-text-tertiary font-medium w-40">{label}</td>
-                      <td className="px-4 py-2.5 text-text-primary">{value}</td>
+                      <td className="px-4 py-2.5 text-text-tertiary font-medium w-36 text-xs">{label}</td>
+                      <td className={cn("px-4 py-2.5 text-text-primary text-sm", isLow && label === "Current Stock" ? "text-amber-600 font-medium" : "")}>{value}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1160,319 +1469,26 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
                 </div>
               </div>
             )}
-
-            {/* Recent price history preview */}
-            {priceHistory && priceHistory.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold text-text-secondary">Recent Prices</p>
-                  <button
-                    className="text-xs text-brand-600 hover:underline"
-                    onClick={() => setTab("prices")}
-                  >
-                    View all
-                  </button>
-                </div>
-                <div className="rounded-xl border border-border-light overflow-hidden">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Type</th>
-                        <th>Party</th>
-                        <th className="text-right">Price</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {priceHistory.slice(0, 5).map((h, i) => (
-                        <tr key={i}>
-                          <td className="text-text-secondary text-xs">{formatDate(h.invoiceDate)}</td>
-                          <td className="capitalize text-text-secondary text-xs">{h.invoiceType}</td>
-                          <td className="text-xs">{h.partyName}</td>
-                          <td className="text-right tabular-nums font-medium">{formatCurrency(h.unitPrice)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Top buyers preview */}
-            {topBuyers && topBuyers.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold text-text-secondary">Top Buyers</p>
-                  <button
-                    className="text-xs text-brand-600 hover:underline"
-                    onClick={() => setTab("buyers")}
-                  >
-                    View all
-                  </button>
-                </div>
-                <div className="rounded-xl border border-border-light overflow-hidden">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Party</th>
-                        <th className="text-right">Qty</th>
-                        <th className="text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {topBuyers.slice(0, 3).map((b) => (
-                        <tr key={b.partyId}>
-                          <td className="text-xs font-medium">{b.partyName}</td>
-                          <td className="text-right tabular-nums text-text-secondary text-xs">{parseFloat(b.totalQuantity).toLocaleString()}</td>
-                          <td className="text-right tabular-nums font-medium text-xs">{formatCurrency(b.totalAmount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
         {/* ── Price History ─────────────────────────────────── */}
         {tab === "prices" && (
-          <div>
-            {!priceHistory?.length ? (
-              <EmptyState
-                title="No price history"
-                description="Prices will appear here as this item is used in invoices."
-              />
-            ) : (
-              <div className="rounded-xl border border-border-light overflow-hidden">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Invoice</th>
-                      <th>Type</th>
-                      <th>Party</th>
-                      <th className="text-right">Qty</th>
-                      <th className="text-right">Unit</th>
-                      <th className="text-right">Unit Price</th>
-                      <th className="text-right">Base Price</th>
-                      <th className="text-right">Tax %</th>
-                      <th className="text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {priceHistory.map((h, i) => (
-                      <tr key={i}>
-                        <td className="text-text-secondary text-xs">{formatDate(h.invoiceDate)}</td>
-                        <td className="font-mono text-[13px] text-text-secondary">{h.invoiceNumber}</td>
-                        <td>
-                          <span className={cn(
-                            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
-                            h.invoiceType === "sale"
-                              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                              : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
-                          )}>
-                            {h.invoiceType === "sale" ? "Sale" : "Purchase"}
-                          </span>
-                        </td>
-                        <td className="text-xs">{h.partyName}</td>
-                        <td className="text-right tabular-nums text-text-secondary">{h.quantity}</td>
-                        <td className="text-right text-text-secondary text-xs">
-                          {h.selectedUnit?.toUpperCase() || item.unit.toUpperCase()}
-                        </td>
-                        <td className="text-right tabular-nums font-medium">{formatCurrency(h.unitPrice)}</td>
-                        <td className="text-right tabular-nums text-text-tertiary text-xs">
-                          {h.conversionFactor && parseFloat(h.conversionFactor) > 1
-                            ? `₹${(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor)).toFixed(2)}/${item.unit}`
-                            : "—"}
-                        </td>
-                        <td className="text-right tabular-nums text-text-secondary">{h.taxPercent}%</td>
-                        <td className="text-right tabular-nums font-medium">{formatCurrency(h.totalAmount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <PriceHistoryTab
+            priceHistory={priceHistory ?? []}
+            period={pricePeriod}
+            onPeriodChange={setPricePeriod}
+          />
         )}
 
-        {/* ── Stock History ─────────────────────────────────── */}
+        {/* ── Stock Movements ───────────────────────────────── */}
         {tab === "stock" && (
-          <div>
-            {!stockMovements?.length ? (
-              <EmptyState
-                title="No stock movements"
-                description="Stock changes will appear here as invoices are created."
-              />
-            ) : (
-              <div className="rounded-xl border border-border-light overflow-hidden">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Invoice</th>
-                      <th>Party</th>
-                      <th>Type</th>
-                      <th className="text-right">Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stockMovements.map((m, i) => (
-                      <tr
-                        key={i}
-                        className="cursor-pointer"
-                        onClick={() => {
-                          onClose();
-                          navigate({ to: "/invoices" });
-                        }}
-                      >
-                        <td className="text-text-secondary text-xs">{formatDate(m.invoiceDate)}</td>
-                        <td className="font-mono text-[13px] text-brand-600 hover:underline">{m.invoiceNumber}</td>
-                        <td className="text-xs">{m.partyName}</td>
-                        <td>
-                          <span className={cn(
-                            "inline-flex items-center gap-1 text-[11px] font-medium",
-                            m.direction === "out" ? "text-red-600" : "text-emerald-600"
-                          )}>
-                            {m.direction === "out" ? "↓" : "↑"}
-                            {m.direction === "out" ? "Out" : "In"}
-                          </span>
-                        </td>
-                        <td className={cn(
-                          "text-right tabular-nums font-medium",
-                          m.direction === "out" ? "text-red-600" : "text-emerald-600"
-                        )}>
-                          {m.direction === "out" ? "-" : "+"}{m.quantity}
-                          {m.selectedUnit && m.selectedUnit !== item.unit && (
-                            <span className="text-text-tertiary text-[10px] ml-1">
-                              ({m.selectedUnit})
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Invoices ─────────────────────────────────────── */}
-        {tab === "invoices" && (
-          <div>
-            {!relatedInvoices?.data.length ? (
-              <EmptyState
-                title="No invoices"
-                description="This item hasn't been used in any invoices yet."
-              />
-            ) : (
-              <div className="rounded-xl border border-border-light overflow-hidden">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Invoice</th>
-                      <th>Date</th>
-                      <th>Party</th>
-                      <th>Status</th>
-                      <th className="text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {relatedInvoices.data.map((inv) => (
-                      <tr
-                        key={inv.id}
-                        className="cursor-pointer"
-                        onClick={() => {
-                          onClose();
-                          navigate({ to: "/invoices" });
-                        }}
-                      >
-                        <td className="font-mono text-[13px] text-brand-600 hover:underline">{inv.invoiceNumber}</td>
-                        <td className="text-text-secondary text-xs">{formatDate(inv.invoiceDate)}</td>
-                        <td className="text-xs font-medium">{inv.partyName}</td>
-                        <td><StatusBadge status={inv.status} size="sm" /></td>
-                        <td className="text-right tabular-nums font-medium">{formatCurrency(inv.totalAmount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {relatedInvoices.total > relatedInvoices.data.length && (
-                  <div className="px-4 py-2 text-center text-xs text-text-tertiary bg-surface-1">
-                    Showing {relatedInvoices.data.length} of {relatedInvoices.total}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Top Buyers ───────────────────────────────────── */}
-        {tab === "buyers" && (
-          <div>
-            {!topBuyers?.length ? (
-              <EmptyState
-                title="No buyers yet"
-                description="Buyer data will appear here as this item is used in invoices."
-              />
-            ) : (
-              <div className="rounded-xl border border-border-light overflow-hidden">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Party</th>
-                      <th>Type</th>
-                      <th className="text-right">Qty</th>
-                      <th className="text-right">Amount</th>
-                      <th className="text-right">Invoices</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topBuyers.map((b, i) => (
-                      <tr
-                        key={b.partyId}
-                        className="cursor-pointer"
-                        onClick={() => {
-                          onClose();
-                          navigate({ to: "/parties" });
-                        }}
-                      >
-                        <td>
-                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-2 text-[10px] font-bold text-text-tertiary">
-                            {i + 1}
-                          </span>
-                        </td>
-                        <td className="font-medium">{b.partyName}</td>
-                        <td>
-                          <span className={cn(
-                            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
-                            b.partyType === "customer"
-                              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                              : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
-                          )}>
-                            {b.partyType === "customer" ? "Customer" : "Supplier"}
-                          </span>
-                        </td>
-                        <td className="text-right tabular-nums text-text-secondary">
-                          {parseFloat(b.totalQuantity).toLocaleString()}
-                        </td>
-                        <td className="text-right tabular-nums font-medium">
-                          {formatCurrency(b.totalAmount)}
-                        </td>
-                        <td className="text-right">
-                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-surface-2 text-[11px] font-medium text-text-secondary">
-                            {b.invoiceCount}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <StockMovementsTab
+            stockMovements={stockMovements ?? []}
+            period={stockPeriod}
+            onPeriodChange={setStockPeriod}
+            currentStock={parseFloat(item.stockQuantity)}
+          />
         )}
       </div>
     </SlideOver>

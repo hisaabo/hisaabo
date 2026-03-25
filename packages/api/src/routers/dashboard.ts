@@ -189,15 +189,37 @@ export const dashboardRouter = router({
     }),
 
   salesTrend: viewerProcedure
-    .input(z.object({ months: z.number().int().min(3).max(24).default(6) }))
+    .input(z.object({
+      months: z.number().int().min(3).max(24).default(6),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
     .query(async ({ input, ctx }) => {
-      // Generate list of months going back N months from today
-      // For each month: total invoiced (sale invoices) + total payments received
+      // If fromDate/toDate are provided, derive the month range from them.
+      // Otherwise fall back to the last N months from today.
+      let rangeStart: Date;
+      let rangeEnd: Date;
+
+      if (input.fromDate) {
+        rangeStart = new Date(input.fromDate);
+      } else {
+        const d = new Date();
+        d.setDate(1);
+        d.setMonth(d.getMonth() - (input.months - 1));
+        rangeStart = d;
+      }
+
+      if (input.toDate) {
+        rangeEnd = new Date(input.toDate);
+      } else {
+        rangeEnd = new Date();
+      }
+
       const results = await ctx.db.execute(sql`
         WITH months AS (
           SELECT generate_series(
-            date_trunc('month', NOW() - (${input.months - 1} || ' months')::interval),
-            date_trunc('month', NOW()),
+            date_trunc('month', ${rangeStart.toISOString()}::timestamptz),
+            date_trunc('month', ${rangeEnd.toISOString()}::timestamptz),
             '1 month'::interval
           ) as month_start
         )

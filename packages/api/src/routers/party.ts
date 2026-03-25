@@ -4,6 +4,7 @@ import { parties, invoices, payments, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { logAudit } from "../lib/audit.js";
 
 
 export const partyRouter = router({
@@ -135,7 +136,8 @@ export const partyRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge a party into itself" });
       }
 
-      return ctx.db.transaction(async (tx) => {
+      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+      const result = await ctx.db.transaction(async (tx) => {
         const [source] = await tx.select().from(parties)
           .where(and(eq(parties.id, input.sourceId), eq(parties.businessId, ctx.businessId))).limit(1);
         const [target] = await tx.select().from(parties)
@@ -173,8 +175,20 @@ export const partyRouter = router({
         // Delete the source party
         await tx.delete(parties).where(eq(parties.id, input.sourceId));
 
-        return { success: true, mergedInto: input.targetId };
+        return { success: true, mergedInto: input.targetId, sourceName: source.name, targetName: target.name };
       });
+
+      await logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "party.merge",
+        entityType: "party",
+        entityId: input.targetId,
+        metadata: { sourceId: input.sourceId, sourceName: result.sourceName, targetName: result.targetName },
+        ipAddress,
+      });
+
+      return { success: result.success, mergedInto: result.mergedInto };
     }),
 
   /**

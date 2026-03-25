@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, ilike, or } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { expenses } from "@hisaabo/db";
@@ -15,7 +15,7 @@ export const expenseRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
-      const conditions = [eq(expenses.businessId, ctx.businessId)];
+      const conditions = [eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)];
       if (input.category) conditions.push(eq(expenses.category, input.category));
       if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
@@ -77,7 +77,16 @@ export const expenseRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await ctx.db.delete(expenses)
+      const [existing] = await ctx.db.select({ id: expenses.id, deletedAt: expenses.deletedAt })
+        .from(expenses)
+        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
+        .limit(1);
+
+      if (!existing) return { success: true };
+      if (existing.deletedAt) return { success: true }; // already soft-deleted
+
+      await ctx.db.update(expenses)
+        .set({ deletedAt: new Date() })
         .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)));
       return { success: true };
     }),
@@ -85,7 +94,7 @@ export const expenseRouter = router({
   categories: viewerProcedure.query(async ({ ctx }) => {
     const result = await ctx.db.selectDistinct({ category: expenses.category })
       .from(expenses)
-      .where(eq(expenses.businessId, ctx.businessId))
+      .where(and(eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)))
       .orderBy(expenses.category);
     return result.map((r) => r.category);
   }),
@@ -96,7 +105,7 @@ export const expenseRouter = router({
       to: z.string().datetime().optional(),
     }))
     .query(async ({ input, ctx }) => {
-      const conditions = [eq(expenses.businessId, ctx.businessId)];
+      const conditions = [eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)];
       if (input.from) conditions.push(sql`${expenses.expenseDate} >= ${input.from}`);
       if (input.to) conditions.push(sql`${expenses.expenseDate} <= ${input.to}`);
 

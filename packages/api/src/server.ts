@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt } from "drizzle-orm";
+import { eq, and, gt, lt, inArray } from "drizzle-orm";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,7 +12,7 @@ import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts } from "@hisaabo/db";
 
 const app = new Hono();
 
@@ -116,6 +116,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
 
+  // Fetch HSN codes for linked items
+  const itemIds = lineItems.map(li => li.itemId).filter(Boolean) as string[];
+  const itemHsns = itemIds.length > 0
+    ? await db.select({ id: items.id, hsn: items.hsn }).from(items).where(inArray(items.id, itemIds))
+    : [];
+  const hsnMap = new Map(itemHsns.map(i => [i.id, i.hsn || ""]));
+
   // Fetch bank accounts for payment info on invoice
   const bizBankAccounts = await db.select().from(bankAccounts)
     .where(eq(bankAccounts.businessId, businessId))
@@ -181,6 +188,10 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     bankName: bankAccount?.bankName || undefined,
     upiId: upiId || undefined,
     upiQrDataUrl,
+    gstRegistrationType: biz.gstRegistrationType || "unregistered",
+    businessStateCode: biz.stateCode || undefined,
+    partyStateCode: party.stateCode || undefined,
+    lineItemHsn: lineItems.map(li => li.itemId ? (hsnMap.get(li.itemId) || "") : ""),
   };
 
   const pdfBuffer = await generatePDFInWorker(pdfData, format);

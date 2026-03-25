@@ -1,9 +1,10 @@
-import { eq, and, sql, desc, gte, lte, notInArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, notInArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { logAudit } from "../lib/audit.js";
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -16,7 +17,7 @@ export const paymentRouter = router({
       ...paginationSchema.shape,
     }))
     .query(async ({ input, ctx }) => {
-      const conditions = [eq(payments.businessId, ctx.businessId)];
+      const conditions = [eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)];
       if (input.partyId) conditions.push(eq(payments.partyId, input.partyId));
       if (input.invoiceId) conditions.push(eq(payments.invoiceId, input.invoiceId));
       if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
@@ -151,7 +152,8 @@ export const paymentRouter = router({
     }),
 
   create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
-    return ctx.db.transaction(async (tx) => {
+    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+    const payment = await ctx.db.transaction(async (tx) => {
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,
@@ -274,6 +276,18 @@ export const paymentRouter = router({
 
       return payment;
     });
+
+    await logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "payment.create",
+      entityType: "payment",
+      entityId: payment.id,
+      metadata: { paymentNumber: payment.paymentNumber, amount: payment.amount, mode: payment.mode },
+      ipAddress,
+    });
+
+    return payment;
   }),
 
   getById: viewerProcedure
@@ -512,13 +526,17 @@ export const paymentRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return ctx.db.transaction(async (tx) => {
+      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+      const result = await ctx.db.transaction(async (tx) => {
         const [payment] = await tx.select()
           .from(payments)
           .where(and(eq(payments.id, input.id), eq(payments.businessId, ctx.businessId)))
           .limit(1);
 
-        if (!payment) return { success: false };
+        if (!payment) return { success: false, payment: null };
+
+        // Already soft-deleted — return early
+        if (payment.deletedAt) return { success: true, payment: null };
 
         // Reverse the invoice amount if linked
         if (payment.invoiceId) {
@@ -573,9 +591,26 @@ export const paymentRouter = router({
           }
         }
 
-        await tx.delete(payments).where(eq(payments.id, input.id));
-        return { success: true };
+        // Soft delete: set deletedAt timestamp
+        await tx.update(payments)
+          .set({ deletedAt: new Date() })
+          .where(eq(payments.id, input.id));
+        return { success: true, payment };
       });
+
+      if (result.success && result.payment) {
+        await logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: "payment.delete",
+          entityType: "payment",
+          entityId: input.id,
+          metadata: { paymentNumber: result.payment.paymentNumber, amount: result.payment.amount },
+          ipAddress,
+        });
+      }
+
+      return { success: result.success };
     }),
 
   // Payments with no bank account assigned

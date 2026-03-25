@@ -1,9 +1,9 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { businesses, bankAccounts, controlDb, tenantMembers } from "@hisaabo/db";
+import { businesses, bankAccounts, controlDb, tenantMembers, auditLog } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
-import { router, tenantProcedure } from "../trpc.js";
+import { router, tenantProcedure, viewerProcedure } from "../trpc.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -109,5 +109,21 @@ export const businessRouter = router({
       );
 
       return { success: true, previousNumber: currentNumber, newNumber: input.newNumber };
+    }),
+
+  auditTrail: viewerProcedure
+    .input(z.object({
+      page: z.number().int().min(1).default(1),
+      limit: z.number().int().min(1).max(100).default(50),
+    }))
+    .query(async ({ input, ctx }) => {
+      const offset = (input.page - 1) * input.limit;
+      const data = await ctx.db.select()
+        .from(auditLog)
+        .where(eq(auditLog.businessId, ctx.businessId))
+        .orderBy(desc(auditLog.createdAt))
+        .limit(input.limit)
+        .offset(offset);
+      return { data, page: input.page, limit: input.limit };
     }),
 });

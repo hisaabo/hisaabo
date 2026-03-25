@@ -12,6 +12,7 @@ export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
 export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"]);
 export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card"]);
 export const bankTransactionTypeEnum = pgEnum("bank_transaction_type", ["deposit", "withdrawal", "transfer"]);
+export const gstRegistrationTypeEnum = pgEnum("gst_registration_type", ["regular", "composition", "unregistered"]);
 
 // ── Business ───────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export const businesses = pgTable("businesses", {
   createdByUserId: uuid("created_by_user_id").notNull(),
   name: text("name").notNull(),
   legalName: text("legal_name"),
+  gstRegistrationType: gstRegistrationTypeEnum("gst_registration_type").default("unregistered").notNull(),
   gstin: text("gstin"),
   pan: text("pan"),
   phone: text("phone"),
@@ -28,6 +30,7 @@ export const businesses = pgTable("businesses", {
   address: text("address"),
   city: text("city"),
   state: text("state"),
+  stateCode: text("state_code"), // 2-digit GST state code (01-38) for inter/intra-state detection
   pincode: text("pincode"),
   logoUrl: text("logo_url"),
   invoicePrefix: text("invoice_prefix").default("INV").notNull(),
@@ -65,6 +68,7 @@ export const parties = pgTable("parties", {
   shippingAddress: text("shipping_address"),
   city: text("city"),
   state: text("state"),
+  stateCode: text("state_code"), // 2-digit GST state code for inter/intra-state detection
   pincode: text("pincode"),
   openingBalance: numeric("opening_balance", { precision: 15, scale: 2 }).default("0").notNull(),
   category: text("category"),
@@ -146,6 +150,7 @@ export const invoices = pgTable("invoices", {
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (t) => [
   index("invoices_business_idx").on(t.businessId),
   index("invoices_party_idx").on(t.partyId),
@@ -197,6 +202,7 @@ export const payments = pgTable("payments", {
   createdByName: text("created_by_name"),
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (t) => [
   index("payments_business_idx").on(t.businessId),
   index("payments_invoice_idx").on(t.invoiceId),
@@ -232,6 +238,7 @@ export const expenses = pgTable("expenses", {
   createdByUserId: uuid("created_by_user_id"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (t) => [
   index("expenses_business_idx").on(t.businessId),
   index("expenses_date_idx").on(t.businessId, t.expenseDate),

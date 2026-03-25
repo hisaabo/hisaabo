@@ -1,9 +1,10 @@
-import { eq, and, sql, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { logAudit } from "../lib/audit.js";
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -24,6 +25,7 @@ export const invoiceRouter = router({
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, input.documentType),
+        isNull(invoices.deletedAt),
       ];
       if (input.type) conditions.push(eq(invoices.type, input.type));
       if (input.status) conditions.push(eq(invoices.status, input.status));
@@ -108,7 +110,8 @@ export const invoiceRouter = router({
     }),
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
-    return ctx.db.transaction(async (tx) => {
+    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+    const invoice = await ctx.db.transaction(async (tx) => {
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
         prefix: businesses.invoicePrefix,
@@ -213,6 +216,18 @@ export const invoiceRouter = router({
 
       return invoice;
     });
+
+    await logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "invoice.create",
+      entityType: "invoice",
+      entityId: invoice.id,
+      metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
+      ipAddress,
+    });
+
+    return invoice;
   }),
 
   updateStatus: memberProcedure
@@ -377,17 +392,29 @@ export const invoiceRouter = router({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const [inv] = await ctx.db.select({ status: invoices.status })
+      const [inv] = await ctx.db.select({ status: invoices.status, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
 
-      if (inv && inv.status !== "draft") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Only draft invoices can be deleted" });
-      }
+      if (!inv) return { success: true };
+      if (inv.deletedAt) return { success: true }; // already soft-deleted
 
-      await ctx.db.delete(invoices)
+      await ctx.db.update(invoices)
+        .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
+
+      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
+      await logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "invoice.delete",
+        entityType: "invoice",
+        entityId: input.id,
+        metadata: { invoiceNumber: inv.invoiceNumber, previousStatus: inv.status },
+        ipAddress,
+      });
+
       return { success: true };
     }),
 });

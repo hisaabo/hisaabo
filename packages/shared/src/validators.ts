@@ -47,9 +47,13 @@ export const completeProfileSchema = z.object({
 
 // ── Business ───────────────────────────────────────────────────
 
+export const gstRegistrationTypes = ["regular", "composition", "unregistered"] as const;
+export type GstRegistrationType = (typeof gstRegistrationTypes)[number];
+
 export const createBusinessSchema = z.object({
   name: z.string().min(1).max(200),
   legalName: z.string().max(200).optional(),
+  gstRegistrationType: z.enum(gstRegistrationTypes).default("unregistered"),
   gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).optional().or(z.literal("")),
   phone: z.string().max(15).optional(),
@@ -57,6 +61,7 @@ export const createBusinessSchema = z.object({
   address: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
+  stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
   invoicePrefix: z.string().min(1).max(10).default("INV"),
   currency: z.string().length(3).default("INR"),
@@ -102,6 +107,7 @@ export const createPartySchema = z.object({
   shippingAddress: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
+  stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
   openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   category: z.string().max(100).optional(),

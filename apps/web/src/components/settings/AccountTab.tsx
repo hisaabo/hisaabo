@@ -3,6 +3,108 @@ import { trpc } from "@/lib/trpc";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/hooks/useToast";
 
+const ACTION_LABELS: Record<string, string> = {
+  "invoice.create": "Invoice created",
+  "invoice.delete": "Invoice deleted",
+  "payment.create": "Payment recorded",
+  "payment.delete": "Payment deleted",
+  "party.merge": "Parties merged",
+};
+
+function formatDate(date: Date | string) {
+  return new Date(date).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function AuditTrailCard() {
+  const [page, setPage] = useState(1);
+  const limit = 20;
+  const { data, isLoading } = trpc.business.auditTrail.useQuery(
+    { page, limit },
+    { keepPreviousData: true }
+  );
+
+  const entries = data?.data ?? [];
+  const hasMore = entries.length === limit;
+
+  return (
+    <div className="card px-6 py-5">
+      <h3 className="text-sm font-semibold text-text-primary mb-4">Activity Log</h3>
+
+      {isLoading && (
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="skeleton h-10 rounded" />
+          ))}
+        </div>
+      )}
+
+      {!isLoading && entries.length === 0 && (
+        <p className="text-sm text-text-tertiary">No activity recorded yet.</p>
+      )}
+
+      {!isLoading && entries.length > 0 && (
+        <>
+          <div className="divide-y divide-border">
+            {entries.map((entry) => {
+              let meta: Record<string, unknown> = {};
+              try {
+                if (entry.metadata) meta = JSON.parse(entry.metadata);
+              } catch {
+                // ignore malformed metadata
+              }
+
+              const label = ACTION_LABELS[entry.action] ?? entry.action;
+              const detail =
+                (meta.invoiceNumber as string) ||
+                (meta.paymentNumber as string) ||
+                (meta.sourceName ? `${meta.sourceName} → ${meta.targetName}` : null) ||
+                null;
+
+              return (
+                <div key={entry.id} className="py-3 flex items-start justify-between gap-4 text-sm">
+                  <div>
+                    <span className="text-text-primary font-medium">{label}</span>
+                    {detail && (
+                      <span className="text-text-tertiary ml-2">{detail}</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-text-tertiary whitespace-nowrap shrink-0">
+                    {formatDate(entry.createdAt)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex gap-3 mt-4">
+            <button
+              className="btn-ghost text-xs"
+              disabled={page === 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </button>
+            <span className="text-xs text-text-tertiary self-center">Page {page}</span>
+            <button
+              className="btn-ghost text-xs"
+              disabled={!hasMore}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function AccountTab() {
   const { data: session } = trpc.auth.me.useQuery();
   const [showLogout, setShowLogout] = useState(false);
@@ -35,6 +137,9 @@ export function AccountTab() {
           </div>
         </div>
       </div>
+
+      {/* Activity log */}
+      <AuditTrailCard />
 
       {/* Sign out */}
       <div className="card px-6 py-5">

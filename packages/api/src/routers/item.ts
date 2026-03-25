@@ -152,6 +152,43 @@ export const itemRouter = router({
       return { success: true };
     }),
 
+  // Aggregate sales/purchase stats for an item — computed server-side so the 50-row
+  // priceHistory limit does not cause undercounting.
+  salesStats: viewerProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const [row] = await ctx.db.select({
+        totalSaleAmount: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.totalAmount}::numeric ELSE 0 END), 0)::text`,
+        totalSaleQty: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.quantity}::numeric ELSE 0 END), 0)::text`,
+        totalPurchaseAmount: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'purchase' THEN ${invoiceItems.totalAmount}::numeric ELSE 0 END), 0)::text`,
+        totalPurchaseQty: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'purchase' THEN ${invoiceItems.quantity}::numeric ELSE 0 END), 0)::text`,
+        saleInvoiceCount: sql<number>`COUNT(DISTINCT CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.id} END)::int`,
+      })
+        .from(invoiceItems)
+        .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+        .where(
+          and(
+            eq(invoiceItems.itemId, input.id),
+            eq(invoices.businessId, ctx.businessId),
+            eq(invoices.documentType, "invoice"),
+            sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          )
+        );
+
+      const totalSaleQty = parseFloat(row.totalSaleQty);
+      const totalSaleAmount = parseFloat(row.totalSaleAmount);
+      const avgSalePrice = totalSaleQty > 0 ? totalSaleAmount / totalSaleQty : 0;
+
+      return {
+        totalSaleAmount: row.totalSaleAmount,
+        totalSaleQty: row.totalSaleQty,
+        avgSalePrice: avgSalePrice.toFixed(2),
+        totalPurchaseAmount: row.totalPurchaseAmount,
+        totalPurchaseQty: row.totalPurchaseQty,
+        saleInvoiceCount: row.saleInvoiceCount,
+      };
+    }),
+
   // Price history: every price this item was sold/purchased at, derived from invoice line items
   priceHistory: viewerProcedure
     .input(z.object({ id: z.string().uuid() }))

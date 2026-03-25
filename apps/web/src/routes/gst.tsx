@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { formatCurrency } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SegmentedControl } from "@/components/ui/Tabs";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { toast } from "@/hooks/useToast";
 
 export const Route = createFileRoute("/gst")({
@@ -21,7 +22,22 @@ function GSTReportsPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [activeTab, setActiveTab] = useState<"gstr1" | "gstr3b">("gstr1");
 
+  const { data: businesses } = trpc.business.list.useQuery();
+  const biz = businesses?.[0];
+
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+
+  if (biz && biz.gstRegistrationType === "unregistered") {
+    return (
+      <div>
+        <PageHeader title="GST Reports" description="Generate GSTR-1 and GSTR-3B reports" />
+        <EmptyState
+          title="GST not applicable"
+          description="Your business is not registered under GST. GST reports are only available for GST-registered businesses."
+        />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -96,7 +112,12 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
       <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
     </div>
   );
-  if (!data) return null;
+  if (!data) return (
+    <EmptyState
+      title="GST not applicable"
+      description="Your business is not registered under GST. GST reports are only available for GST-registered businesses."
+    />
+  );
 
   return (
     <div className="space-y-5">
@@ -225,7 +246,12 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
       <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
     </div>
   );
-  if (!data) return null;
+  if (!data) return (
+    <EmptyState
+      title="GST not applicable"
+      description="Your business is not registered under GST. GST reports are only available for GST-registered businesses."
+    />
+  );
 
   return (
     <div className="space-y-5">

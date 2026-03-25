@@ -5,17 +5,36 @@ export interface LineItemInput {
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
+  taxInclusive?: boolean; // if true, unitPrice includes tax
 }
 
 export interface LineItemResult {
-  subtotal: string;       // qty * price
+  subtotal: string;       // qty * price (tax-exclusive base)
   discountAmount: string; // subtotal * (disc / 100)
   afterDiscount: string;  // subtotal - discountAmount
-  taxAmount: string;      // afterDiscount * (tax / 100)
-  total: string;          // afterDiscount + taxAmount
+  taxAmount: string;      // tax on afterDiscount
+  total: string;          // afterDiscount + taxAmount (or original amount if tax-inclusive)
 }
 
 export function calcLineItem(item: LineItemInput): LineItemResult {
+  if (item.taxInclusive) {
+    // Tax-inclusive: unitPrice already includes tax
+    // Back-calculate: base = price / (1 + tax/100), tax = price - base
+    const grossPerUnit = money.toNumber(item.unitPrice);
+    const taxRate = money.toNumber(item.taxPercent);
+    const basePerUnit = grossPerUnit / (1 + taxRate / 100);
+    const basePrice = basePerUnit.toFixed(2);
+
+    const subtotal = money.mul(basePrice, item.quantity);
+    const discountAmount = money.percent(subtotal, item.discountPercent);
+    const afterDiscount = money.sub(subtotal, discountAmount);
+    const taxAmount = money.percent(afterDiscount, item.taxPercent);
+    const total = money.add(afterDiscount, taxAmount);
+
+    return { subtotal, discountAmount, afterDiscount, taxAmount, total };
+  }
+
+  // Tax-exclusive (default)
   const subtotal = money.mul(item.unitPrice, item.quantity);
   const discountAmount = money.percent(subtotal, item.discountPercent);
   const afterDiscount = money.sub(subtotal, discountAmount);
