@@ -132,6 +132,7 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
+            autoFocus
           />
           <InputField
             label="Legal Name"

@@ -8,10 +8,11 @@ import { eq, and, gt, lt } from "drizzle-orm";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants, magicLinkTokens } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts } from "@hisaabo/db";
 
 const app = new Hono();
 
@@ -61,7 +62,7 @@ setInterval(() => {
 // ── Health check ───────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 
-async function generatePDFInWorker(data: any, format: "a4" | "thermal"): Promise<Buffer> {
+async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "thermal"): Promise<Buffer> {
   const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "lib/pdf-worker.js");
   return new Promise((resolve, reject) => {
     const worker = new Worker(workerPath, { workerData: { data, format } });
@@ -76,7 +77,7 @@ async function generatePDFInWorker(data: any, format: "a4" | "thermal"): Promise
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
-  const format = (c.req.query("format") || "a4") as "a4" | "thermal";
+  const format = (c.req.query("format") || "a5-landscape") as "a5-landscape" | "a4" | "thermal";
 
   // Auth check — look up session in control DB
   const cookies = c.req.header("cookie") || "";
@@ -114,6 +115,27 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
+
+  // Fetch bank accounts for payment info on invoice
+  const bizBankAccounts = await db.select().from(bankAccounts)
+    .where(eq(bankAccounts.businessId, businessId))
+    .orderBy(bankAccounts.isDefault);
+
+  // Find UPI account and primary bank account
+  const upiAccount = bizBankAccounts.find(a => a.accountType === "upi");
+  const bankAccount = bizBankAccounts.find(a => a.accountType === "savings" || a.accountType === "current")
+    || bizBankAccounts.find(a => a.isDefault);
+
+  // Generate UPI QR code if UPI account exists and invoice is a sale with remaining balance
+  let upiQrDataUrl: string | undefined;
+  const upiId = upiAccount?.accountNumber; // UPI ID stored in accountNumber for UPI type
+  if (upiId && invoice.type === "sale") {
+    const balance = parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid);
+    if (balance > 0) {
+      const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+      upiQrDataUrl = await QRCode.toDataURL(upiUrl, { width: 200, margin: 1 });
+    }
+  }
 
   const pdfData: InvoicePDFData = {
     businessName: biz.name,
@@ -153,9 +175,15 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     amountPaid: invoice.amountPaid,
     notes: invoice.notes || undefined,
     termsAndConditions: invoice.termsAndConditions || undefined,
+    bankAccountName: bankAccount?.accountName || undefined,
+    bankAccountNumber: bankAccount?.accountNumber || undefined,
+    bankIfsc: bankAccount?.ifsc || undefined,
+    bankName: bankAccount?.bankName || undefined,
+    upiId: upiId || undefined,
+    upiQrDataUrl,
   };
 
-  const pdfBuffer = await generatePDFInWorker(pdfData, format as "a4" | "thermal");
+  const pdfBuffer = await generatePDFInWorker(pdfData, format);
   return new Response(new Uint8Array(pdfBuffer), {
     headers: {
       "Content-Type": "application/pdf",

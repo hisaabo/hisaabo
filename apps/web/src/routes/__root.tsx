@@ -217,6 +217,13 @@ function RootLayout() {
     }
   }, [businesses, currentBusinessId]);
 
+  // Redirect to /settings if authenticated but no business exists yet
+  const noBusiness = !!session?.tenantId && businesses !== undefined && businesses.length === 0
+    && typeof window !== "undefined" && window.location.pathname !== "/settings";
+  useEffect(() => {
+    if (noBusiness) navigate({ to: "/settings" });
+  }, [noBusiness, navigate]);
+
   // Redirect to login if not authenticated
   const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile"];
   const needsRedirect = !sessionLoading && !session?.user && typeof window !== "undefined" && !publicPaths.some(p => window.location.pathname.startsWith(p));

@@ -2644,9 +2644,12 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           <button
             type="button"
             className="btn-primary flex-1"
-            onClick={handleClose}
+            onClick={() => {
+              handleClose();
+              window.location.href = "/";
+            }}
           >
-            Done
+            View Dashboard
           </button>
         </div>
       );

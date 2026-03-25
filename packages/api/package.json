@@ -21,12 +21,14 @@
     "hono": "^4.6.0",
     "nanoid": "^5.0.0",
     "pdfkit": "^0.15.0",
+    "qrcode": "^1.5.4",
     "superjson": "^2.2.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pdfkit": "^0.13.0",
+    "@types/qrcode": "^1.5.6",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

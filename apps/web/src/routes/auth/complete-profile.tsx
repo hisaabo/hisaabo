@@ -18,7 +18,7 @@ function CompleteProfilePage() {
     onSuccess: async () => {
       // Await the refetch so stale needsProfile=true doesn't trigger a redirect loop
       await utils.auth.me.refetch();
-      navigate({ to: "/" });
+      navigate({ to: "/settings" });
     },
     onError: (e) => setError(e.message),
   });
