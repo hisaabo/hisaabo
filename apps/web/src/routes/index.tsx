@@ -113,6 +113,12 @@ const EXPENSE_COLORS = [
   "#06b6d4",
 ];
 
+// Recharts ResponsiveContainer types are incompatible with React 19's stricter ReactNode
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function renderResponsive(children: React.ReactElement, width: string, height: string) {
+  return <ResponsiveContainer width={width as any} height={height as any}>{children as any}</ResponsiveContainer>;
+}
+
 // ─── Chart card wrapper ───────────────────────────────────────────────────────
 
 function ChartCard({
@@ -123,7 +129,7 @@ function ChartCard({
 }: {
   title: string;
   height?: number;
-  children: React.ReactNode;
+  children: React.ReactElement;
   responsive?: boolean;
 }) {
   return (
@@ -132,11 +138,9 @@ function ChartCard({
         <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
       </div>
       <div className="px-4 py-4" style={{ height }}>
-        {responsive ? (
-          <ResponsiveContainer width="100%" height="100%">
-            {children as React.ReactElement}
-          </ResponsiveContainer>
-        ) : children}
+        {responsive
+          ? renderResponsive(children, "100%", "100%")
+          : children}
       </div>
     </div>
   );

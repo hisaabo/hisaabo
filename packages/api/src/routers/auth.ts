@@ -61,7 +61,7 @@ async function getOrCreateDefaultTenant(userId: string): Promise<string> {
 async function createSessionForUser(
   userId: string,
   ctx: { req: Request; resHeaders: Headers },
-): Promise<void> {
+): Promise<string> {
   const memberships = await controlDb
     .select({ tenantId: tenantMembers.tenantId })
     .from(tenantMembers)
@@ -80,6 +80,17 @@ async function createSessionForUser(
   });
 
   setSessionCookie(ctx.resHeaders, sessionId);
+  return sessionId;
+}
+
+// ── Shared helper: extract session ID from cookie or Bearer header ──
+function getSessionIdFromContext(ctx: { req: Request }): string | null {
+  const cookies = ctx.req.headers.get("cookie") || "";
+  const cookieMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (cookieMatch) return decodeURIComponent(cookieMatch[1]);
+  const authHeader = ctx.req.headers.get("authorization");
+  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  return null;
 }
 
 // ── Shared helper: auto-create tenant for a new user ───────────
@@ -125,9 +136,9 @@ export const authRouter = router({
     }).returning({ id: users.id, email: users.email, name: users.name });
 
     await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
-    await createSessionForUser(user.id, ctx);
+    const sessionToken = await createSessionForUser(user.id, ctx);
 
-    return { user: { id: user.id, email: user.email, name: user.name } };
+    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
 
   // ── Password login ───────────────────────────────────────────
@@ -160,9 +171,9 @@ export const authRouter = router({
       throw new TRPCError({ code: "FORBIDDEN", message: "Account has no organization membership" });
     }
 
-    await createSessionForUser(user.id, ctx);
+    const sessionToken = await createSessionForUser(user.id, ctx);
 
-    return { user: { id: user.id, email: user.email, name: user.name } };
+    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
 
   // ── Magic link: request ──────────────────────────────────────
@@ -249,10 +260,11 @@ export const authRouter = router({
         .where(eq(users.id, user.id));
     }
 
-    await createSessionForUser(user.id, ctx);
+    const sessionToken = await createSessionForUser(user.id, ctx);
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
+      sessionToken,
       isNewUser,
       needsProfile: !user.name,
     };
@@ -266,9 +278,7 @@ export const authRouter = router({
 
     // Invalidate ALL session cache entries for this user so `me` returns fresh data
     // (the cache stores by sessionId, so we need to find and clear the right entry)
-    const cookies = ctx.req.headers.get("cookie") || "";
-    const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+    const sessionId = getSessionIdFromContext(ctx);
     if (sessionId) invalidateSessionCache(sessionId);
 
     return { success: true };
@@ -283,9 +293,7 @@ export const authRouter = router({
         .where(eq(users.id, ctx.user!.id));
 
       // Invalidate session cache so `me` returns fresh data
-      const cookies = ctx.req.headers.get("cookie") || "";
-      const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-      const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+      const sessionId = getSessionIdFromContext(ctx);
       if (sessionId) invalidateSessionCache(sessionId);
 
       return { success: true };
@@ -354,9 +362,7 @@ export const authRouter = router({
 
   // ── Logout ───────────────────────────────────────────────────
   logout: protectedProcedure.mutation(async ({ ctx }) => {
-    const cookies = ctx.req.headers.get("cookie") || "";
-    const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+    const sessionId = getSessionIdFromContext(ctx);
 
     if (sessionId) {
       await controlDb.delete(sessions).where(eq(sessions.id, sessionId));

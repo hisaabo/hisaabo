@@ -27,7 +27,7 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").spl
 app.use("*", cors({
   origin: allowedOrigins,
   credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id"],
+  allowHeaders: ["Content-Type", "x-business-id", "Authorization"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
 }));
@@ -38,7 +38,8 @@ app.use("*", cors({
 const rateMap = new Map<string, { count: number; reset: number }>();
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
-  const hasSession = c.req.header("cookie")?.includes("session_id=");
+  const hasSession = c.req.header("cookie")?.includes("session_id=")
+    || c.req.header("authorization")?.startsWith("Bearer ");
   const limit = hasSession ? 600 : 60;
   const key = hasSession ? `auth:${ip}` : `anon:${ip}`;
   const now = Date.now();
@@ -107,17 +108,24 @@ async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "t
   });
 }
 
+// ── Shared auth helper for non-tRPC endpoints ─────────────────
+function getSessionIdFromRequest(req: Request): string | null {
+  const cookies = req.headers.get("cookie") || "";
+  const match = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (match) return decodeURIComponent(match[1]);
+  const auth = req.headers.get("authorization");
+  if (auth?.startsWith("Bearer ")) return auth.slice(7);
+  return null;
+}
+
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
   const format = (c.req.query("format") || "a5-landscape") as "a5-landscape" | "a4" | "thermal";
 
   // Auth check — look up session in control DB
-  const cookies = c.req.header("cookie") || "";
-  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
-
-  const sessionId = decodeURIComponent(sessionMatch[1]);
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
 
   const [sessionRow] = await controlDb
     .select({ userId: sessions.userId, tenantId: sessions.tenantId })
@@ -242,11 +250,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   const partyId = c.req.param("id");
 
   // Auth check — same pattern as invoice PDF
-  const cookies = c.req.header("cookie") || "";
-  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
-
-  const sessionId = decodeURIComponent(sessionMatch[1]);
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
 
   const [sessionRow] = await controlDb
     .select({ userId: sessions.userId, tenantId: sessions.tenantId })

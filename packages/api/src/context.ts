@@ -9,7 +9,14 @@ const SESSION_CACHE_TTL = 60_000;
 const SESSION_CACHE_MAX = 1000;
 
 export async function createContext(opts: FetchCreateContextFnOptions) {
-  const sessionId = getCookie(opts.req, "session_id");
+  let sessionId = getCookie(opts.req, "session_id");
+
+  if (!sessionId) {
+    const authHeader = opts.req.headers.get("authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      sessionId = authHeader.slice(7);
+    }
+  }
 
   let user: { id: string; email: string; name: string | null } | null = null;
   let tenantId: string | null = null;
