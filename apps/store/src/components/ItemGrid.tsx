@@ -4,8 +4,8 @@ import { ItemCard } from "./ItemCard";
 interface ItemGridProps {
   items: StoreItem[];
   cart: CartItem[];
-  onAdd: (item: StoreItem) => void;
-  onRemove: (itemId: string) => void;
+  onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
+  onRemoveFromCart: (key: string) => void;
   currency: string;
   accentColor?: string;
   search: string;
@@ -15,8 +15,8 @@ interface ItemGridProps {
 export function ItemGrid({
   items,
   cart,
-  onAdd,
-  onRemove,
+  onAddToCart,
+  onRemoveFromCart,
   currency,
   accentColor,
   search,
@@ -94,8 +94,8 @@ export function ItemGrid({
             key={item.id}
             item={item}
             cart={cart}
-            onAdd={onAdd}
-            onRemove={onRemove}
+            onAddToCart={onAddToCart}
+            onRemoveFromCart={onRemoveFromCart}
             currency={currency}
             accentColor={accentColor}
           />

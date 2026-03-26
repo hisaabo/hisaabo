@@ -402,6 +402,37 @@ button, a, input, textarea {
   pointer-events: auto;
 }
 
+/* ---- Unit & Variant Pills ---- */
+
+.unit-pill,
+.variant-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 10px;
+  border: 1.5px solid var(--store-border);
+  border-radius: var(--store-radius-sm);
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.variant-pill {
+  flex-direction: row;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.unit-pill:active,
+.variant-pill:active {
+  transform: scale(0.96);
+}
+
 /* ---- Skeleton ---- */
 
 .skeleton {

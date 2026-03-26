@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 interface PhoneVerifyProps {
   slug: string;
   accentColor: string;
-  onVerified: (phone: string, name: string, isNew: boolean) => void;
+  onVerified: (phone: string, name: string, isNew: boolean, turnstileToken: string) => void;
   onBack: () => void;
 }
 
@@ -44,6 +44,8 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
 
     function mount() {
       if (!turnstileRef.current || !win.turnstile) return;
+      // Guard against double-render (React StrictMode in dev)
+      if (widgetIdRef.current !== null) return;
       widgetIdRef.current = win.turnstile.render(turnstileRef.current, {
         sitekey: siteKey,
         callback: (token: string) => {
@@ -114,9 +116,9 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
 
       const data = await res.json() as { known: boolean; name?: string };
 
-      if (data.known) {
-        // Known customer — proceed straight to checkout, no greeting/name reveal
-        onVerified(`+91${phone}`, data.name || "", false);
+      if (data.known && data.name && !/^(walk.?in|cash|misc|general)/i.test(data.name)) {
+        // Known customer — proceed straight to checkout with their name + the verified token
+        onVerified(`+91${phone}`, data.name || "", false, tokenRef.current);
       } else {
         // New customer — ask for their name
         setShowNameInput(true);
@@ -135,7 +137,7 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
       setError("Please enter your name (at least 2 characters)");
       return;
     }
-    onVerified(`+91${phone}`, name.trim(), true);
+    onVerified(`+91${phone}`, name.trim(), true, tokenRef.current);
   }
 
   // ── Name input screen (new customer) ────────────────────────

@@ -1,6 +1,6 @@
 import { eq, and, ilike, sql, desc, gte, lte, inArray, or } from "drizzle-orm";
 import { z } from "zod";
-import { businesses, items, storeOrders, invoices, invoiceItems } from "@hisaabo/db";
+import { businesses, items, itemVariants, storeOrders, invoices, invoiceItems } from "@hisaabo/db";
 import { paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -151,6 +151,7 @@ export const storeRouter = router({
           taxInclusive: items.taxInclusive,
           stockQuantity: items.stockQuantity,
           itemType: items.itemType,
+          itemMode: items.itemMode,
           // Store-specific fields
           storeEnabled: items.storeEnabled,
           storePrice: items.storePrice,
@@ -221,6 +222,38 @@ export const storeRouter = router({
         });
 
       if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+      return updated;
+    }),
+
+  updateVariantStoreSettings: memberProcedure
+    .input(z.object({
+      variantId: z.string().uuid(),
+      storeEnabled: z.boolean().optional(),
+      storePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).nullish(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Store");
+
+      // Verify variant belongs to an item in this business
+      const [existing] = await ctx.db.select({
+        variantId: itemVariants.id,
+        businessId: items.businessId,
+      }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (input.storeEnabled !== undefined) updates.storeEnabled = input.storeEnabled;
+      if (input.storePrice !== undefined) updates.storePrice = input.storePrice;
+
+      const [updated] = await ctx.db.update(itemVariants)
+        .set(updates)
+        .where(eq(itemVariants.id, input.variantId))
+        .returning();
+
       return updated;
     }),
 

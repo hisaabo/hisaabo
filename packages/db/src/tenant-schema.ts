@@ -9,6 +9,7 @@ export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "unfulfilled
 export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other"]);
 export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"]);
 export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
+export const itemModeEnum = pgEnum("item_mode", ["simple", "alt_units", "variants"]);
 export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"]);
 export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card"]);
 export const bankTransactionTypeEnum = pgEnum("bank_transaction_type", ["deposit", "withdrawal", "transfer"]);
@@ -109,12 +110,14 @@ export const items = pgTable("items", {
   hsn: text("hsn"),
   sku: text("sku"),
   unit: unitEnum("unit").default("pcs").notNull(),
+  itemMode: itemModeEnum("item_mode").default("simple").notNull(),
   unitVariants: jsonb("unit_variants").$type<Array<{
     unit: string;
     conversionFactor: number;
     salePrice: string;
     purchasePrice?: string;
   }>>(),
+  variantAttributes: jsonb("variant_attributes").$type<string[]>(), // dimension names e.g. ["Size", "Color"]
   salePrice: numeric("sale_price", { precision: 15, scale: 2 }),
   purchasePrice: numeric("purchase_price", { precision: 15, scale: 2 }),
   taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
@@ -138,6 +141,26 @@ export const items = pgTable("items", {
   index("items_name_idx").on(t.businessId, t.name),
   index("items_sku_idx").on(t.businessId, t.sku),
   index("items_store_idx").on(t.businessId, t.storeEnabled),
+]);
+
+// ── Item Variants (for items with itemMode = "variants") ─────
+
+export const itemVariants = pgTable("item_variants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  attributeValues: jsonb("attribute_values").$type<Record<string, string>>().notNull(), // e.g. { "Size": "M", "Color": "Red" }
+  sku: text("sku"),
+  salePrice: numeric("sale_price", { precision: 15, scale: 2 }),
+  purchasePrice: numeric("purchase_price", { precision: 15, scale: 2 }),
+  stockQuantity: numeric("stock_quantity", { precision: 15, scale: 3 }).default("0").notNull(),
+  lowStockAlert: numeric("low_stock_alert", { precision: 15, scale: 3 }),
+  storeEnabled: boolean("store_enabled").default(false).notNull(),
+  storePrice: numeric("store_price", { precision: 15, scale: 2 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("item_variants_item_idx").on(t.itemId),
+  index("item_variants_sku_idx").on(t.sku),
 ]);
 
 // ── Invoices ───────────────────────────────────────────────────
@@ -197,9 +220,11 @@ export const invoiceItems = pgTable("invoice_items", {
   sortOrder: integer("sort_order").default(0).notNull(),
   selectedUnit: text("selected_unit"), // which unit was used (null = base unit)
   conversionFactor: numeric("conversion_factor", { precision: 10, scale: 4 }).default("1"), // how many base units per selected unit
+  variantId: uuid("variant_id").references(() => itemVariants.id, { onDelete: "set null" }),
 }, (t) => [
   index("invoice_items_invoice_idx").on(t.invoiceId),
   index("invoice_items_item_idx").on(t.itemId),
+  index("invoice_items_variant_idx").on(t.variantId),
 ]);
 
 // ── Payments ───────────────────────────────────────────────────
@@ -303,6 +328,29 @@ export const bankTransactions = pgTable("bank_transactions", {
   index("bank_txn_ref_idx").on(t.referenceType, t.referenceId),
 ]);
 
+// ── Stock Adjustments ─────────────────────────────────────────
+
+export const stockAdjustments = pgTable("stock_adjustments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  variantId: uuid("variant_id").references(() => itemVariants.id, { onDelete: "cascade" }),
+  // +ve = stock added, -ve = stock removed
+  quantity: numeric("quantity", { precision: 15, scale: 3 }).notNull(),
+  previousStock: numeric("previous_stock", { precision: 15, scale: 3 }).notNull(),
+  newStock: numeric("new_stock", { precision: 15, scale: 3 }).notNull(),
+  reason: text("reason"), // e.g. "Damaged goods", "Physical count correction", "Opening stock"
+  adjustmentDate: timestamp("adjustment_date", { withTimezone: true }).defaultNow().notNull(),
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("stock_adj_business_idx").on(t.businessId),
+  index("stock_adj_item_idx").on(t.itemId),
+  index("stock_adj_variant_idx").on(t.variantId),
+  index("stock_adj_date_idx").on(t.businessId, t.adjustmentDate),
+]);
+
 // ── Audit Log ──────────────────────────────────────────────────
 
 export const auditLog = pgTable("audit_log", {
@@ -378,8 +426,13 @@ export const partiesRelations = relations(parties, ({ one, many }) => ({
   payments: many(payments),
 }));
 
-export const itemsRelations = relations(items, ({ one }) => ({
+export const itemsRelations = relations(items, ({ one, many }) => ({
   business: one(businesses, { fields: [items.businessId], references: [businesses.id] }),
+  variants: many(itemVariants),
+}));
+
+export const itemVariantsRelations = relations(itemVariants, ({ one }) => ({
+  item: one(items, { fields: [itemVariants.itemId], references: [items.id] }),
 }));
 
 export const invoicesRelations = relations(invoices, ({ one, many }) => ({
@@ -394,6 +447,7 @@ export const invoicesRelations = relations(invoices, ({ one, many }) => ({
 export const invoiceItemsRelations = relations(invoiceItems, ({ one }) => ({
   invoice: one(invoices, { fields: [invoiceItems.invoiceId], references: [invoices.id] }),
   item: one(items, { fields: [invoiceItems.itemId], references: [items.id] }),
+  variant: one(itemVariants, { fields: [invoiceItems.variantId], references: [itemVariants.id] }),
 }));
 
 export const paymentsRelations = relations(payments, ({ one }) => ({
@@ -420,4 +474,10 @@ export const bankTransactionsRelations = relations(bankTransactions, ({ one }) =
 export const storeOrdersRelations = relations(storeOrders, ({ one }) => ({
   business: one(businesses, { fields: [storeOrders.businessId], references: [businesses.id] }),
   invoice: one(invoices, { fields: [storeOrders.invoiceId], references: [invoices.id] }),
+}));
+
+export const stockAdjustmentsRelations = relations(stockAdjustments, ({ one }) => ({
+  business: one(businesses, { fields: [stockAdjustments.businessId], references: [businesses.id] }),
+  item: one(items, { fields: [stockAdjustments.itemId], references: [items.id] }),
+  variant: one(itemVariants, { fields: [stockAdjustments.variantId], references: [itemVariants.id] }),
 }));

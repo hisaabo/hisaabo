@@ -94,7 +94,7 @@ export function Disclosure({
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
       >
-        <div className="overflow-hidden">
+        <div className={open ? "overflow-visible" : "overflow-hidden"}>
           <div className="pt-2 pb-1 px-1">{children}</div>
         </div>
       </div>

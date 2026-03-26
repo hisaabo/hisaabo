@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { z } from "zod";
-import { items, invoiceItems, invoices, parties } from "@hisaabo/db";
-import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, money } from "@hisaabo/shared";
+import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
+import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -12,6 +12,7 @@ export const itemRouter = router({
       search: z.string().nullish(),
       lowStock: z.boolean().nullish(),
       itemType: z.enum(itemTypes).nullish(),
+      itemMode: z.enum(itemModes).nullish(),
       category: z.string().nullish(),
       ...paginationSchema.shape,
     }))
@@ -29,6 +30,9 @@ export const itemRouter = router({
       if (input.itemType) {
         conditions.push(eq(items.itemType, input.itemType));
       }
+      if (input.itemMode) {
+        conditions.push(eq(items.itemMode, input.itemMode));
+      }
       if (input.category) {
         conditions.push(eq(items.category, input.category));
       }
@@ -45,7 +49,29 @@ export const itemRouter = router({
           .where(and(...conditions)),
       ]);
 
-      return { data, total: count, page: input.page, limit: input.limit };
+      // For variant items, attach variant count and aggregate stock
+      const variantItemIds = data.filter((i) => i.itemMode === "variants").map((i) => i.id);
+      let variantSummaries: Record<string, { count: number; totalStock: string }> = {};
+      if (variantItemIds.length > 0) {
+        const rows = await ctx.db.select({
+          itemId: itemVariants.itemId,
+          count: sql<number>`count(*)::int`,
+          totalStock: sql<string>`COALESCE(SUM(${itemVariants.stockQuantity}::numeric), 0)::text`,
+        }).from(itemVariants)
+          .where(sql`${itemVariants.itemId} IN (${sql.join(variantItemIds.map(id => sql`${id}`), sql`, `)})`)
+          .groupBy(itemVariants.itemId);
+        for (const r of rows) {
+          variantSummaries[r.itemId] = { count: r.count, totalStock: r.totalStock };
+        }
+      }
+
+      const enriched = data.map((item) => ({
+        ...item,
+        variantCount: variantSummaries[item.id]?.count ?? null,
+        variantTotalStock: variantSummaries[item.id]?.totalStock ?? null,
+      }));
+
+      return { data: enriched, total: count, page: input.page, limit: input.limit };
     }),
 
   getById: viewerProcedure
@@ -55,16 +81,51 @@ export const itemRouter = router({
       const [item] = await ctx.db.select().from(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
         .limit(1);
-      return item ?? null;
+      if (!item) return null;
+
+      if (item.itemMode === "variants") {
+        const variants = await ctx.db.select().from(itemVariants)
+          .where(eq(itemVariants.itemId, item.id))
+          .orderBy(itemVariants.createdAt);
+        return { ...item, variants };
+      }
+
+      return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
     }),
 
   create: memberProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Item");
-    const [item] = await ctx.db.insert(items).values({
-      ...input,
-      businessId: ctx.businessId,
-    }).returning();
-    return item;
+    const { variants: initialVariants, ...itemData } = input;
+
+    return ctx.db.transaction(async (tx) => {
+      const [item] = await tx.insert(items).values({
+        ...itemData,
+        businessId: ctx.businessId,
+      }).returning();
+
+      // Create initial variants if provided
+      if (input.itemMode === "variants" && initialVariants && initialVariants.length > 0) {
+        await tx.insert(itemVariants).values(
+          initialVariants.map((v) => ({
+            itemId: item.id,
+            attributeValues: v.attributeValues,
+            sku: v.sku || null,
+            salePrice: v.salePrice || null,
+            purchasePrice: v.purchasePrice || null,
+            stockQuantity: v.stockQuantity || "0",
+            lowStockAlert: v.lowStockAlert || null,
+          }))
+        );
+      }
+
+      if (input.itemMode === "variants") {
+        const variants = await tx.select().from(itemVariants)
+          .where(eq(itemVariants.itemId, item.id));
+        return { ...item, variants };
+      }
+
+      return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
+    });
   }),
 
   // Switch the base unit of an item — converts stock, moves old base to variants
@@ -83,6 +144,9 @@ export const itemRouter = router({
           .limit(1);
 
         if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+        if (item.itemMode === "variants") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot switch base unit on a variant item. Variants have independent stock and no conversion factor." });
+        }
 
         const oldUnit = item.unit;
         const oldSalePrice = item.salePrice;
@@ -344,10 +408,130 @@ export const itemRouter = router({
       return rows;
     }),
 
+  // ── Variant CRUD ──────────────────────────────────────────────
+
+  listVariants: viewerProcedure
+    .input(z.object({ itemId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      // Verify item belongs to business
+      const [item] = await ctx.db.select({ id: items.id }).from(items)
+        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+
+      return ctx.db.select().from(itemVariants)
+        .where(eq(itemVariants.itemId, input.itemId))
+        .orderBy(itemVariants.createdAt);
+    }),
+
+  createVariant: memberProcedure
+    .input(z.object({ itemId: z.string().uuid(), variant: itemVariantSchema }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+      const [item] = await ctx.db.select().from(items)
+        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+      if (item.itemMode !== "variants") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Item is not in variants mode" });
+      }
+
+      const [variant] = await ctx.db.insert(itemVariants).values({
+        itemId: input.itemId,
+        attributeValues: input.variant.attributeValues,
+        sku: input.variant.sku || null,
+        salePrice: input.variant.salePrice || null,
+        purchasePrice: input.variant.purchasePrice || null,
+        stockQuantity: input.variant.stockQuantity || "0",
+        lowStockAlert: input.variant.lowStockAlert || null,
+      }).returning();
+      return variant;
+    }),
+
+  updateVariant: memberProcedure
+    .input(z.object({
+      variantId: z.string().uuid(),
+      data: itemVariantSchema.partial(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+      // Verify variant belongs to an item in this business
+      const [existing] = await ctx.db.select({
+        variantId: itemVariants.id,
+        itemId: itemVariants.itemId,
+        businessId: items.businessId,
+      }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (input.data.attributeValues !== undefined) updates.attributeValues = input.data.attributeValues;
+      if (input.data.sku !== undefined) updates.sku = input.data.sku || null;
+      if (input.data.salePrice !== undefined) updates.salePrice = input.data.salePrice || null;
+      if (input.data.purchasePrice !== undefined) updates.purchasePrice = input.data.purchasePrice || null;
+      if (input.data.stockQuantity !== undefined) updates.stockQuantity = input.data.stockQuantity;
+      if (input.data.lowStockAlert !== undefined) updates.lowStockAlert = input.data.lowStockAlert || null;
+
+      const [variant] = await ctx.db.update(itemVariants)
+        .set(updates)
+        .where(eq(itemVariants.id, input.variantId))
+        .returning();
+      return variant;
+    }),
+
+  deleteVariant: adminProcedure
+    .input(z.object({ variantId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "Item");
+      const [existing] = await ctx.db.select({
+        variantId: itemVariants.id,
+        businessId: items.businessId,
+      }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+
+      await ctx.db.delete(itemVariants).where(eq(itemVariants.id, input.variantId));
+      return { success: true };
+    }),
+
+  bulkCreateVariants: memberProcedure
+    .input(z.object({
+      itemId: z.string().uuid(),
+      variants: z.array(itemVariantSchema).min(1).max(100),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+      const [item] = await ctx.db.select().from(items)
+        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .limit(1);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+      if (item.itemMode !== "variants") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Item is not in variants mode" });
+      }
+
+      const created = await ctx.db.insert(itemVariants).values(
+        input.variants.map((v) => ({
+          itemId: input.itemId,
+          attributeValues: v.attributeValues,
+          sku: v.sku || null,
+          salePrice: v.salePrice || null,
+          purchasePrice: v.purchasePrice || null,
+          stockQuantity: v.stockQuantity || "0",
+          lowStockAlert: v.lowStockAlert || null,
+        }))
+      ).returning();
+      return created;
+    }),
+
   // Suggest potential merge candidates — items with similar name prefixes
   suggestMerges: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "Item");
-    // Get all items for the business
+    // Get all items for the business (exclude variant items — they're already organized)
     const allItems = await ctx.db.select({
       id: items.id,
       name: items.name,
@@ -355,7 +539,7 @@ export const itemRouter = router({
       salePrice: items.salePrice,
       stockQuantity: items.stockQuantity,
     }).from(items)
-      .where(eq(items.businessId, ctx.businessId))
+      .where(and(eq(items.businessId, ctx.businessId), sql`${items.itemMode} != 'variants'`))
       .orderBy(items.name);
 
     // Group items by name prefix (strip trailing numbers, weights, fractions)
@@ -435,6 +619,9 @@ export const itemRouter = router({
           .where(and(eq(items.id, input.targetId), eq(items.businessId, ctx.businessId))).limit(1);
 
         if (!source || !target) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+        if (source.itemMode === "variants" || target.itemMode === "variants") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge variant items. Manage variants individually instead." });
+        }
 
         // Re-link all invoice line items from source to target
         if (input.stockConversionFactor !== 1) {
@@ -485,15 +672,127 @@ export const itemRouter = router({
       });
     }),
 
+  // ── Stock Adjustments ────────────────────────────────────────
+
+  adjustStock: memberProcedure
+    .input(z.object({
+      itemId: z.string().uuid(),
+      variantId: z.string().uuid().nullish(),
+      quantity: z.string().regex(/^-?\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) !== 0, { message: "Quantity cannot be zero" }),
+      reason: z.string().max(500).optional(),
+      adjustmentDate: z.string().datetime().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+
+      return ctx.db.transaction(async (tx) => {
+        // Resolve current stock
+        let previousStock: string;
+
+        if (input.variantId) {
+          const [variant] = await tx.select({ stockQuantity: itemVariants.stockQuantity })
+            .from(itemVariants)
+            .innerJoin(items, eq(items.id, itemVariants.itemId))
+            .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+            .for("update")
+            .limit(1);
+          if (!variant) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+          previousStock = variant.stockQuantity;
+        } else {
+          const [item] = await tx.select({ stockQuantity: items.stockQuantity })
+            .from(items)
+            .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+            .for("update")
+            .limit(1);
+          if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+          previousStock = item.stockQuantity;
+        }
+
+        const adj = parseFloat(input.quantity);
+        const prev = parseFloat(previousStock);
+        const newStock = (prev + adj).toFixed(3);
+
+        // Apply stock change
+        if (input.variantId) {
+          await tx.update(itemVariants).set({
+            stockQuantity: newStock,
+            updatedAt: new Date(),
+          }).where(eq(itemVariants.id, input.variantId));
+        } else {
+          await tx.update(items).set({
+            stockQuantity: newStock,
+            updatedAt: new Date(),
+          }).where(eq(items.id, input.itemId));
+        }
+
+        // Record the adjustment
+        const [adjustment] = await tx.insert(stockAdjustments).values({
+          businessId: ctx.businessId,
+          itemId: input.itemId,
+          variantId: input.variantId || null,
+          quantity: input.quantity,
+          previousStock,
+          newStock,
+          reason: input.reason || null,
+          adjustmentDate: input.adjustmentDate ? new Date(input.adjustmentDate) : new Date(),
+          createdByUserId: ctx.user!.id,
+          createdByName: ctx.user!.name,
+        }).returning();
+
+        return adjustment;
+      });
+    }),
+
+  stockAdjustmentHistory: viewerProcedure
+    .input(z.object({
+      itemId: z.string().uuid(),
+      variantId: z.string().uuid().nullish(),
+      ...paginationSchema.shape,
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const conditions = [
+        eq(stockAdjustments.businessId, ctx.businessId),
+        eq(stockAdjustments.itemId, input.itemId),
+      ];
+      if (input.variantId) {
+        conditions.push(eq(stockAdjustments.variantId, input.variantId));
+      }
+
+      const offset = (input.page - 1) * input.limit;
+      const [data, [{ count }]] = await Promise.all([
+        ctx.db.select().from(stockAdjustments)
+          .where(and(...conditions))
+          .orderBy(desc(stockAdjustments.adjustmentDate))
+          .limit(input.limit)
+          .offset(offset),
+        ctx.db.select({ count: sql<number>`count(*)::int` }).from(stockAdjustments)
+          .where(and(...conditions)),
+      ]);
+
+      return { data, total: count, page: input.page, limit: input.limit };
+    }),
+
   lowStockCount: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "Item");
-    const [result] = await ctx.db.select({
-      count: sql<number>`count(*)::int`,
-    }).from(items)
-      .where(and(
-        eq(items.businessId, ctx.businessId),
-        sql`${items.lowStockAlert} IS NOT NULL AND ${items.stockQuantity}::numeric <= ${items.lowStockAlert}::numeric`
-      ));
-    return result.count;
+    const [[itemResult], [variantResult]] = await Promise.all([
+      ctx.db.select({
+        count: sql<number>`count(*)::int`,
+      }).from(items)
+        .where(and(
+          eq(items.businessId, ctx.businessId),
+          sql`${items.itemMode} != 'variants'`, // variant items track stock on variants, not parent
+          sql`${items.lowStockAlert} IS NOT NULL AND ${items.stockQuantity}::numeric <= ${items.lowStockAlert}::numeric`
+        )),
+      ctx.db.select({
+        count: sql<number>`count(*)::int`,
+      }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(
+          eq(items.businessId, ctx.businessId),
+          sql`${itemVariants.lowStockAlert} IS NOT NULL AND ${itemVariants.stockQuantity}::numeric <= ${itemVariants.lowStockAlert}::numeric`
+        )),
+    ]);
+    return itemResult.count + variantResult.count;
   }),
 });

@@ -6,7 +6,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "rec
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import type { ItemType } from "@hisaabo/shared";
+import type { ItemType, ItemMode } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -57,6 +57,42 @@ const UNIT_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
+// Unit categories — used to filter alt unit dropdowns so you don't see "metres" for a "kg" product
+const UNIT_CATEGORIES: Record<string, string[]> = {
+  weight:    ["kg", "g", "ton"],
+  volume:    ["l", "ml"],
+  length:    ["m", "cm", "ft", "in"],
+  packaging: ["box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "pack", "pet"],
+  counting:  ["pcs", "person"],
+  other:     ["other"],
+};
+
+// Given a base unit, return which UNIT_OPTIONS are valid as alt units:
+// same measurement category + packaging (you can always sell weight/volume in boxes, bags, etc.)
+function getCompatibleAltUnits(baseUnit: string) {
+  const baseCategory = Object.entries(UNIT_CATEGORIES).find(([, units]) => units.includes(baseUnit))?.[0] || "other";
+  const compatible = new Set<string>();
+
+  // Same category (e.g., kg → g, ton)
+  for (const u of UNIT_CATEGORIES[baseCategory] || []) compatible.add(u);
+
+  // Packaging is always compatible (a "5kg bag" or "250ml bottle" makes sense)
+  for (const u of UNIT_CATEGORIES.packaging) compatible.add(u);
+
+  // If base is packaging/counting, also allow other packaging/counting
+  if (baseCategory === "packaging" || baseCategory === "counting") {
+    for (const u of UNIT_CATEGORIES.counting) compatible.add(u);
+  }
+
+  // "other" is always available
+  compatible.add("other");
+
+  // Never include the base unit itself
+  compatible.delete(baseUnit);
+
+  return UNIT_OPTIONS.filter((o) => compatible.has(o.value));
+}
+
 const ITEMS_PAGE_SIZE = 20;
 
 function countFilled(...values: string[]): number {
@@ -89,44 +125,101 @@ function ItemsPage() {
   const { data: lowStockCount } = trpc.item.lowStockCount.useQuery();
   const utils = trpc.useUtils();
 
-  async function exportItemsCSV() {
+  async function fetchAllItems() {
+    let allData: any[] = [];
+    let pg = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const result = await utils.item.list.fetch({
+        search: debouncedSearch || undefined,
+        lowStock: showLowStock || undefined,
+        page: pg,
+        limit: 100,
+      });
+      allData = [...allData, ...result.data];
+      hasMore = allData.length < result.total;
+      pg++;
+    }
+    // Apply client-side type filter
+    return allData.filter((item: any) => {
+      if (typeFilter === "all") return true;
+      return item.itemType === typeFilter;
+    });
+  }
+
+  async function exportItemsCSV(mode: "simple" | "alt_units" | "variants" | "all" = "all") {
     setExporting(true);
     try {
-      let allData: any[] = [];
-      let pg = 1;
-      let hasMore = true;
-      while (hasMore) {
-        const result = await utils.item.list.fetch({
-          search: debouncedSearch || undefined,
-          lowStock: showLowStock || undefined,
-          page: pg,
-          limit: 100,
-        });
-        allData = [...allData, ...result.data];
-        hasMore = allData.length < result.total;
-        pg++;
+      const filtered = await fetchAllItems();
+
+      if (mode === "all") {
+        const headers = ["Name", "Type", "Mode", "SKU", "HSN", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
+        const rows = filtered.map((item: any) => [
+          item.name, item.itemType, item.itemMode || "simple",
+          item.sku || "", item.hsn || "",
+          item.salePrice || "", item.purchasePrice || "",
+          item.itemMode === "variants" ? (item.variantTotalStock || "0") : item.stockQuantity,
+          item.unit, item.category || "",
+        ]);
+        downloadCSV(`items_all`, headers, rows);
+      } else if (mode === "simple") {
+        const simple = filtered.filter((i: any) => !i.itemMode || i.itemMode === "simple");
+        const headers = ["Name", "Type", "SKU", "HSN", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
+        const rows = simple.map((item: any) => [
+          item.name, item.itemType, item.sku || "", item.hsn || "",
+          item.salePrice || "", item.purchasePrice || "",
+          item.stockQuantity, item.unit, item.category || "",
+        ]);
+        downloadCSV(`items_simple`, headers, rows);
+      } else if (mode === "alt_units") {
+        const altItems = filtered.filter((i: any) => i.itemMode === "alt_units");
+        const headers = ["Name", "Type", "SKU", "HSN", "Base Unit", "Base Sale Price", "Base Purchase Price",
+          "Stock (base)", "Category", "Alt Unit", "Conversion Factor", "Alt Sale Price"];
+        const rows: string[][] = [];
+        for (const item of altItems) {
+          // Base row
+          rows.push([
+            item.name, item.itemType, item.sku || "", item.hsn || "",
+            item.unit, item.salePrice || "", item.purchasePrice || "",
+            item.stockQuantity, item.category || "", "", "", "",
+          ]);
+          // Unit variant sub-rows
+          for (const uv of (item.unitVariants || [])) {
+            rows.push([
+              "", "", "", "", "", "", "", "", "",
+              uv.unit, String(uv.conversionFactor), uv.salePrice,
+            ]);
+          }
+        }
+        downloadCSV(`items_alt_units`, headers, rows);
+      } else if (mode === "variants") {
+        // For variant items, we need to fetch each item's variants
+        const variantItems = filtered.filter((i: any) => i.itemMode === "variants");
+        const allAttrs = new Set<string>();
+        const variantDataMap: Record<string, any[]> = {};
+        for (const item of variantItems) {
+          for (const attr of (item.variantAttributes || [])) allAttrs.add(attr);
+          try {
+            const variants = await utils.item.listVariants.fetch({ itemId: item.id });
+            variantDataMap[item.id] = variants;
+          } catch { variantDataMap[item.id] = []; }
+        }
+        const attrCols = [...allAttrs];
+        const headers = ["Parent Item", ...attrCols, "SKU", "Sale Price", "Purchase Price", "Stock", "Category"];
+        const rows: string[][] = [];
+        for (const item of variantItems) {
+          for (const v of (variantDataMap[item.id] || [])) {
+            const attrs = v.attributeValues as Record<string, string>;
+            rows.push([
+              item.name,
+              ...attrCols.map((a) => attrs[a] || ""),
+              v.sku || "", v.salePrice || item.salePrice || "", v.purchasePrice || item.purchasePrice || "",
+              v.stockQuantity || "0", item.category || "",
+            ]);
+          }
+        }
+        downloadCSV(`items_variants`, headers, rows);
       }
-
-      // Apply client-side type filter (mirrors what filteredItems does)
-      const filtered = allData.filter((item: any) => {
-        if (typeFilter === "all") return true;
-        return item.itemType === typeFilter;
-      });
-
-      const headers = ["Name", "Type", "SKU", "Sale Price", "Purchase Price", "Stock", "Unit", "Category"];
-      const rows = filtered.map((item: any) => [
-        item.name,
-        item.itemType,
-        item.sku || "",
-        item.hsn || "",
-        item.salePrice || "",
-        item.purchasePrice || "",
-        item.stockQuantity,
-        item.unit,
-        item.category || "",
-      ]);
-
-      downloadCSV(`items_${typeFilter}`, headers, rows);
     } finally {
       setExporting(false);
     }
@@ -201,27 +294,38 @@ function ItemsPage() {
             Low stock ({lowStockCount})
           </button>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto relative">
           {data && data.total > 0 && (
-            <button
-              onClick={exportItemsCSV}
-              disabled={exporting}
-              className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 shrink-0"
-            >
-              {exporting ? (
-                <>
-                  <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                  Preparing...
-                </>
-              ) : (
-                <>
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-                  </svg>
-                  Export CSV
-                </>
-              )}
-            </button>
+            <div className="relative group">
+              <button
+                disabled={exporting}
+                className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 shrink-0"
+                onClick={() => exportItemsCSV("all")}
+              >
+                {exporting ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    Preparing...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+                    </svg>
+                    Export CSV
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </>
+                )}
+              </button>
+              <div className="absolute right-0 top-full mt-1 bg-surface-0 border border-border-color rounded-lg shadow-elevated py-1 hidden group-hover:block z-10 min-w-[160px]">
+                <button onClick={() => exportItemsCSV("all")} disabled={exporting} className="w-full text-left px-3 py-1.5 text-xs hover:bg-surface-1 transition-colors">All Items</button>
+                <button onClick={() => exportItemsCSV("simple")} disabled={exporting} className="w-full text-left px-3 py-1.5 text-xs hover:bg-surface-1 transition-colors">Simple Items</button>
+                <button onClick={() => exportItemsCSV("alt_units")} disabled={exporting} className="w-full text-left px-3 py-1.5 text-xs hover:bg-surface-1 transition-colors">Alt Unit Items</button>
+                <button onClick={() => exportItemsCSV("variants")} disabled={exporting} className="w-full text-left px-3 py-1.5 text-xs hover:bg-surface-1 transition-colors">Variant Items</button>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -258,6 +362,7 @@ function ItemsPage() {
             <tbody>
               {filteredItems.map((item) => {
                 const isLow =
+                  item.itemMode !== "variants" &&
                   item.lowStockAlert &&
                   parseFloat(item.stockQuantity) <= parseFloat(item.lowStockAlert);
                 return (
@@ -269,6 +374,16 @@ function ItemsPage() {
                             SVC
                           </span>
                         )}
+                        {item.itemMode === "variants" && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400 shrink-0">
+                            VAR
+                          </span>
+                        )}
+                        {item.itemMode === "alt_units" && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-400 shrink-0">
+                            ALT
+                          </span>
+                        )}
                         <div>
                           <p className="font-medium">{item.name}</p>
                           {item.sku && (
@@ -278,7 +393,11 @@ function ItemsPage() {
                       </div>
                     </td>
                     <td className="text-right tabular-nums">
-                      {item.salePrice ? formatCurrency(item.salePrice) : "—"}
+                      {item.itemMode === "variants" ? (
+                        <span className="text-text-secondary text-xs">{(item as any).variantCount ?? 0} variants</span>
+                      ) : (
+                        item.salePrice ? formatCurrency(item.salePrice) : "—"
+                      )}
                     </td>
                     <td
                       className={cn(
@@ -286,7 +405,10 @@ function ItemsPage() {
                         isLow ? "text-amber-600" : ""
                       )}
                     >
-                      {parseFloat(item.stockQuantity).toLocaleString()}
+                      {item.itemMode === "variants"
+                        ? ((item as any).variantTotalStock ? parseFloat((item as any).variantTotalStock).toLocaleString() : "0")
+                        : parseFloat(item.stockQuantity).toLocaleString()
+                      }
                     </td>
                     <td className="text-text-secondary text-xs">{item.unit}</td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -382,8 +504,13 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [lowStockAlert, setLowStockAlert] = useState("");
   const [unit, setUnit] = useState("pcs");
   const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+  const [variantAttributes, setVariantAttributes] = useState<string[]>([]);
+  const [variantRows, setVariantRows] = useState<Array<{ attributeValues: Record<string, string>; sku: string; salePrice: string; purchasePrice: string; stockQuantity: string }>>([]);
+  const [newAttrName, setNewAttrName] = useState("");
+  const [attrValues, setAttrValues] = useState<Record<string, string[]>>({});
+  const [newAttrValue, setNewAttrValue] = useState<Record<string, string>>({});
 
-  function updateVariant(idx: number, field: string, value: string) {
+  function updateUnitVariant(idx: number, field: string, value: string) {
     setUnitVariants((prev) =>
       prev.map((v, i) =>
         i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
@@ -391,8 +518,64 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
     );
   }
 
-  function removeVariant(idx: number) {
+  function removeUnitVariant(idx: number) {
     setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  // Variant attribute helpers
+  function addAttribute() {
+    if (!newAttrName.trim() || variantAttributes.includes(newAttrName.trim())) return;
+    setVariantAttributes((p) => [...p, newAttrName.trim()]);
+    setNewAttrName("");
+  }
+  function removeAttribute(attr: string) {
+    setVariantAttributes((p) => p.filter((a) => a !== attr));
+    setAttrValues((p) => { const c = { ...p }; delete c[attr]; return c; });
+    setVariantRows((p) => p.map((r) => {
+      const av = { ...r.attributeValues };
+      delete av[attr];
+      return { ...r, attributeValues: av };
+    }));
+  }
+  function addAttrValue(attr: string) {
+    const val = (newAttrValue[attr] || "").trim();
+    if (!val || (attrValues[attr] || []).includes(val)) return;
+    setAttrValues((p) => ({ ...p, [attr]: [...(p[attr] || []), val] }));
+    setNewAttrValue((p) => ({ ...p, [attr]: "" }));
+  }
+  function removeAttrValue(attr: string, val: string) {
+    setAttrValues((p) => ({ ...p, [attr]: (p[attr] || []).filter((v) => v !== val) }));
+  }
+  function generateVariants() {
+    const attrs = variantAttributes.filter((a) => (attrValues[a] || []).length > 0);
+    if (attrs.length === 0) return;
+    let combos: Record<string, string>[] = [{}];
+    for (const attr of attrs) {
+      const values = attrValues[attr] || [];
+      const next: Record<string, string>[] = [];
+      for (const combo of combos) {
+        for (const val of values) {
+          next.push({ ...combo, [attr]: val });
+        }
+      }
+      combos = next;
+    }
+    const existing = new Set(variantRows.map((r) => JSON.stringify(r.attributeValues)));
+    const newRows = combos
+      .filter((c) => !existing.has(JSON.stringify(c)))
+      .map((c) => ({ attributeValues: c, sku: "", salePrice: "", purchasePrice: "", stockQuantity: "0" }));
+    setVariantRows((p) => [...p, ...newRows]);
+  }
+  function addManualVariantRow() {
+    const emptyAttrs: Record<string, string> = {};
+    variantAttributes.forEach((a) => (emptyAttrs[a] = ""));
+    setVariantRows((p) => [...p, { attributeValues: emptyAttrs, sku: "", salePrice: "", purchasePrice: "", stockQuantity: "0" }]);
+  }
+  function updateVariantRow(idx: number, field: string, value: string) {
+    setVariantRows((p) => p.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+  }
+  function removeVariantRow(idx: number) {
+    setVariantRows((p) => p.filter((_, i) => i !== idx));
   }
 
   const utils = trpc.useUtils();
@@ -422,6 +605,11 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
     setLowStockAlert("");
     setUnit("pcs");
     setUnitVariants([]);
+    setVariantAttributes([]);
+    setVariantRows([]);
+    setNewAttrName("");
+    setAttrValues({});
+    setNewAttrValue({});
   }
 
   function handleClose() {
@@ -429,10 +617,18 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
     onClose();
   }
 
+  // Derive itemMode from what the user has configured (no explicit selector needed)
+  const derivedMode: ItemMode = itemType === "service" ? "simple"
+    : variantAttributes.length > 0 ? "variants"
+    : unitVariants.some((v) => v.unit && v.salePrice) ? "alt_units"
+    : "simple";
+
   function handleCreate() {
-    const validVariants = unitVariants.filter((v) => v.unit && v.salePrice);
+    const validUnitVariants = unitVariants.filter((v) => v.unit && v.salePrice);
+    const effectiveMode = derivedMode;
     createMutation.mutate({
       itemType,
+      itemMode: effectiveMode,
       name,
       sku: sku || undefined,
       category: category || undefined,
@@ -441,10 +637,20 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
       purchasePrice: purchasePrice || undefined,
       taxPercent,
       taxInclusive,
-      stockQuantity,
+      stockQuantity: effectiveMode === "variants" ? "0" : stockQuantity,
       lowStockAlert: lowStockAlert || undefined,
       unit: unit as any,
-      unitVariants: validVariants.length > 0 ? validVariants : undefined,
+      unitVariants: effectiveMode === "alt_units" && validUnitVariants.length > 0 ? validUnitVariants : undefined,
+      variantAttributes: effectiveMode === "variants" && variantAttributes.length > 0 ? variantAttributes : undefined,
+      variants: effectiveMode === "variants" && variantRows.length > 0
+        ? variantRows.map((r) => ({
+            attributeValues: r.attributeValues,
+            sku: r.sku || undefined,
+            salePrice: r.salePrice || undefined,
+            purchasePrice: r.purchasePrice || undefined,
+            stockQuantity: r.stockQuantity || "0",
+          }))
+        : undefined,
     });
   }
 
@@ -492,7 +698,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
 
         <div className="grid grid-cols-2 gap-4">
           <InputField
-            label="Sale Price (₹)"
+            label={derivedMode === "variants" ? "Default Price (₹)" : "Sale Price (₹)"}
             type="number"
             step="0.01"
             min="0"
@@ -522,13 +728,16 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
           </div>
         </div>
 
-        <Listbox
-          label="Unit"
-          value={unit}
-          onChange={setUnit}
-          options={UNIT_OPTIONS}
-          placeholder="Select unit"
-        />
+        {/* Unit — hidden for variants (variants don't use unit conversion) */}
+        {derivedMode !== "variants" && (
+          <Listbox
+            label="Unit"
+            value={unit}
+            onChange={setUnit}
+            options={UNIT_OPTIONS}
+            placeholder="Select unit"
+          />
+        )}
 
         {/* Section divider */}
         <div className="flex items-center gap-3 pt-2">
@@ -583,7 +792,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
             />
           </Disclosure>
 
-          {itemType === "product" && (
+          {itemType === "product" && derivedMode !== "variants" && (
             <Disclosure
               label="Stock"
               count={countFilled(stockQuantity === "0" ? "" : stockQuantity, lowStockAlert)}
@@ -609,66 +818,259 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
             </Disclosure>
           )}
 
-          <Disclosure
-            label="Unit Variants"
-            count={unitVariants.filter((v) => v.unit && v.salePrice).length}
-          >
-            <div className="space-y-2">
-              {unitVariants.map((v, i) => (
-                <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                  <InputField
-                    label={i === 0 ? "Unit Name" : ""}
-                    value={v.unit}
-                    onChange={(e) => updateVariant(i, "unit", e.target.value)}
-                    placeholder="e.g. pack, box"
-                  />
-                  <InputField
-                    label={i === 0 ? `Per ${unit}` : ""}
-                    type="number"
-                    min="0.01"
-                    step="any"
-                    value={String(v.conversionFactor)}
-                    onChange={(e) => updateVariant(i, "conversionFactor", e.target.value)}
-                    placeholder="e.g. 5"
-                  />
-                  <InputField
-                    label={i === 0 ? "Sale Price (₹)" : ""}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={v.salePrice}
-                    onChange={(e) => updateVariant(i, "salePrice", e.target.value)}
-                    placeholder="0.00"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeVariant(i)}
-                    className={cn(
-                      "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
-                      i === 0 ? "mb-0.5" : ""
-                    )}
-                    aria-label="Remove variant"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M4 4l8 8M12 4l-8 8" />
-                    </svg>
-                  </button>
+          {itemType === "product" && derivedMode !== "variants" && (
+            <Disclosure
+              label="Alternate Units"
+              count={unitVariants.filter((v) => v.unit && v.salePrice).length}
+            >
+              <div className="space-y-2">
+                {unitVariants.map((v, i) => {
+                  const usedUnits = new Set(unitVariants.filter((_, j) => j !== i).map((uv) => uv.unit));
+                  const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
+                  return (
+                    <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
+                      <Listbox
+                        label={i === 0 ? "Unit" : ""}
+                        value={v.unit}
+                        onChange={(val) => updateUnitVariant(i, "unit", val)}
+                        options={availableUnits}
+                        placeholder="Select unit"
+                      />
+                      <InputField
+                        label={i === 0 ? `Per ${unit}` : ""}
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        value={String(v.conversionFactor)}
+                        onChange={(e) => updateUnitVariant(i, "conversionFactor", e.target.value)}
+                        placeholder="e.g. 5"
+                      />
+                      <InputField
+                        label={i === 0 ? "Sale Price (₹)" : ""}
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={v.salePrice}
+                        onChange={(e) => updateUnitVariant(i, "salePrice", e.target.value)}
+                        placeholder="0.00"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeUnitVariant(i)}
+                        className={cn(
+                          "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
+                          i === 0 ? "mb-0.5" : ""
+                        )}
+                        aria-label="Remove alternate unit"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                          <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                      </button>
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+                >
+                  + Add alternate unit
+                </button>
+                {unitVariants.length > 0 && unit && (
+                  <p className="text-[11px] text-text-tertiary mt-1">
+                    Base unit: {unit.toUpperCase()}. Each alternate unit price is per that unit.
+                  </p>
+                )}
+                {unitVariants.some((v) => v.unit && v.salePrice) && (
+                  <p className="text-[11px] text-teal-600 dark:text-teal-400 mt-1">
+                    Adding alternate units makes this an alt-unit product.
+                  </p>
+                )}
+              </div>
+            </Disclosure>
+          )}
+
+          {itemType === "product" && derivedMode !== "alt_units" && (
+            <>
+              <Disclosure label="Product Variants" count={variantAttributes.length}>
+                <div className="space-y-4">
+                  {/* Defined attributes with their values */}
+                  {variantAttributes.map((attr) => (
+                    <div key={attr} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-text-primary">{attr}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeAttribute(attr)}
+                          className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors"
+                          aria-label={`Remove ${attr}`}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(attrValues[attr] || []).map((val) => (
+                          <span
+                            key={val}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-1 border border-border-light text-xs font-medium text-text-primary"
+                          >
+                            {val}
+                            <button
+                              type="button"
+                              onClick={() => removeAttrValue(attr, val)}
+                              className="text-text-tertiary hover:text-red-500 transition-colors"
+                            >
+                              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M4 4l8 8M12 4l-8 8" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                        <InputField
+                          label=""
+                          value={newAttrValue[attr] || ""}
+                          onChange={(e) => setNewAttrValue((p) => ({ ...p, [attr]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAttrValue(attr); } }}
+                          placeholder={`Add ${attr} value and press Enter`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => addAttrValue(attr)}
+                          className="px-3 py-2 rounded-lg text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 dark:bg-brand-950 dark:hover:bg-brand-900 transition-colors"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Add new attribute */}
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <InputField
+                      label={variantAttributes.length === 0 ? "Attribute Name" : ""}
+                      value={newAttrName}
+                      onChange={(e) => setNewAttrName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAttribute(); } }}
+                      placeholder="e.g. Size, Color, Material"
+                    />
+                    <button
+                      type="button"
+                      onClick={addAttribute}
+                      className={cn(
+                        "px-3 py-2 rounded-lg text-xs font-medium transition-colors",
+                        "text-brand-600 bg-brand-50 hover:bg-brand-100 dark:bg-brand-950 dark:hover:bg-brand-900",
+                      )}
+                    >
+                      + Add
+                    </button>
+                  </div>
+
+                  {variantAttributes.length > 0 && (
+                    <p className="text-[11px] text-purple-600 dark:text-purple-400">
+                      Adding variant attributes makes this a variant product. Stock and pricing are tracked per variant.
+                    </p>
+                  )}
                 </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
-                className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
-              >
-                + Add unit variant
-              </button>
-              {unitVariants.length > 0 && unit && (
-                <p className="text-[11px] text-text-tertiary mt-1">
-                  Base unit: {unit.toUpperCase()}. Each variant price is per that variant unit.
-                </p>
+              </Disclosure>
+
+              {/* Generated variants table */}
+              {variantAttributes.length > 0 && Object.values(attrValues).some((v) => v.length > 0) && (
+                <Disclosure label="Variants" count={variantRows.length} defaultOpen>
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={generateVariants}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 dark:bg-brand-950 dark:hover:bg-brand-900 transition-colors"
+                    >
+                      Generate All Combinations
+                    </button>
+                    {variantRows.length > 0 && (
+                      <div className="overflow-x-auto -mx-1">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-border-light">
+                              {variantAttributes.map((a) => (
+                                <th key={a} className="text-left px-2 py-1.5 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">{a}</th>
+                              ))}
+                              <th className="text-left px-2 py-1.5 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">SKU</th>
+                              <th className="text-right px-2 py-1.5 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">Price</th>
+                              <th className="text-right px-2 py-1.5 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">Stock</th>
+                              <th className="w-7"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border-light">
+                            {variantRows.map((row, i) => (
+                              <tr key={i} className="group">
+                                {variantAttributes.map((a) => (
+                                  <td key={a} className="px-2 py-1.5 text-text-secondary font-medium">{row.attributeValues[a] || "—"}</td>
+                                ))}
+                                <td className="px-2 py-1.5">
+                                  <input
+                                    className="input w-20 text-xs"
+                                    value={row.sku}
+                                    onChange={(e) => updateVariantRow(i, "sku", e.target.value)}
+                                    placeholder="SKU"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <input
+                                    className="input w-20 text-xs text-right tabular-nums"
+                                    type="number"
+                                    step="0.01"
+                                    value={row.salePrice}
+                                    onChange={(e) => updateVariantRow(i, "salePrice", e.target.value)}
+                                    placeholder={salePrice || "0.00"}
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <input
+                                    className="input w-16 text-xs text-right tabular-nums"
+                                    type="number"
+                                    value={row.stockQuantity}
+                                    onChange={(e) => updateVariantRow(i, "stockQuantity", e.target.value)}
+                                    placeholder="0"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariantRow(i)}
+                                    className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                                    aria-label="Remove variant"
+                                  >
+                                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                      <path d="M4 4l8 8M12 4l-8 8" />
+                                    </svg>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={addManualVariantRow}
+                      className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+                    >
+                      + Add variant manually
+                    </button>
+                    {variantRows.length > 0 && (
+                      <p className="text-[11px] text-text-tertiary">
+                        {variantRows.length} variant{variantRows.length !== 1 ? "s" : ""} defined. Leave price blank to use the default price above.
+                      </p>
+                    )}
+                  </div>
+                </Disclosure>
               )}
-            </div>
-          </Disclosure>
+            </>
+          )}
         </div>
 
       </div>
@@ -695,7 +1097,17 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
   const [lowStockAlert, setLowStockAlert] = useState("");
   const [unit, setUnit] = useState("pcs");
   const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+  const [itemMode, setItemMode] = useState<ItemMode>("simple");
   const [initialized, setInitialized] = useState(false);
+
+  // Variant editing state (for inline editing of existing variants)
+  const [editingVariantId, setEditingVariantId] = useState<string | null>(null);
+  const [editVariantData, setEditVariantData] = useState<{ sku: string; salePrice: string; purchasePrice: string; stockQuantity: string }>({ sku: "", salePrice: "", purchasePrice: "", stockQuantity: "0" });
+  const [newVariantAttrs, setNewVariantAttrs] = useState<Record<string, string>>({});
+  const [newVariantSku, setNewVariantSku] = useState("");
+  const [newVariantSalePrice, setNewVariantSalePrice] = useState("");
+  const [newVariantStock, setNewVariantStock] = useState("0");
+  const [showAddVariant, setShowAddVariant] = useState(false);
 
   useEffect(() => {
     if (!item || initialized) return;
@@ -712,10 +1124,11 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     setLowStockAlert(item.lowStockAlert ?? "");
     setUnit(item.unit ?? "pcs");
     setUnitVariants((item.unitVariants as any[]) ?? []);
+    setItemMode((item.itemMode as ItemMode) ?? "simple");
     setInitialized(true);
   }, [item, initialized]);
 
-  function updateVariant(idx: number, field: string, value: string) {
+  function updateUnitVariant(idx: number, field: string, value: string) {
     setUnitVariants((prev) =>
       prev.map((v, i) =>
         i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
@@ -723,7 +1136,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     );
   }
 
-  function removeVariant(idx: number) {
+  function removeUnitVariant(idx: number) {
     setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
   }
 
@@ -737,6 +1150,39 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     onError: (err) => {
       toast.error(err.message);
     },
+  });
+
+  const createVariantMutation = trpc.item.createVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: itemId });
+      utils.item.list.invalidate();
+      toast.success("Variant added");
+      setShowAddVariant(false);
+      setNewVariantAttrs({});
+      setNewVariantSku("");
+      setNewVariantSalePrice("");
+      setNewVariantStock("0");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const updateVariantMutation = trpc.item.updateVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: itemId });
+      utils.item.list.invalidate();
+      toast.success("Variant updated");
+      setEditingVariantId(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteVariantMutation = trpc.item.deleteVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: itemId });
+      utils.item.list.invalidate();
+      toast.success("Variant deleted");
+    },
+    onError: (err) => toast.error(err.message),
   });
 
   function handleSave() {
@@ -753,13 +1199,14 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
         purchasePrice: purchasePrice || undefined,
         taxPercent,
         taxInclusive,
-        stockQuantity,
         lowStockAlert: lowStockAlert || undefined,
         unit: unit as any,
-        unitVariants: validVariants.length > 0 ? validVariants : undefined,
+        unitVariants: itemMode === "alt_units" && validVariants.length > 0 ? validVariants : undefined,
       },
     });
   }
+
+  const variantAttrs = item?.variantAttributes as string[] | null;
 
   return (
     <SlideOver
@@ -793,6 +1240,21 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
           onChange={(v) => setItemType(v as ItemType)}
         />
 
+        {/* Item Mode display (read-only for existing items) */}
+        {itemType === "product" && itemMode !== "simple" && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-tertiary">Mode:</span>
+            <span className={cn(
+              "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
+              itemMode === "variants"
+                ? "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
+                : "bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-400"
+            )}>
+              {itemMode === "variants" ? "Variants" : "Alt Units"}
+            </span>
+          </div>
+        )}
+
         {/* Base fields */}
         <InputField
           label="Item Name"
@@ -805,7 +1267,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
 
         <div className="grid grid-cols-2 gap-4">
           <InputField
-            label="Sale Price (₹)"
+            label={itemMode === "variants" ? "Default Price (₹)" : "Sale Price (₹)"}
             type="number"
             step="0.01"
             min="0"
@@ -835,13 +1297,16 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
           </div>
         </div>
 
-        <Listbox
-          label="Unit"
-          value={unit}
-          onChange={setUnit}
-          options={UNIT_OPTIONS}
-          placeholder="Select unit"
-        />
+        {/* Unit — read-only in edit mode (use Switch Base Unit for changes) */}
+        {itemMode !== "variants" && (
+          <div>
+            <label className="label">Unit</label>
+            <div className="input flex items-center text-text-secondary cursor-not-allowed opacity-75">
+              {UNIT_OPTIONS.find((o) => o.value === unit)?.label || unit}
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-1">Use "Switch Base Unit" from the item detail panel to change units.</p>
+          </div>
+        )}
 
         {/* Section divider */}
         <div className="flex items-center gap-3 pt-2">
@@ -896,20 +1361,19 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
             />
           </Disclosure>
 
-          {itemType === "product" && (
+          {itemType === "product" && itemMode !== "variants" && (
             <Disclosure
               label="Stock"
-              count={countFilled(stockQuantity === "0" ? "" : stockQuantity, lowStockAlert)}
+              count={countFilled(lowStockAlert)}
             >
               <div className="grid grid-cols-2 gap-4">
-                <InputField
-                  label="Stock Quantity"
-                  type="number"
-                  min="0"
-                  value={stockQuantity}
-                  onChange={(e) => setStockQuantity(e.target.value)}
-                  placeholder="0"
-                />
+                <div>
+                  <label className="label">Current Stock</label>
+                  <div className="input flex items-center text-text-secondary cursor-not-allowed opacity-75 tabular-nums">
+                    {parseFloat(stockQuantity).toLocaleString()}
+                  </div>
+                  <p className="text-[10px] text-text-tertiary mt-1">Use "Adjust Stock" in the item detail panel.</p>
+                </div>
                 <InputField
                   label="Low Stock Alert"
                   type="number"
@@ -922,66 +1386,216 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
             </Disclosure>
           )}
 
-          <Disclosure
-            label="Unit Variants"
-            count={unitVariants.filter((v) => v.unit && v.salePrice).length}
-          >
-            <div className="space-y-2">
-              {unitVariants.map((v, i) => (
-                <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                  <InputField
-                    label={i === 0 ? "Unit Name" : ""}
-                    value={v.unit}
-                    onChange={(e) => updateVariant(i, "unit", e.target.value)}
-                    placeholder="e.g. pack, box"
-                  />
-                  <InputField
-                    label={i === 0 ? `Per ${unit}` : ""}
-                    type="number"
-                    min="0.01"
-                    step="any"
-                    value={String(v.conversionFactor)}
-                    onChange={(e) => updateVariant(i, "conversionFactor", e.target.value)}
-                    placeholder="e.g. 5"
-                  />
-                  <InputField
-                    label={i === 0 ? "Sale Price (₹)" : ""}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={v.salePrice}
-                    onChange={(e) => updateVariant(i, "salePrice", e.target.value)}
-                    placeholder="0.00"
-                  />
+          {itemType === "product" && (itemMode === "alt_units" || itemMode === "simple") && (
+            <Disclosure
+              label="Alternate Units"
+              count={unitVariants.filter((v) => v.unit && v.salePrice).length}
+            >
+              <div className="space-y-2">
+                {unitVariants.map((v, i) => {
+                  const usedUnits = new Set(unitVariants.filter((_, j) => j !== i).map((uv) => uv.unit));
+                  const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
+                  return (
+                    <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
+                      <Listbox
+                        label={i === 0 ? "Unit" : ""}
+                        value={v.unit}
+                        onChange={(val) => updateUnitVariant(i, "unit", val)}
+                        options={availableUnits}
+                        placeholder="Select unit"
+                      />
+                      <InputField
+                        label={i === 0 ? `Per ${unit}` : ""}
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        value={String(v.conversionFactor)}
+                        onChange={(e) => updateUnitVariant(i, "conversionFactor", e.target.value)}
+                        placeholder="e.g. 5"
+                      />
+                      <InputField
+                        label={i === 0 ? "Sale Price (₹)" : ""}
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={v.salePrice}
+                        onChange={(e) => updateUnitVariant(i, "salePrice", e.target.value)}
+                        placeholder="0.00"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeUnitVariant(i)}
+                        className={cn(
+                          "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
+                          i === 0 ? "mb-0.5" : ""
+                        )}
+                        aria-label="Remove alternate unit"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                          <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                      </button>
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
+                >
+                  + Add alternate unit
+                </button>
+                {unitVariants.length > 0 && unit && (
+                  <p className="text-[11px] text-text-tertiary mt-1">
+                    Base unit: {unit.toUpperCase()}. Each alternate unit price is per that unit.
+                  </p>
+                )}
+              </div>
+            </Disclosure>
+          )}
+
+          {itemType === "product" && (itemMode === "variants") && item?.variants && (
+            <Disclosure label="Variants" count={item.variants.length} defaultOpen>
+              <div className="space-y-2">
+                {item.variants.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr>
+                          {(variantAttrs || []).map((a) => <th key={a} className="text-left p-1">{a}</th>)}
+                          <th className="text-left p-1">SKU</th>
+                          <th className="text-right p-1">Sale Price</th>
+                          <th className="text-right p-1">Stock</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {item.variants.map((v) => (
+                          <tr key={v.id}>
+                            {(variantAttrs || []).map((a) => (
+                              <td key={a} className="p-1 text-text-secondary">
+                                {(v.attributeValues as Record<string, string>)[a] ?? ""}
+                              </td>
+                            ))}
+                            {editingVariantId === v.id ? (
+                              <>
+                                <td className="p-1">
+                                  <input className="input-field text-xs w-20" value={editVariantData.sku} onChange={(e) => setEditVariantData((p) => ({ ...p, sku: e.target.value }))} />
+                                </td>
+                                <td className="p-1">
+                                  <input className="input-field text-xs w-20 text-right" type="number" step="0.01" value={editVariantData.salePrice} onChange={(e) => setEditVariantData((p) => ({ ...p, salePrice: e.target.value }))} />
+                                </td>
+                                <td className="p-1">
+                                  <input className="input-field text-xs w-16 text-right" type="number" value={editVariantData.stockQuantity} onChange={(e) => setEditVariantData((p) => ({ ...p, stockQuantity: e.target.value }))} />
+                                </td>
+                                <td className="p-1 flex gap-1">
+                                  <button
+                                    onClick={() => updateVariantMutation.mutate({
+                                      variantId: v.id,
+                                      data: {
+                                        sku: editVariantData.sku || undefined,
+                                        salePrice: editVariantData.salePrice || undefined,
+                                        purchasePrice: editVariantData.purchasePrice || undefined,
+                                        stockQuantity: editVariantData.stockQuantity || "0",
+                                      },
+                                    })}
+                                    className="text-brand-600 text-xs font-medium"
+                                    disabled={updateVariantMutation.isPending}
+                                  >
+                                    Save
+                                  </button>
+                                  <button onClick={() => setEditingVariantId(null)} className="text-text-tertiary text-xs">Cancel</button>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="p-1 text-text-secondary">{v.sku || "—"}</td>
+                                <td className="p-1 text-right tabular-nums">{v.salePrice ? formatCurrency(v.salePrice) : "—"}</td>
+                                <td className="p-1 text-right tabular-nums">{parseFloat(v.stockQuantity).toLocaleString()}</td>
+                                <td className="p-1 flex gap-1">
+                                  <button
+                                    onClick={() => {
+                                      setEditingVariantId(v.id);
+                                      setEditVariantData({
+                                        sku: v.sku ?? "",
+                                        salePrice: v.salePrice ?? "",
+                                        purchasePrice: v.purchasePrice ?? "",
+                                        stockQuantity: v.stockQuantity ?? "0",
+                                      });
+                                    }}
+                                    className="text-brand-600 text-xs"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => deleteVariantMutation.mutate({ variantId: v.id })}
+                                    className="text-red-500 text-xs"
+                                    disabled={deleteVariantMutation.isPending}
+                                  >
+                                    &times;
+                                  </button>
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-tertiary">No variants yet.</p>
+                )}
+
+                {showAddVariant ? (
+                  <div className="rounded-lg border border-border-light p-3 space-y-2">
+                    <p className="text-xs font-medium">New Variant</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(variantAttrs || []).map((a) => (
+                        <InputField
+                          key={a}
+                          label={a}
+                          value={newVariantAttrs[a] || ""}
+                          onChange={(e) => setNewVariantAttrs((p) => ({ ...p, [a]: e.target.value }))}
+                          placeholder={a}
+                        />
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <InputField label="SKU" value={newVariantSku} onChange={(e) => setNewVariantSku(e.target.value)} placeholder="SKU" />
+                      <InputField label="Sale Price" type="number" step="0.01" value={newVariantSalePrice} onChange={(e) => setNewVariantSalePrice(e.target.value)} placeholder="0.00" />
+                      <InputField label="Stock" type="number" value={newVariantStock} onChange={(e) => setNewVariantStock(e.target.value)} placeholder="0" />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => createVariantMutation.mutate({
+                          itemId,
+                          variant: {
+                            attributeValues: newVariantAttrs,
+                            sku: newVariantSku || undefined,
+                            salePrice: newVariantSalePrice || undefined,
+                            stockQuantity: newVariantStock || "0",
+                          },
+                        })}
+                        className="text-xs font-medium text-brand-600"
+                        disabled={createVariantMutation.isPending}
+                      >
+                        {createVariantMutation.isPending ? "Adding..." : "Add Variant"}
+                      </button>
+                      <button onClick={() => setShowAddVariant(false)} className="text-xs text-text-tertiary">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => removeVariant(i)}
-                    className={cn(
-                      "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
-                      i === 0 ? "mb-0.5" : ""
-                    )}
-                    aria-label="Remove variant"
+                    onClick={() => setShowAddVariant(true)}
+                    className="text-xs font-medium text-brand-600 hover:text-brand-700"
                   >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M4 4l8 8M12 4l-8 8" />
-                    </svg>
+                    + Add variant
                   </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
-                className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
-              >
-                + Add unit variant
-              </button>
-              {unitVariants.length > 0 && unit && (
-                <p className="text-[11px] text-text-tertiary mt-1">
-                  Base unit: {unit.toUpperCase()}. Each variant price is per that variant unit.
-                </p>
-              )}
-            </div>
-          </Disclosure>
+                )}
+              </div>
+            </Disclosure>
+          )}
         </div>
 
       </div>
@@ -1363,6 +1977,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
   const [tab, setTab] = useState("overview");
   const [showMerge, setShowMerge] = useState(false);
   const [showSwitchUnit, setShowSwitchUnit] = useState(false);
+  const [showAdjustStock, setShowAdjustStock] = useState(false);
   const [pricePeriod, setPricePeriod] = useState<PeriodFilter>("all");
   const [stockPeriod, setStockPeriod] = useState<PeriodFilter>("all");
 
@@ -1406,6 +2021,14 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
               Merge
             </button>
             {item.itemType === "product" && (
+              <button
+                onClick={() => setShowAdjustStock(true)}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+              >
+                Adjust Stock
+              </button>
+            )}
+            {item.itemType === "product" && item.itemMode !== "variants" && (
               <button
                 onClick={() => setShowSwitchUnit(true)}
                 className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -1463,9 +2086,13 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
                   {[
                     ["Sale Price", item.salePrice ? `${formatCurrency(item.salePrice)}${item.taxInclusive ? " (incl. tax)" : ""}` : "—"],
                     ["Purchase Price", item.purchasePrice ? formatCurrency(item.purchasePrice) : "—"],
-                    ["Current Stock", `${parseFloat(item.stockQuantity).toLocaleString()} ${item.unit}${isLow ? " ⚠ Low" : ""}`],
+                    ...(item.itemMode !== "variants"
+                      ? [["Current Stock", `${parseFloat(item.stockQuantity).toLocaleString()} ${item.unit}${isLow ? " ⚠ Low" : ""}`]]
+                      : [["Variants", `${item.variants?.length ?? 0} variants`]]
+                    ),
                     ["Tax %", `${item.taxPercent}%`],
                     ["Unit", item.unit.toUpperCase()],
+                    ...(item.itemMode && item.itemMode !== "simple" ? [["Mode", item.itemMode === "variants" ? "Variants" : "Alt Units"]] : []),
                     ...(item.hsn ? [["HSN / SAC", item.hsn]] : []),
                     ...(item.sku ? [["SKU", item.sku]] : []),
                     ...(item.category ? [["Category", item.category]] : []),
@@ -1478,6 +2105,48 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
                 </tbody>
               </table>
             </div>
+
+            {/* Variants table */}
+            {item.itemMode === "variants" && item.variants && item.variants.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide">Variants</p>
+                  <p className="text-[11px] text-text-tertiary">
+                    Total stock: {item.variants.reduce((sum, v) => sum + parseFloat(v.stockQuantity), 0).toLocaleString()} {item.unit}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border-light overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="data-table w-full">
+                      <thead>
+                        <tr>
+                          {((item.variantAttributes as string[]) || []).map((a) => (
+                            <th key={a}>{a}</th>
+                          ))}
+                          <th>SKU</th>
+                          <th className="text-right">Price</th>
+                          <th className="text-right">Stock</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {item.variants.map((v) => (
+                          <tr key={v.id}>
+                            {((item.variantAttributes as string[]) || []).map((a) => (
+                              <td key={a} className="font-medium">
+                                {(v.attributeValues as Record<string, string>)[a] ?? "—"}
+                              </td>
+                            ))}
+                            <td className="text-text-secondary text-xs">{v.sku || "—"}</td>
+                            <td className="text-right tabular-nums">{v.salePrice ? formatCurrency(v.salePrice) : "—"}</td>
+                            <td className="text-right tabular-nums font-medium">{parseFloat(v.stockQuantity).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Unit Variants */}
             {item.unitVariants && Array.isArray(item.unitVariants) && item.unitVariants.length > 0 && (
@@ -1549,6 +2218,17 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
           setShowSwitchUnit(false);
           onClose();
         }}
+      />
+    )}
+    {showAdjustStock && (
+      <AdjustStockModal
+        itemId={itemId}
+        itemName={item.name}
+        currentStock={item.stockQuantity}
+        unit={item.unit}
+        isVariantItem={item.itemMode === "variants"}
+        variants={item.variants || []}
+        onClose={() => setShowAdjustStock(false)}
       />
     )}
     </>
@@ -1798,6 +2478,200 @@ function MergeItemModal({
             disabled={!targetId || mergeMutation.isPending}
           >
             {mergeMutation.isPending ? "Merging..." : "Merge & Delete"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Adjust Stock Modal ────────────────────────────────────────
+
+function AdjustStockModal({
+  itemId,
+  itemName,
+  currentStock,
+  unit,
+  isVariantItem,
+  variants,
+  onClose,
+}: {
+  itemId: string;
+  itemName: string;
+  currentStock: string;
+  unit: string;
+  isVariantItem: boolean;
+  variants: Array<{ id: string; attributeValues: Record<string, string> | unknown; stockQuantity: string; salePrice: string | null }>;
+  onClose: () => void;
+}) {
+  const [adjustType, setAdjustType] = useState<"add" | "remove">("add");
+  const [quantity, setQuantity] = useState("");
+  const [reason, setReason] = useState("");
+  const [adjustmentDate, setAdjustmentDate] = useState(new Date().toISOString().split("T")[0]);
+  const [selectedVariantId, setSelectedVariantId] = useState<string>("");
+
+  const utils = trpc.useUtils();
+
+  const adjustMutation = trpc.item.adjustStock.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: itemId });
+      utils.item.list.invalidate();
+      utils.item.lowStockCount.invalidate();
+      toast.success("Stock adjusted");
+      onClose();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const { data: history } = trpc.item.stockAdjustmentHistory.useQuery(
+    { itemId, variantId: selectedVariantId || undefined, limit: 10 },
+  );
+
+  const resolvedStock = isVariantItem && selectedVariantId
+    ? variants.find((v) => v.id === selectedVariantId)?.stockQuantity || "0"
+    : currentStock;
+
+  const qty = parseFloat(quantity) || 0;
+  const preview = adjustType === "add"
+    ? parseFloat(resolvedStock) + qty
+    : parseFloat(resolvedStock) - qty;
+
+  function handleSubmit() {
+    if (!qty) return;
+    const adjustedQty = adjustType === "add" ? qty.toFixed(3) : (-qty).toFixed(3);
+    adjustMutation.mutate({
+      itemId,
+      variantId: isVariantItem ? selectedVariantId || undefined : undefined,
+      quantity: adjustedQty,
+      reason: reason || undefined,
+      adjustmentDate: new Date(adjustmentDate).toISOString(),
+    });
+  }
+
+  return (
+    <Modal open={true} onClose={onClose} title="Adjust Stock" className="max-w-md">
+      <div className="space-y-4">
+        <p className="text-sm text-text-secondary">
+          Manually adjust stock for <strong>{itemName}</strong>.
+        </p>
+
+        {/* Variant selector (for variant items) */}
+        {isVariantItem && (
+          <div>
+            <label className="label">Variant</label>
+            <select
+              value={selectedVariantId}
+              onChange={(e) => setSelectedVariantId(e.target.value)}
+              className="input w-full"
+            >
+              <option value="">Select variant...</option>
+              {variants.map((v) => {
+                const attrs = v.attributeValues as Record<string, string>;
+                const label = Object.values(attrs).join(" / ");
+                return (
+                  <option key={v.id} value={v.id}>
+                    {label} (stock: {parseFloat(v.stockQuantity).toLocaleString()})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
+
+        {/* Current stock display */}
+        <div className="rounded-lg bg-surface-1 border border-border-light px-4 py-3">
+          <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Current Stock</p>
+          <p className="text-lg font-bold tabular-nums text-text-primary">
+            {parseFloat(resolvedStock).toLocaleString()} <span className="text-sm font-normal text-text-tertiary">{unit}</span>
+          </p>
+        </div>
+
+        {/* Add / Remove toggle */}
+        <SegmentedControl
+          tabs={[
+            { value: "add", label: "Add Stock" },
+            { value: "remove", label: "Remove Stock" },
+          ]}
+          value={adjustType}
+          onChange={(v) => setAdjustType(v as "add" | "remove")}
+        />
+
+        {/* Quantity + Date */}
+        <div className="grid grid-cols-2 gap-3">
+          <InputField
+            label="Quantity"
+            type="number"
+            min="0.001"
+            step="any"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            placeholder="0"
+            autoFocus
+          />
+          <InputField
+            label="Adjustment Date"
+            type="date"
+            value={adjustmentDate}
+            onChange={(e) => setAdjustmentDate(e.target.value)}
+          />
+        </div>
+
+        {/* Reason */}
+        <div>
+          <label className="label">Reason</label>
+          <input
+            className="input w-full"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Physical count correction, Damaged goods, Opening stock"
+          />
+        </div>
+
+        {/* Preview */}
+        {qty > 0 && (
+          <div className="rounded-lg border border-border-light px-4 py-3 flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">New stock will be</span>
+            <span className={cn(
+              "text-sm font-bold tabular-nums",
+              preview < 0 ? "text-red-600" : "text-text-primary"
+            )}>
+              {preview.toLocaleString()} {unit}
+            </span>
+          </div>
+        )}
+
+        {/* Recent adjustments */}
+        {history && history.data.length > 0 && (
+          <div>
+            <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider mb-2">Recent Adjustments</p>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {history.data.map((adj) => (
+                <div key={adj.id} className="flex items-center justify-between text-xs px-2 py-1.5 rounded bg-surface-1">
+                  <div>
+                    <span className={cn(
+                      "font-medium tabular-nums",
+                      parseFloat(adj.quantity) > 0 ? "text-emerald-600" : "text-red-600"
+                    )}>
+                      {parseFloat(adj.quantity) > 0 ? "+" : ""}{parseFloat(adj.quantity).toLocaleString()}
+                    </span>
+                    {adj.reason && <span className="text-text-tertiary ml-2">{adj.reason}</span>}
+                  </div>
+                  <span className="text-text-tertiary">{formatDate(adj.adjustmentDate)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={handleSubmit}
+            disabled={!qty || adjustMutation.isPending || (isVariantItem && !selectedVariantId)}
+          >
+            {adjustMutation.isPending ? "Adjusting..." : `${adjustType === "add" ? "Add" : "Remove"} Stock`}
           </button>
         </div>
       </div>

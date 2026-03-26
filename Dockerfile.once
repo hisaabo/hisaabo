@@ -1,0 +1,259 @@
+# ── Hisaabo — ONCE-compatible all-in-one image ─────────────────
+# Single container: PostgreSQL 16 + Node API on port 80
+# Managed by s6-overlay for process supervision
+#
+# ONCE zero-downtime deploy safety:
+#   During rolling deploys, two containers share /storage. We use
+#   kernel-level flock() to ensure only ONE PostgreSQL instance
+#   runs at a time. The new container's API delegates to the old
+#   container's PostgreSQL via a Unix socket on the shared volume,
+#   then takes over PG ownership when the old container dies.
+#
+# Persistent data: /storage/pgdata, /storage/run, /storage/backups
+# ONCE backup hooks: /hooks/pre-backup, /hooks/post-restore
+
+# ── Stage 1: Build API ────────────────────────────────────────
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
+COPY packages/api/package.json packages/api/
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+
+RUN pnpm install --frozen-lockfile
+
+COPY packages/shared/ packages/shared/
+COPY packages/db/ packages/db/
+COPY packages/api/ packages/api/
+
+RUN pnpm --filter @hisaabo/api build && \
+    cd packages/api && \
+    npx tsup src/lib/pdf-worker.ts --format esm --out-dir dist/lib
+
+# ── Stage 2: Production runtime ──────────────────────────────
+FROM node:22-alpine AS runtime
+WORKDIR /app
+
+# ── System deps ──────────────────────────────────────────────
+ARG S6_OVERLAY_VERSION=3.2.0.2
+ARG TARGETARCH
+
+RUN apk add --no-cache \
+      postgresql16 \
+      postgresql16-contrib \
+      postgresql16-client \
+      flock \
+      curl \
+    && mkdir -p /storage/pgdata /storage/run /storage/backups \
+    && chown -R postgres:postgres /storage/pgdata /storage/run
+
+# s6-overlay
+RUN case "${TARGETARCH}" in \
+      amd64) S6_ARCH="x86_64" ;; \
+      arm64) S6_ARCH="aarch64" ;; \
+      *) S6_ARCH="${TARGETARCH}" ;; \
+    esac && \
+    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" | tar -C / -Jxpf - && \
+    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" | tar -C / -Jxpf -
+
+# ── Node setup ───────────────────────────────────────────────
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY --from=builder /app/packages/api/package.json packages/api/
+COPY --from=builder /app/packages/api/dist/ packages/api/dist/
+COPY packages/api/fonts/ packages/api/fonts/
+COPY packages/db/package.json packages/db/
+COPY packages/db/src/ packages/db/src/
+COPY packages/db/drizzle/ packages/db/drizzle/
+COPY packages/db/drizzle.config.ts packages/db/
+COPY packages/db/tsconfig.json packages/db/
+COPY packages/shared/package.json packages/shared/
+COPY packages/shared/src/ packages/shared/src/
+COPY packages/shared/tsconfig.json packages/shared/
+
+RUN pnpm install --frozen-lockfile --prod && \
+    pnpm --filter @hisaabo/db add -D drizzle-kit tsx
+
+# ── s6 service: PostgreSQL ───────────────────────────────────
+#
+# Uses flock() on /storage/.pg_lock to safely coordinate between
+# old and new containers during ONCE rolling deploys.
+#
+# If flock succeeds → we own PG, start it
+# If flock blocks  → old container owns PG, we wait until it dies
+
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/postgres/dependencies.d \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/postgres/type \
+    && mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/postgres
+
+COPY <<'PGRUN' /etc/s6-overlay/s6-rc.d/postgres/run
+#!/bin/sh
+set -e
+
+LOCKFILE="/storage/.pg_lock"
+PGDATA="/storage/pgdata"
+SOCKETDIR="/storage/run"
+
+mkdir -p "$SOCKETDIR"
+chown postgres:postgres "$PGDATA" "$SOCKETDIR" 2>/dev/null || true
+
+# Acquire exclusive flock — blocks until the old container releases it
+# This is a KERNEL-LEVEL lock, safe across Docker container PID namespaces
+echo "[postgres] Acquiring flock on $LOCKFILE..."
+exec flock "$LOCKFILE" /bin/sh -c '
+  PGDATA="/storage/pgdata"
+  SOCKETDIR="/storage/run"
+
+  echo "[postgres] Lock acquired — we own PostgreSQL"
+
+  # Remove stale socket files left by the old container
+  rm -f "$SOCKETDIR/.s.PGSQL.5432" "$SOCKETDIR/.s.PGSQL.5432.lock"
+
+  # Initialize data directory if empty
+  if [ ! -f "$PGDATA/PG_VERSION" ]; then
+    echo "[postgres] Initializing new database cluster..."
+    su-exec postgres /usr/libexec/postgresql16/initdb \
+      -D "$PGDATA" --auth=trust --no-locale --encoding=UTF8
+    # Allow local + socket connections (container-internal only)
+    echo "local all all trust" >> "$PGDATA/pg_hba.conf"
+    echo "host all all 127.0.0.1/32 trust" >> "$PGDATA/pg_hba.conf"
+  fi
+
+  # Remove stale PID file (safe — we hold the flock, so no other PG is running)
+  rm -f "$PGDATA/postmaster.pid"
+
+  echo "[postgres] Starting PostgreSQL..."
+  exec su-exec postgres /usr/libexec/postgresql16/postgres \
+    -D "$PGDATA" \
+    -c listen_addresses=127.0.0.1 \
+    -c port=5432 \
+    -c max_connections=20 \
+    -c shared_buffers=128MB \
+    -c unix_socket_directories="$SOCKETDIR"
+'
+PGRUN
+RUN chmod +x /etc/s6-overlay/s6-rc.d/postgres/run
+
+# ── s6 service: PostgreSQL readiness (oneshot) ───────────────
+#
+# Waits for PG to be ready — either our own instance (flock acquired)
+# or the old container's instance (flock blocked, but socket available)
+
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/postgres-ready/dependencies.d \
+    && echo "oneshot" > /etc/s6-overlay/s6-rc.d/postgres-ready/type \
+    && touch /etc/s6-overlay/s6-rc.d/postgres-ready/dependencies.d/postgres \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/postgres-ready
+
+COPY <<'PGREADY' /etc/s6-overlay/s6-rc.d/postgres-ready/up
+#!/bin/sh
+set -e
+SOCKETDIR="/storage/run"
+
+echo "[pg-ready] Waiting for PostgreSQL (own or delegated)..."
+
+# Wait for PG on the Unix socket — works regardless of which container owns PG
+for i in $(seq 1 60); do
+  if pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
+    echo "[pg-ready] PostgreSQL is ready on $SOCKETDIR"
+    # Ensure the hisaabo database exists
+    psql -h "$SOCKETDIR" -U postgres -tc \
+      "SELECT 1 FROM pg_database WHERE datname = 'hisaabo'" \
+      | grep -q 1 \
+      || createdb -h "$SOCKETDIR" -U postgres hisaabo
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "[pg-ready] WARNING: PostgreSQL not ready after 60s"
+exit 1
+PGREADY
+RUN chmod +x /etc/s6-overlay/s6-rc.d/postgres-ready/up
+
+# ── s6 service: API ──────────────────────────────────────────
+
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/api/dependencies.d \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/api/type \
+    && touch /etc/s6-overlay/s6-rc.d/api/dependencies.d/postgres-ready \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/api
+
+COPY <<'APIRUN' /etc/s6-overlay/s6-rc.d/api/run
+#!/bin/sh
+set -e
+SOCKETDIR="/storage/run"
+
+# Run migrations (idempotent — safe even if old container is still serving)
+echo "[api] Running database migrations..."
+cd /app/packages/db
+DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
+  npx drizzle-kit migrate 2>&1 || \
+  echo "[api] WARNING: Migration failed, starting server anyway"
+cd /app
+
+# Start API — connects to PG via Unix socket
+echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
+exec env DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
+  node packages/api/dist/server.js
+APIRUN
+RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
+
+# ── ONCE hooks ───────────────────────────────────────────────
+
+RUN mkdir -p /hooks
+
+# pre-backup: pg_dump to consistent snapshot before ONCE tars /storage
+COPY <<'PREBACKUP' /hooks/pre-backup
+#!/bin/sh
+set -e
+SOCKETDIR="/storage/run"
+echo "[backup] Creating PostgreSQL dump..."
+pg_dump -h "$SOCKETDIR" -U postgres hisaabo \
+  --format=custom \
+  --compress=6 \
+  --file=/storage/backups/hisaabo.dump
+echo "[backup] Dump complete: /storage/backups/hisaabo.dump ($(du -h /storage/backups/hisaabo.dump | cut -f1))"
+PREBACKUP
+RUN chmod +x /hooks/pre-backup
+
+# post-restore: restore from dump after ONCE unpacks /storage
+COPY <<'POSTRESTORE' /hooks/post-restore
+#!/bin/sh
+set -e
+SOCKETDIR="/storage/run"
+DUMP_FILE="/storage/backups/hisaabo.dump"
+
+if [ ! -f "$DUMP_FILE" ]; then
+  echo "[restore] No dump file found at $DUMP_FILE, skipping"
+  exit 0
+fi
+
+echo "[restore] Waiting for PostgreSQL..."
+for i in $(seq 1 30); do
+  pg_isready -h "$SOCKETDIR" -U postgres -q && break
+  sleep 1
+done
+
+echo "[restore] Restoring from dump..."
+dropdb -h "$SOCKETDIR" -U postgres --if-exists hisaabo
+createdb -h "$SOCKETDIR" -U postgres hisaabo
+pg_restore -h "$SOCKETDIR" -U postgres -d hisaabo --no-owner --no-privileges "$DUMP_FILE"
+echo "[restore] Restore complete"
+POSTRESTORE
+RUN chmod +x /hooks/post-restore
+
+# ── Environment ──────────────────────────────────────────────
+
+ENV NODE_ENV=production
+ENV PORT=80
+# DATABASE_URL is set dynamically in the API run script (Unix socket)
+# ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
+# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, TURNSTILE_SECRET_KEY
+
+EXPOSE 80
+
+ENTRYPOINT ["/init"]

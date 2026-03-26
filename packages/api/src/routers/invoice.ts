@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
+import { invoices, invoiceItems, items, itemVariants, businesses, parties } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -149,7 +149,8 @@ export const invoiceRouter = router({
           totalAmount: calc.total,
           sortOrder: idx,
           selectedUnit: li.selectedUnit || null,
-          conversionFactor: li.conversionFactor || "1",
+          conversionFactor: li.variantId ? "1" : (li.conversionFactor || "1"),
+          variantId: li.variantId || null,
         };
       });
 
@@ -199,16 +200,22 @@ export const invoiceRouter = router({
         );
       }
 
-      // Update stock quantities for sale/purchase invoices (adjusted for unit conversion)
-      // Group by itemId and sum quantities to avoid redundant per-row updates
-      const stockMap = new Map<string, number>();
+      // Update stock quantities for sale/purchase invoices
+      // Separate tracking for items (with conversion factor) and variants (no conversion)
+      const itemStockMap = new Map<string, number>();
+      const variantStockMap = new Map<string, number>();
       for (const li of input.lineItems) {
-        if (li.itemId) {
+        if (li.variantId) {
+          // Variant: stock lives on the variant, no conversion factor
+          const qty = parseFloat(li.quantity);
+          variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+        } else if (li.itemId) {
+          // Simple/alt_units: stock lives on the item, apply conversion factor
           const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-          stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
+          itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
         }
       }
-      for (const [itemId, totalQty] of stockMap) {
+      for (const [itemId, totalQty] of itemStockMap) {
         const qtyStr = totalQty.toFixed(3);
         await tx.update(items).set({
           stockQuantity: input.type === "sale"
@@ -216,6 +223,15 @@ export const invoiceRouter = router({
             : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
           updatedAt: new Date(),
         }).where(eq(items.id, itemId));
+      }
+      for (const [variantId, totalQty] of variantStockMap) {
+        const qtyStr = totalQty.toFixed(3);
+        await tx.update(itemVariants).set({
+          stockQuantity: input.type === "sale"
+            ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
+            : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(itemVariants.id, variantId));
       }
 
       return invoice;
@@ -295,24 +311,38 @@ export const invoiceRouter = router({
             itemId: invoiceItems.itemId,
             quantity: invoiceItems.quantity,
             conversionFactor: invoiceItems.conversionFactor,
+            variantId: invoiceItems.variantId,
           }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Step 2: Reverse old stock adjustments (grouped by itemId)
-          const oldStockMap = new Map<string, number>();
+          // Step 2: Reverse old stock adjustments (separate item vs variant)
+          const oldItemStockMap = new Map<string, number>();
+          const oldVariantStockMap = new Map<string, number>();
           for (const li of oldLineItems) {
-            if (li.itemId) {
+            if (li.variantId) {
+              const qty = parseFloat(li.quantity);
+              oldVariantStockMap.set(li.variantId, (oldVariantStockMap.get(li.variantId) || 0) + qty);
+            } else if (li.itemId) {
               const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              oldStockMap.set(li.itemId, (oldStockMap.get(li.itemId) || 0) + qty);
+              oldItemStockMap.set(li.itemId, (oldItemStockMap.get(li.itemId) || 0) + qty);
             }
           }
-          for (const [itemId, totalQty] of oldStockMap) {
+          for (const [itemId, totalQty] of oldItemStockMap) {
             const qtyStr = totalQty.toFixed(3);
             await tx.update(items).set({
               stockQuantity: existing.type === "sale"
-                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`  // reverse: add back
-                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`, // reverse: subtract back
+                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`
+                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`,
               updatedAt: new Date(),
             }).where(eq(items.id, itemId));
+          }
+          for (const [variantId, totalQty] of oldVariantStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(itemVariants).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`
+                : sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(itemVariants.id, variantId));
           }
 
           // Step 3: Delete existing line items
@@ -338,7 +368,8 @@ export const invoiceRouter = router({
               totalAmount: calc.total,
               sortOrder: idx,
               selectedUnit: li.selectedUnit || null,
-              conversionFactor: li.conversionFactor || "1",
+              conversionFactor: li.variantId ? "1" : (li.conversionFactor || "1"),
+              variantId: li.variantId || null,
             };
           });
 
@@ -346,15 +377,19 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
-          // Step 5: Apply new stock adjustments (grouped by itemId)
-          const newStockMap = new Map<string, number>();
+          // Step 5: Apply new stock adjustments (separate item vs variant)
+          const newItemStockMap = new Map<string, number>();
+          const newVariantStockMap = new Map<string, number>();
           for (const li of input.lineItems) {
-            if (li.itemId) {
+            if (li.variantId) {
+              const qty = parseFloat(li.quantity);
+              newVariantStockMap.set(li.variantId, (newVariantStockMap.get(li.variantId) || 0) + qty);
+            } else if (li.itemId) {
               const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              newStockMap.set(li.itemId, (newStockMap.get(li.itemId) || 0) + qty);
+              newItemStockMap.set(li.itemId, (newItemStockMap.get(li.itemId) || 0) + qty);
             }
           }
-          for (const [itemId, totalQty] of newStockMap) {
+          for (const [itemId, totalQty] of newItemStockMap) {
             const qtyStr = totalQty.toFixed(3);
             await tx.update(items).set({
               stockQuantity: existing.type === "sale"
@@ -362,6 +397,15 @@ export const invoiceRouter = router({
                 : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
               updatedAt: new Date(),
             }).where(eq(items.id, itemId));
+          }
+          for (const [variantId, totalQty] of newVariantStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(itemVariants).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
+                : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(itemVariants.id, variantId));
           }
 
           // Recalculate totals using fixed-point arithmetic

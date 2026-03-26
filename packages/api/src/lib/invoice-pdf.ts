@@ -294,10 +294,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   function totalRow(label: string, value: string, bold = false) {
     doc.fontSize(8).fillColor(bold ? colorPrimary : colorSecondary)
-      .font(bold ? "Helvetica-Bold" : "Helvetica")
+      .font(bold ? "NotoSans-Bold" : "NotoSans")
       .text(label, totalsX, y, { width: totalsW * 0.65 });
     doc.fontSize(bold ? 10 : 8).fillColor(colorPrimary)
-      .font(bold ? "Helvetica-Bold" : "Helvetica")
+      .font(bold ? "NotoSans-Bold" : "NotoSans")
       .text(fmt(value), totalsValX, y, { width: totalsValW, align: "right" });
     y += bold ? 18 : 14;
   }

@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import type { CartItem, StoreConfig, OrderResult } from "../types";
+import { cartItemKey } from "../types";
 import { placeOrder } from "../api";
 
 interface CheckoutProps {
@@ -12,6 +13,8 @@ interface CheckoutProps {
   customerName: string;
   /** Whether this is a new customer (name field editable) or returning (read-only) */
   isNewCustomer: boolean;
+  /** Turnstile token from PhoneVerify step — reused for order submission */
+  turnstileToken: string;
   onBack: () => void;
   onSuccess: (result: OrderResult) => void;
 }
@@ -33,6 +36,7 @@ export function Checkout({
   customerPhone,
   customerName: initialName,
   isNewCustomer,
+  turnstileToken: initialToken,
   onBack,
   onSuccess,
 }: CheckoutProps) {
@@ -55,68 +59,11 @@ export function Checkout({
   const [apiError, setApiError] = useState("");
   const [summaryOpen, setSummaryOpen] = useState(false);
 
-  // Turnstile for order submission (separate token from identify step)
-  const orderTurnstileRef = useRef<HTMLDivElement>(null);
-  const orderWidgetIdRef = useRef<string | null>(null);
-  const orderTokenRef = useRef<string>("");
-
-  useEffect(() => {
-    if (!orderTurnstileRef.current) return;
-
-    const siteKey =
-      (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA";
-
-    const win = window as unknown as {
-      turnstile?: {
-        render: (
-          el: HTMLElement,
-          opts: {
-            sitekey: string;
-            callback: (token: string) => void;
-            "error-callback": () => void;
-            "expired-callback": () => void;
-            theme: string;
-            size: string;
-          },
-        ) => string;
-        reset: (id: string) => void;
-      };
-    };
-
-    function mount() {
-      if (!orderTurnstileRef.current || !win.turnstile) return;
-      orderWidgetIdRef.current = win.turnstile.render(orderTurnstileRef.current, {
-        sitekey: siteKey,
-        callback: (token: string) => {
-          orderTokenRef.current = token;
-        },
-        "error-callback": () => {
-          setApiError("Verification widget error. Please refresh the page.");
-        },
-        "expired-callback": () => {
-          orderTokenRef.current = "";
-        },
-        theme: "light",
-        size: "flexible",
-      });
-    }
-
-    if (win.turnstile) {
-      mount();
-    } else {
-      const interval = setInterval(() => {
-        if (win.turnstile) {
-          clearInterval(interval);
-          mount();
-        }
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, []);
+  // Reuse the turnstile token from the PhoneVerify step — no need for a second challenge
+  const orderTokenRef = useRef<string>(initialToken);
 
   const subtotal = cart.reduce(
-    (s, c) => s + parseFloat(c.item.price) * c.quantity,
+    (s, c) => s + parseFloat(c.effectivePrice) * c.quantity,
     0
   );
   const totalItems = cart.reduce((s, c) => s + c.quantity, 0);
@@ -140,11 +87,6 @@ export function Checkout({
     e.preventDefault();
     if (!validate()) return;
 
-    if (!orderTokenRef.current) {
-      setApiError("Please complete the security verification below before placing your order.");
-      return;
-    }
-
     setSubmitting(true);
     setApiError("");
 
@@ -158,7 +100,12 @@ export function Checkout({
         deliveryCity: form.deliveryCity.trim() || undefined,
         deliveryPincode: form.deliveryPincode.trim() || undefined,
         deliveryNotes: form.deliveryNotes.trim() || undefined,
-        items: cart.map((c) => ({ itemId: c.item.id, quantity: c.quantity })),
+        items: cart.map((c) => ({
+          itemId: c.item.id,
+          quantity: c.quantity,
+          ...(c.selectedUnit ? { selectedUnit: c.selectedUnit, conversionFactor: c.conversionFactor } : {}),
+          ...(c.selectedVariantId ? { variantId: c.selectedVariantId } : {}),
+        })),
         turnstileToken: orderTokenRef.current,
       });
       onSuccess(result);
@@ -166,14 +113,6 @@ export function Checkout({
       setApiError(
         err instanceof Error ? err.message : "Failed to place order"
       );
-      // Reset Turnstile so user can retry
-      const win = window as unknown as {
-        turnstile?: { reset: (id: string) => void };
-      };
-      if (win.turnstile && orderWidgetIdRef.current) {
-        win.turnstile.reset(orderWidgetIdRef.current);
-      }
-      orderTokenRef.current = "";
     } finally {
       setSubmitting(false);
     }
@@ -252,16 +191,26 @@ export function Checkout({
               style={{ borderColor: "var(--store-border-light)" }}
             >
               <div className="pt-3 space-y-2">
-                {cart.map((entry) => (
+                {cart.map((entry) => {
+                  let label = entry.item.name;
+                  if (entry.selectedVariantId && entry.item.variants) {
+                    const variant = entry.item.variants.find((v) => v.id === entry.selectedVariantId);
+                    if (variant) {
+                      label += ` (${Object.values(variant.attributes).join(" / ")})`;
+                    }
+                  } else if (entry.selectedUnit) {
+                    label += ` (${entry.selectedUnit})`;
+                  }
+                  return (
                   <div
-                    key={entry.item.id}
+                    key={cartItemKey(entry)}
                     className="flex justify-between items-center text-sm"
                   >
                     <span
                       className="line-clamp-1 flex-1 mr-3"
                       style={{ color: "var(--store-text-secondary)" }}
                     >
-                      {entry.item.name}{" "}
+                      {label}{" "}
                       <span style={{ color: "var(--store-muted)" }}>
                         x{entry.quantity}
                       </span>
@@ -272,11 +221,12 @@ export function Checkout({
                     >
                       {symbol}
                       {(
-                        parseFloat(entry.item.price) * entry.quantity
+                        parseFloat(entry.effectivePrice) * entry.quantity
                       ).toFixed(0)}
                     </span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <div
                 className="flex justify-between items-center text-sm font-bold pt-2.5 border-t"
@@ -415,9 +365,6 @@ export function Checkout({
                 <span>{business.deliveryNote}</span>
               </div>
             )}
-
-            {/* Turnstile verification for order submission */}
-            <div ref={orderTurnstileRef} />
 
             {apiError && (
               <div

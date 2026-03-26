@@ -13,7 +13,7 @@ import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 const app = new Hono();
@@ -63,16 +63,47 @@ setInterval(() => {
 
 // ── Health check ───────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+// ONCE health check — lenient during PG handover (rolling deploy)
+app.get("/up", async (c) => {
+  try {
+    await controlDb.execute(sql`SELECT 1`);
+    return c.text("OK", 200);
+  } catch {
+    // During rolling deploy, PG may be transitioning between containers.
+    // Allow 30s grace period for the handover to complete.
+    if (process.uptime() < 30) {
+      return c.text("WARMING", 200);
+    }
+    return c.text("PG_DOWN", 503);
+  }
+});
 
 async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "thermal"): Promise<Buffer> {
-  const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "lib/pdf-worker.js");
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(workerPath, { workerData: { data, format } });
-    worker.on("message", resolve);
-    worker.on("error", reject);
-    worker.on("exit", (code) => {
-      if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const jsPath = path.resolve(dir, "lib/pdf-worker.js");
+  const fs = await import("node:fs");
+
+  if (fs.existsSync(jsPath)) {
+    // Production: built .js worker exists, run in a worker thread
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(jsPath, { workerData: { data, format } });
+      worker.on("message", resolve);
+      worker.on("error", reject);
+      worker.on("exit", (code) => {
+        if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+      });
     });
+  }
+
+  // Dev: no built worker, run in-process (tsx doesn't support worker threads well)
+  const { generateInvoicePDF } = await import("./lib/invoice-pdf.js");
+  return new Promise((resolve, reject) => {
+    const doc = generateInvoicePDF(data, format);
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    doc.end();
   });
 }
 
@@ -489,6 +520,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
       inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
       stockQty: items.stockQuantity,
       sortOrder: items.storeSortOrder,
+      itemMode: items.itemMode,
+      unitVariants: items.unitVariants,
+      variantAttributes: items.variantAttributes,
     }).from(items)
       .where(and(...conditions))
       .orderBy(items.storeSortOrder, items.name)
@@ -498,17 +532,95 @@ app.get("/store/:slug/catalog.json", async (c) => {
       .where(and(...conditions)),
   ]);
 
+  // Fetch store-enabled variants for any variant-mode items in this page
+  const variantItemIds = catalog
+    .filter((i) => i.itemMode === "variants")
+    .map((i) => i.id);
+
+  const variantRows = variantItemIds.length > 0
+    ? await db.select({
+        id: itemVariants.id,
+        itemId: itemVariants.itemId,
+        attributeValues: itemVariants.attributeValues,
+        salePrice: itemVariants.salePrice,
+        storePrice: itemVariants.storePrice,
+        stockQuantity: itemVariants.stockQuantity,
+        storeEnabled: itemVariants.storeEnabled,
+      }).from(itemVariants)
+        .where(and(
+          inArray(itemVariants.itemId, variantItemIds),
+          eq(itemVariants.storeEnabled, true),
+        ))
+    : [];
+
+  // Group variants by parent item
+  const variantsByItem = new Map<string, typeof variantRows>();
+  for (const v of variantRows) {
+    const arr = variantsByItem.get(v.itemId) || [];
+    arr.push(v);
+    variantsByItem.set(v.itemId, arr);
+  }
+
   const categories = [...new Set(
     catalog.map((i) => i.category).filter(Boolean) as string[]
   )];
 
   // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
   const allowNeg = biz.storeAllowNegativeStock;
-  const transformedItems = catalog.map(({ stockQty, ...rest }) => ({
-    ...rest,
-    inStock: rest.inStock || allowNeg,
-    lowStock: allowNeg && !rest.inStock,
-  }));
+  const transformedItems = catalog
+    .filter((item) => {
+      // Variant items must have at least one store-enabled variant to appear
+      if (item.itemMode === "variants") {
+        const variants = variantsByItem.get(item.id);
+        return variants && variants.length > 0;
+      }
+      return true;
+    })
+    .map(({ stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
+      const base = {
+        ...rest,
+        inStock: rest.inStock || allowNeg,
+        lowStock: allowNeg && !rest.inStock,
+      };
+
+      if (rest.itemMode === "alt_units" && rawUnitVariants) {
+        // Expose unit variants with store-safe prices only
+        return {
+          ...base,
+          unitVariants: rawUnitVariants.map((uv) => ({
+            unit: uv.unit,
+            conversionFactor: uv.conversionFactor,
+            price: uv.salePrice,
+          })),
+        };
+      }
+
+      if (rest.itemMode === "variants") {
+        const variants = variantsByItem.get(rest.id) || [];
+        const variantData = variants.map((v) => ({
+          id: v.id,
+          attributes: v.attributeValues,
+          price: v.storePrice ?? v.salePrice ?? "0",
+          inStock: parseFloat(v.stockQuantity) > 0 || allowNeg,
+        }));
+        // Price = lowest variant price (for display/sorting)
+        const prices = variantData.map((v) => parseFloat(v.price));
+        const lowestPrice = prices.length > 0 ? Math.min(...prices).toFixed(2) : base.price;
+        // inStock = true if ANY variant is in stock
+        const anyInStock = variantData.some((v) => v.inStock);
+
+        return {
+          ...base,
+          price: lowestPrice,
+          inStock: anyInStock,
+          lowStock: allowNeg && !anyInStock,
+          variantAttributes: rawVarAttrs || [],
+          variants: variantData,
+        };
+      }
+
+      return base;
+    });
 
   return c.json(
     {
@@ -641,6 +753,12 @@ app.post("/store/:slug/order", async (c) => {
     if (typeof item.itemId !== "string") return c.json({ error: "Each item must have an itemId" }, 400);
     const qty = Number(item.quantity);
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: "Each item must have a positive quantity" }, 400);
+    // Optional variant/unit fields
+    if (item.variantId !== undefined && typeof item.variantId !== "string") return c.json({ error: "variantId must be a string" }, 400);
+    if (item.selectedUnit !== undefined && typeof item.selectedUnit !== "string") return c.json({ error: "selectedUnit must be a string" }, 400);
+    if (item.conversionFactor !== undefined && (!Number.isFinite(Number(item.conversionFactor)) || Number(item.conversionFactor) <= 0)) {
+      return c.json({ error: "conversionFactor must be a positive number" }, 400);
+    }
   }
 
   // Rate limit: 5 orders per phone per minute
@@ -678,7 +796,8 @@ app.post("/store/:slug/order", async (c) => {
   if (!biz) return c.json({ error: "Store not found" }, 404);
 
   // Validate items exist and are store-enabled
-  const itemIds = (orderItems as Array<{ itemId: string; quantity: number }>).map((i) => i.itemId);
+  type OrderItemInput = { itemId: string; quantity: number; variantId?: string; selectedUnit?: string; conversionFactor?: number };
+  const itemIds = (orderItems as OrderItemInput[]).map((i) => i.itemId);
   const foundItems = await db.select({
     id: items.id,
     name: items.name,
@@ -689,6 +808,8 @@ app.post("/store/:slug/order", async (c) => {
     taxInclusive: items.taxInclusive,
     stockQuantity: items.stockQuantity,
     unit: items.unit,
+    itemMode: items.itemMode,
+    unitVariants: items.unitVariants,
   }).from(items)
     .where(and(
       inArray(items.id, itemIds),
@@ -696,27 +817,86 @@ app.post("/store/:slug/order", async (c) => {
       eq(items.storeEnabled, true),
     ));
 
-  if (foundItems.length !== itemIds.length) {
+  if (foundItems.length !== [...new Set(itemIds)].length) {
     return c.json({ error: "One or more items are not available in this store" }, 400);
   }
 
   const itemMap = new Map(foundItems.map((i) => [i.id, i]));
 
-  // Build line items for calculation
-  const lineItemInputs = (orderItems as Array<{ itemId: string; quantity: number }>).map((oi) => {
+  // Pre-fetch all referenced variants for variant-mode items
+  const requestedVariantIds = (orderItems as OrderItemInput[])
+    .filter((oi) => oi.variantId)
+    .map((oi) => oi.variantId!);
+
+  const foundVariants = requestedVariantIds.length > 0
+    ? await db.select({
+        id: itemVariants.id,
+        itemId: itemVariants.itemId,
+        salePrice: itemVariants.salePrice,
+        storePrice: itemVariants.storePrice,
+        stockQuantity: itemVariants.stockQuantity,
+        storeEnabled: itemVariants.storeEnabled,
+        attributeValues: itemVariants.attributeValues,
+      }).from(itemVariants)
+        .where(and(
+          inArray(itemVariants.id, requestedVariantIds),
+          eq(itemVariants.storeEnabled, true),
+        ))
+    : [];
+
+  const variantMap = new Map(foundVariants.map((v) => [v.id, v]));
+
+  // Build line items for calculation — validate variants and alt units
+  const lineItemInputs: Array<{
+    itemId: string; quantity: string; unitPrice: string; taxPercent: string;
+    discountPercent: string; taxInclusive: boolean; name: string; unit: string;
+    selectedUnit?: string; conversionFactor?: string; variantId?: string;
+  }> = [];
+
+  for (const oi of orderItems as OrderItemInput[]) {
     const item = itemMap.get(oi.itemId)!;
-    const price = item.storePrice ?? item.salePrice ?? "0";
-    return {
+    let price = item.storePrice ?? item.salePrice ?? "0";
+    let description = item.name;
+    let selectedUnit: string | undefined;
+    let conversionFactor: string | undefined;
+    let variantId: string | undefined;
+
+    if (item.itemMode === "variants" && oi.variantId) {
+      // Validate variant exists and belongs to this item
+      const variant = variantMap.get(oi.variantId);
+      if (!variant || variant.itemId !== oi.itemId) {
+        return c.json({ error: `Variant is not available for item "${item.name}"` }, 400);
+      }
+      price = variant.storePrice ?? variant.salePrice ?? price;
+      variantId = oi.variantId;
+      // Build variant label: "Item Name - Size: M, Color: Red"
+      const attrLabel = Object.entries(variant.attributeValues).map(([k, v]) => `${k}: ${v}`).join(", ");
+      description = `${item.name} - ${attrLabel}`;
+    } else if (item.itemMode === "alt_units" && oi.selectedUnit) {
+      // Validate unit exists in item's unitVariants
+      const uv = item.unitVariants?.find((u) => u.unit === oi.selectedUnit);
+      if (!uv) {
+        return c.json({ error: `Unit "${oi.selectedUnit}" is not available for item "${item.name}"` }, 400);
+      }
+      price = uv.salePrice;
+      selectedUnit = oi.selectedUnit;
+      conversionFactor = String(uv.conversionFactor);
+    }
+
+    lineItemInputs.push({
       itemId: oi.itemId,
       quantity: String(oi.quantity),
       unitPrice: price,
       taxPercent: item.taxPercent || "0",
       discountPercent: "0",
       taxInclusive: item.taxInclusive,
-      name: item.name,
+      name: description,
       unit: item.unit,
-    };
-  });
+      selectedUnit,
+      conversionFactor,
+      variantId,
+    });
+  }
 
   // Calculate totals using shared library
   const totals = calcInvoiceTotals({
@@ -826,11 +1006,37 @@ app.post("/store/:slug/order", async (c) => {
           discountPercent: "0",
           totalAmount: calc.total,
           sortOrder: idx,
-          conversionFactor: "1",
+          conversionFactor: li.conversionFactor ?? "1",
+          selectedUnit: li.selectedUnit ?? null,
+          variantId: li.variantId ?? null,
         };
       });
 
       await tx.insert(invoiceItems).values(processedLineItems);
+
+      // Stock adjustment: separate items vs variants
+      const itemStockMap = new Map<string, number>();
+      const variantStockMap = new Map<string, number>();
+      for (const li of lineItemInputs) {
+        if (li.variantId) {
+          variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + parseFloat(li.quantity));
+        } else {
+          const factor = li.conversionFactor ? parseFloat(li.conversionFactor) : 1;
+          itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + parseFloat(li.quantity) * factor);
+        }
+      }
+      for (const [itemId, totalQty] of itemStockMap) {
+        await tx.update(items).set({
+          stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(items.id, itemId));
+      }
+      for (const [variantId, totalQty] of variantStockMap) {
+        await tx.update(itemVariants).set({
+          stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(itemVariants.id, variantId));
+      }
 
       // Create the store order record
       const [order] = await tx.insert(storeOrders).values({

@@ -127,6 +127,9 @@ export const updatePartySchema = createPartySchema.partial().omit({ type: true }
 export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
 export type Unit = (typeof units)[number];
 
+export const itemModes = ["simple", "alt_units", "variants"] as const;
+export type ItemMode = (typeof itemModes)[number];
+
 export const unitVariantSchema = z.object({
   unit: z.string().min(1).max(50),
   conversionFactor: z.number().positive(),
@@ -136,11 +139,26 @@ export const unitVariantSchema = z.object({
 
 export type UnitVariant = z.infer<typeof unitVariantSchema>;
 
-export const createItemSchema = z.object({
+export const decimalStr = z.string().regex(/^\d+(\.\d{1,2})?$/);
+export const decimalStr3 = z.string().regex(/^-?\d+(\.\d{1,3})?$/);
+
+export const itemVariantSchema = z.object({
+  attributeValues: z.record(z.string().min(1), z.string().min(1)),
+  sku: z.string().max(50).optional(),
+  salePrice: decimalStr.optional(),
+  purchasePrice: decimalStr.optional(),
+  stockQuantity: decimalStr3.default("0"),
+  lowStockAlert: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
+});
+
+export type ItemVariant = z.infer<typeof itemVariantSchema>;
+
+const createItemBaseSchema = z.object({
   name: z.string().min(1).max(200),
   hsn: z.string().max(20).optional(),
   sku: z.string().max(50).optional(),
   unit: z.enum(units).default("pcs"),
+  itemMode: z.enum(itemModes).default("simple"),
   salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
@@ -151,9 +169,18 @@ export const createItemSchema = z.object({
   category: z.string().max(100).optional(),
   taxInclusive: z.boolean().default(false),
   unitVariants: z.array(unitVariantSchema).optional(),
+  variantAttributes: z.array(z.string().min(1).max(50)).max(5).optional(),
+  variants: z.array(itemVariantSchema).optional(),
 });
 
-export const updateItemSchema = createItemSchema.partial();
+export const createItemSchema = createItemBaseSchema.refine((d) => {
+  if (d.itemMode === "variants" && d.unitVariants && d.unitVariants.length > 0) return false;
+  if (d.itemMode === "alt_units" && d.variantAttributes && d.variantAttributes.length > 0) return false;
+  if (d.itemMode === "alt_units" && d.variants && d.variants.length > 0) return false;
+  return true;
+}, { message: "An item cannot have both unit variants and product variants" });
+
+export const updateItemSchema = createItemBaseSchema.partial();
 
 // ── Invoice ────────────────────────────────────────────────────
 
@@ -174,6 +201,7 @@ export const invoiceLineItemSchema = z.object({
   discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
   selectedUnit: z.string().nullish(),
   conversionFactor: z.string().nullish(), // stored as string like all numerics
+  variantId: z.string().uuid().nullish(),
 });
 
 export const createInvoiceSchema = z.object({

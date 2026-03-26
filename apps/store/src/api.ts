@@ -18,7 +18,13 @@ export async function placeOrder(
     deliveryCity?: string;
     deliveryPincode?: string;
     deliveryNotes?: string;
-    items: Array<{ itemId: string; quantity: number }>;
+    items: Array<{
+      itemId: string;
+      quantity: number;
+      selectedUnit?: string;
+      conversionFactor?: number;
+      variantId?: string;
+    }>;
     turnstileToken?: string;
   }
 ): Promise<OrderResult> {

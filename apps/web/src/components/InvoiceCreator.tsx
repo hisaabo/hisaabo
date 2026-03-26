@@ -6,6 +6,9 @@ import { getBusinessId } from "@/lib/trpc";
 interface LineItem {
   id: string;
   itemId?: string;
+  variantId?: string;
+  selectedUnit?: string;
+  conversionFactor?: string;
   description: string;
   quantity: string;
   unitPrice: string;
@@ -93,10 +96,64 @@ export function InvoiceCreator({ type, onClose }: Props) {
       li.id === lineId ? {
         ...li,
         itemId: product.id,
+        variantId: undefined,
+        selectedUnit: undefined,
+        conversionFactor: undefined,
         description: product.name,
         unitPrice: (type === "sale" ? product.salePrice : product.purchasePrice) || "",
         taxPercent: product.taxPercent,
       } : li
+    ));
+  }
+
+  function selectVariantFromData(lineId: string, variant: { id: string; attributeValues: Record<string, string>; salePrice: string | null; purchasePrice: string | null }) {
+    const li = items.find((l) => l.id === lineId);
+    if (!li?.itemId) return;
+    const product = itemsData?.data.find((p) => p.id === li.itemId);
+    if (!product) return;
+    const label = Object.values(variant.attributeValues).join(" / ");
+    setItems((prev) => prev.map((l) =>
+      l.id === lineId ? {
+        ...l,
+        variantId: variant.id,
+        description: `${product.name} - ${label}`,
+        unitPrice: (type === "sale"
+          ? (variant.salePrice || product.salePrice)
+          : (variant.purchasePrice || product.purchasePrice)) || "",
+      } : l
+    ));
+  }
+
+  function selectUnit(lineId: string, unitKey: string) {
+    const li = items.find((l) => l.id === lineId);
+    if (!li?.itemId) return;
+    const product = itemsData?.data.find((p) => p.id === li.itemId);
+    if (!product) return;
+
+    if (unitKey === "__base__") {
+      // Back to base unit
+      setItems((prev) => prev.map((l) =>
+        l.id === lineId ? {
+          ...l,
+          selectedUnit: undefined,
+          conversionFactor: undefined,
+          unitPrice: (type === "sale" ? product.salePrice : product.purchasePrice) || "",
+          description: product.name,
+        } : l
+      ));
+      return;
+    }
+
+    const uv = (product.unitVariants as any[])?.find((v: any) => v.unit === unitKey);
+    if (!uv) return;
+    setItems((prev) => prev.map((l) =>
+      l.id === lineId ? {
+        ...l,
+        selectedUnit: uv.unit,
+        conversionFactor: String(uv.conversionFactor),
+        unitPrice: (type === "sale" ? uv.salePrice : (uv.purchasePrice || uv.salePrice)) || "",
+        description: `${product.name} (${uv.unit})`,
+      } : l
     ));
   }
 
@@ -128,6 +185,9 @@ export function InvoiceCreator({ type, onClose }: Props) {
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent,
         discountPercent: li.discountPercent,
+        variantId: li.variantId || undefined,
+        selectedUnit: li.selectedUnit || undefined,
+        conversionFactor: li.conversionFactor || undefined,
       })),
     });
   }
@@ -216,9 +276,12 @@ export function InvoiceCreator({ type, onClose }: Props) {
               <div className="divide-y" style={{ borderColor: "var(--border-light)" }}>
                 {items.map((li, _idx) => {
                   const calc = calcLine(li);
+                  const selectedProduct = li.itemId ? itemsData?.data.find((p) => p.id === li.itemId) : null;
+                  const isVariantProduct = selectedProduct?.itemMode === "variants";
+                  const isAltUnitProduct = selectedProduct?.itemMode === "alt_units";
                   return (
+                    <div key={li.id}>
                     <div
-                      key={li.id}
                       className="grid gap-2 px-3 py-2 items-center"
                       style={{ gridTemplateColumns: "1fr 180px 72px 90px 64px 64px 90px 28px" }}
                     >
@@ -230,7 +293,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       >
                         <option value="">Custom item</option>
-                        {itemsData?.data.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        {itemsData?.data.map((p) => <option key={p.id} value={p.id}>{p.name}{p.itemMode === "variants" ? " (variants)" : p.itemMode === "alt_units" ? ` (${p.unit})` : ""}</option>)}
                       </select>
 
                       {/* Description */}
@@ -311,6 +374,56 @@ export function InvoiceCreator({ type, onClose }: Props) {
                           <path d="M4 4l8 8M12 4l-8 8" />
                         </svg>
                       </button>
+                    </div>
+
+                    {/* Variant sub-selector */}
+                    {isVariantProduct && (
+                      <div className="px-3 pb-2">
+                        <VariantSelector
+                          itemId={li.itemId!}
+                          selectedVariantId={li.variantId}
+                          onSelect={(variant) => selectVariantFromData(li.id, variant)}
+                        />
+                      </div>
+                    )}
+
+                    {/* Alt unit sub-selector */}
+                    {isAltUnitProduct && (selectedProduct?.unitVariants as any[])?.length > 0 && (
+                      <div className="px-3 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-medium" style={{ color: "var(--text-tertiary)" }}>Unit:</span>
+                          <div className="flex gap-1 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => selectUnit(li.id, "__base__")}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                                !li.selectedUnit
+                                  ? "bg-brand-100 text-brand-700 dark:bg-brand-950 dark:text-brand-400"
+                                  : "bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
+                              }`}
+                              style={{ border: "1px solid var(--border-light)" }}
+                            >
+                              {selectedProduct.unit} {selectedProduct.salePrice ? `- ${formatCurrency(selectedProduct.salePrice)}` : ""}
+                            </button>
+                            {(selectedProduct.unitVariants as any[]).map((uv: any) => (
+                              <button
+                                key={uv.unit}
+                                type="button"
+                                onClick={() => selectUnit(li.id, uv.unit)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                                  li.selectedUnit === uv.unit
+                                    ? "bg-brand-100 text-brand-700 dark:bg-brand-950 dark:text-brand-400"
+                                    : "bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
+                                }`}
+                                style={{ border: "1px solid var(--border-light)" }}
+                              >
+                                {uv.unit} - {formatCurrency(uv.salePrice)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     </div>
                   );
                 })}
@@ -409,6 +522,47 @@ export function InvoiceCreator({ type, onClose }: Props) {
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ── Variant Selector (for InvoiceCreator line items) ──────────
+
+function VariantSelector({ itemId, selectedVariantId, onSelect }: {
+  itemId: string;
+  selectedVariantId?: string;
+  onSelect: (variant: { id: string; attributeValues: Record<string, string>; salePrice: string | null; purchasePrice: string | null }) => void;
+}) {
+  const { data: variants, isLoading } = trpc.item.listVariants.useQuery({ itemId });
+
+  if (isLoading) return <span className="text-[10px]" style={{ color: "var(--text-tertiary)" }}>Loading variants...</span>;
+  if (!variants || variants.length === 0) return <span className="text-[10px] text-amber-600">No variants defined</span>;
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] font-medium" style={{ color: "var(--text-tertiary)" }}>Variant:</span>
+      <select
+        value={selectedVariantId || ""}
+        onChange={(e) => {
+          const v = variants.find((v) => v.id === e.target.value);
+          if (v) onSelect({ id: v.id, attributeValues: v.attributeValues as Record<string, string>, salePrice: v.salePrice, purchasePrice: v.purchasePrice });
+        }}
+        className="px-2 py-0.5 rounded text-[10px] outline-none"
+        style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
+      >
+        <option value="">Select variant...</option>
+        {variants.map((v) => {
+          const label = Object.values(v.attributeValues as Record<string, string>).join(" / ");
+          return (
+            <option key={v.id} value={v.id}>
+              {label}{v.salePrice ? ` - ${formatCurrency(v.salePrice)}` : ""}
+            </option>
+          );
+        })}
+      </select>
+      {!selectedVariantId && (
+        <span className="text-[10px] text-amber-600">Please select a variant</span>
+      )}
     </div>
   );
 }
