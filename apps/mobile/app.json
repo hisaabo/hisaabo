@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "backgroundColor": "#1a1a2e"
+      "backgroundColor": "#0f0f1a"
     },
     "ios": {
       "supportsTablet": true,
@@ -17,7 +17,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#1a1a2e"
+        "backgroundColor": "#0f0f1a"
       },
       "package": "in.hisaabo.app"
     },

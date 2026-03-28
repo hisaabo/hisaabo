@@ -19,8 +19,11 @@ interface TenantCtx extends Context {
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
+    // Never expose internal error details (DB errors, stack traces) to clients
+    const isInternal = error.code === "INTERNAL_SERVER_ERROR";
     return {
       ...shape,
+      message: isInternal ? "Something went wrong. Please try again." : shape.message,
       data: {
         ...shape.data,
         zodError: error.cause instanceof Error ? undefined : null,

@@ -719,40 +719,41 @@ export default function LoginScreen() {
                   if you don't see it.
                 </Text>
 
-                {/* Resend button */}
-                <TouchableOpacity
-                  style={[
-                    styles.primaryButton,
-                    (cooldown > 0 || sendMagicLink.isPending) &&
-                      styles.buttonDisabled,
-                  ]}
-                  onPress={handleResend}
-                  disabled={cooldown > 0 || sendMagicLink.isPending}
-                  activeOpacity={0.8}
-                >
-                  {sendMagicLink.isPending ? (
-                    <ActivityIndicator color={C.textPrimary} size="small" />
-                  ) : cooldown > 0 ? (
-                    <Text style={styles.primaryButtonText}>
-                      Resend in {cooldown}s
-                    </Text>
-                  ) : (
-                    <Text style={styles.primaryButtonText}>
-                      Didn't receive it? Send again
-                    </Text>
-                  )}
-                </TouchableOpacity>
+                {/* Action buttons */}
+                <View style={styles.sentActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryButton,
+                      (cooldown > 0 || sendMagicLink.isPending) &&
+                        styles.buttonDisabled,
+                    ]}
+                    onPress={handleResend}
+                    disabled={cooldown > 0 || sendMagicLink.isPending}
+                    activeOpacity={0.8}
+                  >
+                    {sendMagicLink.isPending ? (
+                      <ActivityIndicator color={C.textPrimary} size="small" />
+                    ) : cooldown > 0 ? (
+                      <Text style={styles.primaryButtonText}>
+                        Resend in {cooldown}s
+                      </Text>
+                    ) : (
+                      <Text style={styles.primaryButtonText}>
+                        Didn't receive it? Send again
+                      </Text>
+                    )}
+                  </TouchableOpacity>
 
-                {/* Use different email */}
-                <TouchableOpacity
-                  style={styles.ghostButton}
-                  onPress={() => switchMode("magic-link")}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.ghostButtonText}>
-                    Use a different email
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.ghostButton}
+                    onPress={() => switchMode("magic-link")}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.ghostButtonText}>
+                      Use a different email
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
                 {/* Dev-mode token input */}
                 {__DEV__ && (
@@ -1095,6 +1096,12 @@ const styles = StyleSheet.create({
   /* ── Magic link sent state ────────────────────────────────────── */
   sentContainer: {
     alignItems: "center",
+    gap: 12,
+  },
+  sentActions: {
+    width: "100%",
+    gap: 12,
+    marginTop: 8,
   },
   sentTitle: {
     fontSize: 24,
