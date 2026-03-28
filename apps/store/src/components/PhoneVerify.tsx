@@ -102,8 +102,9 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
     setError("");
 
     try {
-      const BASE = (import.meta.env.VITE_API_URL as string | undefined) || "";
-      const res = await fetch(`${BASE}/store/${slug}/identify`, {
+      const API_URL = (import.meta.env.VITE_API_URL as string | undefined) || "";
+      const prefix = API_URL ? `${API_URL}/store` : "";
+      const res = await fetch(`${prefix}/${slug}/identify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: `+91${phone}`, turnstileToken: tokenRef.current }),

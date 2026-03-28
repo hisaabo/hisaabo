@@ -1,7 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { generateInvoicePDF, type InvoicePDFData } from "./invoice-pdf.js";
 
-const { data, format } = workerData as { data: InvoicePDFData; format: "a5-landscape" | "a4" | "thermal" };
+const { data, format } = workerData as { data: InvoicePDFData; format: "a5" | "a4" | "thermal" };
 
 const doc = generateInvoicePDF(data, format);
 const chunks: Buffer[] = [];

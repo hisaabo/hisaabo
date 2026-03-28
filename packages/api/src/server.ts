@@ -128,7 +128,7 @@ app.get("/up", async (c) => {
   }
 });
 
-async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "thermal"): Promise<Buffer> {
+async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): Promise<Buffer> {
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const jsPath = path.resolve(dir, "lib/pdf-worker.js");
   const fs = await import("node:fs");
@@ -170,7 +170,9 @@ function getSessionIdFromRequest(req: Request): string | null {
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
-  const format = (c.req.query("format") || "a5-landscape") as "a5-landscape" | "a4" | "thermal";
+  const rawFormat = c.req.query("format") || "a5";
+  // Accept legacy "a5-landscape" param from older clients and remap to "a5"
+  const format = (rawFormat === "a5-landscape" ? "a5" : rawFormat) as "a5" | "a4" | "thermal";
 
   // Auth check — look up session in control DB
   const sessionId = getSessionIdFromRequest(c.req.raw);

@@ -63,14 +63,9 @@ function lightenHex(hex: string, amount: number): string {
 type View = "browse" | "cart" | "phone-verify" | "checkout" | "confirmed";
 
 export function App() {
-  // Extract slug from URL: /store/<slug>/... or just /<slug>
+  // Extract slug from URL: /<slug> (store runs on its own subdomain)
   const [slug] = useState<string>(() => {
-    // Support both /store/<slug> (production) and dev via /<slug>
-    const path = window.location.pathname;
-    const storeMatch = path.match(/^\/store\/([^/]+)/);
-    if (storeMatch) return storeMatch[1];
-    // Fallback: first path segment
-    const parts = path.split("/").filter(Boolean);
+    const parts = window.location.pathname.split("/").filter(Boolean);
     return parts[0] || "";
   });
 

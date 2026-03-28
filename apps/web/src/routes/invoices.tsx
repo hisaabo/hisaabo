@@ -54,8 +54,27 @@ function DownloadPDFButton({
   onShared?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  async function download(format: "a4" | "thermal") {
+  const { data: businesses } = trpc.business.list.useQuery();
+  const activeId = getBusinessId();
+  const activeBusiness = businesses?.find((b) => b.id === activeId);
+  const hasGstin = !!(activeBusiness?.gstin && activeBusiness.gstRegistrationType !== "unregistered");
+
+  type Format = "a4" | "a5" | "thermal";
+  const options: { format: Format; label: string }[] = hasGstin
+    ? [
+        { format: "a4", label: "GST Invoice (A4)" },
+        { format: "a5", label: "Simple Invoice (A5)" },
+        { format: "thermal", label: "Thermal Receipt" },
+      ]
+    : [
+        { format: "a5", label: "Invoice (A5)" },
+        { format: "thermal", label: "Thermal Receipt" },
+      ];
+
+  async function download(format: Format) {
+    setOpen(false);
     setLoading(true);
     try {
       const res = await fetch(
@@ -73,7 +92,6 @@ function DownloadPDFButton({
       a.download = `${invoiceNumber}_${format}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-      // Auto-mark as sent on first share
       if (invoiceStatus === "draft") {
         onShared?.();
       }
@@ -84,11 +102,11 @@ function DownloadPDFButton({
   }
 
   return (
-    <div className="flex gap-0.5">
+    <div className="relative inline-flex" onClick={(e) => e.stopPropagation()}>
       <button
-        onClick={(e) => { e.stopPropagation(); download("a4"); }}
+        onClick={() => setOpen((v) => !v)}
         disabled={loading}
-        title="Download A4 PDF"
+        title="Download PDF"
         className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
       >
         {loading ? (
@@ -99,16 +117,22 @@ function DownloadPDFButton({
           </svg>
         )}
       </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); download("thermal"); }}
-        disabled={loading}
-        title="Download receipt"
-        className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 14.25l6-6m4.5-3.493V21.75l-3.75-1.5-3.75 1.5-3.75-1.5-3.75 1.5V4.757c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0c1.1.128 1.907 1.077 1.907 2.185z" />
-        </svg>
-      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-20 min-w-[172px] rounded-lg border border-border-light bg-surface-1 shadow-lg py-1">
+            {options.map((opt) => (
+              <button
+                key={opt.format}
+                onClick={() => download(opt.format)}
+                className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
