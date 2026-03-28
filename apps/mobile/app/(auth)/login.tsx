@@ -44,7 +44,7 @@ const C = {
 
 /* ─── Logo Icon (4-square brand pattern) ─────────────────────────────────── */
 function LogoIcon({ size = 44 }: { size?: number }) {
-  const squareSize = (size - 10) / 2 - 1;
+  const squareSize = (size - 16) / 2 - 2;
   const radius = squareSize * 0.22;
 
   return (
@@ -58,7 +58,7 @@ function LogoIcon({ size = 44 }: { size?: number }) {
         },
       ]}
     >
-      <View style={styles.logoGrid}>
+      <View style={[styles.logoGrid, { width: squareSize * 2 + 4, height: squareSize * 2 + 4 }]}>
         {/* Top-left: white 0.9 */}
         <View
           style={[
@@ -921,9 +921,7 @@ const styles = StyleSheet.create({
   logoGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    width: 22,
-    height: 22,
-    gap: 2,
+    gap: 4,
     alignItems: "center",
     justifyContent: "center",
   },

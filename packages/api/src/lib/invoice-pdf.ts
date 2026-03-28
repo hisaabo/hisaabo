@@ -71,6 +71,12 @@ export interface InvoicePDFData {
   businessStateCode?: string; // 2-digit state code
   partyStateCode?: string;
   lineItemHsn?: string[]; // HSN/SAC code per line item (parallel array)
+
+  // Freemium branding
+  isPaidPlan?: boolean; // true = no branding, false/undefined = show "Powered by hisaabo.in"
+
+  // Payment status for diagonal stamp badge
+  status?: string; // invoice status for stamp badge (paid, partial, overdue, cancelled, draft)
 }
 
 export type PDFFormat = "a5" | "a4" | "thermal";
@@ -712,186 +718,254 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   doc.fontSize(7).fillColor(cLight).font("NotoSans")
     .text("This is a computer-generated invoice and does not require a physical signature.",
       margin, footerY + 4, { width: contentW, align: "center" });
+  if (!data.isPaidPlan) {
+    doc.fontSize(5.5).font("NotoSans").fillColor("#b0b0b8")
+      .text("Powered by hisaabo.in", margin, footerY + 16, { width: contentW, align: "center" });
+  }
 }
 
-// ── A5 Portrait Invoice ────────────────────────────────────────
-// Clean, modern design for non-GST or simpler invoicing needs
+// ── A5 Landscape Invoice ───────────────────────────────────────
+// Clean, two-column design for A5 landscape (595.28 x 419.53 pt)
+// Sections flow top-to-bottom with clear visual hierarchy
 
 function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoicePDFData) {
-  const pageW = 419.53; // A5 portrait width
-  const pageH = 595.28; // A5 portrait height
-  const margin = 28;
+  const pageW   = 595.28; // A5 landscape width
+  const pageH   = 419.53; // A5 landscape height
+  const margin  = 28;
   const contentW = pageW - margin * 2;
   let y = margin;
 
-  // Design tokens — warmer, lighter palette for a modern look
+  // Design tokens
   const cPrimary   = "#111827";
   const cSecondary = "#374151";
   const cMuted     = "#6b7280";
   const cLight     = "#9ca3af";
-  const cAccent    = "#4f46e5"; // indigo
-  const cBorder    = "#e5e7eb";
-  const cBg        = "#f9fafb";
-  const cAccentBg  = "#eef2ff"; // very light indigo
+  const cAccent    = "#5b5bd6"; // indigo
+  const cBorder    = "#e8e8f0";
+  const cBg        = "#f4f4f8"; // very light lavender-grey
+  const cAccentBg  = "#ededfb"; // lightest indigo wash
 
-  const gstMode = isGstRegistered(data);
+  const gstMode  = isGstRegistered(data);
   const titleLabel = getInvoiceTitle(data);
 
-  // ── Accent stripe at top ──────────────────────────────────
-  filledRect(doc, 0, 0, pageW, 4, cAccent);
+  // ── Thin accent stripe at the very top ───────────────────
+  filledRect(doc, 0, 0, pageW, 3, cAccent);
 
-  // ── Header area ───────────────────────────────────────────
-  // Business name + invoice title side by side
-  doc.fontSize(15).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.businessName, margin, y, { width: contentW * 0.58 });
+  // ── SECTION 1: Two-column header ─────────────────────────
+  // Left column: business info  |  Right column: invoice metadata
+  const leftColW  = contentW * 0.52;
+  const rightColW = contentW - leftColW - 12;
+  const rightColX = margin + leftColW + 12;
 
-  // Invoice badge (top-right)
-  const badgeW = 90;
-  const badgeX = margin + contentW - badgeW;
-  filledRect(doc, badgeX, y - 2, badgeW, 22, cAccentBg);
-  doc.fontSize(9).fillColor(cAccent).font("NotoSans-Bold")
-    .text(titleLabel, badgeX, y + 4, { width: badgeW, align: "center" });
-
-  y += 22;
+  // Left: Business name
+  doc.fontSize(13).fillColor(cPrimary).font("NotoSans-Bold")
+    .text(data.businessName, margin, y, { width: leftColW });
 
   if (data.businessLegalName && data.businessLegalName !== data.businessName) {
-    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-      .text(data.businessLegalName, margin, y, { width: contentW * 0.58 });
-    y += 10;
+    // 13pt font renders at ~16pt line height; offset beneath the business name
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+      .text(data.businessLegalName, margin, y + 16, { width: leftColW });
   }
 
-  // Business contact details
-  const bizParts: string[] = [];
-  const bizAddr = [data.businessAddress, data.businessCity, data.businessState, data.businessPincode].filter(Boolean).join(", ");
-  if (bizAddr) bizParts.push(bizAddr);
-  if (data.businessPhone) bizParts.push(`Ph: ${data.businessPhone}`);
-  if (data.businessEmail) bizParts.push(data.businessEmail);
-  if (gstMode && data.businessGstin) bizParts.push(`GSTIN: ${data.businessGstin}`);
-  if (data.businessPan) bizParts.push(`PAN: ${data.businessPan}`);
-
-  doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-    .text(bizParts.join("  |  "), margin, y, { width: contentW });
-  y += 10;
-
-  // Invoice number + date (below business line)
-  doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-    .text(`Invoice #: `, margin + contentW - 140, y - 10, { continued: true })
-    .font("NotoSans-Bold").fillColor(cPrimary)
-    .text(data.invoiceNumber);
-  doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-    .text(`Date: `, margin + contentW - 140, y, { continued: true })
-    .font("NotoSans").fillColor(cSecondary)
-    .text(fmtDate(data.invoiceDate));
-  if (data.dueDate) {
-    y += 10;
-    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-      .text(`Due: `, margin + contentW - 140, y, { continued: true })
-      .font("NotoSans").fillColor(cSecondary)
-      .text(fmtDate(data.dueDate));
-  }
-
-  y += 14;
-  hLine(doc, margin, y, contentW, cAccent, 1);
-  y += 10;
-
-  // ── Bill To ───────────────────────────────────────────────
-  doc.fontSize(6.5).fillColor(cAccent).font("NotoSans-Bold")
-    .text("BILL TO", margin, y);
-  y += 10;
-
-  doc.fontSize(9.5).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.partyName, margin, y, { width: contentW * 0.65 });
-  y += 13;
-
-  const partyParts: string[] = [];
-  if (data.partyBillingAddress) partyParts.push(data.partyBillingAddress);
-  const pCity = [data.partyCity, data.partyState].filter(Boolean).join(", ");
-  if (pCity) partyParts.push(pCity);
-  if (data.partyPhone) partyParts.push(`Ph: ${data.partyPhone}`);
-  if (gstMode && data.partyGstin) partyParts.push(`GSTIN: ${data.partyGstin}`);
-
-  if (partyParts.length > 0) {
+  // Address lines
+  let leftY = y + 16;
+  const addrLine = [data.businessAddress].filter(Boolean).join("");
+  const cityLine = [data.businessCity, data.businessState, data.businessPincode].filter(Boolean).join(", ");
+  if (addrLine) {
     doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
-      .text(partyParts.join("  |  "), margin, y, { width: contentW * 0.65 });
-    y += doc.heightOfString(partyParts.join("  |  "), { width: contentW * 0.65 }) + 8;
+      .text(addrLine, margin, leftY, { width: leftColW });
+    leftY += 10;
+  }
+  if (cityLine) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+      .text(cityLine, margin, leftY, { width: leftColW });
+    leftY += 10;
+  }
+  if (data.businessPhone) {
+    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
+      .text(`Ph: ${data.businessPhone}`, margin, leftY, { width: leftColW });
+    leftY += 10;
+  }
+  if (data.businessEmail) {
+    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
+      .text(data.businessEmail, margin, leftY, { width: leftColW });
+    leftY += 10;
+  }
+  if (gstMode && data.businessGstin) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans-Bold")
+      .text(`GSTIN: ${data.businessGstin}`, margin, leftY, { width: leftColW });
+    leftY += 10;
+  }
+  if (data.businessPan) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+      .text(`PAN: ${data.businessPan}`, margin, leftY, { width: leftColW });
+    leftY += 10;
   }
 
+  // Right: Invoice title badge + metadata
+  // Title badge pill
+  const badgeH = 16;
+  filledRect(doc, rightColX, y, rightColW, badgeH, cAccent);
+  doc.fontSize(8.5).fillColor("#ffffff").font("NotoSans-Bold")
+    .text(titleLabel, rightColX, y + 4, { width: rightColW, align: "center" });
+
+  let rightY = y + badgeH + 6;
+
+  // Meta rows: label right-aligned, value bold right-aligned
+  const metaLabelX = rightColX;
+  const metaValW   = rightColW;
+
+  function metaLine(label: string, value: string) {
+    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+      .text(label, metaLabelX, rightY, { width: metaValW - 2, align: "right" });
+    rightY += 9;
+    doc.fontSize(8).fillColor(cPrimary).font("NotoSans-Bold")
+      .text(value, metaLabelX, rightY, { width: metaValW, align: "right" });
+    rightY += 11;
+  }
+
+  metaLine("INVOICE NUMBER", data.invoiceNumber);
+  metaLine("DATE", fmtDate(data.invoiceDate));
+  if (data.dueDate) metaLine("DUE DATE", fmtDate(data.dueDate));
+
+  // Advance the main y cursor past whichever column is taller
+  y = Math.max(leftY, rightY) + 4;
+
+  // Full-width divider
   hLine(doc, margin, y, contentW, cBorder);
   y += 8;
 
-  // ── Items table ───────────────────────────────────────────
-  const showHsn = gstMode && data.lineItemHsn?.some(h => h);
-  // Columns: # | HSN? | Description | Qty | Rate | Tax | Amount
-  const A_IDX  = margin;
-  const A_HSN  = A_IDX + 16;
-  const A_DESC = showHsn ? A_HSN + 40 : A_IDX + 16;
-  const A_AMT  = margin + contentW - 54;
-  const A_TAX  = A_AMT - 34;
-  const A_RATE = A_TAX - 52;
-  const A_QTY  = A_RATE - 30;
-  const A_DESCW = A_QTY - A_DESC - 6;
+  // ── SECTION 2: Bill To ───────────────────────────────────
+  doc.fontSize(6.5).fillColor(cAccent).font("NotoSans-Bold")
+    .text("BILL TO", margin, y);
+  y += 8;
 
-  // Header row
-  filledRect(doc, margin, y, contentW, 16, cBg);
+  doc.fontSize(9).fillColor(cPrimary).font("NotoSans-Bold")
+    .text(data.partyName, margin, y, { width: contentW * 0.6 });
+
+  // Party details in two sub-columns
+  let partyY = y + 12;
+  const partyAddrParts: string[] = [];
+  if (data.partyBillingAddress) partyAddrParts.push(data.partyBillingAddress);
+  const partyCity = [data.partyCity, data.partyState].filter(Boolean).join(", ");
+  if (partyCity) partyAddrParts.push(partyCity);
+
+  for (const line of partyAddrParts) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+      .text(line, margin, partyY, { width: contentW * 0.55 });
+    partyY += 10;
+  }
+
+  // Party contact on the right side of bill-to row
+  let partyRY = y + 12;
+  const partyRX = margin + contentW * 0.6 + 8;
+  const partyRW = contentW * 0.4 - 8;
+  if (data.partyPhone) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+      .text(`Ph: ${data.partyPhone}`, partyRX, partyRY, { width: partyRW });
+    partyRY += 10;
+  }
+  if (data.partyEmail) {
+    doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
+      .text(data.partyEmail, partyRX, partyRY, { width: partyRW });
+    partyRY += 10;
+  }
+  if (gstMode && data.partyGstin) {
+    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans-Bold")
+      .text(`GSTIN: ${data.partyGstin}`, partyRX, partyRY, { width: partyRW });
+    partyRY += 10;
+  }
+
+  y = Math.max(partyY, partyRY) + 4;
+  hLine(doc, margin, y, contentW, cBorder);
+  y += 1;
+
+  // ── SECTION 3: Items table ───────────────────────────────
+  const showHsn = gstMode && data.lineItemHsn?.some(h => h);
+
+  // Column layout for A5 landscape (539pt content width)
+  // #(14) | HSN?(40) | Description(flex) | Qty(34) | Rate(62) | Tax(32) | Amount(62)
+  const C_IDX   = margin;
+  const C_HSN   = C_IDX + 18;
+  const C_DESC  = showHsn ? C_HSN + 42 : C_IDX + 18;
+  const C_AMT   = margin + contentW - 60;
+  const C_TAX   = C_AMT - 36;
+  const C_RATE  = C_TAX - 64;
+  const C_QTY   = C_RATE - 36;
+  const C_DESCW = C_QTY - C_DESC - 6;
+
+  // Table header
+  const tableHdrH = 18;
+  filledRect(doc, margin, y, contentW, tableHdrH, cBg);
+
   doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold");
-  doc.text("#", A_IDX, y + 4, { width: 14 });
-  if (showHsn) doc.text("HSN", A_HSN, y + 4, { width: 38 });
-  doc.text("DESCRIPTION", A_DESC, y + 4, { width: A_DESCW });
-  doc.text("QTY", A_QTY, y + 4, { width: 28, align: "right" });
-  doc.text("RATE", A_RATE, y + 4, { width: 50, align: "right" });
-  doc.text("TAX", A_TAX, y + 4, { width: 32, align: "right" });
-  doc.text("AMOUNT", A_AMT, y + 4, { width: 54, align: "right" });
-  y += 16;
+  doc.text("#", C_IDX, y + 5, { width: 14 });
+  if (showHsn) doc.text("HSN/SAC", C_HSN, y + 5, { width: 40 });
+  doc.text("DESCRIPTION", C_DESC, y + 5, { width: C_DESCW });
+  doc.text("QTY", C_QTY, y + 5, { width: 34, align: "right" });
+  doc.text("RATE", C_RATE, y + 5, { width: 62, align: "right" });
+  doc.text("TAX", C_TAX, y + 5, { width: 34, align: "right" });
+  doc.text("AMOUNT", C_AMT, y + 5, { width: 60, align: "right" });
+
+  y += tableHdrH;
   hLine(doc, margin, y, contentW, cBorder);
 
   data.lineItems.forEach((item, i) => {
-    const rowH = 16;
+    const rowH = 17;
     if (i % 2 === 1) {
-      filledRect(doc, margin, y, contentW, rowH, cBg);
+      filledRect(doc, margin, y, contentW, rowH, "#fafafc");
     }
     const rowY = y + 4;
 
-    doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans");
-    doc.text(`${i + 1}`, A_IDX, rowY, { width: 14 });
+    doc.fontSize(8).fillColor(cSecondary).font("NotoSans");
+    doc.text(`${i + 1}`, C_IDX, rowY, { width: 14 });
     if (showHsn) {
-      doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", A_HSN, rowY, { width: 38 });
+      doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", C_HSN, rowY, { width: 40 });
     }
-    doc.fontSize(7.5).text(item.description, A_DESC, rowY, { width: A_DESCW });
-    doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), A_QTY, rowY, { width: 28, align: "right" });
-    doc.text(fmt(item.unitPrice), A_RATE, rowY, { width: 50, align: "right" });
-    doc.text(`${item.taxPercent}%`, A_TAX, rowY, { width: 32, align: "right" });
-    doc.font("NotoSans-Bold").text(fmt(item.totalAmount), A_AMT, rowY, { width: 54, align: "right" });
+    doc.fontSize(8).text(item.description, C_DESC, rowY, { width: C_DESCW });
+    doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), C_QTY, rowY, { width: 34, align: "right" });
+    doc.text(fmt(item.unitPrice), C_RATE, rowY, { width: 62, align: "right" });
+    doc.text(`${item.taxPercent}%`, C_TAX, rowY, { width: 34, align: "right" });
+    doc.font("NotoSans-Bold").text(fmt(item.totalAmount), C_AMT, rowY, { width: 60, align: "right" });
 
     y += rowH;
+    hLine(doc, margin, y, contentW, cBorder, 0.3);
   });
 
-  hLine(doc, margin, y, contentW, cBorder);
+  hLine(doc, margin, y, contentW, cBorder, 0.75);
   y += 8;
 
-  // ── Totals ────────────────────────────────────────────────
-  const totLabelX = margin + contentW * 0.55;
-  const totValX   = margin + contentW - 54;
+  // ── SECTION 4: Totals (right column) + Amount in words (left column) ──
+  // Both sit side-by-side so they never overlap
+  const totBlockStartY = y;
+
+  // Right column: totals
+  const totLabelX = margin + contentW * 0.58;
+  const totValW   = 62;
+  const totValX   = margin + contentW - totValW;
   const totLabelW = totValX - totLabelX - 8;
 
-  function totRow(label: string, value: string, bold = false) {
+  let totY = totBlockStartY;
+
+  function totRow(label: string, value: string, bold = false, accent = false) {
     doc.fontSize(bold ? 8.5 : 7.5)
-      .fillColor(bold ? cPrimary : cMuted)
+      .fillColor(accent ? cAccent : bold ? cPrimary : cMuted)
       .font(bold ? "NotoSans-Bold" : "NotoSans")
-      .text(label, totLabelX, y, { width: totLabelW });
+      .text(label, totLabelX, totY, { width: totLabelW });
     doc.fontSize(bold ? 8.5 : 7.5)
       .fillColor(bold ? cPrimary : cSecondary)
       .font(bold ? "NotoSans-Bold" : "NotoSans")
-      .text(fmt(value), totValX, y, { width: 54, align: "right" });
-    y += bold ? 14 : 11;
+      .text(fmt(value), totValX, totY, { width: totValW, align: "right" });
+    totY += bold ? 13 : 11;
   }
 
   totRow("Subtotal", data.subtotal);
   if (parseFloat(data.discountAmount) > 0) totRow("Discount", `-${data.discountAmount}`);
   if (parseFloat(data.taxAmount) > 0) totRow("Tax", data.taxAmount);
 
-  hLine(doc, totLabelX, y, totLabelW + 54 + 8, cBorder);
-  y += 4;
-  totRow("TOTAL", data.totalAmount, true);
+  hLine(doc, totLabelX, totY, totLabelW + totValW + 8, cBorder);
+  totY += 4;
+  totRow("TOTAL", data.totalAmount, true, true);
 
   if (parseFloat(data.amountPaid) > 0) {
     totRow("Amount Paid", data.amountPaid);
@@ -899,130 +973,147 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     if (balance > 0.005) totRow("Balance Due", balance.toFixed(2), true);
   }
 
-  // Amount in words (left side, same row level)
-  const wordsY = y - 40;
-  doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
-    .text("Amount in words:", margin, wordsY, { width: contentW * 0.5 });
-  doc.fontSize(7).fillColor(cSecondary).font("NotoSans")
-    .text(numberToWords(parseFloat(data.totalAmount)), margin, wordsY + 10,
-      { width: contentW * 0.5 });
+  // Left column: amount in words — uses the same vertical band, never overlaps
+  const wordsColW = totLabelX - margin - 10;
+  let wordsY = totBlockStartY;
 
-  y += 8;
+  doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
+    .text("AMOUNT IN WORDS", margin, wordsY, { width: wordsColW });
+  wordsY += 10;
+  doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+    .text(numberToWords(parseFloat(data.totalAmount)), margin, wordsY,
+      { width: wordsColW });
+
+  // Advance past the taller of the two columns
+  y = Math.max(totY, wordsY + 20) + 6;
   hLine(doc, margin, y, contentW, cBorder);
   y += 8;
 
-  // ── Payment info ──────────────────────────────────────────
+  // ── SECTION 5: Payment details + Signatory ───────────────
   const hasPaymentInfo = data.type === "sale" && (data.bankAccountNumber || data.upiId);
 
+  // Three sub-columns: payment text | QR code | signatory
+  const hasQr  = hasPaymentInfo && !!data.upiQrDataUrl;
+  const qrSize = 54;
+
+  // Signatory always occupies the rightmost ~110pt
+  const sigColW  = 110;
+  const sigColX  = margin + contentW - sigColW;
+
+  // QR (if present) sits just left of signatory
+  const qrColX   = hasQr ? sigColX - qrSize - 8 : sigColX;
+  const payTextW = hasQr ? qrColX - margin - 4 : sigColX - margin - 8;
+
+  // Capture y at the start of section 5 so the signatory can anchor here
+  const sec5StartY = y;
+
   if (hasPaymentInfo) {
+    // Section label
     doc.fontSize(6.5).fillColor(cAccent).font("NotoSans-Bold")
       .text("PAYMENT DETAILS", margin, y);
     y += 10;
 
-    const hasQr = !!data.upiQrDataUrl;
-    const qrSize = 56;
-    const textAreaW = hasQr ? contentW - qrSize - 10 : contentW;
-
     let payY = y;
-    if (data.bankAccountNumber) {
-      const parts = [];
-      if (data.bankName) parts.push(`Bank: ${data.bankName}`);
-      parts.push(`A/C: ${data.bankAccountNumber}`);
-      if (data.bankIfsc) parts.push(`IFSC: ${data.bankIfsc}`);
-      if (data.bankAccountName) parts.push(`Name: ${data.bankAccountName}`);
-      doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
-        .text(parts.join("   "), margin, payY, { width: textAreaW });
-      payY += 11;
-    }
 
     if (data.upiId) {
-      doc.fontSize(7.5).fillColor(cMuted).font("NotoSans-Bold")
-        .text("UPI: ", margin, payY, { continued: true })
-        .font("NotoSans").fillColor(cSecondary).text(data.upiId, { width: textAreaW });
+      doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+        .text("UPI", margin, payY, { width: 20 });
+      doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+        .text(data.upiId, margin + 22, payY, { width: payTextW - 22 });
       payY += 11;
     }
 
-    if (hasQr && data.upiQrDataUrl) {
-      const qrX = margin + contentW - qrSize;
-      try {
-        const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
-        doc.image(qrBuffer, qrX, y, { width: qrSize, height: qrSize });
-        const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
-        if (balance > 0) {
-          doc.fontSize(5.5).fillColor(cMuted).font("NotoSans")
-            .text(`Scan to pay ${fmt(balance)}`, qrX, y + qrSize + 2, { width: qrSize, align: "center" });
-        }
-      } catch {
-        // skip QR
+    if (data.bankAccountNumber) {
+      if (data.bankName) {
+        doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+          .text("BANK", margin, payY, { width: 22 });
+        doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+          .text(data.bankName, margin + 24, payY, { width: payTextW - 24 });
+        payY += 11;
+      }
+      doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+        .text("A/C", margin, payY, { width: 22 });
+      doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+        .text(data.bankAccountNumber, margin + 24, payY, { width: payTextW - 24 });
+      payY += 11;
+      if (data.bankIfsc) {
+        doc.fontSize(7).fillColor(cMuted).font("NotoSans-Bold")
+          .text("IFSC", margin, payY, { width: 22 });
+        doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
+          .text(data.bankIfsc, margin + 24, payY, { width: payTextW - 24 });
+        payY += 11;
       }
     }
 
-    y = Math.max(payY, y + (hasQr ? qrSize + 10 : 0)) + 4;
-    hLine(doc, margin, y, contentW, cBorder);
-    y += 8;
+    // QR code — anchored to sec5StartY so it doesn't shift with the text
+    if (hasQr && data.upiQrDataUrl) {
+      try {
+        const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
+        doc.image(qrBuffer, qrColX, sec5StartY, { width: qrSize, height: qrSize });
+        const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
+        if (balance > 0) {
+          doc.fontSize(5.5).fillColor(cMuted).font("NotoSans")
+            .text(`Scan to pay ${fmt(balance)}`, qrColX, sec5StartY + qrSize + 2,
+              { width: qrSize, align: "center" });
+        }
+      } catch {
+        // skip QR if image decoding fails
+      }
+    }
+
+    y = Math.max(payY, hasQr ? sec5StartY + qrSize + 10 : sec5StartY) + 2;
   }
 
-  // ── Notes / Terms ─────────────────────────────────────────
-  if (data.notes || data.termsAndConditions) {
-    const notesLeft  = margin;
-    const notesRight = margin + contentW * 0.55 + 8;
-    const notesW     = contentW * 0.55;
-    const sigW       = contentW * 0.45 - 12;
+  // Signatory block — anchored at the start of section 5
+  const sigTopY = sec5StartY;
+  doc.fontSize(7).fillColor(cMuted).font("NotoSans")
+    .text("For", sigColX, sigTopY, { width: sigColW });
+  doc.fontSize(8.5).fillColor(cPrimary).font("NotoSans-Bold")
+    .text(data.businessName, sigColX, sigTopY + 10, { width: sigColW });
 
+  const sigLineY = sigTopY + 36;
+  hLine(doc, sigColX, sigLineY, sigColW - 4, cBorder);
+  doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
+    .text("Authorized Signatory", sigColX, sigLineY + 3, { width: sigColW });
+
+  y = Math.max(y, sigLineY + 14) + 4;
+
+  // ── SECTION 6: Notes / Terms ─────────────────────────────
+  if (data.notes || data.termsAndConditions) {
+    hLine(doc, margin, y, contentW, cBorder);
+    y += 6;
+    const notesW = contentW * 0.7;
     if (data.termsAndConditions) {
       doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
-        .text("Terms & Conditions", notesLeft, y);
-      y += 10;
+        .text("Terms & Conditions", margin, y, { width: notesW });
+      y += 9;
       doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-        .text(data.termsAndConditions, notesLeft, y, { width: notesW });
+        .text(data.termsAndConditions, margin, y, { width: notesW });
+      y += doc.heightOfString(data.termsAndConditions, { width: notesW }) + 4;
     }
-
     if (data.notes) {
-      const notesY2 = data.termsAndConditions
-        ? y + doc.heightOfString(data.termsAndConditions, { width: notesW }) + 8
-        : y;
       doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
-        .text("Notes", notesLeft, notesY2);
+        .text("Notes", margin, y, { width: notesW });
+      y += 9;
       doc.fontSize(7).fillColor(cSecondary).font("NotoSans")
-        .text(data.notes, notesLeft, notesY2 + 10, { width: notesW });
+        .text(data.notes, margin, y, { width: notesW });
+      y += doc.heightOfString(data.notes, { width: notesW }) + 4;
     }
-
-    // Signatory on the right
-    const sigX = notesRight;
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text("For", sigX, y, { width: sigW });
-    doc.fontSize(8).fillColor(cPrimary).font("NotoSans-Bold")
-      .text(data.businessName, sigX, y + 11, { width: sigW });
-    const sigLineY = y + 40;
-    hLine(doc, sigX, sigLineY, sigW, cBorder);
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text("Authorized Signatory", sigX, sigLineY + 3, { width: sigW });
-
-    y += 55;
-  } else {
-    // Just signatory
-    const sigX = margin + contentW * 0.55 + 8;
-    const sigW = contentW * 0.45 - 12;
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text("For", sigX, y, { width: sigW });
-    doc.fontSize(8).fillColor(cPrimary).font("NotoSans-Bold")
-      .text(data.businessName, sigX, y + 11, { width: sigW });
-    const sigLineY = y + 38;
-    hLine(doc, sigX, sigLineY, sigW, cBorder);
-    doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text("Authorized Signatory", sigX, sigLineY + 3, { width: sigW });
-    y += 50;
   }
 
   // ── Footer ────────────────────────────────────────────────
-  const footerY = Math.min(y + 6, pageH - margin + 4);
-  hLine(doc, margin, footerY, contentW, cBorder);
+  const footerY = Math.min(y + 4, pageH - 10);
+  hLine(doc, margin, footerY, contentW, cBorder, 0.5);
   doc.fontSize(6.5).fillColor(cLight).font("NotoSans")
-    .text("This is a computer-generated invoice.", margin, footerY + 5,
+    .text("This is a computer-generated invoice.", margin, footerY + 4,
       { width: contentW, align: "center" });
+  if (!data.isPaidPlan) {
+    doc.fontSize(5.5).font("NotoSans").fillColor("#b0b0b8")
+      .text("Powered by hisaabo.in", margin, footerY + 14, { width: contentW, align: "center" });
+  }
 }
 
-// ── Thermal Receipt (58mm / 80mm) ──────────────────────────────
+// ── Thermal Receipt (80mm) ─────────────────────────────────────
 
 function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: InvoicePDFData) {
   const pageW = 226; // ~80mm at 72 DPI
@@ -1033,15 +1124,20 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   const colorBlack = "#000000";
   const colorGray = "#555555";
 
+  const gstMode = isGstRegistered(data);
+  const sameState = isSameState(data);
+
+  // Vector rule — no Unicode box-drawing characters that render as squares
   function separator() {
-    const dashes = "─".repeat(35);
-    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
-      .text(dashes, margin, y, { width: contentW, align: "center" });
-    y += 10;
+    doc.save();
+    doc.strokeColor("#bbbbbb").lineWidth(0.5)
+      .moveTo(margin, y).lineTo(margin + contentW, y).stroke();
+    doc.restore();
+    y += 6;
   }
 
-  // Header
-  doc.fontSize(10).fillColor(colorBlack).font("Courier-Bold")
+  // ── Header ───────────────────────────────────────────────────
+  doc.fontSize(10).fillColor(colorBlack).font("NotoSans-Bold")
     .text(data.businessName.toUpperCase(), margin, y, { width: contentW, align: "center" });
   y += 14;
 
@@ -1053,17 +1149,19 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
 
   const cityLine = [data.businessCity, data.businessState].filter(Boolean).join(", ");
   if (cityLine) {
-    doc.text(cityLine, margin, y, { width: contentW, align: "center" });
+    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
+      .text(cityLine, margin, y, { width: contentW, align: "center" });
     y += 9;
   }
 
   if (data.businessPhone) {
-    doc.text(`Ph: ${data.businessPhone}`, margin, y, { width: contentW, align: "center" });
+    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
+      .text(`Ph: ${data.businessPhone}`, margin, y, { width: contentW, align: "center" });
     y += 9;
   }
 
-  if (data.businessGstin && data.gstRegistrationType !== "unregistered") {
-    doc.fontSize(6).font("Courier-Bold")
+  if (gstMode && data.businessGstin) {
+    doc.fontSize(6).fillColor(colorBlack).font("NotoSans-Bold")
       .text(`GSTIN: ${data.businessGstin}`, margin, y, { width: contentW, align: "center" });
     y += 9;
   }
@@ -1071,9 +1169,15 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   y += 4;
   separator();
 
-  // Invoice info
-  doc.fontSize(8).fillColor(colorBlack).font("Courier-Bold")
-    .text(getInvoiceTitle(data), margin, y, { width: contentW, align: "center" });
+  // ── Invoice info ─────────────────────────────────────────────
+  // GST-registered businesses get TAX INVOICE / BILL OF SUPPLY;
+  // unregistered businesses get plain INVOICE
+  const thermalTitle = gstMode
+    ? getInvoiceTitle(data)
+    : (data.type === "purchase" ? "PURCHASE INVOICE" : "INVOICE");
+
+  doc.fontSize(8).fillColor(colorBlack).font("NotoSans-Bold")
+    .text(thermalTitle, margin, y, { width: contentW, align: "center" });
   y += 12;
 
   doc.fontSize(6).font("NotoSans").fillColor(colorBlack);
@@ -1085,50 +1189,85 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   y += 9;
 
   if (data.partyGstin) {
-    doc.text(`GSTIN: ${data.partyGstin}`, margin, y);
+    doc.fontSize(6).fillColor(colorGray).font("NotoSans")
+      .text(`GSTIN: ${data.partyGstin}`, margin, y);
     y += 9;
   }
 
   separator();
 
-  // Items
-  doc.fontSize(6).font("Courier-Bold").fillColor(colorBlack);
+  // ── Items header ─────────────────────────────────────────────
+  doc.fontSize(6).font("NotoSans-Bold").fillColor(colorBlack);
   doc.text("ITEM", margin, y);
   doc.text("QTY", margin + contentW * 0.5, y, { width: 30, align: "right" });
   doc.text("AMT", margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
-  y += 10;
+  y += 8;
+  separator();
 
-  doc.font("NotoSans").fontSize(6);
-  for (const item of data.lineItems) {
-    // Item name (may wrap)
+  // ── Line items ───────────────────────────────────────────────
+  for (let i = 0; i < data.lineItems.length; i++) {
+    const item = data.lineItems[i];
     const nameW = contentW * 0.48;
-    doc.text(item.description, margin, y, { width: nameW });
+
+    doc.fontSize(6).font("NotoSans").fillColor(colorBlack)
+      .text(item.description, margin, y, { width: nameW });
     const nameH = doc.heightOfString(item.description, { width: nameW });
 
-    doc.text(parseFloat(item.quantity).toString(), margin + contentW * 0.5, y, { width: 30, align: "right" });
-    doc.text(fmt(item.totalAmount), margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
+    doc.fontSize(6).font("NotoSans")
+      .text(parseFloat(item.quantity).toString(), margin + contentW * 0.5, y, { width: 30, align: "right" });
+    doc.fontSize(6).font("NotoSans")
+      .text(fmt(item.totalAmount), margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
 
-    // Rate + tax under item name
     y += Math.max(nameH, 8) + 1;
-    doc.fontSize(5).fillColor(colorGray)
-      .text(`@ ${fmt(item.unitPrice)} + ${item.taxPercent}% tax`, margin + 4, y);
-    doc.fillColor(colorBlack).fontSize(6);
+
+    // Sub-line: HSN (if GST mode) + rate + tax
+    let subLine = `@ ${fmt(item.unitPrice)} + ${item.taxPercent}% tax`;
+    if (gstMode && data.lineItemHsn?.[i]) {
+      subLine = `HSN: ${data.lineItemHsn[i]}  ` + subLine;
+    }
+    doc.fontSize(5).fillColor(colorGray).font("NotoSans")
+      .text(subLine, margin + 4, y);
     y += 9;
   }
 
   separator();
 
-  // Totals
+  // ── Totals ───────────────────────────────────────────────────
+  // NotoSans used throughout so fmt() ₹ symbol renders correctly
   function totalLine(label: string, value: string, bold = false) {
-    doc.fontSize(bold ? 8 : 6).font(bold ? "Courier-Bold" : "Courier")
-      .text(label, margin, y)
+    const fs = bold ? 8 : 6;
+    const font = bold ? "NotoSans-Bold" : "NotoSans";
+    doc.fontSize(fs).font(font).fillColor(colorBlack)
+      .text(label, margin, y);
+    doc.fontSize(fs).font(font).fillColor(colorBlack)
       .text(fmt(value), margin, y, { width: contentW, align: "right" });
     y += bold ? 12 : 9;
   }
 
   totalLine("Subtotal", data.subtotal);
-  totalLine("Tax", data.taxAmount);
-  if (parseFloat(data.discountAmount) > 0) totalLine("Discount", `-${data.discountAmount}`);
+
+  if (gstMode && parseFloat(data.taxAmount) > 0) {
+    // Show CGST/SGST or IGST breakdown for GST-registered businesses
+    const breakdown = buildGstBreakdown(data);
+    for (const row of breakdown) {
+      if (sameState) {
+        if (row.cgst > 0) {
+          totalLine(`CGST (${parseFloat(row.rate) / 2}%)`, row.cgst.toFixed(2));
+          totalLine(`SGST (${parseFloat(row.rate) / 2}%)`, row.sgst.toFixed(2));
+        }
+      } else {
+        if (row.igst > 0) {
+          totalLine(`IGST (${row.rate}%)`, row.igst.toFixed(2));
+        }
+      }
+    }
+  } else {
+    totalLine("Tax", data.taxAmount);
+  }
+
+  if (parseFloat(data.discountAmount) > 0) {
+    totalLine("Discount", `-${data.discountAmount}`);
+  }
 
   separator();
   totalLine("TOTAL", data.totalAmount, true);
@@ -1136,17 +1275,98 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   if (parseFloat(data.amountPaid) > 0) {
     totalLine("Paid", data.amountPaid);
     const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
-    if (balance > 0) totalLine("Balance", balance.toFixed(2), true);
+    if (balance > 0) totalLine("Balance Due", balance.toFixed(2), true);
   }
 
   separator();
 
-  // Footer
+  // ── Notes ────────────────────────────────────────────────────
+  if (data.notes) {
+    doc.fontSize(5).fillColor(colorGray).font("NotoSans")
+      .text(data.notes, margin, y, { width: contentW, align: "center" });
+    y += doc.heightOfString(data.notes, { width: contentW }) + 6;
+  }
+
+  // ── Footer ───────────────────────────────────────────────────
   doc.fontSize(5).fillColor(colorGray).font("NotoSans")
     .text("Thank you for your business!", margin, y, { width: contentW, align: "center" });
   y += 8;
   doc.text("Computer generated invoice", margin, y, { width: contentW, align: "center" });
-  y += 12;
+  y += 8;
+  if (!data.isPaidPlan) {
+    doc.fontSize(5).font("NotoSans").fillColor("#b0b0b0")
+      .text("hisaabo.in", margin, y, { width: contentW, align: "center" });
+    y += 8;
+  } else {
+    y += 4;
+  }
+}
+
+// ── Status stamp ──────────────────────────────────────────────
+// Renders a diagonal watermark-style stamp (PAID, OVERDUE, etc.) on the page.
+// Drawn with very low opacity so it doesn't impede readability.
+
+function renderStatusStamp(
+  doc: InstanceType<typeof PDFDocument>,
+  status: string,
+  pageWidth: number,
+  pageHeight: number
+) {
+  const stampConfig: Record<string, { text: string; color: string }> = {
+    paid:      { text: "PAID",      color: "#10b981" },
+    partial:   { text: "PARTIAL",   color: "#f59e0b" },
+    overdue:   { text: "OVERDUE",   color: "#ef4444" },
+    cancelled: { text: "CANCELLED", color: "#9ca3af" },
+    draft:     { text: "DRAFT",     color: "#9ca3af" },
+  };
+
+  const config = stampConfig[status];
+  if (!config) return; // sent, unfulfilled — no stamp
+
+  doc.save();
+
+  // Translate to page center, then rotate
+  const centerX = pageWidth / 2;
+  const centerY = pageHeight / 2;
+  doc.translate(centerX, centerY);
+  doc.rotate(-30);
+
+  // Font size scales with page width: A4/A5 get 48pt, thermal gets 22pt
+  const fontSize = pageWidth > 400 ? 48 : pageWidth > 300 ? 36 : 22;
+  doc.font("NotoSans-Bold").fontSize(fontSize);
+
+  const charSpacing = fontSize * 0.15;
+  // Measure with character spacing included so the width constraint doesn't clip
+  const baseWidth  = doc.widthOfString(config.text);
+  const textWidth  = baseWidth + charSpacing * (config.text.length - 1);
+  const textHeight = fontSize;
+  const padding    = 16;
+
+  // Border rectangle — stamp border effect
+  doc
+    .rect(
+      -textWidth / 2 - padding,
+      -textHeight / 2 - padding / 2,
+      textWidth + padding * 2,
+      textHeight + padding
+    )
+    .lineWidth(2.5)
+    .strokeOpacity(0.12)
+    .strokeColor(config.color)
+    .stroke();
+
+  // Stamp text — width must accommodate character spacing to prevent wrapping
+  doc
+    .fillColor(config.color)
+    .fillOpacity(0.10)
+    .text(config.text, -textWidth / 2, -textHeight / 2, {
+      width: textWidth + padding,
+      align: "center",
+      characterSpacing: charSpacing,
+      lineBreak: false,
+    });
+
+  doc.restore();
 }
 
 // ── Public API ─────────────────────────────────────────────────
@@ -1159,10 +1379,25 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
     docSize = "A4";
     docMargin = 36;
   } else if (format === "a5") {
-    docSize = [419.53, 595.28]; // A5 portrait
+    docSize = [595.28, 419.53]; // A5 landscape (width × height)
     docMargin = 28;
   } else {
-    docSize = [226, 800]; // 80mm thermal
+    // Thermal: calculate height dynamically to avoid large blank space.
+    // Estimate based on fixed chrome (~200pt) plus per-item rows (~30pt each),
+    // optional GSTIN line, GST tax breakdown lines, notes, and paid/balance lines.
+    const gstMode = data.gstRegistrationType === "regular" || data.gstRegistrationType === "composition";
+    const taxBreakdownLines = gstMode && parseFloat(data.taxAmount) > 0
+      ? new Set(data.lineItems.map((li) => li.taxPercent)).size * 2 // CGST+SGST per rate
+      : 0;
+    const estimatedHeight =
+      200 +
+      data.lineItems.length * 30 +
+      (gstMode && data.businessGstin ? 10 : 0) +
+      taxBreakdownLines * 9 +
+      (parseFloat(data.discountAmount) > 0 ? 9 : 0) +
+      (parseFloat(data.amountPaid) > 0 ? 18 : 0) +
+      (data.notes ? 20 : 0);
+    docSize = [226, Math.max(300, estimatedHeight)];
     docMargin = 8;
   }
 
@@ -1188,6 +1423,33 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
     generateThermalReceipt(doc, data);
   } else {
     generateA5Invoice(doc, data);
+  }
+
+  // Add status stamp on A5 and thermal only — A4 is a formal GST document, no watermark
+  if (data.status && format !== "a4") {
+    const totalStampPages = doc.bufferedPageRange().count;
+    for (let i = 0; i < totalStampPages; i++) {
+      doc.switchToPage(i);
+      renderStatusStamp(doc, data.status, doc.page.width, doc.page.height);
+    }
+  }
+
+  // Add page numbers if multi-page (not on thermal receipts)
+  if (format !== "thermal") {
+    const totalPages = doc.bufferedPageRange().count;
+    if (totalPages > 1) {
+      for (let i = 0; i < totalPages; i++) {
+        doc.switchToPage(i);
+        const pageWidth = doc.page.width;
+        const pageHeight = doc.page.height;
+        doc.fontSize(7).font("NotoSans").fillColor("#9ca3af")
+          .text(
+            `Page ${i + 1} of ${totalPages}`,
+            0, pageHeight - 20,
+            { width: pageWidth, align: "center" }
+          );
+      }
+    }
   }
 
   return doc;

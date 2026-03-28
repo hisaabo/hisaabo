@@ -188,7 +188,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
 
   // Verify tenant is active
-  const [tenant] = await controlDb.select({ status: tenants.status })
+  const [tenant] = await controlDb.select({ status: tenants.status, plan: tenants.plan })
     .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
   if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
 
@@ -291,6 +291,8 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     businessStateCode: biz.stateCode || undefined,
     partyStateCode: party.stateCode || undefined,
     lineItemHsn: lineItems.map(li => li.itemId ? (hsnMap.get(li.itemId) || "") : ""),
+    isPaidPlan: tenant.plan !== "free",
+    status: invoice.status,
   };
 
   const pdfBuffer = await generatePDFInWorker(pdfData, format);
