@@ -209,22 +209,27 @@ export function InvoiceCreator({ type, onClose }: Props) {
               Add items, set tax rates, and preview totals
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] transition-colors" style={{ color: "var(--text-tertiary)" }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] transition-colors" style={{ color: "var(--text-tertiary)" }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
               <path d="M4 4l8 8M12 4l-8 8" />
             </svg>
           </button>
         </div>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} aria-label={`New ${type} invoice`}>
           <div className="px-6 py-4 space-y-4">
             {/* Top row: party, dates */}
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>
+                <label
+                  htmlFor="invoice-party-select"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
                   {type === "sale" ? "Customer" : "Supplier"} *
                 </label>
                 <select
+                  id="invoice-party-select"
                   value={partyId}
                   onChange={(e) => setPartyId(e.target.value)}
                   required
@@ -236,15 +241,15 @@ export function InvoiceCreator({ type, onClose }: Props) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Invoice date</label>
-                <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)}
+                <label htmlFor="invoice-date" className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Invoice date</label>
+                <input id="invoice-date" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                   style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Due date</label>
-                <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
+                <label htmlFor="invoice-due-date" className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Due date</label>
+                <input id="invoice-due-date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                   style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                 />
@@ -289,6 +294,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                       <select
                         value={li.itemId || ""}
                         onChange={(e) => selectProduct(li.id, e.target.value)}
+                        aria-label="Product"
                         className="w-full px-2 py-1.5 rounded text-xs outline-none"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       >
@@ -301,6 +307,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         value={li.description}
                         onChange={(e) => updateItem(li.id, "description", e.target.value)}
                         placeholder="Description *"
+                        aria-label="Description"
                         required
                         className="w-full px-2 py-1.5 rounded text-xs outline-none"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
@@ -314,6 +321,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         min="0.001"
                         step="any"
                         required
+                        aria-label="Quantity"
                         className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
@@ -327,6 +335,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         step="0.01"
                         required
                         placeholder="0.00"
+                        aria-label="Unit price"
                         className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
@@ -339,6 +348,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         min="0"
                         step="0.01"
                         disabled={isSeller}
+                        aria-label="Tax percent"
                         title={isSeller ? "Tax rate is set from the item. Contact admin to change." : undefined}
                         className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums disabled:opacity-60 disabled:cursor-not-allowed"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
@@ -353,6 +363,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         max="100"
                         step="0.01"
                         disabled={isSeller}
+                        aria-label="Discount percent"
                         title={isSeller ? "Discount is managed by admin. Contact admin to change." : undefined}
                         className="w-full px-2 py-1.5 rounded text-xs outline-none text-right tabular-nums disabled:opacity-60 disabled:cursor-not-allowed"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
@@ -368,9 +379,10 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         type="button"
                         onClick={() => removeLine(li.id)}
                         disabled={items.length <= 1}
+                        aria-label="Remove line item"
                         className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                       >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
                           <path d="M4 4l8 8M12 4l-8 8" />
                         </svg>
                       </button>
@@ -472,8 +484,9 @@ export function InvoiceCreator({ type, onClose }: Props) {
             {/* Notes and terms */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Notes</label>
+                <label htmlFor="invoice-notes" className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Notes</label>
                 <textarea
+                  id="invoice-notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   rows={3}
@@ -483,8 +496,9 @@ export function InvoiceCreator({ type, onClose }: Props) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Terms & conditions</label>
+                <label htmlFor="invoice-terms" className="block text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Terms & conditions</label>
                 <textarea
+                  id="invoice-terms"
                   value={terms}
                   onChange={(e) => setTerms(e.target.value)}
                   rows={3}

@@ -29,24 +29,29 @@ const trpc = createTRPCClient<AppRouter>({
 
 // 1. Login
 const { sessionToken } = await trpc.auth.login.mutate({
-  email: "you@example.com",
+  email: "rahul@sharmatraders.in",
   password: "your-password",
 });
 
 // 2. List your businesses
-const businesses = await trpc.business.list.query();
+const { data: businesses } = await trpc.business.list.query();
+// e.g. [{ id: "biz-uuid", name: "Sharma Traders", gstin: "07AABCS1429B1ZP" }]
 
-// 3. Create an invoice
+// 3. Create an invoice (sale to a customer, with 5% GST on Basmati Rice)
 const invoice = await trpc.invoice.create.mutate({
-  partyId: "customer-uuid",
+  partyId: "gupta-enterprises-party-uuid",
   type: "sale",
   lineItems: [{
-    description: "Consulting services",
-    quantity: "8.000",
-    unitPrice: "2500.00",
-    taxPercent: "18.00",
+    description: "Basmati Rice 25kg",
+    quantity: "20.000",   // 20 bags
+    unitPrice: "1250.00", // ₹1,250 per bag
+    taxPercent: "5.00",   // GST 5% — HSN 1006
+    itemId: "basmati-rice-item-uuid",
   }],
-});`;
+  notes: "Delivery to warehouse on 28th. NEFT payment preferred.",
+});
+// invoice.invoiceNumber → "BB-14821"
+// invoice.totalAmount   → "26250.00" (₹25,000 + ₹1,250 GST)`;
 
 function CopyInline({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);

@@ -4,6 +4,8 @@ import { QueryClient } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 
+// The explicit `as any` cast avoids TS2742 "inferred type cannot be named" error caused
+// by tRPC's internal .d.mts paths resolving through hoisted node_modules.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const trpc: ReturnType<typeof createTRPCReact<AppRouter>> = createTRPCReact<AppRouter>() as any;
 

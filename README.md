@@ -53,7 +53,7 @@ Hisaabo's entire product is API-first. The web dashboard, mobile app, and deskto
 
 ### MCP Server — Works with Claude Desktop today
 
-Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Five-minute setup. Zero config. Natural conversation becomes real business operations:
+Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Five-minute setup. Natural conversation becomes real business operations:
 
 ```
 You: "How much does Montu Arora owe me?"
@@ -64,6 +64,27 @@ You: "Create an invoice for Gupta Enterprises — 20 bags of rice at ₹1,250"
 Claude: "Done. Invoice BB-14821 created — ₹26,250 total (inc. 5% GST). PDF ready."
 ```
 
+Add to Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "npx",
+      "args": ["@hisaabo/mcp"],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_TOKEN": "sess_...",
+        "HISAABO_TENANT_ID": "tenant-uuid",
+        "HISAABO_BUSINESS_ID": "business-uuid"
+      }
+    }
+  }
+}
+```
+
+Get your credentials: `npm install -g @hisaabo/cli && hisaabo login && hisaabo whoami --json`
+
 130+ API endpoints. 14 business domains. GST-compliant out of the box. Multi-tenant with full business isolation.
 
 ### CLI Tool — Script everything
@@ -71,12 +92,16 @@ Claude: "Done. Invoice BB-14821 created — ₹26,250 total (inc. 5% GST). PDF r
 Script your business operations from the terminal. JSON output by default, pipes into `jq`, `curl`, `mail`. Copy-paste ready cron jobs for daily reports, GST filing prep, and stock reorder alerts.
 
 ```bash
+npm install -g @hisaabo/cli
+
 # Morning business brief in one line
 hisaabo dashboard --period today --json | jq '{revenue, outstanding, overdueCount}'
 
 # Automated GST filing prep — runs on the 28th of every month
 hisaabo gst export --type gstr1 --month $(date +%m) --year $(date +%Y) --format json
 ```
+
+**Deep-dive:** [docs.hisaabo.in/ai/cli](https://docs.hisaabo.in/ai/cli)
 
 ### Integrations
 
@@ -97,7 +122,27 @@ Build on top of Hisaabo's open API to connect anything:
 
 ---
 
-## Quick Start
+## Quick Start for Developers
+
+Three paths, pick the one that matches your goal:
+
+### 1. Try the API immediately (no setup)
+
+Call the Hisaabo Cloud API directly:
+
+```bash
+# Register an account
+curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
+  -H "Content-Type: application/json" \
+  -d '{"json":{"email":"you@yourshop.in","name":"Your Name","password":"strongpass123","confirmPassword":"strongpass123"}}'
+
+# The response includes sessionToken — use it as a Bearer token
+# and your businessId from the setup wizard
+```
+
+Full API reference: [api.hisaabo.in](https://api.hisaabo.in)
+
+### 2. Self-host and build on top
 
 **Prerequisites:** Node.js 20+, pnpm 9+, Docker
 
@@ -128,6 +173,20 @@ pnpm dev
 | Online store | http://localhost:5174 |
 
 On first visit, create an account and follow the setup wizard to create your first business.
+
+### 3. Connect AI to your existing Hisaabo instance
+
+If you already have Hisaabo running and want to connect Claude Desktop:
+
+```bash
+npm install -g @hisaabo/cli
+hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo whoami --json  # copy token, tenantId, businessId
+```
+
+Then add to `claude_desktop_config.json` — see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
+
+---
 
 For production deployment, database setup, and HTTPS configuration, see the [self-hosting guide](https://docs.hisaabo.in/getting-started/self-hosting).
 
@@ -361,6 +420,16 @@ Contributions are welcome. Before opening a PR:
 pnpm typecheck   # Must pass
 pnpm lint        # Must pass
 pnpm build       # Must pass
+```
+
+To run the test suite:
+
+```bash
+# Run all tests
+pnpm --filter @hisaabo/api test
+
+# Run tests in watch mode during development
+pnpm --filter @hisaabo/api test:watch
 ```
 
 Key contribution guidelines:

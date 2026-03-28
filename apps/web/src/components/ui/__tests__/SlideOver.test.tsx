@@ -21,7 +21,7 @@
  *   8. No WCAG 2.1 AA violations via axe-core.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "vitest-axe";
@@ -122,8 +122,23 @@ describe("SlideOver — right-side panel used for all data-entry forms", () => {
   // ─── Focus management ──────────────────────────────────────────────────────
 
   describe("focus management — important for keyboard and screen-reader users", () => {
+    beforeEach(() => {
+      // Use fake timers so that the SlideOver's setTimeout-based focus call
+      // can be flushed synchronously with vi.runAllTimers().
+      //
+      // jsdom does not implement layout, so deferred focus using setTimeout or
+      // requestAnimationFrame does not execute as part of React's act() flush.
+      // Fake timers let us advance the clock explicitly and assert the result.
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("moves focus to the first interactive element when the panel opens so keyboard users can immediately start typing", async () => {
-      // The SlideOver uses requestAnimationFrame internally, so we wrap in act.
+      // Render inside act so React effects (including the focus useEffect)
+      // run synchronously before we assert.
       await act(async () => {
         renderSlideOver({
           open: true,
@@ -135,9 +150,12 @@ describe("SlideOver — right-side panel used for all data-entry forms", () => {
             </>
           ),
         });
-        // Wait for requestAnimationFrame to flush.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
       });
+
+      // The SlideOver defers focus with setTimeout(fn, 0) so that the slide-in
+      // CSS animation has begun before focus moves.  Advance fake timers to
+      // flush that callback now.
+      act(() => { vi.runAllTimers(); });
 
       // The SlideOver focuses the first interactive element (the close button
       // or the first form field — whichever comes first in DOM order).

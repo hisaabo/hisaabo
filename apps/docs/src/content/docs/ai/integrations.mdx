@@ -90,7 +90,7 @@ Bot replies: "Invoice BB-15042 ready!
 
 - Use the [WhatsApp Business Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) for message webhooks
 - Audio transcription via OpenAI Whisper handles Hindi, English, and regional languages well
-- Start the Hisaabo MCP server with `--readonly` and a separate write-enabled instance to limit blast radius
+- Use a dedicated Hisaabo user account with the `seller` role for the write MCP instance to limit blast radius; use an `accountant`-role account for any read-only agent
 - Keep an audit log of every voice note + transcript + invoice created for dispute resolution
 
 ---
@@ -399,8 +399,14 @@ description: "Customer service agent for Hisaabo online store"
 
 mcp_servers:
   - name: hisaabo
-    url: http://localhost:3100/mcp
-    # Start with --readonly so the agent cannot create or modify records
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_..."
+      HISAABO_TENANT_ID: "tenant-uuid"
+      HISAABO_BUSINESS_ID: "business-uuid"
+    # Use an accountant-role user account so the agent cannot create or modify records
 
 system_prompt: |
   You are a friendly customer service agent for [Your Store Name].
@@ -436,12 +442,18 @@ schedule: "0 9 * * 1"  # Every Monday at 9 AM
 
 mcp_servers:
   - name: hisaabo
-    url: http://localhost:3100/mcp
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_..."
+      HISAABO_TENANT_ID: "tenant-uuid"
+      HISAABO_BUSINESS_ID: "business-uuid"
 
 instructions: |
   Review the outstanding balances for all B2B customers.
   For each customer:
-  1. Check their outstanding balance via party_outstanding
+  1. Check their outstanding balance via party_list (filter: "outstanding")
   2. Check their last payment date via payment_list
   3. Check if any invoices are overdue via invoice_list with status: overdue
 
@@ -465,13 +477,32 @@ name: ca-client-agent
 description: "CA agent with read-only access to client businesses"
 
 # Multiple MCP server connections — one per client business
+# Each uses a separate HISAABO_BUSINESS_ID pointing to that client's business
 mcp_servers:
   - name: client-sharma-traders
-    url: http://localhost:3101/mcp  # MCP server for Client 1
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_client1_token..."
+      HISAABO_TENANT_ID: "tenant-uuid"
+      HISAABO_BUSINESS_ID: "sharma-traders-business-uuid"
   - name: client-gupta-enterprises
-    url: http://localhost:3102/mcp  # MCP server for Client 2
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_client2_token..."
+      HISAABO_TENANT_ID: "tenant-uuid"
+      HISAABO_BUSINESS_ID: "gupta-enterprises-business-uuid"
   - name: client-vinod-sons
-    url: http://localhost:3103/mcp  # MCP server for Client 3
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_client3_token..."
+      HISAABO_TENANT_ID: "tenant-uuid"
+      HISAABO_BUSINESS_ID: "vinod-sons-business-uuid"
 
 system_prompt: |
   You are a CA assistant managing accounts for three clients.

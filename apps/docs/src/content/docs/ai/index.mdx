@@ -66,7 +66,7 @@ Every morning at 8 AM, an agent pulls all overdue invoices using `invoice_list`,
 When an order is confirmed in the Hisaabo online store, an agent creates the delivery challan via `invoice_create` (type: challan), pushes the shipment details to Shiprocket's API, and records the tracking number back against the invoice. The fleet manager's job is to manage drivers, not push data between software tabs.
 
 **A Bengaluru CA's firm runs monthly GST prep for 12 clients without opening a single dashboard.**
-A cron job fires on the 28th of every month. For each client, it calls `gst_gstr1_data` and `gst_summary`, formats the output into a structured handoff document, and emails it to the filing team. Twelve clients. Zero manual data exports.
+A cron job fires on the 28th of every month. For each client, it calls `gst_report` (GSTR-1 and GSTR-3B), formats the output into a structured handoff document, and emails it to the filing team. Twelve clients. Zero manual data exports.
 
 ---
 
@@ -104,7 +104,7 @@ AI Agent: "Three customers have outstanding balances above ₹10,000:
 ```
 User: "Give me a GST summary for this quarter"
 
-AI Agent: [calls gst_summary tool for the current financial quarter]
+AI Agent: [calls gst_report tool with report_type: "gstr3b" for the current quarter]
 
 AI Agent: "Q3 FY 2025-26 GST summary:
           Total taxable turnover: ₹8,42,500
@@ -120,14 +120,30 @@ AI Agent: "Q3 FY 2025-26 GST summary:
 See the [MCP Server setup guide](/ai/mcp-server/) for full installation and configuration instructions. The short version:
 
 ```bash
-npm install -g @hisaabo/mcp-server
-
-hisaabo-mcp --api-url https://your-hisaabo-instance.com \
-            --api-key your_api_key \
-            --business-id your_business_id
+# 1. Get your credentials
+npm install -g @hisaabo/cli
+hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo whoami --json   # copy token, tenantId, businessId from output
 ```
 
-Then add the server to your MCP client's configuration file.
+Then add this to your Claude Desktop `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "npx",
+      "args": ["@hisaabo/mcp"],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_TOKEN": "sess_...",
+        "HISAABO_TENANT_ID": "tenant-uuid",
+        "HISAABO_BUSINESS_ID": "business-uuid"
+      }
+    }
+  }
+}
+```
 
 ### Available tools
 
@@ -135,15 +151,19 @@ The MCP server exposes tools across all major Hisaabo modules. A representative 
 
 | Tool | What it does |
 |---|---|
-| `invoice_create` | Create a sale or purchase invoice |
 | `invoice_list` | List invoices with filters (status, party, date range) |
+| `invoice_create` | Create a sale or purchase invoice |
 | `invoice_get` | Get a single invoice with all line items |
-| `party_list` | List parties with outstanding balance data |
-| `party_get` | Get a party's full ledger |
-| `item_list` | List items with current stock levels |
-| `payment_record` | Record a payment against one or more invoices |
-| `dashboard_summary` | Get today's key business metrics |
-| `gst_summary` | Get GST liability for a period |
+| `invoice_update_status` | Advance invoice lifecycle (draft → sent → paid) |
+| `invoice_pdf_url` | Get a URL to download the invoice PDF |
+| `party_list` | List parties — use `filter='outstanding'` for unpaid balances |
+| `party_get` | Get a party's profile and outstanding balance |
+| `party_ledger` | Get a party's full transaction ledger |
+| `item_list` | List items — use `lowStock=true` for reorder alerts |
+| `item_adjust_stock` | Manually adjust stock quantity |
+| `payment_create` | Record a payment (Cash, UPI, Bank, Cheque) |
+| `dashboard_summary` | Get key business metrics for a time period |
+| `gst_report` | Get GSTR-1 or GSTR-3B data for a month |
 | `expense_create` | Record a business expense |
 
 Full schema documentation is in the [MCP Server reference](/ai/mcp-server/).
@@ -229,25 +249,34 @@ If you are building a custom AI agent or integration, the underlying tRPC API is
 
 ### Authentication
 
-All API calls require a session cookie or an API key in the `Authorization` header:
+All API calls require a session token in the `Authorization` header and the target business ID:
 
 ```http
-Authorization: Bearer hisaabo_key_xxxxxxxxxxxxxxxxxx
-x-business-id: biz_xxxxxxxxxxxxxxxxxx
+Authorization: Bearer sess_VbK2mQ9xP4nR7wA1...
+x-business-id: <your-business-uuid>
+x-tenant-id: <your-tenant-uuid>
 ```
 
-Generate an API key from **Settings > API Keys** in your Hisaabo dashboard.
+Get your session token by logging in via the CLI:
+
+```bash
+hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo whoami --json   # prints token, tenantId, businessId
+```
+
+Session tokens last 30 days. For unattended server automations, store the token in an environment variable and refresh it monthly.
 
 ### Key patterns
 
-**Pagination** — All list endpoints accept `limit` and `cursor` parameters. Use `limit: 50` or lower in AI agent contexts to keep responses inside context window budgets:
+**Pagination** — All list endpoints accept `page` and `limit` parameters. Use `limit: 20` or lower in AI agent contexts to keep responses inside context window budgets. The MCP server automatically caps at 25 per page.
 
 ```typescript
-const invoices = await trpc.invoice.list.query({
+const { data, total } = await trpc.invoice.list.query({
   status: "overdue",
-  limit: 50,
-  cursor: lastSeenId, // for pagination
+  page: 1,
+  limit: 20,
 });
+// Fetch next page by incrementing page until data.length < limit
 ```
 
 **Business isolation** — Every request must include the `x-business-id` header. If you manage multiple businesses, each has its own ID.
@@ -279,23 +308,26 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 
+// Get these values from: hisaabo whoami --json
 const client = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
-      url: "https://your-hisaabo.com/trpc",
+      url: `${process.env.HISAABO_API_URL}/api/trpc`,
       transformer: SuperJSON,
       headers: {
-        Authorization: `Bearer ${process.env.HISAABO_API_KEY}`,
+        Authorization: `Bearer ${process.env.HISAABO_TOKEN}`,
         "x-business-id": process.env.HISAABO_BUSINESS_ID,
+        "x-tenant-id": process.env.HISAABO_TENANT_ID,
       },
     }),
   ],
 });
 
-// Fully typed — your editor knows every field
-const overdueInvoices = await client.invoice.list.query({
+// Fully typed — your editor knows every field, every filter, every response shape
+const { data: overdueInvoices } = await client.invoice.list.query({
   status: "overdue",
-  limit: 50,
+  page: 1,
+  limit: 20,
 });
 ```
 

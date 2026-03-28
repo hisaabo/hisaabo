@@ -35,14 +35,15 @@ hisaabo --version
 hisaabo login --api-url https://your-hisaabo-instance.com
 ```
 
-This opens a browser window for authentication and stores a session token in `~/.hisaabo/credentials.json`. For headless environments (servers, CI), use an API key instead:
+The CLI prompts for your email and password, authenticates against your Hisaabo instance, and stores the session token in `~/.hisaabo/credentials.json`. For headless environments (servers, CI), pass credentials directly:
 
 ```bash
 hisaabo login --api-url https://your-hisaabo-instance.com \
-              --api-key hisaabo_key_xxxxxxxxxxxxxxxxxx
+              --email owner@yourshop.in \
+              --password yourpassword
 ```
 
-Generate an API key from **Settings > API Keys** in your Hisaabo dashboard.
+Session tokens last 30 days. After expiry, run `hisaabo login` again to refresh.
 
 ### Environment variables (recommended for automation)
 
@@ -633,15 +634,16 @@ tools:
 instructions: |
   You are a business intelligence agent for an Indian SMB.
   Every morning at 6 AM, you:
-  1. Run `hisaabo dashboard --period today --json` to get overnight data
+  1. Run `hisaabo dashboard --period this-month --json` to get current month data
   2. Run `hisaabo invoice list --status overdue --json` to check overdue invoices
   3. Run `hisaabo item list --low-stock --json` to check stock levels
-  4. Call the hisaabo MCP gst_summary tool to check GST position
+  4. Call the hisaabo MCP gst_report tool (report_type: "gstr3b", current month)
+     to check GST position and upcoming filing deadlines
   5. Compose a concise morning brief in the owner's preferred format
   6. Send it via the notification webhook
 
   Keep the brief under 300 words. Highlight anything urgent.
-  Use INR formatting. Refer to parties by their short names.
+  Use INR formatting (₹). Refer to parties by their short names.
 ```
 
 ### Consuming CLI output as an AI agent tool

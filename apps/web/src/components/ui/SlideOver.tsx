@@ -32,8 +32,13 @@ export function SlideOver({
       const first = dialogRef.current.querySelector<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
       );
-      // Use rAF so the panel animation has started before we steal focus
-      requestAnimationFrame(() => first?.focus());
+      // Defer focus by one event-loop tick so the panel slide-in animation
+      // has begun before we move focus.  setTimeout(fn, 0) is used instead
+      // of requestAnimationFrame so that the timing is predictable in tests
+      // (vi.useFakeTimers() + vi.runAllTimers() flushes setTimeout but rAF
+      // flushing behaviour is environment-dependent in jsdom).
+      const id = setTimeout(() => first?.focus(), 0);
+      return () => clearTimeout(id);
     }
   }, [open]);
 

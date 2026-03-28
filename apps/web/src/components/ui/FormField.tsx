@@ -1,4 +1,4 @@
-import { ReactNode, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import { ReactNode, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, useId } from "react";
 import { cn } from "@/lib/utils";
 
 interface FormFieldProps {
@@ -7,12 +7,14 @@ interface FormFieldProps {
   required?: boolean;
   children: ReactNode;
   className?: string;
+  /** Explicit id for the control — used when you pass a custom child (e.g. Combobox) */
+  htmlFor?: string;
 }
 
-export function FormField({ label, error, required, children, className }: FormFieldProps) {
+export function FormField({ label, error, required, children, className, htmlFor }: FormFieldProps) {
   return (
     <div className={cn("flex flex-col", className)}>
-      <label className="label">
+      <label htmlFor={htmlFor} className="label">
         {label}
         {required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
@@ -30,10 +32,14 @@ interface InputFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   required?: boolean;
 }
 
-export function InputField({ label, error, required, className, ...props }: InputFieldProps) {
+export function InputField({ label, error, required, className, id, ...props }: InputFieldProps) {
+  // Generate a stable id so the <label htmlFor> association works even when
+  // the caller does not supply an explicit id.
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
-    <FormField label={label} error={error} required={required}>
-      <input className={cn("input", className)} {...props} />
+    <FormField label={label} error={error} required={required} htmlFor={fieldId}>
+      <input id={fieldId} className={cn("input", className)} {...props} />
     </FormField>
   );
 }
@@ -51,11 +57,14 @@ export function SelectField({
   required,
   children,
   className,
+  id,
   ...props
 }: SelectFieldProps) {
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
-    <FormField label={label} error={error} required={required}>
-      <select className={cn("input", className)} {...props}>
+    <FormField label={label} error={error} required={required} htmlFor={fieldId}>
+      <select id={fieldId} className={cn("input", className)} {...props}>
         {children}
       </select>
     </FormField>
@@ -73,11 +82,14 @@ export function TextareaField({
   error,
   required,
   className,
+  id,
   ...props
 }: TextareaFieldProps) {
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
-    <FormField label={label} error={error} required={required}>
-      <textarea className={cn("input", className)} {...props} />
+    <FormField label={label} error={error} required={required} htmlFor={fieldId}>
+      <textarea id={fieldId} className={cn("input", className)} {...props} />
     </FormField>
   );
 }

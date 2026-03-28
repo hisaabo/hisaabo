@@ -33,15 +33,16 @@ export const invoiceEndpoints: EndpointGroup = {
           data: [
             {
               id: "inv-uuid",
-              invoiceNumber: "INV-00042",
+              invoiceNumber: "BB-14821",
               type: "sale",
               status: "sent",
               documentType: "invoice",
-              invoiceDate: "2024-03-15T00:00:00.000Z",
-              dueDate: "2024-04-14T00:00:00.000Z",
-              totalAmount: "15750.00",
+              invoiceDate: "2026-03-26T00:00:00.000Z",
+              dueDate: "2026-04-10T00:00:00.000Z",
+              totalAmount: "26250.00",
               amountPaid: "0.00",
-              partyName: "Acme Corp",
+              balanceDue: "26250.00",
+              partyName: "Gupta Enterprises",
               partyId: "party-uuid",
               createdByName: "Rahul Sharma",
             },
@@ -96,39 +97,40 @@ result = resp.json()["result"]["data"]["json"]`,
         description: "Full invoice object with line items and party.",
         example: {
           id: "inv-uuid",
-          invoiceNumber: "INV-00042",
+          invoiceNumber: "BB-14821",
           type: "sale",
           status: "sent",
           documentType: "invoice",
-          invoiceDate: "2024-03-15T00:00:00.000Z",
-          dueDate: "2024-04-14T00:00:00.000Z",
-          subtotal: "13347.46",
-          taxAmount: "2402.54",
+          invoiceDate: "2026-03-26T00:00:00.000Z",
+          dueDate: "2026-04-10T00:00:00.000Z",
+          subtotal: "25000.00",
+          taxAmount: "1250.00",
           discountAmount: "0.00",
           additionalCharges: "0.00",
           roundOff: "0.00",
-          totalAmount: "15750.00",
+          totalAmount: "26250.00",
           amountPaid: "0.00",
-          notes: "Payment due within 30 days.",
+          balanceDue: "26250.00",
+          notes: "Delivery to warehouse on 28th. NEFT payment preferred.",
           termsAndConditions: null,
           lineItems: [
             {
               id: "li-uuid",
-              description: "Premium Widget A",
-              quantity: "10.000",
-              unitPrice: "1334.75",
-              taxPercent: "18.00",
-              taxAmount: "2402.55",
+              description: "Basmati Rice 25kg",
+              quantity: "20.000",
+              unitPrice: "1250.00",
+              taxPercent: "5.00",
+              taxAmount: "1250.00",
               discountPercent: "0.00",
-              totalAmount: "15750.00",
+              totalAmount: "26250.00",
               sortOrder: 0,
               itemId: "item-uuid",
               variantId: null,
-              selectedUnit: "pcs",
+              selectedUnit: "bag",
               conversionFactor: "1",
             },
           ],
-          party: { id: "party-uuid", name: "Acme Corp", gstin: "27AADCB2230M1ZP", phone: "9876543210" },
+          party: { id: "party-uuid", name: "Gupta Enterprises", gstin: "07AABCG5432M1Z3", phone: "9876543210" },
         },
       },
       codeExamples: {
@@ -215,38 +217,43 @@ resp = httpx.get(
   -H "x-business-id: YOUR_BUSINESS_ID" \\
   -d '{
     "json": {
-      "partyId": "party-uuid",
+      "partyId": "gupta-enterprises-party-uuid",
       "type": "sale",
+      "invoiceDate": "2026-03-26T00:00:00.000Z",
+      "dueDate": "2026-04-10T00:00:00.000Z",
       "lineItems": [
         {
-          "description": "Premium Widget A",
-          "quantity": "10.000",
-          "unitPrice": "1334.75",
-          "taxPercent": "18.00",
+          "description": "Basmati Rice 25kg",
+          "quantity": "20.000",
+          "unitPrice": "1250.00",
+          "taxPercent": "5.00",
           "discountPercent": "0.00",
-          "itemId": "item-uuid"
+          "itemId": "basmati-rice-item-uuid"
         }
-      ]
+      ],
+      "notes": "Delivery to warehouse on 28th. NEFT payment preferred."
     }
   }'`,
         javascript: `const invoice = await trpc.invoice.create.mutate({
-  partyId: "party-uuid",
+  partyId: "gupta-enterprises-party-uuid",
   type: "sale",
-  invoiceDate: new Date().toISOString(),
+  invoiceDate: "2026-03-26T00:00:00.000Z",
+  dueDate: "2026-04-10T00:00:00.000Z",
   lineItems: [
     {
-      description: "Premium Widget A",
-      quantity: "10.000",
-      unitPrice: "1334.75",
-      taxPercent: "18.00",
+      description: "Basmati Rice 25kg",
+      quantity: "20.000",    // 20 bags
+      unitPrice: "1250.00",  // ₹1,250 per bag
+      taxPercent: "5.00",    // GST 5% — HSN 1006
       discountPercent: "0.00",
-      itemId: "item-uuid",
+      itemId: "basmati-rice-item-uuid",
     },
   ],
-  notes: "Payment due within 30 days.",
+  notes: "Delivery to warehouse on 28th. NEFT payment preferred.",
 });
 
-console.log("Created:", invoice.invoiceNumber); // "INV-00043"`,
+console.log("Created:", invoice.invoiceNumber); // "BB-14822"
+console.log("Total:  ", invoice.totalAmount);   // "26250.00" (₹25,000 + ₹1,250 GST)`,
         python: `import httpx
 
 resp = httpx.post(
@@ -256,21 +263,25 @@ resp = httpx.post(
         "x-business-id": business_id,
     },
     json={"json": {
-        "partyId": "party-uuid",
+        "partyId": "gupta-enterprises-party-uuid",
         "type": "sale",
+        "invoiceDate": "2026-03-26T00:00:00.000Z",
+        "dueDate": "2026-04-10T00:00:00.000Z",
         "lineItems": [
             {
-                "description": "Premium Widget A",
-                "quantity": "10.000",
-                "unitPrice": "1334.75",
-                "taxPercent": "18.00",
+                "description": "Basmati Rice 25kg",
+                "quantity": "20.000",
+                "unitPrice": "1250.00",
+                "taxPercent": "5.00",   # GST 5% — HSN 1006
                 "discountPercent": "0.00",
             },
         ],
+        "notes": "Delivery to warehouse on 28th. NEFT payment preferred.",
     }},
 )
 invoice = resp.json()["result"]["data"]["json"]
-print("Created:", invoice["invoiceNumber"])`,
+print("Created:", invoice["invoiceNumber"])  # "BB-14822"
+print("Total:  ", invoice["totalAmount"])    # "26250.00"`,
       },
       gotchas: [
         "All monetary values (`quantity`, `unitPrice`, `taxPercent`, etc.) must be passed as strings, not numbers. The API enforces `NUMERIC(15,2)` precision.",

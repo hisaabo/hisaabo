@@ -31,7 +31,8 @@
         {
           "contactsPermission": "Hisaabo needs access to your contacts to help you create invoices faster."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ]
   }
 }

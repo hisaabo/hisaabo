@@ -34,7 +34,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "vitest-axe";
 
@@ -118,16 +118,23 @@ function renderCreator(type: "sale" | "purchase" = "sale") {
 }
 
 /**
- * Returns the inputs in the first (and by default, only) line-item row.
- * The InvoiceCreator renders inputs without accessible labels on each row
- * (it uses placeholder text instead), so we query by placeholder.
+ * Returns the inputs in the specified line-item row (0-indexed).
+ *
+ * Each row has four spinbutton (type="number") inputs in DOM order:
+ *   [qty, price, tax%, disc%]
+ *
+ * For the first row (rowIndex=0) the spinbuttons are at indices 0-3.
+ * For the second row (rowIndex=1) they are at indices 4-7, and so on.
+ *
+ * This helper returns only qty and price for convenience; callers that
+ * need tax% or disc% should call getAllByRole("spinbutton") directly and
+ * index at rowIndex*4+2 and rowIndex*4+3 respectively.
  */
 function getLineRow(rowIndex = 0) {
-  // Each row's quantity input has a specific step="any" attribute.
-  const allQtyInputs = screen.getAllByRole("spinbutton");
-  // First spinbutton per row is Qty, second is Price.
-  const qtyInput = allQtyInputs[rowIndex * 2];
-  const priceInput = allQtyInputs[rowIndex * 2 + 1];
+  const allSpinbuttons = screen.getAllByRole("spinbutton");
+  // Four spinbuttons per row: qty(0), price(1), tax%(2), disc%(3).
+  const qtyInput = allSpinbuttons[rowIndex * 4];
+  const priceInput = allSpinbuttons[rowIndex * 4 + 1];
   const descInput = screen.getAllByPlaceholderText("Description *")[rowIndex];
   return { qtyInput, priceInput, descInput };
 }
@@ -193,17 +200,21 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
 
       const { qtyInput, priceInput } = getLineRow(0);
 
-      // Clear defaults and enter values.
-      await userEvent.triple_click(qtyInput);
-      await userEvent.type(qtyInput, "5");
-
-      await userEvent.triple_click(priceInput);
-      await userEvent.type(priceInput, "2000");
+      // Use fireEvent.change to directly set values on controlled number inputs.
+      // userEvent.type() simulates individual keystrokes which can be unreliable
+      // for number inputs in jsdom — in particular, the existing value is not
+      // automatically cleared and the typed characters may append instead of
+      // replace.  fireEvent.change triggers the React onChange handler directly.
+      fireEvent.change(qtyInput, { target: { value: "5" } });
+      fireEvent.change(priceInput, { target: { value: "2000" } });
 
       // The totals section must update with the correct subtotal.
       // With no tax and no discount: subtotal = after_discount = 10000.
+      // Note: both the line-item total and the Subtotal row show ₹10,000.00
+      // when there is no tax and no discount, so we assert that at least one
+      // element with this formatted amount appears in the document.
       await waitFor(() => {
-        expect(screen.getByText(/₹10,000\.00|10,000\.00/)).toBeInTheDocument();
+        expect(screen.getAllByText(/₹10,000\.00|10,000\.00/).length).toBeGreaterThan(0);
       });
     });
 
@@ -226,21 +237,16 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       // Discount is the 4th spinbutton (index 3 in the first row).
       const discountInput = allNumberInputs[3];
 
-      await userEvent.triple_click(qtyInput);
-      await userEvent.type(qtyInput, "10");
-
-      await userEvent.triple_click(priceInput);
-      await userEvent.type(priceInput, "1000");
-
-      // Enter 10% discount.
-      await userEvent.triple_click(discountInput);
-      await userEvent.type(discountInput, "10");
+      fireEvent.change(qtyInput, { target: { value: "10" } });
+      fireEvent.change(priceInput, { target: { value: "1000" } });
+      fireEvent.change(discountInput, { target: { value: "10" } });
 
       // After-discount subtotal = 10 × 1000 × (1 - 0.10) = 9000.
-      // The "Discount" row should show the discount amount (₹1,000).
+      // The "Subtotal" row in the totals panel shows the sum of all after-discount
+      // amounts — here ₹9,000.00.  The line-item total also shows ₹9,000.00 since
+      // there is no tax, so we assert that at least one matching element exists.
       await waitFor(() => {
-        // Subtotal column shows after-discount total = ₹9,000.
-        expect(screen.getByText(/₹9,000\.00|9,000\.00/)).toBeInTheDocument();
+        expect(screen.getAllByText(/₹9,000\.00|9,000\.00/).length).toBeGreaterThan(0);
       });
     });
 
@@ -266,17 +272,10 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       const taxInput = allNumberInputs[2];
       const discountInput = allNumberInputs[3];
 
-      await userEvent.triple_click(qtyInput);
-      await userEvent.type(qtyInput, "1");
-
-      await userEvent.triple_click(priceInput);
-      await userEvent.type(priceInput, "10000");
-
-      await userEvent.triple_click(discountInput);
-      await userEvent.type(discountInput, "10");
-
-      await userEvent.triple_click(taxInput);
-      await userEvent.type(taxInput, "18");
+      fireEvent.change(qtyInput, { target: { value: "1" } });
+      fireEvent.change(priceInput, { target: { value: "10000" } });
+      fireEvent.change(discountInput, { target: { value: "10" } });
+      fireEvent.change(taxInput, { target: { value: "18" } });
 
       // after_discount = 10000 × 0.90 = 9000
       // tax = 9000 × 0.18 = 1620
@@ -294,18 +293,16 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       const priceInput = allNumberInputs[1];
       const taxInput = allNumberInputs[2];
 
-      await userEvent.triple_click(qtyInput);
-      await userEvent.type(qtyInput, "1");
+      fireEvent.change(qtyInput, { target: { value: "1" } });
+      fireEvent.change(priceInput, { target: { value: "5000" } });
+      fireEvent.change(taxInput, { target: { value: "18" } });
 
-      await userEvent.triple_click(priceInput);
-      await userEvent.type(priceInput, "5000");
-
-      await userEvent.triple_click(taxInput);
-      await userEvent.type(taxInput, "18");
-
-      // tax_amount = 5000 × 0.18 = 900
+      // tax_amount = 5000 × 0.18 = 900.
+      // The Tax row in the totals panel displays ₹900.00.  We use getAllByText
+      // because "900.00" also appears as a substring inside "5,900.00" (the
+      // line total and grand total), so getByText would throw "multiple elements".
       await waitFor(() => {
-        expect(screen.getByText(/₹900\.00|900\.00/)).toBeInTheDocument();
+        expect(screen.getAllByText(/₹900\.00/).length).toBeGreaterThan(0);
       });
     });
 
@@ -318,21 +315,17 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       const taxInput = allNumberInputs[2];
       const discountInput = allNumberInputs[3];
 
-      await userEvent.triple_click(qtyInput);
-      await userEvent.type(qtyInput, "1");
+      fireEvent.change(qtyInput, { target: { value: "1" } });
+      fireEvent.change(priceInput, { target: { value: "10000" } });
+      fireEvent.change(discountInput, { target: { value: "10" } });
+      fireEvent.change(taxInput, { target: { value: "18" } });
 
-      await userEvent.triple_click(priceInput);
-      await userEvent.type(priceInput, "10000");
-
-      await userEvent.triple_click(discountInput);
-      await userEvent.type(discountInput, "10");
-
-      await userEvent.triple_click(taxInput);
-      await userEvent.type(taxInput, "18");
-
-      // total = 9000 + 1620 = 10620
+      // total = 9000 + 1620 = 10620.
+      // ₹10,620.00 appears in both the line-item total column and the Grand
+      // Total row in the totals panel.  We use getAllByText to allow multiple
+      // matches and assert that at least one is present.
       await waitFor(() => {
-        expect(screen.getByText(/₹10,620\.00|10,620\.00/)).toBeInTheDocument();
+        expect(screen.getAllByText(/₹10,620\.00|10,620\.00/).length).toBeGreaterThan(0);
       });
     });
   });
@@ -351,20 +344,14 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       const [qty0, price0, tax0, , qty1, price1, tax1] = allNumberInputs;
 
       // Row 1: 1 × ₹5,000 @ 18% GST → tax = ₹900
-      await userEvent.triple_click(qty0);
-      await userEvent.type(qty0, "1");
-      await userEvent.triple_click(price0);
-      await userEvent.type(price0, "5000");
-      await userEvent.triple_click(tax0);
-      await userEvent.type(tax0, "18");
+      fireEvent.change(qty0, { target: { value: "1" } });
+      fireEvent.change(price0, { target: { value: "5000" } });
+      fireEvent.change(tax0, { target: { value: "18" } });
 
       // Row 2: 1 × ₹3,500 @ 5% GST → tax = ₹175
-      await userEvent.triple_click(qty1);
-      await userEvent.type(qty1, "1");
-      await userEvent.triple_click(price1);
-      await userEvent.type(price1, "3500");
-      await userEvent.triple_click(tax1);
-      await userEvent.type(tax1, "5");
+      fireEvent.change(qty1, { target: { value: "1" } });
+      fireEvent.change(price1, { target: { value: "3500" } });
+      fireEvent.change(tax1, { target: { value: "5" } });
 
       // Total tax = 900 + 175 = 1075
       await waitFor(() => {

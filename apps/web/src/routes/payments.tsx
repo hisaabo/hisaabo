@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect, useCallback } from "react";
-import { trpc } from "@/lib/trpc";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -20,6 +20,223 @@ import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 export const Route = createFileRoute("/payments")({
   component: PaymentsPage,
 });
+
+// ── Smart auto-assignment banner ──────────────────────────────────────────────
+
+const SECONDS_PER_MANUAL_ASSIGN = 75;
+
+function getAutoAssignKey(businessId: string) {
+  return `hisaabo_autoassign_shown_${businessId}`;
+}
+
+function formatTimeSaved(assignedCount: number): string {
+  const totalSeconds = assignedCount * SECONDS_PER_MANUAL_ASSIGN;
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 60) return `~${minutes} minute${minutes !== 1 ? "s" : ""}`;
+  const hours = Math.round(minutes / 60);
+  return `~${hours} hour${hours !== 1 ? "s" : ""}`;
+}
+
+// Maximum payment amount auto-assigned without confirmation (safety guardrail)
+const AUTO_ASSIGN_AMOUNT_LIMIT = "50000.00";
+
+type AssignmentMap = {
+  mode: "cash" | "upi" | "bank";
+  bankAccountId: string;
+  accountName: string;
+  paymentIds: string[];
+};
+
+function SmartAssignBanner({ onAssigned }: { onAssigned: () => void }) {
+  const businessId = getBusinessId() ?? "";
+  const bannerKey = getAutoAssignKey(businessId);
+
+  // One-time check: has this banner already been shown for this business?
+  const alreadyShown = businessId ? !!localStorage.getItem(bannerKey) : true;
+
+  const [bannerState, setBannerState] = useState<
+    | { status: "idle" }
+    | { status: "assigning" }
+    | { status: "done"; assignedCount: number }
+    | { status: "dismissed" }
+  >({ status: "idle" });
+
+  // Prevent the effect from firing more than once per mount
+  const didRunRef = useRef(false);
+
+  const { data: untrackedData, isSuccess: untrackedReady } =
+    trpc.payment.untrackedPayments.useQuery(
+      { page: 1, limit: 200 },
+      { enabled: !alreadyShown && bannerState.status === "idle" }
+    );
+
+  const { data: accounts, isSuccess: accountsReady } =
+    trpc.bankAccount.list.useQuery(undefined, {
+      enabled: !alreadyShown && bannerState.status === "idle",
+    });
+
+  const utils = trpc.useUtils();
+
+  const assignMutation = trpc.payment.assignAccount.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  useEffect(() => {
+    if (alreadyShown) return;
+    if (!untrackedReady || !accountsReady) return;
+    if (didRunRef.current) return;
+    if (bannerState.status !== "idle") return;
+
+    const payments = untrackedData?.data ?? [];
+    const totalUntracked = untrackedData?.total ?? 0;
+    if (totalUntracked === 0 || payments.length === 0) return;
+
+    // Build mode-to-account mapping — only for unambiguous (single-account) cases
+    const cashAccounts = (accounts ?? []).filter((a) => a.accountType === "cash");
+    const upiAccounts = (accounts ?? []).filter((a) => a.accountType === "upi");
+    const bankAccounts = (accounts ?? []).filter(
+      (a) => a.accountType === "savings" || a.accountType === "current"
+    );
+
+    const modeAccountMap: Partial<Record<"cash" | "upi" | "bank", string>> = {};
+    if (cashAccounts.length === 1) modeAccountMap.cash = cashAccounts[0].id;
+    if (upiAccounts.length === 1) modeAccountMap.upi = upiAccounts[0].id;
+    if (bankAccounts.length === 1) modeAccountMap.bank = bankAccounts[0].id;
+
+    if (Object.keys(modeAccountMap).length === 0) return;
+
+    // Group payments by mode, filter to mappable + within amount guardrail
+    const groups: AssignmentMap[] = [];
+    for (const [mode, accountId] of Object.entries(modeAccountMap) as [
+      "cash" | "upi" | "bank",
+      string
+    ][]) {
+      const matchingPayments = payments.filter(
+        (p) =>
+          p.mode === mode &&
+          parseFloat(p.amount) <= parseFloat(AUTO_ASSIGN_AMOUNT_LIMIT)
+      );
+      if (matchingPayments.length === 0) continue;
+
+      const accountName =
+        (accounts ?? []).find((a) => a.id === accountId)?.accountName ?? accountId;
+
+      groups.push({
+        mode,
+        bankAccountId: accountId,
+        accountName,
+        paymentIds: matchingPayments.map((p) => p.id),
+      });
+    }
+
+    if (groups.length === 0) return;
+
+    didRunRef.current = true;
+
+    // Run all assignments in parallel
+    setBannerState({ status: "assigning" });
+
+    Promise.all(
+      groups.map((g) =>
+        assignMutation.mutateAsync({
+          paymentIds: g.paymentIds,
+          bankAccountId: g.bankAccountId,
+        })
+      )
+    )
+      .then((results) => {
+        const totalAssigned = results.reduce((sum, r) => sum + r.assigned, 0);
+        if (totalAssigned > 0) {
+          utils.payment.list.invalidate();
+          utils.payment.untrackedPayments.invalidate();
+          utils.bankAccount.list.invalidate();
+          utils.bankAccount.summary.invalidate();
+          setBannerState({ status: "done", assignedCount: totalAssigned });
+          onAssigned();
+        } else {
+          setBannerState({ status: "dismissed" });
+        }
+      })
+      .catch(() => {
+        setBannerState({ status: "dismissed" });
+      });
+  }, [alreadyShown, untrackedReady, accountsReady, untrackedData, accounts]);
+
+  function dismiss() {
+    if (businessId) localStorage.setItem(bannerKey, "1");
+    setBannerState({ status: "dismissed" });
+  }
+
+  if (alreadyShown) return null;
+  if (bannerState.status === "idle" || bannerState.status === "assigning") return null;
+  if (bannerState.status === "dismissed") return null;
+  if (bannerState.status !== "done") return null;
+
+  const { assignedCount } = bannerState;
+  const timeSaved = formatTimeSaved(assignedCount);
+
+  return (
+    <div className="mb-4 animate-milestone-enter" role="status" aria-live="polite">
+      <div className="px-4 py-3.5 rounded-xl border border-brand-200 bg-brand-50 dark:bg-brand-950/20 dark:border-brand-800/50">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            {/* Star icon */}
+            <svg
+              className="w-4 h-4 text-brand-600 dark:text-brand-400 shrink-0 mt-0.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
+              />
+            </svg>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-brand-700 dark:text-brand-300 mb-0.5">
+                Smart Assignment
+              </p>
+              <p className="text-sm text-brand-600 dark:text-brand-400 leading-snug">
+                We auto-assigned{" "}
+                <span className="font-semibold">{assignedCount}</span>{" "}
+                {assignedCount === 1 ? "payment" : "payments"} to{" "}
+                {assignedCount === 1 ? "its" : "their"} matching bank{" "}
+                {assignedCount === 1 ? "account" : "accounts"} based on payment
+                mode. That&apos;s{" "}
+                <span className="font-semibold">{timeSaved}</span> of manual
+                work saved.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={dismiss}
+            className="shrink-0 p-1 rounded-lg text-brand-500 hover:text-brand-700 hover:bg-brand-100 dark:hover:bg-brand-900/40 transition-colors"
+            aria-label="Dismiss smart assignment notification"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const modeLabels: Record<string, string> = {
   cash: "Cash",
@@ -139,6 +356,9 @@ function PaymentsPage() {
           </button>
         }
       />
+
+      {/* Smart auto-assign banner — one-time per business, shown only when assignments fire */}
+      <SmartAssignBanner onAssigned={() => utils.payment.list.invalidate()} />
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-3 flex-wrap">
