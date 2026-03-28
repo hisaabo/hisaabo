@@ -14,11 +14,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
-import { haptic } from "../../../../src/lib/haptics";
-import { DatePickerField } from "../../../../src/components/ui";
+import { trpc } from "../../../src/lib/trpc";
+import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { haptic } from "../../../src/lib/haptics";
+import { DatePickerField } from "../../../src/components/ui";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -127,23 +127,43 @@ export default function CreatePaymentScreen() {
     undefined
   );
 
-  const { data: defaultAccountData } = trpc.payment.defaultAccount.useQuery(undefined);
+  // Party-aware default account: uses party's last payment method, falls back to business default
+  const { data: defaultAccountData } = trpc.payment.defaultAccount.useQuery(
+    selectedParty ? { partyId: selectedParty.id } : undefined,
+    { enabled: !!bankAccountsData }
+  );
 
   const { data: unpaidInvoices, isLoading: invoicesLoading } = trpc.payment.unpaidInvoices.useQuery(
     { partyId: selectedParty?.id ?? "" },
     { enabled: !!selectedParty }
   );
 
-  // ── Auto-select default account ──────────────────────────────────────────
+  // ── Auto-select default account (re-evaluates when party changes) ──────
+
+  const [partyAccountHint, setPartyAccountHint] = useState<string | null>(null);
+  const lastAutoSelectedPartyId = useRef<string | null>(null);
 
   useEffect(() => {
-    if (selectedAccountId) return;
-    if (defaultAccountData) {
+    if (!defaultAccountData) return;
+    // Only auto-switch when party changes (not on initial mount after manual selection)
+    const isPartySwitch = selectedParty?.id !== lastAutoSelectedPartyId.current;
+    if (isPartySwitch || !selectedAccountId) {
       setSelectedAccountId(defaultAccountData.id);
-    } else if (bankAccountsData && bankAccountsData.length > 0) {
+      lastAutoSelectedPartyId.current = selectedParty?.id ?? null;
+      // Show hint if this was party-specific (not the global default)
+      if (selectedParty && defaultAccountData.accountName) {
+        setPartyAccountHint(`${selectedParty.name} usually pays via ${defaultAccountData.accountName}`);
+        setTimeout(() => setPartyAccountHint(null), 4000);
+      }
+    }
+  }, [defaultAccountData, selectedParty?.id]);
+
+  // Fallback to first account if nothing selected
+  useEffect(() => {
+    if (!selectedAccountId && bankAccountsData && bankAccountsData.length > 0 && !defaultAccountData) {
       setSelectedAccountId(bankAccountsData[0].id);
     }
-  }, [defaultAccountData, bankAccountsData, selectedAccountId]);
+  }, [bankAccountsData, selectedAccountId, defaultAccountData]);
 
   // ── Auto-fill amount when invoices are checked ─────────────────────────
 
@@ -286,7 +306,7 @@ export default function CreatePaymentScreen() {
     checkedInvoices.size === unpaidInvoices.length;
 
   return (
-    <SafeAreaView style={styles.container} edges={["bottom"]}>
+    <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {/* Party Selector */}
         <View style={styles.section}>
@@ -350,6 +370,9 @@ export default function CreatePaymentScreen() {
                 );
               })}
             </View>
+          )}
+          {partyAccountHint && (
+            <Text style={styles.partyHint}>{partyAccountHint}</Text>
           )}
         </View>
 
@@ -627,6 +650,17 @@ export default function CreatePaymentScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   content: { padding: 16, paddingBottom: 40 },
   section: { marginBottom: 20 },
   label: {
@@ -730,6 +764,14 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "600",
     color: colors.brand,
+  },
+
+  partyHint: {
+    fontSize: 11,
+    color: colors.brand,
+    fontStyle: "italic",
+    marginTop: 6,
+    paddingLeft: 2,
   },
 
   // ── Invoice rows ─────────────────────────────────────────────────────────

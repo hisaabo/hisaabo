@@ -101,12 +101,16 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
+        name="(payments)"
+        options={{
+          title: "Payments",
+          tabBarIcon: ({ color, size }) => <Ionicons name="card-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="(items)"
         options={{
-          title: "Items",
-          tabBarIcon: ({ color, size }) => <Ionicons name="cube-outline" size={size} color={color} />,
-          tabBarBadge: lowStockCount && lowStockCount > 0 ? lowStockCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: colors.danger, fontSize: 10 },
+          href: null, // Hidden from tab bar — accessible via More
         }}
       />
       <Tabs.Screen

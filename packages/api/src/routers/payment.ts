@@ -94,38 +94,62 @@ export const paymentRouter = router({
 
   // Return the default/most-recently-used bank account for this business
   defaultAccount: viewerProcedure
-    .query(async ({ ctx }) => {
+    .input(z.object({ partyId: z.string().uuid().optional() }).optional())
+    .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "BankAccount");
-      // Look at the last 5 payments that have a bankAccountId
-      const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
-        .from(payments)
-        .where(
-          and(
-            eq(payments.businessId, ctx.businessId),
-            sql`${payments.bankAccountId} IS NOT NULL`,
-          )
-        )
-        .orderBy(desc(payments.paymentDate))
-        .limit(5);
-
-      // Find most common bankAccountId
-      const freq: Record<string, number> = {};
-      for (const p of recentPayments) {
-        if (p.bankAccountId) {
-          freq[p.bankAccountId] = (freq[p.bankAccountId] ?? 0) + 1;
-        }
-      }
 
       let defaultAccountId: string | null = null;
-      let maxFreq = 0;
-      for (const [id, count] of Object.entries(freq)) {
-        if (count > maxFreq) {
-          maxFreq = count;
-          defaultAccountId = id;
+
+      // Priority 1: If partyId provided, check how this party has been paying
+      if (input?.partyId) {
+        const partyPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
+          .from(payments)
+          .where(
+            and(
+              eq(payments.businessId, ctx.businessId),
+              eq(payments.partyId, input.partyId),
+              sql`${payments.bankAccountId} IS NOT NULL`,
+            )
+          )
+          .orderBy(desc(payments.paymentDate))
+          .limit(3);
+
+        if (partyPayments.length > 0 && partyPayments[0].bankAccountId) {
+          // Use the most recent payment method for this party
+          defaultAccountId = partyPayments[0].bankAccountId;
         }
       }
 
-      // Fall back to the isDefault account
+      // Priority 2: Business-wide most common recent payment method
+      if (!defaultAccountId) {
+        const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
+          .from(payments)
+          .where(
+            and(
+              eq(payments.businessId, ctx.businessId),
+              sql`${payments.bankAccountId} IS NOT NULL`,
+            )
+          )
+          .orderBy(desc(payments.paymentDate))
+          .limit(5);
+
+        const freq: Record<string, number> = {};
+        for (const p of recentPayments) {
+          if (p.bankAccountId) {
+            freq[p.bankAccountId] = (freq[p.bankAccountId] ?? 0) + 1;
+          }
+        }
+
+        let maxFreq = 0;
+        for (const [id, count] of Object.entries(freq)) {
+          if (count > maxFreq) {
+            maxFreq = count;
+            defaultAccountId = id;
+          }
+        }
+      }
+
+      // Priority 3: Fall back to the isDefault account
       if (!defaultAccountId) {
         const [defAccount] = await ctx.db.select({ id: bankAccounts.id })
           .from(bankAccounts)

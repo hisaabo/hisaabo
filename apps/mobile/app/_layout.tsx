@@ -2,12 +2,12 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {
   useColorScheme,
   View,
-  Text,
   StyleSheet,
   Animated,
   Easing,
   Dimensions,
   AppState,
+  Alert,
 } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -17,13 +17,14 @@ import { useAuthStore } from "../src/stores/auth";
 import { useBusinessStore } from "../src/stores/business";
 import { useBiometricStore } from "../src/stores/biometric";
 import { LockScreen } from "../src/components/LockScreen";
+import { vanillaTRPC } from "../src/lib/trpc";
 
 // Keep the native splash screen visible while we hydrate stores
 SplashScreen.preventAutoHideAsync();
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-/* ─── Brand Colors ───────────────────────────────────────────────────────── */
+/* --- Brand Colors -------------------------------------------------------- */
 const C = {
   bg: "#0f0f1a",
   brand: "#5b5bd6",
@@ -34,7 +35,7 @@ const C = {
   textMuted: "#6b7280",
 } as const;
 
-/* ─── Animated Background Mesh ───────────────────────────────────────────── */
+/* --- Animated Background Mesh -------------------------------------------- */
 function SplashBackgroundMesh({
   blob1Anim,
   blob2Anim,
@@ -92,7 +93,7 @@ function SplashBackgroundMesh({
   );
 }
 
-/* ─── Splash Logo Icon (4-square brand pattern) ─────────────────────────── */
+/* --- Splash Logo Icon (4-square brand pattern) --------------------------- */
 function SplashLogoIcon({ size = 72 }: { size?: number }) {
   const squareSize = (size - 16) / 2 - 2;
   const radius = squareSize * 0.22;
@@ -159,7 +160,7 @@ function SplashLogoIcon({ size = 72 }: { size?: number }) {
   );
 }
 
-/* ─── Animated Splash Screen ─────────────────────────────────────────────── */
+/* --- Animated Splash Screen ---------------------------------------------- */
 function AnimatedSplash({
   ready,
   onFinish,
@@ -378,7 +379,7 @@ function AnimatedSplash({
   );
 }
 
-/* ─── Splash Styles ──────────────────────────────────────────────────────── */
+/* --- Splash Styles ------------------------------------------------------- */
 const splashStyles = StyleSheet.create({
   splashContainer: {
     ...StyleSheet.absoluteFillObject,
@@ -448,29 +449,53 @@ const splashStyles = StyleSheet.create({
   },
 });
 
-/* ─── Root Layout ────────────────────────────────────────────────────────── */
+/* --- Auth Gate States ---------------------------------------------------- */
+/**
+ * The root layout uses a state machine to gate access:
+ *
+ *   loading  - stores are hydrating, splash is visible
+ *   locked   - user has a token AND biometric/PIN is enabled;
+ *              the lock screen renders as the ONLY content (no app underneath)
+ *   ready    - user is authenticated locally (and server session verified);
+ *              render the full app
+ *   login    - no token OR server session expired; redirect to login
+ */
+type AuthGateState = "loading" | "locked" | "ready" | "login";
+
 /** How long the app must be in background before re-locking (ms) */
 const RELOCK_THRESHOLD = 30_000;
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  // Auth store
   const hydrate = useAuthStore((s) => s.hydrate);
   const isHydrated = useAuthStore((s) => s.isHydrated);
+  const token = useAuthStore((s) => s.token);
+  const logout = useAuthStore((s) => s.logout);
+
+  // Business store
   const hydrateBusinessStore = useBusinessStore((s) => s.hydrate);
 
+  // Biometric store
   const hydrateBiometric = useBiometricStore((s) => s.hydrate);
   const biometricHydrated = useBiometricStore((s) => s.isHydrated);
-  const isLocked = useBiometricStore((s) => s.isLocked);
   const biometricEnabled = useBiometricStore((s) => s.biometricEnabled);
   const pinEnabled = useBiometricStore((s) => s.pinEnabled);
   const lockApp = useBiometricStore((s) => s.lock);
+  const unlockApp = useBiometricStore((s) => s.unlock);
 
+  // Gate state machine
+  const [authGate, setAuthGate] = useState<AuthGateState>("loading");
+
+  // Splash animation state
   const [appReady, setAppReady] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
   // Track when the app went to background for re-lock logic
   const lastBackground = useRef(Date.now());
 
+  // --- Step 1: Hydrate all stores ----------------------------------------
   useEffect(() => {
     async function prepare() {
       await Promise.all([hydrate(), hydrateBusinessStore(), hydrateBiometric()]);
@@ -482,7 +507,90 @@ export default function RootLayout() {
     prepare();
   }, []);
 
-  // Re-lock when app returns from background after threshold
+  // --- Step 2: Determine gate state after hydration ----------------------
+  useEffect(() => {
+    if (!isHydrated || !biometricHydrated) return;
+    // Only set initial gate state when still in loading
+    if (authGate !== "loading") return;
+
+    if (!token) {
+      setAuthGate("login");
+    } else if (biometricEnabled || pinEnabled) {
+      // User has a token AND local auth is enabled -- show lock screen FIRST.
+      // No app content will render until the user authenticates locally AND
+      // the server session is verified.
+      setAuthGate("locked");
+    } else {
+      // No local auth -- verify token silently then show app.
+      // The (app)/_layout.tsx already calls auth.me, so we can go straight
+      // to ready. If the token is expired, (app)/_layout.tsx will redirect
+      // to login.
+      verifyTokenAndProceed();
+    }
+  }, [isHydrated, biometricHydrated]);
+
+  // --- Token verification helper -----------------------------------------
+  const verifyTokenAndProceed = useCallback(async () => {
+    try {
+      const result = await vanillaTRPC.auth.me.query();
+      if (result.user) {
+        unlockApp();
+        setAuthGate("ready");
+      } else {
+        // Token exists but server says no user -- session expired
+        await logout();
+        setAuthGate("login");
+        Alert.alert(
+          "Session expired",
+          "Your session has expired. Please sign in again."
+        );
+      }
+    } catch {
+      // Network error -- for a financial app we could require network,
+      // but to avoid blocking users on bad connections, allow access.
+      // The app layout's auth.me query will handle it gracefully.
+      unlockApp();
+      setAuthGate("ready");
+    }
+  }, [logout, unlockApp]);
+
+  // --- Lock screen callbacks ---------------------------------------------
+  /**
+   * Called by LockScreen after successful biometric/PIN authentication.
+   * Verifies the server session before allowing access to app content.
+   */
+  const handleLockScreenUnlock = useCallback(async () => {
+    try {
+      const result = await vanillaTRPC.auth.me.query();
+      if (result.user) {
+        unlockApp();
+        setAuthGate("ready");
+      } else {
+        // Token expired while the app was locked
+        await logout();
+        setAuthGate("login");
+        Alert.alert(
+          "Session expired",
+          "Your session has expired. Please sign in again."
+        );
+      }
+    } catch {
+      // Network error -- allow access, the app will handle it gracefully
+      unlockApp();
+      setAuthGate("ready");
+    }
+  }, [logout, unlockApp]);
+
+  /**
+   * Called when the user taps "Sign out" on the lock screen.
+   */
+  const handleLockScreenSignOut = useCallback(async () => {
+    await logout();
+    unlockApp();
+    setAuthGate("login");
+  }, [logout, unlockApp]);
+
+  // --- Re-lock when returning from background ----------------------------
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "background") {
@@ -490,16 +598,28 @@ export default function RootLayout() {
       }
       if (state === "active") {
         const elapsed = Date.now() - lastBackground.current;
-        if (elapsed > RELOCK_THRESHOLD) {
+        if (
+          elapsed > RELOCK_THRESHOLD &&
+          (biometricEnabled || pinEnabled) &&
+          authGate === "ready"
+        ) {
           lockApp();
+          setAuthGate("locked");
         }
       }
     });
     return () => sub.remove();
-  }, [lockApp]);
+  }, [lockApp, biometricEnabled, pinEnabled, authGate]);
 
-  // Don't render app content until auth + biometric stores have hydrated
-  if (!isHydrated || !biometricHydrated) {
+  // --- When the user logs out from within the app, reset gate state ------
+  useEffect(() => {
+    if (isHydrated && !token && authGate === "ready") {
+      setAuthGate("login");
+    }
+  }, [token, isHydrated, authGate]);
+
+  // --- Render: splash while loading / hydrating --------------------------
+  if (authGate === "loading" || !splashDone) {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         <AnimatedSplash ready={appReady} onFinish={() => setSplashDone(true)} />
@@ -507,6 +627,24 @@ export default function RootLayout() {
     );
   }
 
+  // --- Render: lock screen as the ONLY content (gate, not overlay) -------
+  if (authGate === "locked") {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <StatusBar style="light" />
+        <LockScreen
+          onUnlock={handleLockScreenUnlock}
+          onSignOut={handleLockScreenSignOut}
+        />
+      </View>
+    );
+  }
+
+  // --- Render: login or ready -- both go through the router --------------
+  // When authGate is "login", the Stack renders (auth) routes.
+  // When authGate is "ready", the Stack renders (app) routes.
+  // The (app)/_layout.tsx still has its own token check + Redirect to login
+  // as a safety net, and handles business/tenant selection.
   return (
     <TRPCProvider>
       <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
@@ -514,12 +652,6 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
       </Stack>
-      {/* Lock screen overlay — renders on top when locked */}
-      {isLocked && (biometricEnabled || pinEnabled) && splashDone && <LockScreen />}
-      {/* Custom animated splash renders on top until animation completes */}
-      {!splashDone && (
-        <AnimatedSplash ready={appReady} onFinish={() => setSplashDone(true)} />
-      )}
     </TRPCProvider>
   );
 }

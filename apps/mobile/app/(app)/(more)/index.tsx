@@ -1,9 +1,13 @@
-import { View, Text, StyleSheet, ScrollView, Dimensions } from "react-native";
+import { useState, useEffect } from "react";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as SecureStore from "expo-secure-store";
 import { colors } from "../../../src/lib/theme";
 import { PressableRow } from "../../../src/components/ui";
+
+/* ── Menu items ──────────────────────────────────────────────── */
 
 interface MenuItem {
   label: string;
@@ -11,172 +15,155 @@ interface MenuItem {
   route: string;
 }
 
-interface MenuSection {
-  title: string;
-  items: MenuItem[];
-}
-
-const MENU_SECTIONS: MenuSection[] = [
-  {
-    title: "Daily Use",
-    items: [
-      { label: "Payments", icon: "card-outline", route: "/(more)/payments" },
-      { label: "Expenses", icon: "receipt-outline", route: "/(more)/expenses" },
-    ],
-  },
-  {
-    title: "Banking",
-    items: [
-      { label: "Cash & Bank", icon: "wallet-outline", route: "/(more)/bank" },
-    ],
-  },
-  {
-    title: "Documents",
-    items: [
-      { label: "Quotations", icon: "document-text-outline", route: "/(more)/quotations" },
-      { label: "Credit Notes", icon: "return-down-back-outline", route: "/(more)/credit-notes" },
-      { label: "Delivery Challans", icon: "car-outline", route: "/(more)/delivery-challans" },
-      { label: "Store Orders", icon: "storefront-outline", route: "/(more)/store-orders" },
-    ],
-  },
-  {
-    title: "Business",
-    items: [
-      { label: "GST Reports", icon: "pie-chart-outline", route: "/(more)/gst" },
-      { label: "Reports", icon: "bar-chart-outline", route: "/(more)/reports" },
-      { label: "Settings", icon: "settings-outline", route: "/(more)/settings" },
-    ],
-  },
+const ALL_ITEMS: MenuItem[] = [
+  { label: "Items", icon: "cube-outline", route: "/(items)" },
+  { label: "Expenses", icon: "receipt-outline", route: "/(more)/expenses" },
+  { label: "Cash & Bank", icon: "wallet-outline", route: "/(more)/bank" },
+  { label: "Quotations", icon: "document-text-outline", route: "/(more)/quotations" },
+  { label: "Credit Notes", icon: "return-down-back-outline", route: "/(more)/credit-notes" },
+  { label: "Delivery Challans", icon: "car-outline", route: "/(more)/delivery-challans" },
+  { label: "Store Orders", icon: "storefront-outline", route: "/(more)/store-orders" },
+  { label: "GST Reports", icon: "pie-chart-outline", route: "/(more)/gst" },
+  { label: "Reports", icon: "bar-chart-outline", route: "/(more)/reports" },
+  { label: "Settings", icon: "settings-outline", route: "/(more)/settings" },
 ];
 
-const { width } = Dimensions.get("window");
-const PADDING = 16;
-const COLUMNS = 3;
-const GAP = 12;
-const CARD_WIDTH = (width - PADDING * 2 - GAP * (COLUMNS - 1)) / COLUMNS;
+const RECENT_KEY = "hisaabo_recent_more";
+const MAX_RECENT = 4;
 
-// For the Daily Use section, use 2-column larger cards for quicker access
-const CARD_WIDTH_2COL = (width - PADDING * 2 - GAP) / 2;
+/* ── Recent tracking ─────────────────────────────────────────── */
+
+async function getRecent(): Promise<string[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(RECENT_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+async function trackRecent(route: string) {
+  try {
+    const recent = await getRecent();
+    const updated = [route, ...recent.filter((r) => r !== route)].slice(0, MAX_RECENT);
+    await SecureStore.setItemAsync(RECENT_KEY, JSON.stringify(updated));
+  } catch { /* non-fatal */ }
+}
+
+/* ── Screen ──────────────────────────────────────────────────── */
 
 export default function MoreScreen() {
   const router = useRouter();
+  const [recentRoutes, setRecentRoutes] = useState<string[]>([]);
+
+  useEffect(() => {
+    getRecent().then(setRecentRoutes);
+  }, []);
+
+  function handlePress(item: MenuItem) {
+    trackRecent(item.route);
+    setRecentRoutes((prev) => [item.route, ...prev.filter((r) => r !== item.route)].slice(0, MAX_RECENT));
+    router.push(item.route as any);
+  }
+
+  // Split items into recent and the rest
+  const recentItems = recentRoutes
+    .map((route) => ALL_ITEMS.find((i) => i.route === route))
+    .filter((i): i is MenuItem => !!i);
+
+  const recentSet = new Set(recentRoutes);
+  const otherItems = ALL_ITEMS.filter((i) => !recentSet.has(i.route));
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>More</Text>
-        <Text style={styles.subtitle}>All features & settings</Text>
+    <SafeAreaView style={s.container} edges={["top"]}>
+      <View style={s.header}>
+        <Text style={s.title}>More</Text>
       </View>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {MENU_SECTIONS.map((section) => {
-          const isDailyUse = section.title === "Daily Use";
-          return (
-            <View key={section.title} style={styles.section}>
-              <Text style={styles.sectionTitle}>{section.title}</Text>
-              <View style={[styles.grid, isDailyUse && styles.gridTwoCol]}>
-                {section.items.map((item) => (
-                  <PressableRow
-                    key={item.label}
-                    style={[
-                      styles.card,
-                      { width: isDailyUse ? CARD_WIDTH_2COL : CARD_WIDTH },
-                    ]}
-                    onPress={() => router.push(item.route as any)}
-                  >
-                    <View style={[styles.iconWrapper, isDailyUse && styles.iconWrapperLarge]}>
-                      <Ionicons
-                        name={item.icon as any}
-                        size={isDailyUse ? 28 : 24}
-                        color={colors.brand}
-                      />
-                    </View>
-                    <Text style={[styles.cardLabel, isDailyUse && styles.cardLabelLarge]}>
-                      {item.label}
-                    </Text>
-                  </PressableRow>
-                ))}
-              </View>
+      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+        {/* Recent section */}
+        {recentItems.length > 0 && (
+          <View style={s.section}>
+            <Text style={s.sectionTitle}>Recent</Text>
+            <View style={s.grid}>
+              {recentItems.map((item) => (
+                <GridItem key={item.route} item={item} onPress={() => handlePress(item)} />
+              ))}
             </View>
-          );
-        })}
+          </View>
+        )}
+
+        {/* All other items */}
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>{recentItems.length > 0 ? "All Features" : "Features"}</Text>
+          <View style={s.grid}>
+            {otherItems.map((item) => (
+              <GridItem key={item.route} item={item} onPress={() => handlePress(item)} />
+            ))}
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  header: {
-    paddingHorizontal: PADDING,
-    paddingTop: 20,
-    paddingBottom: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  content: {
-    paddingHorizontal: PADDING,
-    paddingBottom: 32,
-  },
-  section: {
-    marginTop: 20,
-  },
+/* ── Grid item ───────────────────────────────────────────────── */
+
+function GridItem({ item, onPress }: { item: MenuItem; onPress: () => void }) {
+  return (
+    <PressableRow style={s.card} onPress={onPress}>
+      <View style={s.iconWrap}>
+        <Ionicons name={item.icon as any} size={22} color={colors.brand} />
+      </View>
+      <Text style={s.cardLabel} numberOfLines={2}>{item.label}</Text>
+    </PressableRow>
+  );
+}
+
+/* ── Styles ──────────────────────────────────────────────────── */
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
+  header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
+  title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, letterSpacing: -0.5 },
+  content: { paddingHorizontal: 16, paddingBottom: 32 },
+
+  section: { marginTop: 20 },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
     color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 0.8,
     marginBottom: 10,
   },
+
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: GAP,
-  },
-  gridTwoCol: {
-    // 2-column layout — items stretch evenly
+    gap: 10,
   },
   card: {
+    width: "48%",
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
   },
-  iconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+  iconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapperLarge: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-  },
   cardLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "600",
     color: colors.textPrimary,
-    textAlign: "center",
-    lineHeight: 16,
-  },
-  cardLabelLarge: {
-    fontSize: 14,
+    flex: 1,
   },
 });

@@ -1,5 +1,10 @@
 import { createTRPCReact } from "@trpc/react-query";
-import { httpBatchLink, splitLink, httpLink } from "@trpc/client";
+import {
+  createTRPCClient as createVanillaClient,
+  httpBatchLink,
+  splitLink,
+  httpLink,
+} from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 import { getTokenSync } from "./auth";
@@ -39,3 +44,25 @@ export function createTRPCClient() {
     ],
   });
 }
+
+/**
+ * Vanilla (non-React) tRPC client for imperative calls outside the
+ * component tree — e.g. verifying a session token from the root layout
+ * before any providers are mounted.
+ */
+export const vanillaTRPC = createVanillaClient<AppRouter>({
+  links: [
+    httpLink({
+      url: `${getApiUrl()}/api/trpc`,
+      transformer: superjson,
+      headers() {
+        const headers: Record<string, string> = {};
+        const token = getTokenSync();
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+        return headers;
+      },
+    }),
+  ],
+});

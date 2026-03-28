@@ -9,8 +9,8 @@ export default function InvoicesLayout() {
     <Stack screenOptions={{ headerStyle, headerTintColor, headerShadowVisible: false }}>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="[id]" options={{ headerTitle: "", headerBackTitle: "Invoices" }} />
-      <Stack.Screen name="create" options={{ headerTitle: "New Invoice", presentation: "modal" }} />
-      <Stack.Screen name="edit" options={{ headerTitle: "Edit Invoice", presentation: "modal" }} />
+      <Stack.Screen name="create" options={{ headerShown: false, presentation: "modal" }} />
+      <Stack.Screen name="edit" options={{ headerShown: false, presentation: "modal" }} />
     </Stack>
   );
 }

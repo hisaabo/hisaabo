@@ -90,7 +90,7 @@ export function RecordPaymentPanel({
   );
 
   const { data: defaultAccountData } = trpc.payment.defaultAccount.useQuery(
-    undefined,
+    partyId ? { partyId } : undefined,
     { enabled: open && !isEditMode }
   );
 

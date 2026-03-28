@@ -113,6 +113,7 @@ export default function BankAccountsScreen() {
                     <Text style={styles.accountName}>{item.accountName}</Text>
                     {item.isDefault && (
                       <View style={styles.defaultBadge}>
+                        <Ionicons name="star" size={9} color={colors.brand} />
                         <Text style={styles.defaultBadgeText}>Default</Text>
                       </View>
                     )}
@@ -128,6 +129,14 @@ export default function BankAccountsScreen() {
                     {formatCurrency(Math.abs(balance))}
                     {isNegative ? " Dr" : ""}
                   </Text>
+                  <TouchableOpacity
+                    style={styles.editBtn}
+                    onPress={() => router.push(`/(more)/bank/edit?id=${item.id}` as never)}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="create-outline" size={16} color={colors.textMuted} />
+                  </TouchableOpacity>
                 </View>
               </PressableRow>
             );
@@ -206,6 +215,25 @@ const styles = StyleSheet.create({
   balanceNegative: { color: colors.danger },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   badgeText: { fontSize: 11, fontWeight: "600" },
-  defaultBadge: { backgroundColor: colors.brandLight, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  defaultBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.brandLight,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
   defaultBadgeText: { fontSize: 10, fontWeight: "600", color: colors.brand },
+  editBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
 });

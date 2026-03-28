@@ -8,6 +8,7 @@ import {
   Easing,
   Dimensions,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useBiometricStore } from "../stores/biometric";
@@ -20,18 +21,30 @@ const PIN_LENGTH = 4;
 
 type Mode = "biometric" | "pin";
 
-export function LockScreen() {
+interface LockScreenProps {
+  /**
+   * Called after the user successfully authenticates locally (biometric or PIN).
+   * The parent is responsible for verifying the server session and calling
+   * biometricStore.unlock(). While this runs the lock screen shows a
+   * "Verifying..." spinner.
+   */
+  onUnlock: () => Promise<void>;
+  /** Called when the user taps "Sign out" on the lock screen. */
+  onSignOut: () => void;
+}
+
+export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
   const {
     biometricEnabled,
     pinEnabled,
     authenticate,
     verifyPin,
-    unlock,
   } = useBiometricStore();
 
   const [mode, setMode] = useState<Mode>(biometricEnabled ? "biometric" : "pin");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [verifying, setVerifying] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
 
   // Animations
@@ -71,18 +84,24 @@ export function LockScreen() {
     return () => pulse.stop();
   }, [glowAnim]);
 
-  const handleUnlockSuccess = useCallback(() => {
+  /**
+   * After a successful local authentication (biometric or PIN), show a
+   * "Verifying..." state and delegate to the parent's onUnlock which
+   * checks the server session.
+   */
+  const handleUnlockSuccess = useCallback(async () => {
     haptic.success();
-    // Fade out then unlock
-    Animated.timing(fadeAnim, {
-      toValue: 0,
-      duration: 250,
-      easing: Easing.in(Easing.ease),
-      useNativeDriver: true,
-    }).start(() => {
-      unlock();
-    });
-  }, [fadeAnim, unlock]);
+    setVerifying(true);
+    setError("");
+    try {
+      await onUnlock();
+    } catch {
+      // If the parent's onUnlock throws (e.g. session expired), it will
+      // have already handled navigation. Reset the verifying state so
+      // the lock screen is usable again if it's still mounted.
+      setVerifying(false);
+    }
+  }, [onUnlock]);
 
   const triggerShake = useCallback(() => {
     shakeAnim.setValue(0);
@@ -98,13 +117,14 @@ export function LockScreen() {
 
   // Auto-trigger biometric on mount / mode change
   useEffect(() => {
-    if (mode === "biometric") {
+    if (mode === "biometric" && !verifying) {
       attemptBiometric();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   const attemptBiometric = useCallback(async () => {
+    if (verifying) return;
     const success = await authenticate();
     if (success) {
       handleUnlockSuccess();
@@ -119,10 +139,11 @@ export function LockScreen() {
         setError("Authentication failed. Tap to try again.");
       }
     }
-  }, [authenticate, biometricFailCount, handleUnlockSuccess, pinEnabled]);
+  }, [authenticate, biometricFailCount, handleUnlockSuccess, pinEnabled, verifying]);
 
   // Handle PIN digit entry
   const handlePinDigit = useCallback((digit: string) => {
+    if (verifying) return;
     haptic.light();
     setError("");
     setPin((prev) => {
@@ -144,18 +165,34 @@ export function LockScreen() {
       }
       return newPin;
     });
-  }, [handleUnlockSuccess, triggerShake, verifyPin]);
+  }, [handleUnlockSuccess, triggerShake, verifyPin, verifying]);
 
   const handlePinDelete = useCallback(() => {
+    if (verifying) return;
     haptic.light();
     setError("");
     setPin((prev) => prev.slice(0, -1));
-  }, []);
+  }, [verifying]);
 
   const glowOpacity = glowAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0.06, 0.15],
   });
+
+  // Verifying state -- shown after successful local auth while token is checked
+  if (verifying) {
+    return (
+      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+        <Animated.View style={[styles.ambientGlow, { opacity: glowOpacity }]} />
+        <View style={styles.content}>
+          <LogoIcon size={64} />
+          <Text style={styles.brandName}>Hisaabo</Text>
+          <ActivityIndicator size="small" color={colors.brand} style={{ marginTop: 24 }} />
+          <Text style={styles.verifyingText}>Verifying session...</Text>
+        </View>
+      </Animated.View>
+    );
+  }
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
@@ -275,11 +312,16 @@ export function LockScreen() {
           )}
         </Animated.View>
       )}
+
+      {/* Sign out link — always visible at the bottom */}
+      <TouchableOpacity style={styles.signOutButton} onPress={onSignOut} activeOpacity={0.7}>
+        <Text style={styles.signOutText}>Sign out</Text>
+      </TouchableOpacity>
     </Animated.View>
   );
 }
 
-/* ── Mini Logo Icon (reused from splash pattern) ──────────── */
+/* -- Mini Logo Icon (reused from splash pattern) ------------ */
 
 function LogoIcon({ size = 64 }: { size?: number }) {
   const squareSize = (size - 12) / 2 - 2;
@@ -318,7 +360,7 @@ function LogoIcon({ size = 64 }: { size?: number }) {
   );
 }
 
-/* ── Styles ───────────────────────────────────────────── */
+/* -- Styles ------------------------------------------------- */
 
 const styles = StyleSheet.create({
   container: {
@@ -365,6 +407,11 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginBottom: 8,
   },
+  verifyingText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginTop: 12,
+  },
   errorText: {
     fontSize: 13,
     color: colors.danger,
@@ -397,6 +444,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     marginTop: 24,
+  },
+
+  // Sign out
+  signOutButton: {
+    position: "absolute",
+    bottom: 48,
+  },
+  signOutText: {
+    fontSize: 13,
+    color: colors.textMuted,
   },
 
   // PIN mode

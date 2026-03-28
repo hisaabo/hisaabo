@@ -163,6 +163,44 @@ export default function BankAccountDetailScreen() {
   const [showAddTx, setShowAddTx] = useState(false);
   const utils = trpc.useUtils();
 
+  const setDefaultMutation = trpc.bankAccount.update.useMutation({
+    onSuccess: () => {
+      haptic.success();
+      utils.bankAccount.getById.invalidate({ id: id! });
+      utils.bankAccount.list.invalidate();
+    },
+    onError: (err) => Alert.alert("Error", err.message),
+  });
+
+  const deleteMutation = trpc.bankAccount.delete.useMutation({
+    onSuccess: () => {
+      haptic.success();
+      utils.bankAccount.list.invalidate();
+      utils.bankAccount.summary.invalidate();
+      router.replace("/(more)/bank" as never);
+    },
+    onError: (err) => Alert.alert("Cannot Delete", err.message),
+  });
+
+  const handleSetDefault = () => {
+    setDefaultMutation.mutate({ id: id!, data: { isDefault: true } });
+  };
+
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete Account",
+      "Delete this account? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => deleteMutation.mutate({ id: id! }),
+        },
+      ]
+    );
+  };
+
   const { data: account, isLoading: accountLoading } = trpc.bankAccount.getById.useQuery(
     { id: id! },
     { enabled: !!id }
@@ -221,7 +259,27 @@ export default function BankAccountDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{account.accountName}</Text>
-        <View style={{ width: 40 }} />
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => router.push(`/(more)/bank/edit?id=${id}` as never)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="create-outline" size={20} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.headerIconBtn, styles.headerIconBtnDanger]}
+            onPress={handleDelete}
+            disabled={deleteMutation.isPending}
+            activeOpacity={0.7}
+          >
+            {deleteMutation.isPending ? (
+              <ActivityIndicator size={16} color={colors.danger} />
+            ) : (
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -236,7 +294,15 @@ export default function BankAccountDetailScreen() {
                 <Ionicons name={config.icon as any} size={28} color={config.color} />
               </View>
               <View style={styles.accountCardBody}>
-                <Text style={styles.accountName}>{account.accountName}</Text>
+                <View style={styles.accountNameRow}>
+                  <Text style={styles.accountName}>{account.accountName}</Text>
+                  {account.isDefault && (
+                    <View style={styles.defaultBadge}>
+                      <Ionicons name="star" size={10} color={colors.brand} />
+                      <Text style={styles.defaultBadgeText}>Default</Text>
+                    </View>
+                  )}
+                </View>
                 {account.bankName ? <Text style={styles.bankName}>{account.bankName}</Text> : null}
                 {account.accountNumber ? (
                   <Text style={styles.accountNumber}>Account: {account.accountNumber}</Text>
@@ -255,6 +321,23 @@ export default function BankAccountDetailScreen() {
                 <Text style={styles.balanceLabel}>Current Balance</Text>
               </View>
             </View>
+
+            {/* Set as Default (only when not already default) */}
+            {!account.isDefault && (
+              <TouchableOpacity
+                style={styles.setDefaultBtn}
+                onPress={handleSetDefault}
+                disabled={setDefaultMutation.isPending}
+                activeOpacity={0.8}
+              >
+                {setDefaultMutation.isPending ? (
+                  <ActivityIndicator size={16} color={colors.brand} />
+                ) : (
+                  <Ionicons name="star-outline" size={16} color={colors.brand} />
+                )}
+                <Text style={styles.setDefaultBtnText}>Set as Default</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Add Transaction Button */}
             <TouchableOpacity
@@ -363,6 +446,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerTitle: { flex: 1, fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+  headerActions: { flexDirection: "row", gap: 8 },
+  headerIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerIconBtnDanger: { borderColor: colors.dangerBg },
   listContent: { paddingHorizontal: 16, paddingBottom: 60 },
   accountCard: {
     backgroundColor: colors.surface,
@@ -384,7 +479,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   accountCardBody: { flex: 1, gap: 2 },
+  accountNameRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   accountName: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  defaultBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.brandLight,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  defaultBadgeText: { fontSize: 10, fontWeight: "700", color: colors.brand },
   bankName: { fontSize: 13, color: colors.textSecondary },
   accountNumber: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   ifsc: { fontSize: 12, color: colors.textMuted },
@@ -394,6 +500,19 @@ const styles = StyleSheet.create({
   currentBalance: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   balanceNeg: { color: colors.danger },
   balanceLabel: { fontSize: 10, color: colors.textMuted },
+  setDefaultBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.brandLight,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.brand + "40",
+    paddingVertical: 11,
+    gap: 7,
+    marginBottom: 10,
+  },
+  setDefaultBtnText: { fontSize: 13, fontWeight: "600", color: colors.brand },
   addTxBtn: {
     flexDirection: "row",
     alignItems: "center",

@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
+import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, SelectField } from "@/components/ui/FormField";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/cash-and-bank")({
 function CashAndBankPage() {
   const navigate = useNavigate();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [editAccountId, setEditAccountId] = useState<string | null>(null);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -213,8 +215,9 @@ function CashAndBankPage() {
   const deleteAccountMutation = trpc.bankAccount.delete.useMutation({
     onSuccess: () => {
       toast.success("Account deleted");
-      setDeleteConfirm(null);
       if (selectedAccountId === deleteConfirm) setSelectedAccountId(null);
+      if (editAccountId === deleteConfirm) setEditAccountId(null);
+      setDeleteConfirm(null);
       utils.bankAccount.list.invalidate();
       utils.bankAccount.summary.invalidate();
     },
@@ -311,14 +314,18 @@ function CashAndBankPage() {
                     >
                       <div className="flex items-center justify-between">
                         <div className="min-w-0 pr-2">
-                          <p className="text-sm font-medium text-text-primary truncate">
-                            {account.accountName}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-medium text-text-primary truncate">
+                              {account.accountName}
+                            </p>
+                            {account.isDefault && (
+                              <svg className="w-3 h-3 text-amber-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                              </svg>
+                            )}
+                          </div>
                           <p className="text-xs text-text-tertiary mt-0.5">
                             {account.bankName || account.accountType}
-                            {account.isDefault && (
-                              <span className="ml-1 text-brand-600">• Default</span>
-                            )}
                           </p>
                         </div>
                         <p className="text-sm font-semibold tabular-nums text-text-primary flex-shrink-0">
@@ -326,21 +333,19 @@ function CashAndBankPage() {
                         </p>
                       </div>
                     </button>
-                    {/* Only show delete if no transactions (balance is 0 and it's not the selected account with transactions) */}
-                    {parseFloat(account.currentBalance) === 0 && account.id !== selectedAccountId && (
-                      <button
-                        className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-all"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirm(account.id);
-                        }}
-                        aria-label="Delete account"
-                      >
-                        <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    )}
+                    {/* Edit button — always available on hover */}
+                    <button
+                      className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-all"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditAccountId(account.id);
+                      }}
+                      aria-label="Edit account"
+                    >
+                      <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
                   </div>
                 ))}
               </div>
@@ -786,6 +791,15 @@ function CashAndBankPage() {
         />
       )}
 
+      {/* Edit Account SlideOver */}
+      {editAccountId && (
+        <EditAccountSlideOver
+          accountId={editAccountId}
+          onClose={() => setEditAccountId(null)}
+          onDeleteRequest={(id) => setDeleteConfirm(id)}
+        />
+      )}
+
       {/* Add Transaction Modal */}
       {showAddTransaction && selectedAccountId && (
         <AddTransactionModal
@@ -807,7 +821,7 @@ function CashAndBankPage() {
       <ConfirmDialog
         open={!!deleteConfirm}
         title="Delete Account"
-        description="This will permanently delete this bank account and all its transactions."
+        description="This will permanently delete this bank account. Accounts with existing transactions cannot be deleted."
         confirmLabel="Delete"
         variant="danger"
         loading={deleteAccountMutation.isPending}
@@ -817,6 +831,240 @@ function CashAndBankPage() {
         onCancel={() => setDeleteConfirm(null)}
       />
     </div>
+  );
+}
+
+// ─── Edit Account SlideOver ───────────────────────────────────────────────────
+
+function EditAccountSlideOver({
+  accountId,
+  onClose,
+  onDeleteRequest,
+}: {
+  accountId: string;
+  onClose: () => void;
+  onDeleteRequest: (id: string) => void;
+}) {
+  const utils = trpc.useUtils();
+
+  // Fetch the account details
+  const { data: accountData, isLoading } = trpc.bankAccount.getById.useQuery(
+    { id: accountId },
+    { staleTime: 0 }
+  );
+  const account = accountData;
+
+  const [accountName, setAccountName] = useState("");
+  const [accountType, setAccountType] = useState("current");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [ifsc, setIfsc] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [openingBalance, setOpeningBalance] = useState("");
+  const [isDefault, setIsDefault] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+
+  // Populate form when account data loads
+  useEffect(() => {
+    if (account && !initialized) {
+      setAccountName(account.accountName);
+      setAccountType(account.accountType);
+      setAccountNumber(account.accountNumber ?? "");
+      setIfsc(account.ifsc ?? "");
+      setBankName(account.bankName ?? "");
+      setOpeningBalance(account.openingBalance);
+      setIsDefault(account.isDefault);
+      setInitialized(true);
+    }
+  }, [account, initialized]);
+
+  const updateMutation = trpc.bankAccount.update.useMutation({
+    onSuccess: () => {
+      toast.success("Account updated");
+      onClose();
+      utils.bankAccount.list.invalidate();
+      utils.bankAccount.summary.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  function handleSave() {
+    if (!accountName.trim()) return;
+    updateMutation.mutate({
+      id: accountId,
+      data: {
+        accountName: accountName.trim(),
+        accountType: accountType as "savings" | "current" | "cash" | "upi" | "credit_card",
+        accountNumber: accountNumber || undefined,
+        ifsc: ifsc || undefined,
+        bankName: bankName || undefined,
+        openingBalance: openingBalance || "0",
+        isDefault,
+      },
+    });
+  }
+
+  const showAccountNumber = accountType === "savings" || accountType === "current" || accountType === "credit_card";
+  const showUpiId = accountType === "upi";
+  const showIfsc = accountType === "savings" || accountType === "current";
+  const showBankName = accountType === "savings" || accountType === "current" || accountType === "credit_card";
+  const accountNumberLabel = accountType === "credit_card" ? "Last 4 Digits" : "Account Number";
+
+  const openingBalanceChanged =
+    account && initialized && openingBalance !== account.openingBalance;
+
+  return (
+    <SlideOver
+      open
+      onClose={onClose}
+      title="Edit Account"
+      description={account?.accountName}
+      footer={
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            className="btn-ghost text-sm text-red-600 hover:text-red-700 hover:bg-red-600/[0.08] px-3 py-2"
+            onClick={() => onDeleteRequest(accountId)}
+          >
+            Delete Account
+          </button>
+          <div className="flex gap-3">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={updateMutation.isPending || !accountName.trim() || isLoading}
+            >
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </div>
+      }
+    >
+      {isLoading ? (
+        <div className="space-y-4 animate-pulse">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="space-y-1.5">
+              <div className="skeleton h-3.5 w-24 rounded" />
+              <div className="skeleton h-9 w-full rounded-lg" />
+            </div>
+          ))}
+        </div>
+      ) : !account ? (
+        <div className="py-8 text-center text-sm text-text-tertiary">Account not found</div>
+      ) : (
+        <div className="space-y-5">
+          <div>
+            <p className="label">Account Type</p>
+            <Listbox
+              value={accountType}
+              onChange={(val) => setAccountType(val)}
+              options={ACCOUNT_TYPE_OPTIONS}
+              className="w-full"
+            />
+          </div>
+
+          <InputField
+            label="Account Name"
+            required
+            data-autofocus
+            value={accountName}
+            onChange={(e) => setAccountName(e.target.value)}
+            placeholder="e.g. HDFC Current"
+          />
+
+          {showAccountNumber && showIfsc && (
+            <div className="grid grid-cols-2 gap-4">
+              <InputField
+                label={accountNumberLabel}
+                value={accountNumber}
+                onChange={(e) => setAccountNumber(e.target.value)}
+                placeholder="Optional"
+              />
+              <InputField
+                label="IFSC Code"
+                value={ifsc}
+                onChange={(e) => setIfsc(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+          )}
+
+          {showAccountNumber && !showIfsc && (
+            <InputField
+              label={accountNumberLabel}
+              value={accountNumber}
+              onChange={(e) => setAccountNumber(e.target.value)}
+              placeholder="Optional"
+            />
+          )}
+
+          {showUpiId && (
+            <InputField
+              label="UPI ID"
+              value={accountNumber}
+              onChange={(e) => setAccountNumber(e.target.value)}
+              placeholder="e.g. business@upi"
+            />
+          )}
+
+          {showBankName && (
+            <InputField
+              label="Bank Name"
+              value={bankName}
+              onChange={(e) => setBankName(e.target.value)}
+              placeholder="e.g. HDFC Bank"
+            />
+          )}
+
+          <div>
+            <InputField
+              label="Opening Balance (₹)"
+              type="number"
+              step="0.01"
+              value={openingBalance}
+              onChange={(e) => setOpeningBalance(e.target.value)}
+              placeholder="0.00"
+            />
+            {openingBalanceChanged && (
+              <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Changing the opening balance will affect the calculated running balance for all transactions.
+              </p>
+            )}
+          </div>
+
+          <div className="pt-1 border-t border-border-light">
+            <label className="flex items-center gap-3 cursor-pointer py-2">
+              <input
+                type="checkbox"
+                checked={isDefault}
+                onChange={(e) => setIsDefault(e.target.checked)}
+                className="rounded w-4 h-4"
+              />
+              <div>
+                <p className="text-sm font-medium text-text-primary">Set as default account</p>
+                <p className="text-xs text-text-tertiary mt-0.5">
+                  The default account is auto-selected when recording payments
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Current balance info */}
+          <div className="rounded-xl bg-surface-1 px-4 py-3 flex items-center justify-between">
+            <p className="text-xs text-text-tertiary">Current Balance</p>
+            <p className="text-sm font-semibold tabular-nums text-text-primary">
+              {formatCurrency(account.currentBalance)}
+            </p>
+          </div>
+        </div>
+      )}
+    </SlideOver>
   );
 }
 
