@@ -45,19 +45,55 @@ Indian billing apps like MyBillBook and Vyaapaar charge monthly fees for basic f
 
 ## AI & Automation
 
-Hisaabo is built for the AI age. Every feature is accessible via API, and we provide first-class tooling for AI agents.
+**The only Indian invoicing platform with native AI agent support.**
 
-### MCP Server (Model Context Protocol)
-Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Your AI assistant can create invoices, check outstanding balances, generate GST reports, and manage inventory — all through natural conversation.
+Your competitors are automating their bookkeeping. A textile merchant in Jaipur creates invoices from WhatsApp voice notes. An accountant in Mumbai reconciles 500 invoices across three businesses before lunch. A Delhi logistics company auto-generates GST prep data every month without a single manual step.
 
-### CLI Tool
-Script your business operations from the terminal. Perfect for automation workflows, CI/CD pipelines, and AI agent integrations.
+Hisaabo's entire product is API-first. The web dashboard, mobile app, and desktop app are thin clients over the same tRPC API — which means any AI agent, automation script, or CI/CD pipeline can do everything a human can do in the UI.
+
+### MCP Server — Works with Claude Desktop today
+
+Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Five-minute setup. Zero config. Natural conversation becomes real business operations:
+
+```
+You: "How much does Montu Arora owe me?"
+Claude: "Montu Arora has ₹12,450 outstanding across 3 invoices.
+         The oldest is INV-12890 from 15 days ago. Should I draft a reminder?"
+
+You: "Create an invoice for Gupta Enterprises — 20 bags of rice at ₹1,250"
+Claude: "Done. Invoice BB-14821 created — ₹26,250 total (inc. 5% GST). PDF ready."
+```
+
+130+ API endpoints. 14 business domains. GST-compliant out of the box. Multi-tenant with full business isolation.
+
+### CLI Tool — Script everything
+
+Script your business operations from the terminal. JSON output by default, pipes into `jq`, `curl`, `mail`. Copy-paste ready cron jobs for daily reports, GST filing prep, and stock reorder alerts.
+
+```bash
+# Morning business brief in one line
+hisaabo dashboard --period today --json | jq '{revenue, outstanding, overdueCount}'
+
+# Automated GST filing prep — runs on the 28th of every month
+hisaabo gst export --type gstr1 --month $(date +%m) --year $(date +%Y) --format json
+```
+
+### Integrations
+
+Build on top of Hisaabo's open API to connect anything:
+- **WhatsApp Bot** — Create invoices from voice notes via Claude + MCP
+- **Slack** — Daily business summary in your team channel via webhook
+- **Google Sheets** — Nightly sync of invoices, payments, and stock levels
+- **Shiprocket** — Auto-generate shipping labels from delivery challans *(roadmap)*
+- **Tally** — Export parties and invoices as Tally XML *(built-in today)*
+- **OpenClaw Agents** — Deploy customer service agents for your online store
 
 ### Coming Soon
 - **Auto GST Rate Updates** — AI monitors government notifications and suggests rate changes. You review and approve.
-- **Dynamic Pricing Intelligence** — Competition analysis and pricing recommendations based on market data.
-- **Shiprocket Integration** — Automated shipping label generation and tracking from invoices.
-- **AI Customer Service** — OpenClaw-powered customer service agents that handle order inquiries, payment reminders, and support tickets for your online store.
+- **Dynamic Pricing Intelligence** — Market pricing analysis and margin-aware recommendations.
+- **AI Customer Service** — OpenClaw-powered agents handling order status, payment queries, and support for your online store.
+
+**Deep-dive:** [docs.hisaabo.in/ai](https://docs.hisaabo.in/ai)
 
 ---
 

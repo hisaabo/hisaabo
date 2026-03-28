@@ -16,27 +16,46 @@
  *
  * These tests verify that priority ordering is respected.
  *
- * Implementation note on testing strategy:
- * getApiUrl() reads both expo-constants and process.env at CALL TIME (not
- * at module evaluation time). This means we can control the env var via
- * process.env mutation per-test. For expo-constants, we use a mutable object
- * reference that the mock returns — mutations to `mockConstants.expoConfig`
- * propagate into the imported module because both share the same reference.
+ * Implementation note on mock hoisting:
+ * Jest hoists `jest.mock()` calls to the top of the compiled file — before any
+ * `const`/`let` initialisers execute. Because Babel compiles `const`/`let` to
+ * `var`, a variable declared with `const` BEFORE `jest.mock()` in source order
+ * is actually `undefined` at the moment the mock factory runs (the `var` is
+ * hoisted but its initialiser hasn't executed yet).
+ *
+ * The pattern used here avoids that trap: the mock factory itself creates the
+ * mutable state object and assigns it to a module-level `let` variable.  After
+ * hoisting the sequence is:
+ *   1. `var mockConstants` hoisted → undefined
+ *   2. jest.mock factory runs → creates { expoConfig: null }, assigns to
+ *      `mockConstants`, returns { __esModule: true, default: mockConstants }
+ *   3. `import { getApiUrl }` resolves — Constants === mockConstants (not null)
+ *   4. test body runs — mutates `mockConstants.expoConfig` per test scenario
+ *
+ * Mutations to `mockConstants.expoConfig` propagate into the imported module
+ * because both share the same object reference.
  */
 
 // ---------------------------------------------------------------------------
-// We create a mutable object that the mock exposes. Mutating
-// `mockConstantsDefault.expoConfig` in tests is reflected in the module
-// because the mock factory captures a reference, not a value snapshot.
+// Module-level variable that the mock factory will populate.
+// Declared with `let` so Babel compiles it to `var` (hoistable) and the
+// factory assignment below is visible to test bodies.
 // ---------------------------------------------------------------------------
-const mockConstantsDefault: { expoConfig: null | Record<string, any> } = {
-  expoConfig: null,
-};
+let mockConstants: { expoConfig: null | Record<string, any> };
 
-jest.mock("expo-constants", () => ({
-  __esModule: true,
-  default: mockConstantsDefault,
-}));
+jest.mock("expo-constants", () => {
+  // This factory runs at hoist time (before any const/let initialisers).
+  // We create the state object HERE so the factory captures a live reference,
+  // then assign it to the module-level `mockConstants` so tests can mutate it.
+  const state: { expoConfig: null | Record<string, any> } = { expoConfig: null };
+  // `mockConstants` is `var`-hoisted, so this assignment is visible to code
+  // that runs after the factory (i.e. the test bodies below).
+  mockConstants = state;
+  return {
+    __esModule: true,
+    default: state,
+  };
+});
 
 import { getApiUrl } from "../api-url";
 
@@ -47,7 +66,7 @@ beforeEach(() => {
   process.env = { ...originalEnv };
   delete (process.env as any).EXPO_PUBLIC_API_URL;
   // Reset constants mock to "no app.json extra" state
-  mockConstantsDefault.expoConfig = null;
+  mockConstants.expoConfig = null;
 });
 
 afterAll(() => {
@@ -66,7 +85,7 @@ describe("getApiUrl — API URL resolution for different build environments", ()
     //      "https://api.hisaabo.in" — this test pins that exact value so a
     //      typo in the source file is caught by CI before release.
     // PRECONDITION: process.env.EXPO_PUBLIC_API_URL is deleted in beforeEach
-    //               and mockConstantsDefault.expoConfig is null.
+    //               and mockConstants.expoConfig is null.
 
     const url = getApiUrl();
 
@@ -96,7 +115,7 @@ describe("getApiUrl — API URL resolution for different build environments", ()
     //      Expo apps. If this priority is reversed, an EAS production build
     //      could point to a staging server, or vice versa.
     process.env.EXPO_PUBLIC_API_URL = "http://env-var-api:3000";
-    mockConstantsDefault.expoConfig = {
+    mockConstants.expoConfig = {
       extra: { apiUrl: "https://api-staging.hisaabo.in" },
     };
 
@@ -114,7 +133,7 @@ describe("getApiUrl — API URL resolution for different build environments", ()
     //      `undefined` as the URL (which would cause every fetch to fail with
     //      a "Invalid URL" error on startup).
     process.env.EXPO_PUBLIC_API_URL = "http://fallback-to-env:3000";
-    mockConstantsDefault.expoConfig = {
+    mockConstants.expoConfig = {
       extra: { someOtherField: "value" }, // no apiUrl
     };
 
@@ -130,7 +149,7 @@ describe("getApiUrl — API URL resolution for different build environments", ()
     // WHY: Guards against a `Cannot read properties of null` TypeError when
     //      accessing `expoConfig.extra.apiUrl` with a null `extra`.
     delete (process.env as any).EXPO_PUBLIC_API_URL;
-    mockConstantsDefault.expoConfig = { extra: null };
+    mockConstants.expoConfig = { extra: null };
 
     // Should not throw — should fall through to the production URL
     const url = getApiUrl();

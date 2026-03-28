@@ -7,9 +7,13 @@
  *   - toHaveNoViolations from vitest-axe for WCAG 2.1 AA axe-core audits
  */
 import "@testing-library/jest-dom";
-import { expect } from "vitest";
-import { toHaveNoViolations } from "vitest-axe";
+import "vitest-axe/extend-expect";
+import { afterEach } from "vitest";
+import { cleanup } from "@testing-library/react";
 
-// Register the vitest-axe custom matcher so expect(results).toHaveNoViolations()
-// works in every test file that imports axe from "vitest-axe".
-expect.extend({ toHaveNoViolations });
+// Automatically clean up DOM after each test to prevent:
+// 1. Memory leaks from accumulated DOM nodes across tests
+// 2. Stale rendered content interfering with subsequent tests
+afterEach(() => {
+  cleanup();
+});

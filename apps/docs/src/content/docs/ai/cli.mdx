@@ -1,6 +1,6 @@
 ---
 title: CLI Tool
-description: The Hisaabo CLI for terminal-based business management. Installation, authentication, full command reference, scripting patterns, and cron job examples.
+description: The Hisaabo CLI for terminal-based business management. Installation, authentication, full command reference, power user workflows, and copy-paste ready automation scripts.
 sidebar:
   order: 3
 ---
@@ -376,6 +376,179 @@ These flags work on every command:
 
 ---
 
+## Power User Workflows
+
+These are the workflows that separate a Hisaabo user from a Hisaabo power user. All copy-paste ready.
+
+### Morning business check with jq
+
+Start every workday with a clear picture. This one-liner pulls your dashboard, formats it, and prints only what matters:
+
+```bash
+hisaabo dashboard --period today --json | jq -r '
+"=== TODAY (" + (now | strftime("%d %b %Y")) + ") ===
+Revenue:       \(.totalRevenue)
+Outstanding:   \(.totalOutstanding) (\(.overdueCount) overdue)
+Invoices:      \(.invoiceCount)
+
+Top customers:
+\(.topCustomers[:3] | .[] | "  \(.name): \(.revenue)")"
+'
+```
+
+For a richer morning brief, combine it with overdue and low-stock data:
+
+```bash
+#!/bin/bash
+# morning-brief.sh
+
+DASH=$(hisaabo dashboard --period today --json)
+OVERDUE=$(hisaabo invoice list --status overdue --sort oldest-first --limit 5 --json)
+LOW=$(hisaabo item list --low-stock --json)
+
+echo "=== MORNING BRIEF — $(date +"%d %b %Y") ==="
+echo ""
+echo "Revenue today:    $(echo $DASH | jq -r '.totalRevenue')"
+echo "Outstanding:      $(echo $DASH | jq -r '.totalOutstanding')"
+echo ""
+
+OVERDUE_COUNT=$(echo $OVERDUE | jq 'length')
+if [ "$OVERDUE_COUNT" -gt 0 ]; then
+  echo "OVERDUE ($OVERDUE_COUNT):"
+  echo $OVERDUE | jq -r '.[] | "  \(.invoiceNumber) — \(.party.name) — ₹\(.totalAmount) (\(.daysOverdue) days)"'
+  echo ""
+fi
+
+LOW_COUNT=$(echo $LOW | jq 'length')
+if [ "$LOW_COUNT" -gt 0 ]; then
+  echo "LOW STOCK ($LOW_COUNT):"
+  echo $LOW | jq -r '.[] | "  \(.name): \(.stockQuantity) \(.unit) left"'
+fi
+```
+
+### Automated GST filing prep
+
+Run this on the 28th of every month. It exports GSTR-1 data, generates the 3B summary, and emails everything to your CA — no manual steps.
+
+```bash
+#!/bin/bash
+# gst-filing-prep.sh — run monthly on the 28th via cron
+# 0 8 28 * * /opt/hisaabo/gst-filing-prep.sh
+
+MONTH=$(date +%m)
+YEAR=$(date +%Y)
+CA_EMAIL="ca@yourca.com"
+OWNER_EMAIL="owner@yourbusiness.com"
+OUTPUT_DIR="/var/gst-reports/${YEAR}-${MONTH}"
+mkdir -p "$OUTPUT_DIR"
+
+echo "Preparing GST filing data for ${YEAR}-${MONTH}..."
+
+# Export GSTR-1 (full B2B, B2C, HSN breakdown)
+hisaabo gst export \
+  --type gstr1 \
+  --month "$MONTH" \
+  --year "$YEAR" \
+  --format json \
+  --output "$OUTPUT_DIR/gstr1.json"
+
+# Export GSTR-3B summary
+hisaabo gst export \
+  --type gstr3b \
+  --month "$MONTH" \
+  --year "$YEAR" \
+  --format csv \
+  --output "$OUTPUT_DIR/gstr3b.csv"
+
+# Generate human-readable summary
+SUMMARY=$(hisaabo gst summary --period last-month)
+
+# Email to CA with attachments
+{
+  echo "Hi,"
+  echo ""
+  echo "GST data for ${YEAR}-${MONTH} is attached. Summary below:"
+  echo ""
+  echo "$SUMMARY"
+  echo ""
+  echo "Files:"
+  echo "  gstr1.json — B2B/B2C invoice data for GSTR-1 upload"
+  echo "  gstr3b.csv — 3B summary for quick review"
+  echo ""
+  echo "Please review and file before the 11th."
+} | mail -s "GST Data ${YEAR}-${MONTH} — Please file by 11th" \
+  -a "$OUTPUT_DIR/gstr1.json" \
+  -a "$OUTPUT_DIR/gstr3b.csv" \
+  "$CA_EMAIL"
+
+# Notify owner
+echo "GST filing prep done. Data sent to $CA_EMAIL." | \
+  mail -s "GST prep complete for ${YEAR}-${MONTH}" "$OWNER_EMAIL"
+```
+
+### Stock reorder alerts via cron
+
+Check twice daily. Alert only when action is needed. The script formats the output as a clean order list, ready to forward to your supplier.
+
+```bash
+#!/bin/bash
+# stock-reorder-alert.sh — run twice daily: 9 AM and 5 PM
+# 0 9,17 * * * /opt/hisaabo/stock-reorder-alert.sh
+
+LOW_STOCK=$(hisaabo item list --low-stock --json)
+COUNT=$(echo "$LOW_STOCK" | jq 'length')
+
+if [ "$COUNT" -eq 0 ]; then
+  exit 0
+fi
+
+# Build reorder list
+REORDER_LIST=$(echo "$LOW_STOCK" | jq -r '
+.[] | "  \(.name)
+       Current: \(.stockQuantity) \(.unit)
+       Minimum: \(.lowStockThreshold) \(.unit)
+       Suggest reordering: \((.lowStockThreshold * 3 | floor)) \(.unit)"
+')
+
+{
+  echo "STOCK ALERT — $(date +"%d %b %Y, %I:%M %p")"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "$COUNT items need reordering:"
+  echo ""
+  echo "$REORDER_LIST"
+  echo ""
+  echo "View in dashboard: https://your-hisaabo-instance.com/inventory"
+} | mail -s "Stock Alert: $COUNT items low — $(date +"%d %b")" \
+  owner@yourbusiness.com
+```
+
+### Outstanding balance aging report
+
+Run this weekly and know exactly which receivables are at risk before they become bad debt.
+
+```bash
+#!/bin/bash
+# aging-report.sh — run every Monday morning
+
+OVERDUE=$(hisaabo invoice list --status overdue --sort oldest-first --json)
+
+echo "$OVERDUE" | jq -r '
+"RECEIVABLES AGING — " + (now | strftime("%d %b %Y")) + "
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+" + (
+  group_by(.party.name) |
+  .[] |
+  "Party: \(.[0].party.name)
+  Total outstanding: ₹\([.[].totalAmount | tonumber] | add | tostring)
+  Oldest invoice: \(sort_by(.date) | .[0].invoiceNumber) (\(sort_by(.date) | .[0].daysOverdue) days)\n"
+)
+'
+```
+
+---
+
 ## Scripting Patterns
 
 ### Process JSON output with jq
@@ -420,6 +593,87 @@ INVOICE_ID=$(hisaabo invoice create \
 hisaabo invoice pdf "$INVOICE_ID" --output /tmp/
 echo "Invoice PDF saved to /tmp/${INVOICE_ID}.pdf"
 ```
+
+---
+
+## For AI Agent Developers
+
+The CLI and MCP server are designed to complement each other. Understanding when to use each will make your AI agent more reliable.
+
+### CLI vs. MCP: which to use
+
+| Scenario | Use CLI | Use MCP |
+|---|---|---|
+| Cron jobs and scheduled automation | Yes | No |
+| AI assistants in conversation (Claude Desktop, etc.) | No | Yes |
+| Shell pipeline data processing | Yes | No |
+| OpenClaw agents that take actions | No | Yes |
+| CI/CD pipelines and deployment scripts | Yes | No |
+| Natural-language business queries | No | Yes |
+| Bulk data export and reporting | Yes | No |
+
+### Combining CLI and MCP in the same agent
+
+For AI agents that run in an agentic loop (like OpenClaw agents with tool use), the MCP server handles the interactive, conversational actions. The CLI handles the heavy lifting — batch operations, data exports, and scheduled triggers.
+
+Example: An OpenClaw agent that runs nightly and prepares a morning brief for the owner.
+
+```yaml
+# openclaw-agent.yaml
+name: morning-brief-agent
+schedule: "0 6 * * *"  # 6 AM daily
+
+tools:
+  - type: bash
+    description: "Run hisaabo CLI commands for data collection"
+  - type: mcp
+    server: hisaabo
+    description: "Live business data and actions"
+
+instructions: |
+  You are a business intelligence agent for an Indian SMB.
+  Every morning at 6 AM, you:
+  1. Run `hisaabo dashboard --period today --json` to get overnight data
+  2. Run `hisaabo invoice list --status overdue --json` to check overdue invoices
+  3. Run `hisaabo item list --low-stock --json` to check stock levels
+  4. Call the hisaabo MCP gst_summary tool to check GST position
+  5. Compose a concise morning brief in the owner's preferred format
+  6. Send it via the notification webhook
+
+  Keep the brief under 300 words. Highlight anything urgent.
+  Use INR formatting. Refer to parties by their short names.
+```
+
+### Consuming CLI output as an AI agent tool
+
+If your agent framework supports shell tool execution, you can expose the CLI as a tool:
+
+```typescript
+// tools/hisaabo-cli.ts
+export const hisaaboCLI = {
+  name: "hisaabo_cli",
+  description: "Run a hisaabo CLI command and return the JSON output. " +
+    "Available subcommands: dashboard, invoice list/get/create, " +
+    "party list/get, item list/get, payment list/create, gst summary/export",
+  parameters: {
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description: "The hisaabo command to run, e.g. 'invoice list --status overdue --json'"
+      }
+    },
+    required: ["command"]
+  },
+  execute: async ({ command }: { command: string }) => {
+    const { stdout, stderr } = await exec(`hisaabo ${command}`);
+    if (stderr) throw new Error(stderr);
+    return JSON.parse(stdout);
+  }
+};
+```
+
+This pattern works well for agents that need to do bulk data processing — pull all overdue invoices, sort them, calculate totals — before taking any action through MCP.
 
 ---
 
@@ -581,6 +835,7 @@ Environment variables override the config file. Command-line flags override envi
 ## Related Documentation
 
 - [AI & Automation overview](/ai/)
-- [MCP Server](/ai/mcp-server/)
+- [MCP Server](/ai/mcp-server/) — For interactive AI agents and Claude Desktop
+- [Integrations](/ai/integrations/) — WhatsApp, Slack, Google Sheets, and more
 - [API Reference](https://api-docs.hisaabo.in)
 - [Self-Hosting](/self-hosting/) — generating API keys, setting up your instance

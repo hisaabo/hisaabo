@@ -1,6 +1,6 @@
 ---
 title: MCP Server
-description: Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Full setup guide, available tools, resource schemas, and configuration reference.
+description: Connect Hisaabo to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 5-minute setup, zero config, 130+ API endpoints available through natural conversation.
 sidebar:
   order: 2
 ---
@@ -8,6 +8,187 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 The Hisaabo MCP server implements the [Model Context Protocol](https://modelcontextprotocol.io/) — an open standard for connecting AI assistants to external tools and data sources. Once configured, any MCP-compatible AI agent can create invoices, query party ledgers, generate GST reports, and manage inventory through natural conversation.
+
+Works with **Claude Desktop** · Works with **OpenClaw** · Works with **any MCP client**
+
+---
+
+## 5-Minute Quickstart
+
+This is the fastest path from zero to a working AI agent that understands your business.
+
+**Step 1: Install the MCP server**
+
+```bash
+npm install -g @hisaabo/mcp-server
+```
+
+**Step 2: Get your credentials**
+
+In your Hisaabo dashboard, go to **Settings > API Keys** and create a new key. Copy your API key and your business ID (visible in **Settings > Business Profile** or in the URL when you're on the dashboard).
+
+**Step 3: Test the connection**
+
+```bash
+hisaabo-mcp \
+  --api-url https://your-hisaabo-instance.com \
+  --api-key hisaabo_key_xxxxxxxxxxxxxxxxxx \
+  --business-id biz_xxxxxxxxxxxxxxxxxx
+```
+
+You should see: `Hisaabo MCP server running on port 3100`. If you see an error, check that your API URL is reachable and your key is valid.
+
+**Step 4: Add to Claude Desktop**
+
+Open your Claude Desktop config file (see paths below), add the `hisaabo` entry, and restart Claude Desktop.
+
+<Tabs>
+  <TabItem label="macOS">
+    ```
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```
+    %APPDATA%\Claude\claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```
+    ~/.config/claude/claude_desktop_config.json
+    ```
+  </TabItem>
+</Tabs>
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "hisaabo-mcp",
+      "args": [],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_API_KEY": "hisaabo_key_xxxxxxxxxxxxxxxxxx",
+        "HISAABO_BUSINESS_ID": "biz_xxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+**Step 5: Have your first conversation**
+
+Open Claude Desktop and try this:
+
+```
+"What is my business's total outstanding receivables?"
+```
+
+Claude calls `dashboard_summary` and returns your live business data. That's it. You now have an AI that knows your business.
+
+---
+
+## The WOW Moment
+
+Here is what the experience actually looks like once connected. These are real conversation flows using the tools described in this document.
+
+**Checking what a party owes you:**
+
+```
+You: "How much does Montu Arora owe me?"
+
+Claude: [calls party_get tool with name search "Montu Arora"]
+
+Claude: "Montu Arora has ₹12,450 outstanding across 3 invoices.
+         The oldest is INV-12890 from 15 days ago (₹5,000).
+         The other two are INV-12901 (₹4,200, 8 days ago) and
+         INV-12934 (₹3,250, 2 days ago).
+
+         Should I draft a payment reminder for the older invoices,
+         or would you like to see the full ledger first?"
+```
+
+**Creating an invoice in seconds:**
+
+```
+You: "Bill Gupta Enterprises for 20 bags of Basmati Rice at ₹1,250 each,
+      due in 15 days"
+
+Claude: [calls item_list to resolve "Basmati Rice" to item ID]
+        [calls party_list to resolve "Gupta Enterprises" to party ID]
+        [calls invoice_create with all resolved IDs and calculated amounts]
+
+Claude: "Done. Invoice BB-14821 created:
+         Gupta Enterprises — ₹25,000 + GST
+         20 × Basmati Rice 25kg @ ₹1,250 = ₹25,000
+         GST (5% — HSN 1006): ₹1,250
+         Total: ₹26,250
+         Due: April 12, 2026
+
+         PDF is ready. Want me to note any delivery instructions?"
+```
+
+**Morning business briefing:**
+
+```
+You: "Give me this morning's numbers"
+
+Claude: [calls dashboard_summary with period: today]
+        [calls invoice_list with status: overdue]
+        [calls item_list with lowStock: true]
+
+Claude: "Good morning. Here's where things stand:
+
+         Today so far: ₹84,500 revenue (12 invoices)
+         Outstanding: ₹2,34,000 across 18 invoices
+         Critical: Vinod & Sons — ₹45,000 overdue for 63 days
+
+         3 items need restocking:
+         — Mustard Oil 15L: 2 cans left (min: 10)
+         — Basmati Rice 25kg: 4 bags left (min: 15)
+         — Refined Sugar 50kg: 1 bag left (min: 5)
+
+         GSTR-3B is due in 4 days. Should I pull the GST summary?"
+```
+
+**GST filing prep — done in one message:**
+
+```
+You: "Prepare my GSTR-1 data for March"
+
+Claude: [calls gst_gstr1_data with month: 3, year: 2026]
+        [calls gst_summary with period: last-month]
+
+Claude: "March 2026 GSTR-1 summary:
+
+         B2B invoices: 47 (₹8,42,500 taxable)
+         B2C invoices: 183 (₹3,21,000 taxable)
+         HSN summary: 6 HSN codes, full detail attached
+
+         Net GST liability: ₹90,024
+         (CGST: ₹37,912 | SGST: ₹37,912 | IGST: ₹14,200)
+
+         The full GSTR-1 JSON is ready to forward to your CA.
+         Filing deadline: April 11, 2026 — 14 days away."
+```
+
+---
+
+## What You Can Build
+
+The MCP server is not just for answering questions. It gives AI agents the ability to take action. Here is what becomes possible:
+
+**WhatsApp invoice bot** — A customer sends a voice note on WhatsApp. A bot transcribes it, passes the text to Claude via MCP, and Claude creates the invoice. The customer gets a PDF link in under 30 seconds. No app, no form, no manual entry.
+
+**Automated payment follow-up** — An OpenClaw agent runs daily, identifies overdue invoices, drafts personalized reminders in Hindi or English based on party preference, and queues them for one-click sending. Your accountant reviews and approves the batch in two minutes.
+
+**CA reconciliation assistant** — Your CA connects their Claude Desktop to your Hisaabo instance (read-only mode). They can ask questions, pull GSTR data, and cross-reference ledgers without you exporting a single file or being on a call.
+
+**Multi-business dashboard agent** — An agent that spans all three of your businesses, pulling `dashboard_summary` for each, and generating a consolidated morning report comparing performance across businesses.
+
+**Stock reorder agent** — An agent that checks `item_list --lowStock` every morning, identifies items below threshold, checks your supplier's catalog, and creates draft purchase orders for your review.
+
+See [Integrations](/ai/integrations/) for detailed implementation guides for each of these patterns.
 
 ---
 
@@ -467,7 +648,7 @@ Resources are cached for 5 minutes to avoid hammering the API. The catalog and p
 
 **API key scope** — API keys in Hisaabo can be scoped to specific permissions (read-only, invoicing-only, full access). Create a purpose-specific key for the MCP server rather than using a full-admin key.
 
-**Read-only mode** — For agents that should only read data, start the MCP server with `--readonly`. This disables all tools that create or modify records.
+**Read-only mode** — For agents that should only read data, start the MCP server with `--readonly`. This disables all tools that create or modify records. Recommended for CA and accountant access.
 
 **Network exposure** — The MCP server should not be publicly accessible. Run it on localhost and connect your AI client locally, or use a reverse proxy with authentication for remote access.
 
@@ -479,5 +660,6 @@ Resources are cached for 5 minutes to avoid hammering the API. The catalog and p
 
 - [AI & Automation overview](/ai/)
 - [CLI Tool](/ai/cli/)
+- [Integrations](/ai/integrations/) — WhatsApp, Slack, Google Sheets, Shiprocket, and more
 - [API Reference](https://api-docs.hisaabo.in)
 - [Settings > API Keys](/settings/) — generating and managing API keys

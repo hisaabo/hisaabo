@@ -1,15 +1,17 @@
 ---
 title: AI & Automation
-description: Connect Hisaabo to AI agents, automate business operations, and leverage intelligent features. MCP server, CLI tool, and upcoming AI capabilities.
+description: The only Indian invoicing platform with native AI agent support. Connect Claude, build automations, and let AI handle your bookkeeping while you run your business.
 sidebar:
   order: 1
 ---
 
 import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Hisaabo exposes every business operation through a clean, typed API. That design choice was deliberate: it means any AI agent, automation script, or CI/CD pipeline can interact with your business data the same way a human would through the dashboard — without screen-scraping, browser automation, or brittle workarounds.
+Your competitors are already automating their invoicing. A textile merchant in Jaipur is creating invoices from WhatsApp voice notes. An accountant in Mumbai is reconciling 500 invoices across three businesses before lunch. A Delhi logistics company has an AI agent that files GST prep data every month without a single manual step.
 
-This section covers what is available today and what is coming next.
+This is not the future. This is happening now, with Hisaabo.
+
+Hisaabo exposes every business operation through a clean, typed API. That design choice was deliberate: it means any AI agent, automation script, or CI/CD pipeline can interact with your business data the same way a human would through the dashboard — without screen-scraping, browser automation, or brittle workarounds.
 
 ---
 
@@ -27,6 +29,44 @@ Hisaabo is different. The entire product is API-first. The web dashboard, mobile
 - Responses are paginated and bounded, keeping AI context windows from being flooded with data
 
 The goal is to let you spend your time on decisions — pricing strategy, customer relationships, business growth — while AI handles the routine bookkeeping work.
+
+---
+
+## Why Hisaabo vs. Building Your Own
+
+You could build an invoicing API from scratch, wire up a GST calculation engine, handle multi-tenant business isolation, and implement audit logs. Or you could use Hisaabo.
+
+| Capability | Building your own | Hisaabo |
+|---|---|---|
+| **API coverage** | Months of development | 130+ endpoints, ready today |
+| **Business domains** | Build each one manually | 14 domains covered (invoicing, parties, inventory, GST, payments, expenses, banking, reports, and more) |
+| **GST compliance** | Study CGST/SGST/IGST rules, HSN codes, filing formats | Built in — GSTR-1, GSTR-3B, state-wise tax splits, HSN summaries |
+| **Multi-tenant isolation** | Design and implement from scratch | Every request is business-scoped via `x-business-id` |
+| **Type safety** | Manual schema maintenance | End-to-end TypeScript types from `AppRouter` — no codegen |
+| **MCP integration** | Build your own MCP server | Zero-config MCP server, works with Claude Desktop today |
+| **Indian business context** | Learn the rules (April FY, UPI, HSN, GSTIN) | All of it works out of the box |
+| **Audit trail** | Design and implement | Every API call logged, every MCP tool call recorded |
+| **Time to first AI agent** | 3–6 months | 5 minutes |
+
+The answer is obvious. Use Hisaabo as the backend, build the AI on top.
+
+---
+
+## What Developers Are Building
+
+These are the kinds of automations Hisaabo makes possible today.
+
+**A Jaipur textile shop owner uses Claude to create invoices from WhatsApp voice notes.**
+The shop owner forwards a voice note: "Bhai, 50 meters of georgette at 180 per meter for Sharma Fabrics." A WhatsApp bot transcribes the note, passes the text to Claude via the MCP server, and Claude calls `invoice_create` with the resolved party ID, item details, and GST rate. The invoice is ready in under 30 seconds. The owner never opens a browser.
+
+**A Mumbai accountant uses an OpenClaw agent to reconcile 500 invoices across 3 businesses in under 10 minutes.**
+Every morning at 8 AM, an agent pulls all overdue invoices using `invoice_list`, cross-references payment records, flags discrepancies, and sends a prioritized reconciliation list to the accountant's Slack. What used to take half a day now takes the time it takes to read a Slack message.
+
+**A Delhi delivery fleet manager's agent auto-generates delivery challans and updates Shiprocket.**
+When an order is confirmed in the Hisaabo online store, an agent creates the delivery challan via `invoice_create` (type: challan), pushes the shipment details to Shiprocket's API, and records the tracking number back against the invoice. The fleet manager's job is to manage drivers, not push data between software tabs.
+
+**A Bengaluru CA's firm runs monthly GST prep for 12 clients without opening a single dashboard.**
+A cron job fires on the 28th of every month. For each client, it calls `gst_gstr1_data` and `gst_summary`, formats the output into a structured handoff document, and emails it to the filing team. Twelve clients. Zero manual data exports.
 
 ---
 
@@ -401,6 +441,9 @@ Agent: "Hello! Your order SO-4821 (25 kg Basmati Rice) was dispatched
 
 ## Related Documentation
 
+- [MCP Server](/ai/mcp-server/) — Install, configure, and connect to Claude Desktop or OpenClaw
+- [CLI Tool](/ai/cli/) — Full command reference and power user workflows
+- [Integrations](/ai/integrations/) — WhatsApp bots, Slack, Google Sheets, Shiprocket, Tally, and more
 - [Invoicing](/invoicing/) — Invoice structure, line items, tax calculation
 - [GST Compliance](/gst/) — GSTR-1, GSTR-3B, HSN codes, state-wise tax rules
 - [Online Store](/online-store/) — Store setup, catalog management, order fulfillment

@@ -13,8 +13,10 @@
     "db:studio": "pnpm --filter @hisaabo/db studio",
     "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
     "typecheck": "turbo typecheck",
-    "test": "turbo test",
-    "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test"
+    "test": "turbo test --concurrency 1",
+    "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
+    "test:web": "pnpm --filter @hisaabo/web test",
+    "test:mobile": "pnpm --filter @hisaabo/mobile test"
   },
   "devDependencies": {
     "oxlint": "^1.56.0",

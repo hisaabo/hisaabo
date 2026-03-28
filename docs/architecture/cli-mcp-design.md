@@ -1199,3 +1199,106 @@ auth paths.
 | `packages/mcp/src/resources/` | MCP resource handlers |
 | `packages/mcp/src/lib/errors.ts` | `wrapTool` error normalization |
 | `packages/mcp/src/lib/pagination.ts` | `MAX_PAGE_SIZE` constant, page helpers |
+
+---
+
+## Design Review & Corrections
+
+This section documents issues found during review of the design against the actual
+codebase and MCP SDK 1.28.0, plus improvements made to the skeleton implementation.
+
+### Issues Found
+
+#### 1. Missing tools for key business workflows
+
+The original design lacked several tools needed to complete the stated workflows:
+
+| Workflow | Gap | Fix |
+|----------|-----|-----|
+| "Create an invoice and send it" | `invoice_update_status` existed, but `invoice_pdf_url` was missing | Added `invoice_pdf_url` tool that returns the authenticated download URL |
+| "Check outstanding balance for a customer" | `party_get` was listed in a comment but not fully specified | Fully implemented; the `balance` field is the answer to this query |
+| "Record a payment against the latest invoice" | `payment_create` with `invoice_id` covers this; needs `invoice_list` first to get the invoice UUID | Covered by the existing tool pair; descriptions call this out explicitly |
+| "Generate this month's GST report" | `gst_report` existed in a comment; needed month/year input and description that maps month number to period | Implemented with period guidance in description |
+| "What are my top selling items this month?" | No analytics tool existed. Dashboard covers totals; per-item analytics require `invoice_list` with `item_id` filter | `invoice_list` accepts an `item_id` filter (from the actual API router) which was not in the original design — added it |
+| Business expenses | `expense_list` and `expense_create` were not in the MCP tools at all | Added `src/tools/expense.ts` with both tools |
+
+#### 2. `invoice_list` was missing `item_id` and `sort_by`/`sort_dir` filters
+
+The actual `invoice.list` API procedure accepts `itemId`, `sortBy`, and `sortDir`.
+These were not in the architecture doc's tool schema. The `item_id` filter is the
+mechanism for "top selling items" analytics — an agent calls `invoice_list` with
+`item_id=<uuid>` to see all invoices containing that product.
+
+#### 3. `party_list` filter parameter vs type parameter
+
+The actual API supports both a `type` parameter and a richer `filter` parameter
+(`outstanding`, `overdue`). The architecture doc only mentioned `type`. Both are
+now exposed in `party_list` as `type` and `filter`.
+
+#### 4. `invoice_create` missing `document_type` field
+
+The architecture doc's `invoice_create` schema did not expose `documentType`, but
+the actual API accepts any value from the `documentTypes` enum (quotation, credit note,
+proforma, etc.). Without this, agents can only create plain invoices — they cannot
+create quotations or proforma invoices via MCP. Added as an optional field.
+
+#### 5. Resource registration used deprecated `ResourceTemplate` for static URIs
+
+The architecture doc used `ResourceTemplate` with `{ list: undefined }` for all
+six static resources. In MCP SDK 1.28.0, static URIs should use
+`server.resource(name, uri, callback)` directly. `ResourceTemplate` is for
+URI templates with variables (e.g. `invoices://{id}`). Fixed in implementation.
+
+#### 6. `tenantId` not needed on every request in the current API
+
+The `createContext` function in `packages/api/src/context.ts` reads `tenantId`
+from the session record in the DB, not from a header. The `x-tenant-id` header
+is read via `opts.req.headers.get("x-tenant-id")` only if present. This means
+`HISAABO_TENANT_ID` is a belt-and-suspenders concern — the session already carries
+the tenant. However, keeping it as an env var and header is correct defensive
+behavior: it ensures the MCP server can be pointed at a specific tenant without
+ambiguity.
+
+#### 7. `HisaaboError` `not_found` shape mismatch between ADR-006 and actual types
+
+ADR-006 defines: `{ code: "not_found", resource: string; id: string }` (with `id`).
+The implementation in `src/lib/errors.ts` uses `{ code: "not_found", resource: string }`
+(without `id`, because the tRPC error message already includes the resource name).
+The `id` field was removed — it is redundant and the API does not consistently
+include it in NOT_FOUND error shapes.
+
+#### 8. `packages/mcp` implemented as self-contained (no `packages/client` dependency)
+
+`packages/client` does not exist yet. Rather than block on it, `packages/mcp`
+includes an inline copy of the HTTP client in `src/client.ts`. When `packages/client`
+is built, replace the import in `src/client.ts` with:
+
+```typescript
+export { HisaaboClient, HisaaboApiError, formatHisaaboError } from "@hisaabo/client";
+export type { HisaaboError, ClientConfig, /* domain types */ } from "@hisaabo/client";
+```
+
+The inline client is architecturally identical to the design in ADR-001.
+
+### MCP SDK Version Notes (1.28.0)
+
+- `server.tool(name, description, schema, cb)` works but is `@deprecated`.
+  The new API is `server.registerTool(name, { description, inputSchema }, cb)`.
+  The skeleton uses the deprecated form for brevity; migration is a find-and-replace.
+- `ResourceTemplate` constructor requires a `{ list: ListCallback | undefined }`
+  second argument — the `undefined` is mandatory, not optional.
+- `server.resource(name, uri, cb)` (static URI) is the non-deprecated path for
+  fixed resources. Used in the implementation.
+
+### Workflow Coverage Verification
+
+| Workflow | Tools required | Covered |
+|----------|---------------|---------|
+| Create invoice and send it | `party_list` (find UUID) + `invoice_create` + `invoice_update_status` | Yes |
+| Check outstanding balance for a customer | `party_list` (search) + `party_get` (read balance field) | Yes |
+| Record payment against latest invoice | `invoice_list` (find invoice) + `payment_create` (with invoice_id) | Yes |
+| Generate this month's GST report | `gst_report` (report_type + month + year) | Yes |
+| Top selling items this month | `item_list` (get item IDs) + `invoice_list` (with item_id + date range) | Yes |
+| Track expense | `expense_create` | Yes (added) |
+| Check low stock | `item_list` (with low_stock=true) | Yes |
+| Party account statement | `party_ledger` | Yes |

@@ -150,16 +150,24 @@ describe("SearchBar — text search for parties, items, and invoices", () => {
     //      all text and delete it — a multi-step gesture for a one-tap task.
     //      The feature parity with iOS is important for the Android-heavy
     //      Indian market (Android accounts for ~95% of Indian smartphone users).
-    jest
-      .spyOn(Platform, "OS", "get")
-      .mockReturnValue("android");
+    //
+    // NOTE ON MOCKING Platform.OS:
+    //      `jest.spyOn(Platform, "OS", "get")` only works when Platform.OS is
+    //      defined as an accessor (get/set) property. In the React Native test
+    //      environment Platform.OS is a plain data property ("ios"), so we must
+    //      use Object.defineProperty to temporarily install a getter instead.
+    Object.defineProperty(Platform, "OS", {
+      get: () => "android",
+      configurable: true,
+    });
 
     render(<SearchBar value="Sharma" onChangeText={() => {}} />);
 
     // The close-circle icon should be present
     expect(screen.getByTestId("icon-close-circle")).toBeTruthy();
 
-    jest.restoreAllMocks();
+    // Restore the original iOS value so this test does not pollute others.
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
   });
 
   // -------------------------------------------------------------------------
@@ -168,15 +176,18 @@ describe("SearchBar — text search for parties, items, and invoices", () => {
     //       clear (value.length > 0).
     // WHY: A persistent close button when no text is present is confusing and
     //      wastes touch target space in a compact search bar.
-    jest
-      .spyOn(Platform, "OS", "get")
-      .mockReturnValue("android");
+    //
+    // NOTE ON MOCKING Platform.OS: see explanation in the test above.
+    Object.defineProperty(Platform, "OS", {
+      get: () => "android",
+      configurable: true,
+    });
 
     render(<SearchBar value="" onChangeText={() => {}} />);
 
     expect(screen.queryByTestId("icon-close-circle")).toBeNull();
 
-    jest.restoreAllMocks();
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
   });
 
   // -------------------------------------------------------------------------
@@ -185,9 +196,12 @@ describe("SearchBar — text search for parties, items, and invoices", () => {
     // WHY: If the clear button does not call onChangeText(""), the text input
     //      clears visually but the parent's filter state remains stale —
     //      the list looks empty but the state still has the old query.
-    jest
-      .spyOn(Platform, "OS", "get")
-      .mockReturnValue("android");
+    //
+    // NOTE ON MOCKING Platform.OS: see explanation in the "shows a clear" test above.
+    Object.defineProperty(Platform, "OS", {
+      get: () => "android",
+      configurable: true,
+    });
 
     const mockOnChange = jest.fn();
     render(<SearchBar value="Sharma" onChangeText={mockOnChange} />);
@@ -198,7 +212,7 @@ describe("SearchBar — text search for parties, items, and invoices", () => {
 
     expect(mockOnChange).toHaveBeenCalledWith("");
 
-    jest.restoreAllMocks();
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
   });
 
   // -------------------------------------------------------------------------
@@ -208,16 +222,21 @@ describe("SearchBar — text search for parties, items, and invoices", () => {
     // WHY: Rendering both the native and custom clear buttons on iOS would
     //      show two X icons side-by-side — a visual regression that breaks
     //      the iOS design review checklist.
-    jest
-      .spyOn(Platform, "OS", "get")
-      .mockReturnValue("ios");
+    //
+    // NOTE ON MOCKING Platform.OS: see explanation in the "shows a clear" test above.
+    // The jest-expo preset runs with platform: 'ios' already, but we set it
+    // explicitly here to document the intent and make this test self-describing.
+    Object.defineProperty(Platform, "OS", {
+      get: () => "ios",
+      configurable: true,
+    });
 
     render(<SearchBar value="some text" onChangeText={() => {}} />);
 
     // Custom close button must not be rendered on iOS
     expect(screen.queryByTestId("icon-close-circle")).toBeNull();
 
-    jest.restoreAllMocks();
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
   });
 
   // -------------------------------------------------------------------------

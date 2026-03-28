@@ -91,11 +91,26 @@ describe("EmptyState — zero-data placeholder for list screens", () => {
       />
     );
 
-    // There should be only one Text element (the title)
-    const texts = screen.getAllByText(/.+/);
-    // Title is present; description text is absent
-    expect(texts).toHaveLength(1);
+    // The title must be present so the user knows what the empty state is for.
+    expect(screen.getByText("No parties added")).toBeTruthy();
+
+    // No description text should exist — the component conditionally renders
+    // {description && <Text>…</Text>} so when the prop is omitted the <Text>
+    // element is never mounted at all (not just hidden or empty).
+    // NOTE: getAllByText(/.+/) also matches the mocked Ionicons node (which
+    // renders as <Text>people-outline</Text>), so we test the ABSENCE of a
+    // description by querying for the known-absent description string instead
+    // of counting total text nodes.
     expect(screen.queryByText("Tap + to create your first invoice")).toBeNull();
+    // Verify no second meaningful text node exists other than the title itself.
+    // We exclude the icon's testID node from this check since the Ionicons mock
+    // renders the icon name as a Text node in the test environment.
+    const allTexts = screen.getAllByText(/.+/);
+    const nonIconTexts = allTexts.filter(
+      (el) => !el.props.testID?.startsWith("icon-")
+    );
+    // Only the title Text should be rendered (no description Text node at all).
+    expect(nonIconTexts).toHaveLength(1);
   });
 
   // -------------------------------------------------------------------------

@@ -1,0 +1,505 @@
+---
+title: Integrations
+description: Connect Hisaabo to WhatsApp, Slack, Google Sheets, Shiprocket, Tally, and custom AI agents. Implementation guides for every major integration pattern.
+sidebar:
+  order: 4
+---
+
+import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Hisaabo's API-first design means every piece of business data is accessible to any system that can make an HTTP request. This page covers the most common integration patterns — from a WhatsApp bot that creates invoices from voice notes to a Bengaluru CA managing 12 clients through a single OpenClaw agent.
+
+All integrations use the [MCP server](/ai/mcp-server/) or the [CLI tool](/ai/cli/). No undocumented hooks, no screen-scraping, no fragile browser automation.
+
+---
+
+## WhatsApp Bot
+
+**Use case:** A shop owner in Jaipur forwards a voice note on WhatsApp — "Bhai, 50 meters of georgette at 180 per meter for Sharma Fabrics, due 15th." An invoice is created and the PDF link is sent back in under 30 seconds. No browser, no form, no manual entry.
+
+This integration sits between WhatsApp Business API and Hisaabo's MCP server. The bot layer handles message receipt and transcription; Hisaabo handles the invoice creation.
+
+### Architecture
+
+```
+WhatsApp Business API
+       |
+       v
+  Bot server (Node.js / Python)
+  - Receives webhook on new message
+  - Transcribes voice notes via Whisper API
+  - Passes text to Claude via MCP
+       |
+       v
+  Claude (with Hisaabo MCP)
+  - Parses invoice details from natural language
+  - Resolves party names to IDs
+  - Calls invoice_create
+  - Returns invoice number and PDF URL
+       |
+       v
+  Bot server sends reply on WhatsApp
+```
+
+### Implementation
+
+```typescript
+// whatsapp-bot/src/handler.ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+export async function handleIncomingMessage(message: WhatsAppMessage) {
+  let text = message.text;
+
+  // Transcribe voice notes
+  if (message.type === "audio") {
+    text = await transcribeAudio(message.audioUrl);
+  }
+
+  // Pass to Claude with Hisaabo MCP connected
+  const response = await client.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 1024,
+    system: `You are a billing assistant for an Indian business using Hisaabo.
+             When the user describes a sale, create the invoice immediately.
+             Always confirm the invoice number and total in your response.
+             Respond in the same language the user used (Hindi or English).`,
+    messages: [{ role: "user", content: text }],
+    // Claude uses the connected Hisaabo MCP server automatically
+  });
+
+  return response.content[0].text;
+}
+```
+
+**Voice note example:**
+
+```
+Owner sends: [voice note] "Sharma Fabrics ke liye 50 meter georgette,
+              180 rupay per meter, 15 tarikh tak"
+
+Bot replies: "Invoice BB-15042 ready!
+              Sharma Fabrics — ₹9,000
+              50m Georgette @ ₹180/m
+              Due: April 15, 2026
+              [PDF Link]"
+```
+
+### Notes
+
+- Use the [WhatsApp Business Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) for message webhooks
+- Audio transcription via OpenAI Whisper handles Hindi, English, and regional languages well
+- Start the Hisaabo MCP server with `--readonly` and a separate write-enabled instance to limit blast radius
+- Keep an audit log of every voice note + transcript + invoice created for dispute resolution
+
+---
+
+## Slack Bot
+
+**Use case:** Every morning at 8 AM, a message appears in your team's `#business-daily` Slack channel with yesterday's revenue, overdue invoices, and stock alerts. No one has to pull a report. No one has to log in.
+
+This is the simplest integration to set up — a cron job and a Slack webhook.
+
+### Daily business summary
+
+```bash
+#!/bin/bash
+# slack-daily-summary.sh — runs at 8 AM via cron
+
+SLACK_WEBHOOK="https://hooks.slack.com/services/your/webhook/url"
+
+DASH=$(hisaabo dashboard --period today --json)
+OVERDUE=$(hisaabo invoice list --status overdue --json)
+LOW=$(hisaabo item list --low-stock --json)
+
+REVENUE=$(echo $DASH | jq -r '.totalRevenue')
+OUTSTANDING=$(echo $DASH | jq -r '.totalOutstanding')
+OVERDUE_COUNT=$(echo $OVERDUE | jq 'length')
+LOW_COUNT=$(echo $LOW | jq 'length')
+
+# Build Slack message blocks
+PAYLOAD=$(jq -n \
+  --arg revenue "$REVENUE" \
+  --arg outstanding "$OUTSTANDING" \
+  --argjson overdue_count "$OVERDUE_COUNT" \
+  --argjson low_count "$LOW_COUNT" \
+  '{
+    "blocks": [
+      {
+        "type": "header",
+        "text": { "type": "plain_text", "text": "Morning Brief — " }
+      },
+      {
+        "type": "section",
+        "fields": [
+          { "type": "mrkdwn", "text": "*Revenue today*\n₹\($revenue)" },
+          { "type": "mrkdwn", "text": "*Outstanding*\n₹\($outstanding)" },
+          { "type": "mrkdwn", "text": "*Overdue invoices*\n\($overdue_count)" },
+          { "type": "mrkdwn", "text": "*Low stock items*\n\($low_count)" }
+        ]
+      }
+    ]
+  }')
+
+curl -s -X POST -H 'Content-type: application/json' \
+  --data "$PAYLOAD" "$SLACK_WEBHOOK"
+```
+
+### Interactive Slack bot (with Bolt)
+
+For a bot that responds to questions in Slack, use the Hisaabo MCP server via Claude:
+
+```typescript
+// slack-bot/src/app.ts
+import { App } from "@slack/bolt";
+import Anthropic from "@anthropic-ai/sdk";
+
+const app = new App({ token: process.env.SLACK_BOT_TOKEN });
+const claude = new Anthropic();
+
+app.message(/hisaabo/i, async ({ message, say }) => {
+  const userMessage = message.text.replace(/hisaabo/i, "").trim();
+
+  const response = await claude.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 512,
+    system: "You are a business assistant with access to Hisaabo invoicing data. " +
+            "Answer questions about invoices, parties, GST, and inventory. " +
+            "Keep responses concise for Slack — use bullet points, not paragraphs.",
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  await say(response.content[0].text);
+});
+```
+
+Usage in Slack:
+```
+@hisaabo-bot what's today's revenue?
+@hisaabo-bot how much does Gupta Enterprises owe us?
+@hisaabo-bot which items are low on stock?
+```
+
+---
+
+## Google Sheets
+
+**Use case:** Your accountant maintains a master Google Sheet for financial reporting. Instead of manually exporting and pasting data, a scheduled script syncs Hisaabo invoice data directly into the sheet every night.
+
+### Sync invoice data to Sheets
+
+```typescript
+// sync-to-sheets.ts
+import { google } from "googleapis";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
+
+async function syncInvoicesToSheets() {
+  // Pull invoice data from Hisaabo CLI
+  const { stdout } = await execAsync(
+    "hisaabo invoice list --from 2026-04-01 --to 2026-03-31 --json"
+  );
+  const invoices = JSON.parse(stdout);
+
+  // Authenticate with Google Sheets
+  const auth = new google.auth.GoogleAuth({
+    keyFile: "./service-account.json",
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  const sheets = google.sheets({ version: "v4", auth });
+
+  // Prepare rows
+  const rows = invoices.map((inv) => [
+    inv.invoiceNumber,
+    inv.date,
+    inv.party.name,
+    inv.totalAmount,
+    inv.taxAmount,
+    inv.status,
+    inv.dueDate || "",
+  ]);
+
+  // Write to sheet (replace range with actual data)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.SHEET_ID,
+    range: "Invoices!A2:G",
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: rows },
+  });
+
+  console.log(`Synced ${rows.length} invoices to Google Sheets`);
+}
+```
+
+### What to sync
+
+| Sheet | Hisaabo CLI command | Refresh frequency |
+|---|---|---|
+| Invoices | `hisaabo invoice list --json` | Daily |
+| Payments | `hisaabo payment list --json` | Daily |
+| Outstanding | `hisaabo party list --outstanding --json` | Daily |
+| GST summary | `hisaabo gst summary --period this-month --json` | Weekly |
+| P&L | `hisaabo report pnl --period this-month --json` | Weekly |
+| Stock levels | `hisaabo item list --json` | Daily |
+
+---
+
+## Shiprocket
+
+**Use case:** A Pune-based electronics retailer receives an order in their Hisaabo online store. The moment they confirm the invoice, Shiprocket gets the shipment details, generates the label, and Hisaabo records the tracking number. The customer gets a WhatsApp update. No one touches the Shiprocket dashboard.
+
+This integration is on the [Hisaabo roadmap](/ai/#shiprocket-integration) as a built-in feature. Until then, you can wire it up yourself using the following pattern.
+
+### Webhook-based automation
+
+```typescript
+// shiprocket-sync/src/handler.ts
+
+export async function onInvoiceConfirmed(invoiceId: string) {
+  // Fetch invoice details from Hisaabo
+  const { stdout } = await execAsync(`hisaabo invoice get ${invoiceId} --json`);
+  const invoice = JSON.parse(stdout);
+
+  if (invoice.type !== "sale") return; // Only process sale invoices
+
+  // Create shipment in Shiprocket
+  const shipment = await shiprocketAPI.createOrder({
+    order_id: invoice.invoiceNumber,
+    order_date: invoice.date,
+    pickup_location: "Primary Warehouse",
+    billing_customer_name: invoice.party.name,
+    billing_address: invoice.party.address,
+    billing_city: invoice.party.city,
+    billing_pincode: invoice.party.pincode,
+    billing_state: invoice.party.state,
+    billing_email: invoice.party.email,
+    billing_phone: invoice.party.phone,
+    order_items: invoice.items.map((item) => ({
+      name: item.name,
+      sku: item.itemCode,
+      units: item.quantity,
+      selling_price: item.pricePerUnit,
+    })),
+    payment_method: "Prepaid",
+    sub_total: invoice.totalAmount,
+    length: 30, // cm — configure per item category
+    breadth: 20,
+    height: 10,
+    weight: 1.5, // kg
+  });
+
+  // Record tracking number back in Hisaabo via CLI
+  await execAsync(
+    `hisaabo invoice update ${invoiceId} \
+      --note "Shiprocket AWB: ${shipment.awb_code}" \
+      --tracking-id "${shipment.awb_code}"`
+  );
+
+  console.log(`Shipment created: AWB ${shipment.awb_code} for ${invoice.invoiceNumber}`);
+}
+```
+
+### What gets automated
+
+1. Order confirmed in Hisaabo online store
+2. Invoice created (type: sale)
+3. Webhook fires `onInvoiceConfirmed`
+4. Shiprocket order created with full item and address details
+5. AWB number recorded back on the Hisaabo invoice as a note
+6. Customer receives Shiprocket tracking link via WhatsApp (via Shiprocket's built-in notification)
+
+---
+
+## Tally
+
+**Use case:** Your accountant works in Tally for statutory filings. Instead of re-entering every transaction, export Hisaabo party and invoice data in Tally XML format and import it directly.
+
+Hisaabo already includes Tally XML export for party data. Here is how to use it and extend it for invoices.
+
+### Party export (built-in)
+
+```bash
+# Export all parties as Tally XML
+hisaabo party list --format tally-xml --output parties.xml
+```
+
+The output follows the Tally XML import schema and can be imported via **Tally > Import Data > Masters**.
+
+### Invoice export for Tally
+
+```bash
+# Export invoices as Tally-compatible XML
+hisaabo invoice list \
+  --from 2026-04-01 \
+  --to 2026-03-31 \
+  --format tally-xml \
+  --output invoices-FY2026.xml
+```
+
+### Monthly sync workflow
+
+```bash
+#!/bin/bash
+# tally-monthly-sync.sh — run on the 1st of every month
+
+LAST_MONTH_START=$(date -d "last month" +%Y-%m-01)
+LAST_MONTH_END=$(date -d "last month" +%Y-%m-$(cal $(date -d "last month" +%m %Y) | awk 'NF{f=$NF}END{print f}'))
+OUTPUT_DIR="/var/tally-exports"
+mkdir -p "$OUTPUT_DIR"
+
+# Export parties (masters)
+hisaabo party list \
+  --format tally-xml \
+  --output "$OUTPUT_DIR/parties-$(date -d 'last month' +%Y-%m).xml"
+
+# Export sale invoices (vouchers)
+hisaabo invoice list \
+  --type sale \
+  --from "$LAST_MONTH_START" \
+  --to "$LAST_MONTH_END" \
+  --format tally-xml \
+  --output "$OUTPUT_DIR/sales-$(date -d 'last month' +%Y-%m).xml"
+
+# Export purchase invoices
+hisaabo invoice list \
+  --type purchase \
+  --from "$LAST_MONTH_START" \
+  --to "$LAST_MONTH_END" \
+  --format tally-xml \
+  --output "$OUTPUT_DIR/purchases-$(date -d 'last month' +%Y-%m).xml"
+
+echo "Tally export complete. Files saved to $OUTPUT_DIR"
+```
+
+### Import into Tally
+
+1. Open Tally Prime
+2. Go to **Gateway of Tally > Import Data**
+3. Select **Vouchers** for invoice files, **Masters** for party files
+4. Browse to the exported XML file
+5. Tally validates and imports the data
+
+---
+
+## Custom AI Agents (OpenClaw)
+
+**Use case:** An online electronics store in Bengaluru deploys a customer-facing agent that handles order status, payment confirmations, and product availability questions — without routing any of it through the owner. The owner only sees escalations.
+
+OpenClaw agents connect to Hisaabo via the [MCP server](/ai/mcp-server/). Once connected, the agent has access to all of your live business data.
+
+### Customer service agent
+
+```yaml
+# customer-service-agent.yaml
+name: store-support-agent
+description: "Customer service agent for Hisaabo online store"
+
+mcp_servers:
+  - name: hisaabo
+    url: http://localhost:3100/mcp
+    # Start with --readonly so the agent cannot create or modify records
+
+system_prompt: |
+  You are a friendly customer service agent for [Your Store Name].
+  You help customers with:
+  - Order status and tracking
+  - Payment confirmation
+  - Product availability and pricing
+  - Store policies and delivery timelines
+
+  Rules:
+  - Always greet customers by name if you know it
+  - For order status, always include the expected delivery date
+  - For payment queries, confirm the amount and payment method
+  - If you cannot answer a question, say "Let me connect you with our team"
+    and set escalate: true in your response
+  - Never discuss pricing adjustments, refunds, or disputes
+    without escalating to a human
+
+  Use INR for all amounts. Keep responses under 3 sentences unless
+  the customer asks for details.
+
+escalation_webhook: https://your-hisaabo-instance.com/webhooks/escalate
+```
+
+### B2B account management agent
+
+For businesses that sell to other businesses, an OpenClaw agent can proactively manage the relationship:
+
+```yaml
+# b2b-account-agent.yaml
+name: b2b-account-manager
+schedule: "0 9 * * 1"  # Every Monday at 9 AM
+
+mcp_servers:
+  - name: hisaabo
+    url: http://localhost:3100/mcp
+
+instructions: |
+  Review the outstanding balances for all B2B customers.
+  For each customer:
+  1. Check their outstanding balance via party_outstanding
+  2. Check their last payment date via payment_list
+  3. Check if any invoices are overdue via invoice_list with status: overdue
+
+  Categorize customers:
+  - Green: No overdue, recent payment in last 30 days
+  - Yellow: Overdue < 30 days, or no payment in 45 days
+  - Red: Overdue > 30 days, or no payment in 60 days
+
+  Generate a weekly account health report.
+  For Red customers, draft a polite payment reminder.
+  Send the report to the owner's email.
+```
+
+### Multi-business CA agent
+
+A chartered accountant managing multiple clients through a single agent:
+
+```yaml
+# ca-multi-client-agent.yaml
+name: ca-client-agent
+description: "CA agent with read-only access to client businesses"
+
+# Multiple MCP server connections — one per client business
+mcp_servers:
+  - name: client-sharma-traders
+    url: http://localhost:3101/mcp  # MCP server for Client 1
+  - name: client-gupta-enterprises
+    url: http://localhost:3102/mcp  # MCP server for Client 2
+  - name: client-vinod-sons
+    url: http://localhost:3103/mcp  # MCP server for Client 3
+
+system_prompt: |
+  You are a CA assistant managing accounts for three clients.
+  When asked about a client, always specify which business you're referring to.
+  For GST queries, always check the filing deadline and mention it.
+  For outstanding receivables, flag any amount overdue more than 60 days as high-risk.
+  Never compare confidential financial data between clients in a response.
+```
+
+The CA can now ask: "What's the combined GST liability for all three clients this quarter?" and get a consolidated view — each client's data accessed through its own MCP connection, combined by the agent.
+
+---
+
+## Building Your Own Integration
+
+If you have a use case not covered here, the [API for AI agents](/ai/#api-for-ai-agents) section of the overview shows how to call the Hisaabo tRPC API directly from any language.
+
+For TypeScript integrations, import `AppRouter` from `@hisaabo/api` as a devDependency for full end-to-end type safety — your editor will autocomplete every field, every filter, every response shape.
+
+For read-heavy integrations (reporting, dashboards, syncs), use the CLI's `--json` output and pipe it into your processing layer. It is simpler, more debuggable, and easier to maintain than building an API client from scratch.
+
+---
+
+## Related Documentation
+
+- [AI & Automation overview](/ai/) — Start here if you're new to Hisaabo's AI capabilities
+- [MCP Server](/ai/mcp-server/) — Full tool reference and Claude Desktop setup
+- [CLI Tool](/ai/cli/) — Full command reference and automation scripts
+- [API Reference](https://api-docs.hisaabo.in) — Direct tRPC API access
+- [Online Store](/online-store/) — Store setup for WhatsApp and customer service integrations
+- [Self-Hosting](/self-hosting/) — Running Hisaabo on your own infrastructure
