@@ -34,7 +34,7 @@ export default function MoreScreen() {
           {MENU_ITEMS.map((item) => (
             <TouchableOpacity
               key={item.label}
-              style={[styles.card, { width: CARD_WIDTH }]}
+              style={styles.card}
               onPress={() => router.push(item.route as any)}
               activeOpacity={0.7}
             >
@@ -77,16 +77,18 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: GAP,
+    justifyContent: "space-between",
+    rowGap: GAP,
   },
   card: {
     backgroundColor: "#1a1a2e",
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#2d2d44",
-    padding: 20,
+    padding: 16,
     alignItems: "center",
     gap: 8,
+    width: CARD_WIDTH,
   },
   iconWrapper: {
     width: 48,

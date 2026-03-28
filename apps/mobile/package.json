@@ -5,7 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "dev": "expo start",
-    "dev:android": "expo start --android",
+    "dev:android": "EXPO_PUBLIC_API_URL=http://$(hostname -I | awk '{print $1}'):3000 expo start --android",
     "dev:ios": "expo start --ios",
     "dev:web": "expo start --web",
     "prebuild": "expo prebuild",
