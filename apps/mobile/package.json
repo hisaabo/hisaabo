@@ -9,6 +9,7 @@
     "dev:ios": "expo start --ios",
     "dev:web": "expo start --web",
     "prebuild": "expo prebuild",
+    "build:apk": "bash scripts/build-apk.sh",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings ./app ./src"
   },
@@ -21,6 +22,7 @@
     "@trpc/react-query": "^11.0.0",
     "expo": "~52.0.0",
     "expo-constants": "~17.0.0",
+    "expo-contacts": "~14.0.5",
     "expo-file-system": "~18.0.0",
     "expo-font": "~13.0.0",
     "expo-haptics": "55.0.10-canary-20260327-0789fbc",

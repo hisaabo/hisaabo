@@ -14,7 +14,7 @@ import { useState } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
-import { Card, QueryError, Skeleton, ScreenHeader } from "../../../src/components/ui";
+import { Card, QueryError, Skeleton, ScreenHeader, DatePickerField } from "../../../src/components/ui";
 
 type Period = "month" | "quarter" | "fy" | "all" | "custom";
 
@@ -23,14 +23,14 @@ interface PeriodDates {
   toDate?: string;
 }
 
-function getPeriodDates(period: Period, customFrom: string, customTo: string): PeriodDates {
+function getPeriodDates(period: Period, customFrom: Date | null, customTo: Date | null): PeriodDates {
   const now = new Date();
 
   if (period === "all") return {};
 
   if (period === "custom") {
-    const from = customFrom ? new Date(customFrom + "T00:00:00.000Z").toISOString() : undefined;
-    const to = customTo ? new Date(customTo + "T23:59:59.999Z").toISOString() : undefined;
+    const from = customFrom ? new Date(customFrom.getFullYear(), customFrom.getMonth(), customFrom.getDate()).toISOString() : undefined;
+    const to = customTo ? new Date(customTo.getFullYear(), customTo.getMonth(), customTo.getDate(), 23, 59, 59, 999).toISOString() : undefined;
     return { fromDate: from, toDate: to };
   }
 
@@ -101,8 +101,8 @@ const barStyles = StyleSheet.create({
 export default function ReportsScreen() {
   const router = useRouter();
   const [period, setPeriod] = useState<Period>("fy");
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
+  const [customFrom, setCustomFrom] = useState<Date | null>(null);
+  const [customTo, setCustomTo] = useState<Date | null>(null);
 
   const dates = getPeriodDates(period, customFrom, customTo);
 
@@ -202,25 +202,18 @@ export default function ReportsScreen() {
         {period === "custom" && (
           <View style={styles.customDateRow}>
             <View style={styles.customDateField}>
-              <Text style={styles.customDateLabel}>From</Text>
-              <TextInput
-                style={styles.customDateInput}
-                value={customFrom}
-                onChangeText={setCustomFrom}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numbers-and-punctuation"
+              <DatePickerField
+                label="From"
+                value={customFrom ?? new Date()}
+                onChange={setCustomFrom}
               />
             </View>
             <View style={styles.customDateField}>
-              <Text style={styles.customDateLabel}>To</Text>
-              <TextInput
-                style={styles.customDateInput}
-                value={customTo}
-                onChangeText={setCustomTo}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numbers-and-punctuation"
+              <DatePickerField
+                label="To"
+                value={customTo ?? new Date()}
+                onChange={setCustomTo}
+                minimumDate={customFrom ?? undefined}
               />
             </View>
           </View>

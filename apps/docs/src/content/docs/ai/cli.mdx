@@ -1,0 +1,586 @@
+---
+title: CLI Tool
+description: The Hisaabo CLI for terminal-based business management. Installation, authentication, full command reference, scripting patterns, and cron job examples.
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Hisaabo CLI (`hisaabo`) brings your entire business management workflow to the terminal. It is useful for three things: quick lookups without opening a browser, automation scripts and cron jobs, and AI agent workflows that execute shell commands as part of a broader pipeline.
+
+Every command outputs clean JSON by default, making it straightforward to pipe into `jq`, `mail`, `curl`, or any other Unix tool.
+
+---
+
+## Installation
+
+```bash
+npm install -g @hisaabo/cli
+```
+
+Verify the installation:
+
+```bash
+hisaabo --version
+```
+
+---
+
+## Authentication
+
+### Login
+
+```bash
+hisaabo login --api-url https://your-hisaabo-instance.com
+```
+
+This opens a browser window for authentication and stores a session token in `~/.hisaabo/credentials.json`. For headless environments (servers, CI), use an API key instead:
+
+```bash
+hisaabo login --api-url https://your-hisaabo-instance.com \
+              --api-key hisaabo_key_xxxxxxxxxxxxxxxxxx
+```
+
+Generate an API key from **Settings > API Keys** in your Hisaabo dashboard.
+
+### Environment variables (recommended for automation)
+
+Rather than logging in interactively, set credentials as environment variables. This is the preferred approach for cron jobs and CI/CD pipelines:
+
+```bash
+export HISAABO_API_URL=https://your-hisaabo-instance.com
+export HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
+export HISAABO_BUSINESS_ID=biz_xxxxxxxxxxxxxxxxxx
+```
+
+### Select active business
+
+If your account manages multiple businesses:
+
+```bash
+# List all businesses on your account
+hisaabo business list
+
+# Set the active business for all subsequent commands
+hisaabo business use biz_xxxxxxxxxxxxxxxxxx
+
+# Or pass --business on any command to override
+hisaabo dashboard --business biz_xxxxxxxxxxxxxxxxxx
+```
+
+### Check current context
+
+```bash
+hisaabo whoami
+# Output:
+# Logged in as: owner@yourbusiness.com
+# API URL:      https://your-hisaabo-instance.com
+# Business:     Sharma Traders (biz_xxxxxxxxxxxxxxxxxx)
+```
+
+---
+
+## Command Reference
+
+### `hisaabo dashboard`
+
+Display key business metrics.
+
+```bash
+hisaabo dashboard
+hisaabo dashboard --period today
+hisaabo dashboard --period this-week
+hisaabo dashboard --period this-month
+hisaabo dashboard --period last-month
+hisaabo dashboard --period this-year
+hisaabo dashboard --from 2026-01-01 --to 2026-03-31
+```
+
+**Options:**
+| Flag | Description |
+|---|---|
+| `--period` | Predefined period: `today`, `this-week`, `this-month`, `last-month`, `this-year` |
+| `--from` | Start date (ISO 8601) for custom period |
+| `--to` | End date (ISO 8601) for custom period |
+| `--json` | Output raw JSON instead of formatted table |
+
+**Example output:**
+
+```
+Business Dashboard — March 2026
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Revenue:        ₹4,82,500
+Expenses:       ₹1,23,400
+Net Profit:     ₹3,59,100
+Outstanding:    ₹78,250 (6 overdue invoices)
+
+Top customers this month:
+  Gupta Enterprises      ₹1,42,000
+  Sharma Traders         ₹98,500
+  Vinod & Sons           ₹67,000
+
+Low stock alerts: 3 items
+```
+
+---
+
+### `hisaabo invoice`
+
+#### `hisaabo invoice list`
+
+```bash
+hisaabo invoice list
+hisaabo invoice list --status overdue
+hisaabo invoice list --status paid
+hisaabo invoice list --party "Sharma Traders"
+hisaabo invoice list --from 2026-03-01 --to 2026-03-31
+hisaabo invoice list --status overdue --sort oldest-first
+hisaabo invoice list --type purchase
+```
+
+**Options:**
+| Flag | Description |
+|---|---|
+| `--status` | Filter: `draft`, `sent`, `paid`, `overdue`, `cancelled` |
+| `--type` | Invoice type: `sale` (default) or `purchase` |
+| `--party` | Party name or ID |
+| `--from` / `--to` | Date range filter |
+| `--sort` | Sort order: `newest-first` (default), `oldest-first`, `amount-asc`, `amount-desc` |
+| `--limit` | Maximum results (default 50, max 100) |
+| `--json` | Raw JSON output |
+
+#### `hisaabo invoice get`
+
+```bash
+hisaabo invoice get BB-12948
+hisaabo invoice get inv_xxxxxxxxxx
+```
+
+#### `hisaabo invoice create`
+
+```bash
+hisaabo invoice create \
+  --party "Montu Arora" \
+  --item "Spinach" --quantity 7.3 --unit kg --price 65 \
+  --item "Tomato" --quantity 5 --unit kg --price 40 \
+  --date 2026-03-26 \
+  --due-date 2026-04-10
+```
+
+For complex invoices with many line items, pass a JSON file:
+
+```bash
+hisaabo invoice create --from-file invoice.json
+```
+
+Where `invoice.json` follows the format:
+
+```json
+{
+  "party": "Gupta Enterprises",
+  "date": "2026-03-26",
+  "dueDate": "2026-04-10",
+  "items": [
+    { "item": "Basmati Rice 25kg", "quantity": 10, "unit": "bag", "price": "1250.00" },
+    { "item": "Mustard Oil 15L", "quantity": 5, "unit": "can", "price": "2100.00" }
+  ],
+  "notes": "Delivery to warehouse on 28th"
+}
+```
+
+#### `hisaabo invoice pdf`
+
+```bash
+# Download PDF to current directory
+hisaabo invoice pdf BB-12948
+
+# Specify output path
+hisaabo invoice pdf BB-12948 --output /tmp/invoices/
+
+# Thermal (58mm) format
+hisaabo invoice pdf BB-12948 --format thermal
+```
+
+---
+
+### `hisaabo party`
+
+#### `hisaabo party list`
+
+```bash
+hisaabo party list
+hisaabo party list --type customer
+hisaabo party list --type supplier
+hisaabo party list --search "sharma"
+hisaabo party list --outstanding   # only parties with unpaid balance
+hisaabo party list --json
+```
+
+#### `hisaabo party get`
+
+```bash
+hisaabo party get "Sharma Traders"
+hisaabo party get party_xxxxxxxxxx --ledger
+hisaabo party get "Gupta Enterprises" --ledger --from 2026-01-01
+```
+
+---
+
+### `hisaabo item`
+
+#### `hisaabo item list`
+
+```bash
+hisaabo item list
+hisaabo item list --low-stock
+hisaabo item list --search "rice"
+hisaabo item list --category "Grains"
+hisaabo item list --json
+```
+
+#### `hisaabo item get`
+
+```bash
+hisaabo item get "Basmati Rice 25kg"
+hisaabo item get item_xxxxxxxxxx
+```
+
+#### `hisaabo item update-stock`
+
+```bash
+# Add stock (positive adjustment)
+hisaabo item update-stock "Basmati Rice 25kg" --adjustment +50 --reason "Purchase from supplier"
+
+# Remove stock (negative adjustment — damage, theft, sampling)
+hisaabo item update-stock "Mustard Oil 15L" --adjustment -3 --reason "Damaged in transit"
+```
+
+---
+
+### `hisaabo payment`
+
+#### `hisaabo payment list`
+
+```bash
+hisaabo payment list
+hisaabo payment list --party "Sharma Traders"
+hisaabo payment list --from 2026-03-01 --to 2026-03-31
+hisaabo payment list --mode upi
+```
+
+#### `hisaabo payment create`
+
+```bash
+# Record payment received from customer
+hisaabo payment create \
+  --party "Sharma Traders" \
+  --amount 25000 \
+  --mode upi \
+  --date 2026-03-26 \
+  --reference "UTR123456789" \
+  --allocate BB-12800 BB-12801
+
+# Bulk payment without specific invoice allocation
+hisaabo payment create \
+  --party "Gupta Enterprises" \
+  --amount 50000 \
+  --mode bank_transfer \
+  --reference "NEFT20260326"
+```
+
+---
+
+### `hisaabo expense`
+
+#### `hisaabo expense list`
+
+```bash
+hisaabo expense list
+hisaabo expense list --category "Transport"
+hisaabo expense list --from 2026-03-01 --to 2026-03-31
+hisaabo expense list --json
+```
+
+#### `hisaabo expense create`
+
+```bash
+hisaabo expense create \
+  --amount 1500 \
+  --category "Transport" \
+  --date 2026-03-26 \
+  --description "Delivery to Sector 15 warehouse"
+```
+
+---
+
+### `hisaabo gst`
+
+#### `hisaabo gst summary`
+
+```bash
+hisaabo gst summary --period this-month
+hisaabo gst summary --period last-month
+hisaabo gst summary --period this-quarter
+hisaabo gst summary --from 2026-01-01 --to 2026-03-31
+```
+
+#### `hisaabo gst export`
+
+Export data for filing with your CA or uploading to the GST portal:
+
+```bash
+# GSTR-1 data for March 2026
+hisaabo gst export --type gstr1 --month 3 --year 2026 --format json
+
+# GSTR-3B summary
+hisaabo gst export --type gstr3b --month 3 --year 2026 --format csv
+
+# Save to file
+hisaabo gst export --type gstr1 --month 3 --year 2026 \
+  --output /var/gst-reports/
+```
+
+---
+
+### `hisaabo report`
+
+```bash
+# Receivables aging report
+hisaabo report aging
+
+# Profit and loss
+hisaabo report pnl --period this-month
+
+# Sales trends
+hisaabo report sales --period this-year --group-by month
+
+# Party ledger
+hisaabo report ledger --party "Sharma Traders" --from 2026-04-01
+```
+
+---
+
+### Global flags
+
+These flags work on every command:
+
+| Flag | Description |
+|---|---|
+| `--json` | Output raw JSON instead of formatted tables |
+| `--business <id>` | Override the active business for this command |
+| `--api-url <url>` | Override the API URL for this command |
+| `--quiet` | Suppress all output except errors |
+| `--no-color` | Disable color output (useful for log files) |
+| `--help` | Show help for any command |
+
+---
+
+## Scripting Patterns
+
+### Process JSON output with jq
+
+```bash
+# Sum total outstanding across all overdue invoices
+hisaabo invoice list --status overdue --json | \
+  jq '[.[].totalAmount | tonumber] | add'
+
+# List items that need reordering with their stock levels
+hisaabo item list --low-stock --json | \
+  jq '.[] | "\(.name): \(.stockQuantity) \(.unit) (min: \(.lowStockThreshold))"'
+
+# Get the top 5 customers by outstanding balance
+hisaabo party list --outstanding --json | \
+  jq 'sort_by(.outstandingBalance | tonumber) | reverse | .[0:5] | .[] | "\(.name): ₹\(.outstandingBalance)"'
+```
+
+### Use exit codes in shell scripts
+
+The CLI exits with code `0` on success and non-zero on failure. Use this in conditional logic:
+
+```bash
+#!/bin/bash
+if hisaabo invoice get "$INVOICE_ID" --quiet; then
+  echo "Invoice $INVOICE_ID found"
+else
+  echo "Invoice $INVOICE_ID not found — check ID" >&2
+  exit 1
+fi
+```
+
+### Chaining commands
+
+```bash
+# Create invoice and immediately download the PDF
+INVOICE_ID=$(hisaabo invoice create \
+  --party "Montu Arora" \
+  --item "Spinach" --quantity 7.3 --unit kg --price 65 \
+  --json | jq -r '.id')
+
+hisaabo invoice pdf "$INVOICE_ID" --output /tmp/
+echo "Invoice PDF saved to /tmp/${INVOICE_ID}.pdf"
+```
+
+---
+
+## Cron Job Examples
+
+### Daily morning business snapshot
+
+```bash
+# /etc/cron.d/hisaabo
+# Environment
+HISAABO_API_URL=https://your-hisaabo-instance.com
+HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
+HISAABO_BUSINESS_ID=biz_xxxxxxxxxxxxxxxxxx
+
+# Daily summary at 8:00 AM
+0 8 * * * root hisaabo dashboard --period today --json | \
+  jq -r '"Revenue: ₹\(.totalRevenue)\nOutstanding: ₹\(.totalOutstanding)\nOverdue invoices: \(.overdueCount)"' | \
+  mail -s "Daily Business Summary" owner@yourbusiness.com
+
+# Overdue invoice alert at 9:00 AM
+0 9 * * * root hisaabo invoice list --status overdue --json | \
+  jq 'length' | \
+  xargs -I{} sh -c '[ {} -gt 0 ] && hisaabo invoice list --status overdue | \
+    mail -s "ALERT: {} overdue invoices need attention" owner@yourbusiness.com'
+```
+
+### Weekly reports (every Monday at 8 AM)
+
+```bash
+0 8 * * 1 root /opt/hisaabo-scripts/weekly-report.sh
+```
+
+```bash
+#!/bin/bash
+# /opt/hisaabo-scripts/weekly-report.sh
+
+WEEK=$(date +%Y-W%V)
+REPORT_DIR="/var/reports/hisaabo"
+mkdir -p "$REPORT_DIR"
+
+# Collect data
+DASHBOARD=$(hisaabo dashboard --period this-week --json)
+OVERDUE=$(hisaabo invoice list --status overdue --json)
+LOW_STOCK=$(hisaabo item list --low-stock --json)
+
+# Build report
+REPORT=$(jq -n \
+  --argjson dashboard "$DASHBOARD" \
+  --argjson overdue "$OVERDUE" \
+  --argjson low_stock "$LOW_STOCK" \
+  '{
+    week: "'"$WEEK"'",
+    revenue: $dashboard.totalRevenue,
+    expenses: $dashboard.totalExpenses,
+    profit: $dashboard.netProfit,
+    overdueCount: ($overdue | length),
+    overdueTotal: ([($overdue[].totalAmount | tonumber)] | add // 0),
+    lowStockCount: ($low_stock | length),
+    lowStockItems: [$low_stock[].name]
+  }')
+
+echo "$REPORT" > "$REPORT_DIR/week-$WEEK.json"
+
+# Format and send
+echo "$REPORT" | jq -r '
+"Weekly Report: \(.week)
+━━━━━━━━━━━━━━━━━━━━━
+Revenue:  ₹\(.revenue)
+Expenses: ₹\(.expenses)
+Profit:   ₹\(.profit)
+
+Overdue: \(.overdueCount) invoices (₹\(.overdueTotal))
+Low Stock: \(.lowStockCount) items: \(.lowStockItems | join(", "))"
+' | mail -s "Hisaabo Weekly Report — $WEEK" owner@yourbusiness.com
+```
+
+### Monthly GST export (1st of every month)
+
+```bash
+0 6 1 * * root /opt/hisaabo-scripts/monthly-gst-export.sh
+```
+
+```bash
+#!/bin/bash
+# /opt/hisaabo-scripts/monthly-gst-export.sh
+
+LAST_MONTH=$(date -d "last month" +%m)
+LAST_YEAR=$(date -d "last month" +%Y)
+OUTPUT_DIR="/var/gst-reports"
+mkdir -p "$OUTPUT_DIR"
+
+# Export GSTR-1 data
+hisaabo gst export \
+  --type gstr1 \
+  --month "$LAST_MONTH" \
+  --year "$LAST_YEAR" \
+  --format json \
+  --output "$OUTPUT_DIR"
+
+# Export GSTR-3B summary
+hisaabo gst export \
+  --type gstr3b \
+  --month "$LAST_MONTH" \
+  --year "$LAST_YEAR" \
+  --format csv \
+  --output "$OUTPUT_DIR"
+
+# Email summary to CA
+hisaabo gst summary \
+  --period last-month \
+  | mail -s "GST Summary ${LAST_YEAR}-${LAST_MONTH} — Please review before filing" \
+    ca@yourca.com
+```
+
+### Low stock reorder alert (twice daily)
+
+```bash
+0 9,17 * * * root /opt/hisaabo-scripts/low-stock-check.sh
+```
+
+```bash
+#!/bin/bash
+# /opt/hisaabo-scripts/low-stock-check.sh
+
+LOW_STOCK=$(hisaabo item list --low-stock --json)
+COUNT=$(echo "$LOW_STOCK" | jq 'length')
+
+if [ "$COUNT" -gt 0 ]; then
+  ITEMS=$(echo "$LOW_STOCK" | jq -r \
+    '.[] | "  \(.name): \(.stockQuantity) \(.unit) remaining (min: \(.lowStockThreshold) \(.unit))"')
+
+  echo -e "The following $COUNT items need reordering:\n\n$ITEMS" | \
+    mail -s "Stock Alert: $COUNT items need reordering" owner@yourbusiness.com
+fi
+```
+
+---
+
+## Configuration File
+
+The CLI looks for a configuration file at `~/.hisaabo/config.json`. You can also place a project-level config at `.hisaabo.json` in your working directory:
+
+```json
+{
+  "apiUrl": "https://your-hisaabo-instance.com",
+  "defaultBusiness": "biz_xxxxxxxxxxxxxxxxxx",
+  "output": {
+    "format": "table",
+    "color": true,
+    "pager": true
+  }
+}
+```
+
+Environment variables override the config file. Command-line flags override environment variables.
+
+---
+
+## Related Documentation
+
+- [AI & Automation overview](/ai/)
+- [MCP Server](/ai/mcp-server/)
+- [API Reference](https://api-docs.hisaabo.in)
+- [Self-Hosting](/self-hosting/) — generating API keys, setting up your instance

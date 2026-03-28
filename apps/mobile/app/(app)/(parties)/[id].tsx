@@ -20,7 +20,7 @@ import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
-import { Card, QueryError } from "../../../src/components/ui";
+import { Card, QueryError, DatePickerField } from "../../../src/components/ui";
 
 type LedgerTab = "ledger" | "topItems";
 
@@ -29,8 +29,8 @@ export default function PartyDetailScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<LedgerTab>("ledger");
   const [ledgerPage, setLedgerPage] = useState(1);
-  const [ledgerFrom, setLedgerFrom] = useState("");
-  const [ledgerTo, setLedgerTo] = useState("");
+  const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
+  const [ledgerTo, setLedgerTo] = useState<Date | null>(null);
   const [showDateFilter, setShowDateFilter] = useState(false);
 
   const { data: party, isLoading: partyLoading, refetch: refetchParty, isRefetching: isRefetchingParty } =
@@ -46,8 +46,8 @@ export default function PartyDetailScreen() {
     page: ledgerPage,
     limit: 50,
   };
-  if (ledgerFrom) ledgerInput.fromDate = new Date(ledgerFrom + "T00:00:00.000Z").toISOString();
-  if (ledgerTo) ledgerInput.toDate = new Date(ledgerTo + "T23:59:59.999Z").toISOString();
+  if (ledgerFrom) ledgerInput.fromDate = new Date(ledgerFrom.getFullYear(), ledgerFrom.getMonth(), ledgerFrom.getDate()).toISOString();
+  if (ledgerTo) ledgerInput.toDate = new Date(ledgerTo.getFullYear(), ledgerTo.getMonth(), ledgerTo.getDate(), 23, 59, 59, 999).toISOString();
 
   const { data: ledgerData, isLoading: ledgerLoading } =
     trpc.party.ledger.useQuery(
@@ -358,25 +358,18 @@ export default function PartyDetailScreen() {
         {activeTab === "ledger" && showDateFilter && (
           <View style={styles.dateFilterRow}>
             <View style={styles.dateField}>
-              <Text style={styles.dateFieldLabel}>From</Text>
-              <TextInput
-                style={styles.dateFieldInput}
-                value={ledgerFrom}
-                onChangeText={setLedgerFrom}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numbers-and-punctuation"
+              <DatePickerField
+                label="From"
+                value={ledgerFrom ?? new Date()}
+                onChange={setLedgerFrom}
               />
             </View>
             <View style={styles.dateField}>
-              <Text style={styles.dateFieldLabel}>To</Text>
-              <TextInput
-                style={styles.dateFieldInput}
-                value={ledgerTo}
-                onChangeText={setLedgerTo}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numbers-and-punctuation"
+              <DatePickerField
+                label="To"
+                value={ledgerTo ?? new Date()}
+                onChange={setLedgerTo}
+                minimumDate={ledgerFrom ?? undefined}
               />
             </View>
           </View>

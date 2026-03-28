@@ -18,6 +18,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "other";
 type TxType = "deposit" | "withdrawal";
@@ -31,7 +32,7 @@ const ACCOUNT_TYPE_CONFIG: Record<AccountType, { label: string; color: string; b
   other: { label: "Other", color: "#9ca3af", bg: "rgba(156,163,175,0.15)", icon: "ellipsis-horizontal-outline" },
 };
 
-function todayISO() { return new Date().toISOString(); }
+function todayDate() { return new Date(); }
 
 interface AddTransactionModalProps {
   visible: boolean;
@@ -44,7 +45,7 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
   const [txType, setTxType] = useState<TxType>("deposit");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [txDate] = useState(todayISO());
+  const [txDate, setTxDate] = useState(todayDate());
 
   const mutation = trpc.bankAccount.addTransaction.useMutation({
     onSuccess: () => {
@@ -68,7 +69,7 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
       type: txType,
       amount: amt.toFixed(2),
       description: description.trim() || undefined,
-      transactionDate: txDate,
+      transactionDate: txDate.toISOString(),
     });
   };
 
@@ -111,6 +112,7 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor={colors.textMuted}
+            returnKeyType="done"
           />
 
           <Text style={ms.fieldLabel}>Description (optional)</Text>
@@ -125,11 +127,11 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
             textAlignVertical="top"
           />
 
-          <Text style={ms.fieldLabel}>Date</Text>
-          <View style={ms.datePill}>
-            <Ionicons name="calendar-outline" size={15} color={colors.textMuted} />
-            <Text style={ms.datePillText}>{new Date(txDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</Text>
-          </View>
+          <DatePickerField
+            label="Date"
+            value={txDate}
+            onChange={setTxDate}
+          />
 
           <TouchableOpacity
             style={[ms.submitBtn, mutation.isPending && ms.submitBtnDisabled]}

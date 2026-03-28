@@ -25,7 +25,9 @@ This page is a reference for ongoing self-hosting operations. For initial instal
 └─────────────────────────────────────────────────┘
 ```
 
-The API serves the backend tRPC endpoints. The web frontend is deployed separately (hosted on a CDN, Vercel, or any static hosting). The mobile app connects to the API directly via Bearer token authentication.
+The API serves the backend tRPC endpoints. The web frontend is deployed separately (hosted on a CDN, Vercel, or any static hosting) and is the primary interface for self-hosted users — accessible from any browser, including on phones and tablets.
+
+The native mobile app (Android/iOS) and desktop app (macOS/Windows/Linux) are **Hisaabo Cloud** features and connect to Hisaabo Cloud by default. Self-hosted users have full access to every feature through the web app.
 
 ## Environment variable reference
 

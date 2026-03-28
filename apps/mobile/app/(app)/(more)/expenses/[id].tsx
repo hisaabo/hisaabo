@@ -17,7 +17,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
-import { QueryError } from "../../../../src/components/ui";
+import { QueryError, DatePickerField } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -52,7 +52,7 @@ export default function ExpenseDetailScreen() {
   const [editDescription, setEditDescription] = useState("");
   const [editAmount, setEditAmount] = useState("");
   const [editMode, setEditMode] = useState<PaymentMode>("cash");
-  const [editDate, setEditDate] = useState("");
+  const [editDate, setEditDate] = useState(new Date());
   const [editReferenceNumber, setEditReferenceNumber] = useState("");
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
 
@@ -95,8 +95,8 @@ export default function ExpenseDetailScreen() {
     setEditMode((expenseItem.mode as PaymentMode) ?? "cash");
     setEditDate(
       expenseItem.expenseDate
-        ? new Date(expenseItem.expenseDate).toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10)
+        ? new Date(expenseItem.expenseDate)
+        : new Date()
     );
     setEditReferenceNumber(expenseItem.referenceNumber ?? "");
     setIsEditing(true);
@@ -120,9 +120,7 @@ export default function ExpenseDetailScreen() {
         description: editDescription.trim() || undefined,
         amount: parseFloat(editAmount).toFixed(2),
         mode: editMode,
-        expenseDate: editDate
-          ? new Date(editDate + "T00:00:00.000Z").toISOString()
-          : undefined,
+        expenseDate: editDate.toISOString(),
         referenceNumber: editReferenceNumber.trim() || undefined,
       },
     });
@@ -338,13 +336,13 @@ export default function ExpenseDetailScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Date</Text>
             {isEditing ? (
-              <TextInput
-                style={styles.inlineInput}
-                value={editDate}
-                onChangeText={setEditDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-              />
+              <View style={{ flex: 1 }}>
+                <DatePickerField
+                  label=""
+                  value={editDate}
+                  onChange={setEditDate}
+                />
+              </View>
             ) : (
               <Text style={styles.detailValue}>
                 {expenseItem.expenseDate ? formatDate(expenseItem.expenseDate) : "—"}

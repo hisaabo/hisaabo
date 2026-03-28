@@ -17,7 +17,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
-import { QueryError } from "../../../../src/components/ui";
+import { QueryError, DatePickerField } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -47,7 +47,7 @@ export default function PaymentDetailScreen() {
   const [editMode, setEditMode] = useState<PaymentMode>("cash");
   const [editReferenceNumber, setEditReferenceNumber] = useState("");
   const [editNotes, setEditNotes] = useState("");
-  const [editDate, setEditDate] = useState("");
+  const [editDate, setEditDate] = useState(new Date());
 
   const { data: payment, isLoading, refetch, isRefetching } = trpc.payment.getById.useQuery(
     { id: id ?? "" },
@@ -84,8 +84,8 @@ export default function PaymentDetailScreen() {
     setEditNotes(payment.notes ?? "");
     setEditDate(
       payment.paymentDate
-        ? new Date(payment.paymentDate).toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10)
+        ? new Date(payment.paymentDate)
+        : new Date()
     );
     setIsEditing(true);
   }, [payment]);
@@ -103,9 +103,7 @@ export default function PaymentDetailScreen() {
       mode: editMode,
       referenceNumber: editReferenceNumber.trim() || null,
       notes: editNotes.trim() || null,
-      paymentDate: editDate
-        ? new Date(editDate + "T00:00:00.000Z").toISOString()
-        : undefined,
+      paymentDate: editDate.toISOString(),
     });
   }, [payment, editAmount, editMode, editReferenceNumber, editNotes, editDate, updatePayment]);
 
@@ -264,13 +262,13 @@ export default function PaymentDetailScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Date</Text>
             {isEditing ? (
-              <TextInput
-                style={styles.inlineInput}
-                value={editDate}
-                onChangeText={setEditDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-              />
+              <View style={{ flex: 1 }}>
+                <DatePickerField
+                  label=""
+                  value={editDate}
+                  onChange={setEditDate}
+                />
+              </View>
             ) : (
               <Text style={styles.detailValue}>
                 {payment.paymentDate ? formatDate(payment.paymentDate) : "—"}

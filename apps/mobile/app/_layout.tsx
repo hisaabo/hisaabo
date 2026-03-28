@@ -7,6 +7,7 @@ import {
   Animated,
   Easing,
   Dimensions,
+  AppState,
 } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -14,6 +15,8 @@ import * as SplashScreen from "expo-splash-screen";
 import { TRPCProvider } from "../src/providers/TRPCProvider";
 import { useAuthStore } from "../src/stores/auth";
 import { useBusinessStore } from "../src/stores/business";
+import { useBiometricStore } from "../src/stores/biometric";
+import { LockScreen } from "../src/components/LockScreen";
 
 // Keep the native splash screen visible while we hydrate stores
 SplashScreen.preventAutoHideAsync();
@@ -446,18 +449,31 @@ const splashStyles = StyleSheet.create({
 });
 
 /* ─── Root Layout ────────────────────────────────────────────────────────── */
+/** How long the app must be in background before re-locking (ms) */
+const RELOCK_THRESHOLD = 30_000;
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const hydrate = useAuthStore((s) => s.hydrate);
   const isHydrated = useAuthStore((s) => s.isHydrated);
   const hydrateBusinessStore = useBusinessStore((s) => s.hydrate);
 
+  const hydrateBiometric = useBiometricStore((s) => s.hydrate);
+  const biometricHydrated = useBiometricStore((s) => s.isHydrated);
+  const isLocked = useBiometricStore((s) => s.isLocked);
+  const biometricEnabled = useBiometricStore((s) => s.biometricEnabled);
+  const pinEnabled = useBiometricStore((s) => s.pinEnabled);
+  const lockApp = useBiometricStore((s) => s.lock);
+
   const [appReady, setAppReady] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
+  // Track when the app went to background for re-lock logic
+  const lastBackground = useRef(Date.now());
+
   useEffect(() => {
     async function prepare() {
-      await Promise.all([hydrate(), hydrateBusinessStore()]);
+      await Promise.all([hydrate(), hydrateBusinessStore(), hydrateBiometric()]);
       // Hide the native splash to reveal our custom animated one
       await SplashScreen.hideAsync();
       // Signal the custom splash to begin its exit animation
@@ -466,8 +482,24 @@ export default function RootLayout() {
     prepare();
   }, []);
 
-  // Don't render app content until auth store has hydrated
-  if (!isHydrated) {
+  // Re-lock when app returns from background after threshold
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background") {
+        lastBackground.current = Date.now();
+      }
+      if (state === "active") {
+        const elapsed = Date.now() - lastBackground.current;
+        if (elapsed > RELOCK_THRESHOLD) {
+          lockApp();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [lockApp]);
+
+  // Don't render app content until auth + biometric stores have hydrated
+  if (!isHydrated || !biometricHydrated) {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         <AnimatedSplash ready={appReady} onFinish={() => setSplashDone(true)} />
@@ -482,6 +514,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
       </Stack>
+      {/* Lock screen overlay — renders on top when locked */}
+      {isLocked && (biometricEnabled || pinEnabled) && splashDone && <LockScreen />}
       {/* Custom animated splash renders on top until animation completes */}
       {!splashDone && (
         <AnimatedSplash ready={appReady} onFinish={() => setSplashDone(true)} />

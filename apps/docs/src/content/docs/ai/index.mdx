@@ -1,0 +1,408 @@
+---
+title: AI & Automation
+description: Connect Hisaabo to AI agents, automate business operations, and leverage intelligent features. MCP server, CLI tool, and upcoming AI capabilities.
+sidebar:
+  order: 1
+---
+
+import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Hisaabo exposes every business operation through a clean, typed API. That design choice was deliberate: it means any AI agent, automation script, or CI/CD pipeline can interact with your business data the same way a human would through the dashboard — without screen-scraping, browser automation, or brittle workarounds.
+
+This section covers what is available today and what is coming next.
+
+---
+
+## Why AI-Ready Invoicing?
+
+Indian small and medium businesses lose 8–12 hours a week to manual bookkeeping tasks: entering invoices, chasing overdue payments, reconciling bank statements, calculating GST liability, and updating stock records. These are not judgment calls — they are repetitive, rule-based operations that AI agents can handle reliably.
+
+The problem with most accounting software is that it was designed for humans clicking through a UI. The data is locked inside proprietary systems with no programmatic access. An AI agent that could theoretically send your payment reminders or flag GST mismatches cannot, because the software has no API.
+
+Hisaabo is different. The entire product is API-first. The web dashboard, mobile app, and desktop app are all thin clients over the same tRPC API. That means:
+
+- Any AI agent that can make HTTP requests can do anything a human can do in the dashboard
+- The [MCP server](/ai/mcp-server/) gives AI assistants like Claude structured, typed access without writing API code
+- The [CLI tool](/ai/cli/) lets you pipe business data into shell scripts and automation workflows
+- Responses are paginated and bounded, keeping AI context windows from being flooded with data
+
+The goal is to let you spend your time on decisions — pricing strategy, customer relationships, business growth — while AI handles the routine bookkeeping work.
+
+---
+
+## MCP Server
+
+The [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) is an open standard that lets AI assistants connect to external tools and data sources through a structured interface. Hisaabo's MCP server exposes your business data as MCP tools and resources, so AI agents can act on your behalf without you writing a single line of integration code.
+
+### What this looks like in practice
+
+Once you connect Hisaabo's MCP server to Claude Desktop or an OpenClaw agent, natural-language requests become real business operations:
+
+```
+User: "Create an invoice for Montu Arora — 7.3 kg spinach at ₹65/kg"
+
+AI Agent: [calls invoice_create tool with resolved party ID, item details, and calculated tax]
+
+AI Agent: "Done. Invoice BB-12948 created for Montu Arora — ₹474.50 total
+          (7.3 kg × ₹65 = ₹474.50, exempt from GST as fresh vegetables).
+          Should I send it via WhatsApp or mark it as pending?"
+```
+
+```
+User: "Which customers owe me more than ₹10,000?"
+
+AI Agent: [calls party_list tool with outstanding balance filter]
+
+AI Agent: "Three customers have outstanding balances above ₹10,000:
+          - Sharma Traders: ₹34,200 (oldest invoice: 47 days)
+          - Gupta Enterprises: ₹18,750 (oldest invoice: 12 days)
+          - Vinod & Sons: ₹11,400 (oldest invoice: 63 days)
+          Want me to draft a payment reminder for Vinod & Sons first,
+          since they have the oldest unpaid invoice?"
+```
+
+```
+User: "Give me a GST summary for this quarter"
+
+AI Agent: [calls gst_summary tool for the current financial quarter]
+
+AI Agent: "Q3 FY 2025-26 GST summary:
+          Total taxable turnover: ₹8,42,500
+          CGST collected: ₹37,912
+          SGST collected: ₹37,912
+          IGST collected: ₹14,200
+          Net GST liability: ₹90,024
+          Your GSTR-3B is due in 11 days."
+```
+
+### Setup
+
+See the [MCP Server setup guide](/ai/mcp-server/) for full installation and configuration instructions. The short version:
+
+```bash
+npm install -g @hisaabo/mcp-server
+
+hisaabo-mcp --api-url https://your-hisaabo-instance.com \
+            --api-key your_api_key \
+            --business-id your_business_id
+```
+
+Then add the server to your MCP client's configuration file.
+
+### Available tools
+
+The MCP server exposes tools across all major Hisaabo modules. A representative sample:
+
+| Tool | What it does |
+|---|---|
+| `invoice_create` | Create a sale or purchase invoice |
+| `invoice_list` | List invoices with filters (status, party, date range) |
+| `invoice_get` | Get a single invoice with all line items |
+| `party_list` | List parties with outstanding balance data |
+| `party_get` | Get a party's full ledger |
+| `item_list` | List items with current stock levels |
+| `payment_record` | Record a payment against one or more invoices |
+| `dashboard_summary` | Get today's key business metrics |
+| `gst_summary` | Get GST liability for a period |
+| `expense_create` | Record a business expense |
+
+Full schema documentation is in the [MCP Server reference](/ai/mcp-server/).
+
+---
+
+## CLI Tool
+
+The Hisaabo CLI brings your business data to the terminal. It is designed for three audiences: developers who want to script business operations, system administrators setting up automation, and AI agents that run shell commands as part of a broader workflow.
+
+### Quick start
+
+```bash
+npm install -g @hisaabo/cli
+
+# Authenticate against your Hisaabo instance
+hisaabo login --api-url https://your-hisaabo-instance.com
+
+# Set your active business
+hisaabo business use <business-id>
+```
+
+### Daily operations
+
+```bash
+# Morning business snapshot
+hisaabo dashboard --period today
+
+# See who owes you money
+hisaabo invoice list --status overdue --sort oldest-first
+
+# Check stock levels
+hisaabo item list --low-stock
+
+# Record a payment
+hisaabo payment create --party "Sharma Traders" --amount 15000 --mode upi
+```
+
+### Automation patterns
+
+The CLI outputs clean JSON by default, which pipes directly into `jq` and other Unix tools:
+
+```bash
+# Daily morning report sent to Slack
+hisaabo dashboard --period today --json | \
+  jq '{revenue: .totalRevenue, outstanding: .totalOutstanding, invoices: .invoiceCount}' | \
+  curl -X POST -H 'Content-type: application/json' \
+    -d @- https://hooks.slack.com/your-webhook
+
+# Find items below low-stock threshold
+hisaabo item list --low-stock --json | \
+  jq '.[] | "\(.name): \(.stockQuantity) \(.unit) remaining"'
+
+# Auto-generate weekly GST summary
+hisaabo gst summary --period this-week --format csv > gst-$(date +%Y-W%V).csv
+```
+
+### Cron job examples
+
+```bash
+# /etc/cron.d/hisaabo-automation
+
+# Daily overdue invoice check at 9 AM
+0 9 * * * hisaabo invoice list --status overdue --json | \
+  hisaabo notify send --template payment-reminder
+
+# Weekly low-stock report every Monday at 8 AM
+0 8 * * 1 hisaabo item list --low-stock --json | \
+  hisaabo report email --subject "Weekly Stock Alert" --to owner@yourbusiness.com
+
+# Monthly GST export on the 1st at 6 AM
+0 6 1 * * hisaabo gst export --period last-month --format json \
+  > /backups/gst/$(date +%Y-%m).json
+```
+
+Full command reference is in the [CLI documentation](/ai/cli/).
+
+---
+
+## API for AI Agents
+
+If you are building a custom AI agent or integration, the underlying tRPC API is the right layer to work with. It is the same API the dashboard uses, so anything you see in the UI is achievable programmatically.
+
+### Authentication
+
+All API calls require a session cookie or an API key in the `Authorization` header:
+
+```http
+Authorization: Bearer hisaabo_key_xxxxxxxxxxxxxxxxxx
+x-business-id: biz_xxxxxxxxxxxxxxxxxx
+```
+
+Generate an API key from **Settings > API Keys** in your Hisaabo dashboard.
+
+### Key patterns
+
+**Pagination** — All list endpoints accept `limit` and `cursor` parameters. Use `limit: 50` or lower in AI agent contexts to keep responses inside context window budgets:
+
+```typescript
+const invoices = await trpc.invoice.list.query({
+  status: "overdue",
+  limit: 50,
+  cursor: lastSeenId, // for pagination
+});
+```
+
+**Business isolation** — Every request must include the `x-business-id` header. If you manage multiple businesses, each has its own ID.
+
+**Error handling** — The API returns structured errors with machine-readable codes:
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Party not found",
+    "data": { "partyId": "party_abc123" }
+  }
+}
+```
+
+**Rate limits** — The default limits are:
+- 120 requests/minute for authenticated requests
+- 10 requests/minute for anonymous requests
+
+AI agent workflows that batch-process large datasets should spread requests over time or request a higher limit for self-hosted installations.
+
+### Type-safe client
+
+If your agent is written in TypeScript, import the `AppRouter` type from `@hisaabo/api` for end-to-end type safety without any code generation step:
+
+```typescript
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import SuperJSON from "superjson";
+import type { AppRouter } from "@hisaabo/api";
+
+const client = createTRPCClient<AppRouter>({
+  links: [
+    httpBatchLink({
+      url: "https://your-hisaabo.com/trpc",
+      transformer: SuperJSON,
+      headers: {
+        Authorization: `Bearer ${process.env.HISAABO_API_KEY}`,
+        "x-business-id": process.env.HISAABO_BUSINESS_ID,
+      },
+    }),
+  ],
+});
+
+// Fully typed — your editor knows every field
+const overdueInvoices = await client.invoice.list.query({
+  status: "overdue",
+  limit: 50,
+});
+```
+
+---
+
+## Upcoming AI Features
+
+These features are in active development. The goal with each one is the same: the AI does the routine monitoring and data processing, you make the final call.
+
+### Auto GST Rate Updates
+
+GST rates in India change through government gazette notifications — notifications that most business owners miss until a customer points out the wrong rate on an invoice. Hisaabo will monitor official government sources for rate changes and surface them directly in your dashboard.
+
+The workflow:
+1. Government publishes a GST rate change notification
+2. Hisaabo detects the change and identifies which items in your catalog are affected
+3. You receive an in-app notification: "GST rate for HSN 0910 (spices) changes from 5% to 12% effective April 1"
+4. Review the affected items and accept with one click — or make individual adjustments before accepting
+
+You stay in control. The AI handles the monitoring and mapping; you handle the approval.
+
+### Dynamic Pricing Intelligence
+
+Pricing decisions for Indian SMBs are often made on gut feel because gathering competitive data is time-consuming. This feature aggregates publicly available market pricing data and cross-references it with your own margins to surface actionable pricing suggestions.
+
+The workflow:
+1. Hisaabo collects market price data for categories matching your item catalog
+2. Compares your prices against market ranges and your own cost/margin data
+3. Surfaces items where you may be underpricing (leaving money on the table) or overpricing (losing sales)
+4. Suggests adjusted prices — you accept, modify, or dismiss each suggestion
+
+Your actual pricing data never leaves your server. The market data feeds are external; the comparison logic runs locally.
+
+### Shiprocket Integration
+
+For businesses that sell physical goods through the online store, the gap between "invoice created" and "shipment dispatched" currently requires manual work in a separate Shiprocket dashboard. This integration closes that gap.
+
+The workflow:
+1. A customer places an order in your Hisaabo online store
+2. You confirm the order and create an invoice — as you do today
+3. Hisaabo automatically pushes the shipment to Shiprocket: customer address, item weights, dimensions
+4. Shiprocket generates the shipping label; Hisaabo attaches it to the invoice
+5. Tracking updates from Shiprocket sync back to Hisaabo and to the customer via WhatsApp
+
+### AI Customer Service (OpenClaw)
+
+Handling inbound customer questions — order status, payment confirmation, product availability — takes time away from running your business. This feature lets you deploy a customer-facing AI agent for your Hisaabo online store, powered by OpenClaw.
+
+The agent reads from your live Hisaabo data via MCP:
+- Order status and tracking information
+- Payment confirmation and receipt generation
+- Product catalog and stock availability
+- Store policies and business hours
+
+Setup:
+1. Connect your OpenClaw account in **Settings > Integrations**
+2. Configure the agent's persona, tone, and escalation rules
+3. The agent goes live on your store's chat widget
+4. All conversations are logged; complex issues are escalated to you
+
+The agent never takes actions that modify data without your explicit permission. It reads and reports; it does not create invoices or process refunds autonomously.
+
+---
+
+## Integration Examples
+
+Real-world automation workflows you can build today with the CLI and API.
+
+### Send payment reminders for overdue invoices
+
+An AI agent workflow that identifies overdue invoices and drafts personalized reminders:
+
+```
+Trigger: Daily at 9 AM (cron)
+
+Agent steps:
+1. hisaabo invoice list --status overdue --json
+2. For each invoice > 30 days overdue:
+   a. hisaabo party get <party-id> --json (get contact details)
+   b. Draft reminder message referencing invoice number and amount
+   c. Log draft to /reminders/$(date +%Y-%m-%d).json for review
+3. Send summary to owner: "5 overdue invoices need attention"
+```
+
+### Auto-reorder items below low stock threshold
+
+```bash
+#!/bin/bash
+# reorder-check.sh — run daily via cron
+
+LOW_STOCK=$(hisaabo item list --low-stock --json)
+COUNT=$(echo "$LOW_STOCK" | jq 'length')
+
+if [ "$COUNT" -gt 0 ]; then
+  echo "$LOW_STOCK" | jq -r '.[] | "REORDER: \(.name) — \(.stockQuantity) \(.unit) remaining (threshold: \(.lowStockThreshold))"' \
+    | mail -s "Hisaabo: $COUNT items need reordering" owner@yourbusiness.com
+fi
+```
+
+### Generate weekly business report
+
+```bash
+#!/bin/bash
+# weekly-report.sh — run every Monday via cron
+
+REPORT_DATE=$(date +%Y-%m-%d)
+OUTPUT="/var/reports/hisaabo/week-$REPORT_DATE.json"
+
+# Collect data
+hisaabo dashboard --period this-week --json > "$OUTPUT"
+hisaabo invoice list --status overdue --json >> "$OUTPUT"
+hisaabo gst summary --period this-week --json >> "$OUTPUT"
+
+# Email the report
+cat "$OUTPUT" | jq '{
+  period: "this-week",
+  revenue: .dashboard.totalRevenue,
+  overdueCount: (.overdue | length),
+  overdueAmount: [.overdue[].totalAmount] | add,
+  gstLiability: .gst.netLiability
+}' | mail -s "Weekly Business Report — $REPORT_DATE" owner@yourbusiness.com
+```
+
+### Customer asks about order status (OpenClaw agent + MCP)
+
+When a customer messages your store's chat widget:
+
+```
+Customer: "Hi, I ordered rice yesterday. What's the status?"
+
+OpenClaw Agent:
+  [calls hisaabo MCP: store_order_list with customer phone]
+  [finds order SO-4821, status: confirmed, dispatched via Shiprocket]
+  [calls hisaabo MCP: shipment_tracking for SO-4821]
+
+Agent: "Hello! Your order SO-4821 (25 kg Basmati Rice) was dispatched
+       this morning via Shiprocket. Tracking ID: SR-98421.
+       Expected delivery: tomorrow between 10 AM – 2 PM.
+       You'll get a WhatsApp update when it's out for delivery."
+```
+
+---
+
+## Related Documentation
+
+- [Invoicing](/invoicing/) — Invoice structure, line items, tax calculation
+- [GST Compliance](/gst/) — GSTR-1, GSTR-3B, HSN codes, state-wise tax rules
+- [Online Store](/online-store/) — Store setup, catalog management, order fulfillment
+- [API Reference](https://api-docs.hisaabo.in) — Full tRPC procedure documentation
+- [Self-Hosting](/self-hosting/) — Production deployment, environment variables, security

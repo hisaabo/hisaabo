@@ -18,6 +18,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -48,9 +49,7 @@ export default function CreatePaymentScreen() {
   const [mode, setMode] = useState<PaymentMode>("cash");
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");
-  const [paymentDate, setPaymentDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [paymentDate, setPaymentDate] = useState(new Date());
 
   // Allocations
   const [allocations, setAllocations] = useState<AllocatedInvoice[]>([]);
@@ -118,7 +117,7 @@ export default function CreatePaymentScreen() {
       return;
     }
 
-    const dateStr = new Date(paymentDate + "T00:00:00.000Z").toISOString();
+    const dateStr = paymentDate.toISOString();
 
     haptic.success();
     createPayment.mutate({
@@ -176,6 +175,7 @@ export default function CreatePaymentScreen() {
             value={amount}
             onChangeText={setAmount}
             keyboardType="decimal-pad"
+            returnKeyType="done"
           />
         </View>
 
@@ -203,13 +203,10 @@ export default function CreatePaymentScreen() {
 
         {/* Date */}
         <View style={styles.section}>
-          <Text style={styles.label}>Date</Text>
-          <TextInput
-            style={styles.input}
+          <DatePickerField
+            label="Date"
             value={paymentDate}
-            onChangeText={setPaymentDate}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={colors.textMuted}
+            onChange={setPaymentDate}
           />
         </View>
 

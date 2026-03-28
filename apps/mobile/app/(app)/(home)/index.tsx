@@ -2,12 +2,14 @@ import { View, Text, ScrollView, RefreshControl, StyleSheet, TouchableOpacity } 
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
+import { useBiometricStore } from "../../../src/stores/biometric";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { StatusBadge, Skeleton } from "../../../src/components/ui";
+import { BiometricSetupPrompt } from "../../../src/components/BiometricSetupPrompt";
 
 /* ── Period helpers ──────────────────────────────────────────── */
 
@@ -41,6 +43,21 @@ export default function DashboardScreen() {
   const { businessName } = useBusinessStore();
   const [period, setPeriod] = useState<Period>("month");
   const dates = useMemo(() => getPeriodDates(period), [period]);
+
+  // Biometric setup prompt — shows once after first login
+  const setupPrompted = useBiometricStore((s) => s.setupPrompted);
+  const biometricEnabled = useBiometricStore((s) => s.biometricEnabled);
+  const pinEnabled = useBiometricStore((s) => s.pinEnabled);
+  const [showSetupPrompt, setShowSetupPrompt] = useState(false);
+
+  // Show setup prompt once if user hasn't been prompted and has no security set up
+  useEffect(() => {
+    if (!setupPrompted && !biometricEnabled && !pinEnabled) {
+      // Slight delay so the dashboard feels loaded first
+      const timer = setTimeout(() => setShowSetupPrompt(true), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [setupPrompted, biometricEnabled, pinEnabled]);
 
   // businessId is guaranteed by _layout.tsx — no need for `enabled` gates
   const { data: summary, refetch, isRefetching } = trpc.dashboard.summary.useQuery(
@@ -138,6 +155,12 @@ export default function DashboardScreen() {
           <Skeleton width="100%" height={120} borderRadius={16} />
         )}
       </ScrollView>
+
+      {/* Biometric setup prompt — shown once after first login */}
+      <BiometricSetupPrompt
+        visible={showSetupPrompt}
+        onDismiss={() => setShowSetupPrompt(false)}
+      />
     </SafeAreaView>
   );
 }

@@ -25,7 +25,13 @@
       "expo-router",
       "expo-secure-store",
       "expo-font",
-      "expo-local-authentication"
+      "expo-local-authentication",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Hisaabo needs access to your contacts to help you create invoices faster."
+        }
+      ]
     ]
   }
 }

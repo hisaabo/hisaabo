@@ -255,6 +255,7 @@ export default function BusinessSettingsScreen() {
               onChangeText={(v) => setForm((f) => ({ ...f, phone: v }))}
               placeholder="+91 9999999999"
               keyboardType="phone-pad"
+              autoCorrect={false}
               returnKeyType="next"
               onSubmitEditing={() => emailRef.current?.focus()}
             />
@@ -266,6 +267,7 @@ export default function BusinessSettingsScreen() {
               placeholder="business@email.com"
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
               returnKeyType="next"
               onSubmitEditing={() => addressRef.current?.focus()}
             />
@@ -329,12 +331,13 @@ const Field = forwardRef<TextInput, {
   placeholder?: string;
   keyboardType?: any;
   autoCapitalize?: any;
+  autoCorrect?: boolean;
   multiline?: boolean;
   returnKeyType?: any;
   onSubmitEditing?: () => void;
   blurOnSubmit?: boolean;
 }>(function Field(
-  { label, value, onChangeText, placeholder, keyboardType, autoCapitalize, multiline, returnKeyType, onSubmitEditing, blurOnSubmit },
+  { label, value, onChangeText, placeholder, keyboardType, autoCapitalize, autoCorrect, multiline, returnKeyType, onSubmitEditing, blurOnSubmit },
   ref
 ) {
   return (
@@ -349,6 +352,7 @@ const Field = forwardRef<TextInput, {
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType ?? "default"}
         autoCapitalize={autoCapitalize ?? "words"}
+        autoCorrect={autoCorrect}
         multiline={multiline}
         numberOfLines={multiline ? 3 : 1}
         returnKeyType={returnKeyType ?? (multiline ? "default" : "next")}

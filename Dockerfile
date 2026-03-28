@@ -12,7 +12,9 @@ COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
 
 # Install ALL deps (need devDependencies for build)
-RUN pnpm install --frozen-lockfile
+# Mount pnpm store cache to avoid re-downloading packages across builds
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 # Copy source code for backend packages only
 COPY packages/shared/ packages/shared/
@@ -53,11 +55,14 @@ COPY packages/shared/tsconfig.json packages/shared/
 
 # Install production dependencies only
 # argon2 needs a rebuild on alpine (native addon)
-RUN pnpm install --frozen-lockfile --prod
+# Mount pnpm store cache to avoid re-downloading packages across builds
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
 
 # drizzle-kit is needed at runtime for migrations in entrypoint
 # tsx is needed because db package uses TypeScript source at runtime
-RUN pnpm --filter @hisaabo/db add -D drizzle-kit tsx
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm --filter @hisaabo/db add -D drizzle-kit tsx
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

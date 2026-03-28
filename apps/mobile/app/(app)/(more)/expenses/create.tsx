@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -38,7 +39,7 @@ export default function CreateExpenseScreen() {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [mode, setMode] = useState<PaymentMode>("cash");
-  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expenseDate, setExpenseDate] = useState(new Date());
   const [referenceNumber, setReferenceNumber] = useState("");
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
 
@@ -67,7 +68,7 @@ export default function CreateExpenseScreen() {
       return;
     }
 
-    const dateStr = new Date(expenseDate + "T00:00:00.000Z").toISOString();
+    const dateStr = expenseDate.toISOString();
 
     haptic.success();
     createExpense.mutate({
@@ -145,6 +146,7 @@ export default function CreateExpenseScreen() {
             value={amount}
             onChangeText={setAmount}
             keyboardType="decimal-pad"
+            returnKeyType="done"
           />
         </View>
 
@@ -172,13 +174,10 @@ export default function CreateExpenseScreen() {
 
         {/* Date */}
         <View style={styles.section}>
-          <Text style={styles.label}>Date</Text>
-          <TextInput
-            style={styles.input}
+          <DatePickerField
+            label="Date"
             value={expenseDate}
-            onChangeText={setExpenseDate}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={colors.textMuted}
+            onChange={setExpenseDate}
           />
         </View>
 

@@ -219,6 +219,7 @@ export default function CreatePartyScreen() {
                     if (errors.phone) setErrors((e) => ({ ...e, phone: "" }));
                   }}
                   keyboardType="phone-pad"
+                  autoCorrect={false}
                   returnKeyType="next"
                   onSubmitEditing={() => emailRef.current?.focus()}
                   blurOnSubmit={false}
@@ -244,6 +245,7 @@ export default function CreatePartyScreen() {
                   }}
                   keyboardType="email-address"
                   autoCapitalize="none"
+                  autoCorrect={false}
                   returnKeyType="next"
                   onSubmitEditing={() => gstinRef.current?.focus()}
                   blurOnSubmit={false}

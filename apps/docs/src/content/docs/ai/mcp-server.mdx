@@ -1,0 +1,483 @@
+---
+title: MCP Server
+description: Connect Hisaabo to Claude, OpenClaw, or any MCP-compatible AI agent. Full setup guide, available tools, resource schemas, and configuration reference.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Hisaabo MCP server implements the [Model Context Protocol](https://modelcontextprotocol.io/) — an open standard for connecting AI assistants to external tools and data sources. Once configured, any MCP-compatible AI agent can create invoices, query party ledgers, generate GST reports, and manage inventory through natural conversation.
+
+---
+
+## Prerequisites
+
+- A running Hisaabo instance ([self-hosting guide](/getting-started/self-hosting/))
+- An API key from your Hisaabo dashboard (**Settings > API Keys**)
+- Your business ID (visible in **Settings > Business Profile** or the URL when logged in)
+- Node.js 20+ on the machine where the MCP server will run
+
+---
+
+## Installation
+
+```bash
+npm install -g @hisaabo/mcp-server
+```
+
+Verify the installation:
+
+```bash
+hisaabo-mcp --version
+```
+
+---
+
+## Configuration
+
+The MCP server is configured through environment variables or command-line flags.
+
+### Environment variables
+
+```bash
+HISAABO_API_URL=https://your-hisaabo-instance.com
+HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
+HISAABO_BUSINESS_ID=biz_xxxxxxxxxxxxxxxxxx
+```
+
+### Command-line flags
+
+```bash
+hisaabo-mcp \
+  --api-url https://your-hisaabo-instance.com \
+  --api-key hisaabo_key_xxxxxxxxxxxxxxxxxx \
+  --business-id biz_xxxxxxxxxxxxxxxxxx \
+  --port 3100
+```
+
+### Full configuration reference
+
+| Variable / Flag | Required | Default | Description |
+|---|---|---|---|
+| `HISAABO_API_URL` / `--api-url` | Yes | — | Base URL of your Hisaabo API server |
+| `HISAABO_API_KEY` / `--api-key` | Yes | — | API key generated from Settings > API Keys |
+| `HISAABO_BUSINESS_ID` / `--business-id` | Yes | — | The business to operate on |
+| `HISAABO_MCP_PORT` / `--port` | No | `3100` | Port the MCP server listens on |
+| `HISAABO_LOG_LEVEL` / `--log-level` | No | `info` | Logging verbosity: `error`, `warn`, `info`, `debug` |
+| `HISAABO_READONLY` / `--readonly` | No | `false` | Disable all write tools (safe for read-only agent access) |
+
+---
+
+## Connecting to Claude Desktop
+
+1. Install the MCP server globally and verify it runs without errors.
+
+2. Open your Claude Desktop configuration file:
+
+<Tabs>
+  <TabItem label="macOS">
+    ```
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```
+    %APPDATA%\Claude\claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```
+    ~/.config/claude/claude_desktop_config.json
+    ```
+  </TabItem>
+</Tabs>
+
+3. Add the Hisaabo MCP server to the `mcpServers` section:
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "hisaabo-mcp",
+      "args": [],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_API_KEY": "hisaabo_key_xxxxxxxxxxxxxxxxxx",
+        "HISAABO_BUSINESS_ID": "biz_xxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+4. Restart Claude Desktop. You will see "hisaabo" appear in the tools list in Claude's interface.
+
+5. Test the connection:
+
+```
+"What is my business's total outstanding receivables?"
+```
+
+Claude will call the `dashboard_summary` tool and return a structured response with your current data.
+
+---
+
+## Connecting to OpenClaw
+
+OpenClaw agents connect to MCP servers over HTTP using the streamable HTTP transport. Run the MCP server as a persistent process on your server:
+
+```bash
+# Start as a background service
+hisaabo-mcp --api-url https://your-hisaabo.com \
+            --api-key hisaabo_key_xxxxxxxxxx \
+            --business-id biz_xxxxxxxxxx \
+            --port 3100 &
+```
+
+In your OpenClaw agent configuration, add the MCP server endpoint:
+
+```yaml
+# openclaw-agent.yaml
+mcp_servers:
+  - name: hisaabo
+    url: http://localhost:3100/mcp
+    description: "Hisaabo business management — invoices, parties, inventory, GST"
+```
+
+For production OpenClaw deployments, run the MCP server behind a reverse proxy with authentication:
+
+```nginx
+location /mcp/hisaabo/ {
+    proxy_pass http://localhost:3100/mcp/;
+    proxy_set_header Authorization "Bearer $OPENCLAW_MCP_SECRET";
+}
+```
+
+---
+
+## Available Tools
+
+### Invoicing
+
+#### `invoice_create`
+
+Create a sale or purchase invoice.
+
+**Input:**
+```typescript
+{
+  type: "sale" | "purchase";
+  partyId: string;
+  date: string; // ISO 8601, e.g. "2026-03-26"
+  items: Array<{
+    itemId: string;
+    quantity: number; // string for NUMERIC precision in JS
+    unit: string;
+    pricePerUnit: string; // e.g. "65.00"
+    discountPercent?: string;
+  }>;
+  notes?: string;
+  dueDate?: string;
+}
+```
+
+**Output:**
+```typescript
+{
+  id: string;
+  invoiceNumber: string; // e.g. "BB-12948"
+  totalAmount: string;
+  taxAmount: string;
+  status: "draft" | "sent" | "paid" | "overdue";
+  pdfUrl: string;
+}
+```
+
+#### `invoice_list`
+
+List invoices with optional filters. Results are paginated (max 100 per call).
+
+**Input:**
+```typescript
+{
+  type?: "sale" | "purchase";
+  status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+  partyId?: string;
+  fromDate?: string;
+  toDate?: string;
+  limit?: number; // default 50, max 100
+  cursor?: string;
+}
+```
+
+#### `invoice_get`
+
+Get a single invoice with all line items and payment history.
+
+**Input:** `{ id: string }`
+
+#### `invoice_pdf`
+
+Get a download URL for the invoice PDF.
+
+**Input:** `{ id: string; format?: "a4" | "thermal" }`
+
+---
+
+### Parties
+
+#### `party_list`
+
+List customers and suppliers. Includes outstanding balance for each party.
+
+**Input:**
+```typescript
+{
+  type?: "customer" | "supplier" | "both";
+  search?: string;
+  hasOutstanding?: boolean; // filter to parties with unpaid balance
+  limit?: number;
+  cursor?: string;
+}
+```
+
+#### `party_get`
+
+Get a party's full profile and running ledger.
+
+**Input:**
+```typescript
+{
+  id: string;
+  includeLedger?: boolean; // default false — ledger adds response size
+  fromDate?: string;
+  toDate?: string;
+}
+```
+
+#### `party_outstanding`
+
+Get a summary of all outstanding receivables or payables.
+
+**Input:** `{ type: "receivable" | "payable"; minAmount?: string }`
+
+---
+
+### Items & Inventory
+
+#### `item_list`
+
+List items in your catalog with current stock levels.
+
+**Input:**
+```typescript
+{
+  search?: string;
+  lowStock?: boolean; // filter to items below low-stock threshold
+  category?: string;
+  limit?: number;
+  cursor?: string;
+}
+```
+
+#### `item_get`
+
+Get a single item with full pricing and stock history.
+
+**Input:** `{ id: string }`
+
+#### `item_update_stock`
+
+Manually adjust stock for an item (for corrections, write-offs, etc.).
+
+**Input:**
+```typescript
+{
+  id: string;
+  adjustment: string; // positive to add, negative to remove
+  reason: string; // required for audit trail
+}
+```
+
+---
+
+### Payments
+
+#### `payment_record`
+
+Record a payment from a customer or to a supplier.
+
+**Input:**
+```typescript
+{
+  partyId: string;
+  amount: string;
+  mode: "cash" | "upi" | "bank_transfer" | "cheque" | "other";
+  date: string;
+  invoiceAllocations?: Array<{
+    invoiceId: string;
+    amount: string;
+  }>;
+  notes?: string;
+  referenceNumber?: string;
+}
+```
+
+#### `payment_list`
+
+List payments with optional filters.
+
+**Input:**
+```typescript
+{
+  partyId?: string;
+  fromDate?: string;
+  toDate?: string;
+  mode?: string;
+  limit?: number;
+  cursor?: string;
+}
+```
+
+---
+
+### Expenses
+
+#### `expense_create`
+
+Record a business expense.
+
+**Input:**
+```typescript
+{
+  amount: string;
+  category: string;
+  date: string;
+  description: string;
+  bankAccountId?: string;
+  attachmentUrl?: string;
+}
+```
+
+#### `expense_list`
+
+List expenses with filters.
+
+**Input:**
+```typescript
+{
+  category?: string;
+  fromDate?: string;
+  toDate?: string;
+  limit?: number;
+  cursor?: string;
+}
+```
+
+---
+
+### GST
+
+#### `gst_summary`
+
+Get GST collected/payable summary for a period.
+
+**Input:**
+```typescript
+{
+  period: "this-month" | "last-month" | "this-quarter" | "last-quarter" | "custom";
+  fromDate?: string; // required if period is "custom"
+  toDate?: string;
+}
+```
+
+**Output:**
+```typescript
+{
+  period: { from: string; to: string };
+  totalTaxableAmount: string;
+  cgstCollected: string;
+  sgstCollected: string;
+  igstCollected: string;
+  cessCollected: string;
+  netLiability: string;
+  invoiceCount: number;
+}
+```
+
+#### `gst_gstr1_data`
+
+Export data for GSTR-1 filing (B2B, B2C, HSN summary).
+
+**Input:** `{ month: number; year: number }`
+
+---
+
+### Dashboard
+
+#### `dashboard_summary`
+
+Get key business metrics for a time period.
+
+**Input:**
+```typescript
+{
+  period: "today" | "this-week" | "this-month" | "last-month" | "this-year" | "custom";
+  fromDate?: string;
+  toDate?: string;
+}
+```
+
+**Output:**
+```typescript
+{
+  totalRevenue: string;
+  totalExpenses: string;
+  netProfit: string;
+  totalOutstanding: string; // sum of overdue receivables
+  invoiceCount: number;
+  overdueCount: number;
+  topCustomers: Array<{ name: string; revenue: string }>;
+  lowStockItems: Array<{ name: string; quantity: string; unit: string }>;
+}
+```
+
+---
+
+## Available Resources
+
+MCP resources are read-only data sources that AI agents can reference in their context window. Hisaabo exposes the following resources:
+
+| Resource URI | Description |
+|---|---|
+| `hisaabo://business/profile` | Business name, GST number, address, contact info |
+| `hisaabo://business/settings` | Financial year, default tax rates, invoice numbering |
+| `hisaabo://catalog/items` | Full item catalog (name, HSN, tax rate, prices) |
+| `hisaabo://catalog/categories` | Item categories and tax groupings |
+| `hisaabo://parties/customers` | Customer list with basic contact info |
+| `hisaabo://parties/suppliers` | Supplier list with basic contact info |
+| `hisaabo://gst/tax-rates` | HSN code to GST rate mappings for your catalog |
+
+Resources are cached for 5 minutes to avoid hammering the API. The catalog and party list resources are particularly useful for AI agents that need to resolve names to IDs before making tool calls.
+
+---
+
+## Security Considerations
+
+**API key scope** — API keys in Hisaabo can be scoped to specific permissions (read-only, invoicing-only, full access). Create a purpose-specific key for the MCP server rather than using a full-admin key.
+
+**Read-only mode** — For agents that should only read data, start the MCP server with `--readonly`. This disables all tools that create or modify records.
+
+**Network exposure** — The MCP server should not be publicly accessible. Run it on localhost and connect your AI client locally, or use a reverse proxy with authentication for remote access.
+
+**Audit log** — All tool calls made through the MCP server are recorded in Hisaabo's audit log. You can review them under **Settings > Audit Log**.
+
+---
+
+## Related Documentation
+
+- [AI & Automation overview](/ai/)
+- [CLI Tool](/ai/cli/)
+- [API Reference](https://api-docs.hisaabo.in)
+- [Settings > API Keys](/settings/) — generating and managing API keys

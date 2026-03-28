@@ -21,6 +21,7 @@ import { formatCurrency } from "../../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 interface LineItem {
   itemId?: string;
@@ -41,14 +42,14 @@ function newLineItem(): LineItem {
   };
 }
 
-function todayISO() {
-  return new Date().toISOString();
+function todayDate() {
+  return new Date();
 }
 
-function in30daysISO() {
+function in30daysDate() {
   const d = new Date();
   d.setDate(d.getDate() + 30);
-  return d.toISOString();
+  return d;
 }
 
 function safeNum(s: string) {
@@ -265,8 +266,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
 export default function QuotationCreateScreen() {
   const router = useRouter();
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
-  const [invoiceDate] = useState(todayISO());
-  const [dueDate] = useState(in30daysISO());
+  const [invoiceDate, setInvoiceDate] = useState(todayDate());
+  const [dueDate, setDueDate] = useState(in30daysDate());
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
@@ -349,8 +350,8 @@ export default function QuotationCreateScreen() {
       partyId: selectedParty.id,
       type: "sale",
       documentType: "quotation",
-      invoiceDate,
-      dueDate,
+      invoiceDate: invoiceDate.toISOString(),
+      dueDate: dueDate.toISOString(),
       notes: notes.trim() || undefined,
       additionalCharges: "0",
       invoiceDiscount: "0",
@@ -402,12 +403,19 @@ export default function QuotationCreateScreen() {
           <Text style={styles.sectionLabel}>Dates</Text>
           <View style={styles.datesRow}>
             <View style={styles.dateCard}>
-              <Text style={styles.dateLabel}>Quotation Date</Text>
-              <Text style={styles.dateValue}>{new Date(invoiceDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</Text>
+              <DatePickerField
+                label="Quotation Date"
+                value={invoiceDate}
+                onChange={setInvoiceDate}
+              />
             </View>
             <View style={styles.dateCard}>
-              <Text style={styles.dateLabel}>Valid Until</Text>
-              <Text style={styles.dateValue}>{new Date(dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</Text>
+              <DatePickerField
+                label="Valid Until"
+                value={dueDate}
+                onChange={setDueDate}
+                minimumDate={invoiceDate}
+              />
             </View>
           </View>
 

@@ -248,6 +248,7 @@ export default function EditPartyScreen() {
                     if (errors.phone) setErrors((e) => ({ ...e, phone: "" }));
                   }}
                   keyboardType="phone-pad"
+                  autoCorrect={false}
                 />
                 {errors.phone && (
                   <Text style={styles.errorText}>{errors.phone}</Text>
@@ -269,6 +270,7 @@ export default function EditPartyScreen() {
                   }}
                   keyboardType="email-address"
                   autoCapitalize="none"
+                  autoCorrect={false}
                 />
                 {errors.email && (
                   <Text style={styles.errorText}>{errors.email}</Text>

@@ -21,7 +21,7 @@ import { formatCurrency } from "../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
-import { QueryError } from "../../../src/components/ui";
+import { QueryError, DatePickerField } from "../../../src/components/ui";
 
 interface LineItem {
   itemId?: string;
@@ -339,8 +339,8 @@ export default function InvoiceEditScreen() {
   );
 
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
-  const [invoiceDate, setInvoiceDate] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState(new Date());
+  const [dueDate, setDueDate] = useState<Date | null>(null);
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
@@ -355,13 +355,13 @@ export default function InvoiceEditScreen() {
       }
       setInvoiceDate(
         invoice.invoiceDate
-          ? new Date(invoice.invoiceDate).toISOString().slice(0, 10)
-          : new Date().toISOString().slice(0, 10)
+          ? new Date(invoice.invoiceDate)
+          : new Date()
       );
       setDueDate(
         invoice.dueDate
-          ? new Date(invoice.dueDate).toISOString().slice(0, 10)
-          : ""
+          ? new Date(invoice.dueDate)
+          : null
       );
       setNotes(invoice.notes ?? "");
       if (invoice.lineItems && invoice.lineItems.length > 0) {
@@ -458,7 +458,7 @@ export default function InvoiceEditScreen() {
   );
 
   const handleAddLine = useCallback(() => {
-    setLineItems((prev) => [...prev, newLineItem()]);
+    setLineItems((prev) => [newLineItem(), ...prev]); // prepend — new item at top
   }, []);
 
   const handleUpdate = useCallback(() => {
@@ -480,12 +480,8 @@ export default function InvoiceEditScreen() {
     updateMutation.mutate({
       id: id ?? "",
       partyId: selectedParty.id,
-      invoiceDate: invoiceDate
-        ? new Date(invoiceDate + "T00:00:00.000Z").toISOString()
-        : undefined,
-      dueDate: dueDate
-        ? new Date(dueDate + "T00:00:00.000Z").toISOString()
-        : null,
+      invoiceDate: invoiceDate.toISOString(),
+      dueDate: dueDate ? dueDate.toISOString() : null,
       notes: notes.trim() || null,
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
@@ -579,29 +575,34 @@ export default function InvoiceEditScreen() {
           <Text style={styles.sectionLabel}>Dates</Text>
           <View style={styles.datesRow}>
             <View style={styles.dateCard}>
-              <Text style={styles.dateLabel}>Invoice Date</Text>
-              <TextInput
-                style={styles.dateInput}
+              <DatePickerField
+                label="Invoice Date"
                 value={invoiceDate}
-                onChangeText={setInvoiceDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
+                onChange={setInvoiceDate}
               />
             </View>
             <View style={styles.dateCard}>
-              <Text style={styles.dateLabel}>Due Date</Text>
-              <TextInput
-                style={styles.dateInput}
-                value={dueDate}
-                onChangeText={setDueDate}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
+              <DatePickerField
+                label="Due Date"
+                value={dueDate ?? invoiceDate}
+                onChange={setDueDate}
+                minimumDate={invoiceDate}
               />
             </View>
           </View>
 
           {/* Line Items */}
-          <Text style={styles.sectionLabel}>Items</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 16, marginBottom: 12 }}>
+            <Text style={styles.sectionLabel}>Items</Text>
+            <TouchableOpacity
+              style={styles.addLineBtn}
+              onPress={handleAddLine}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
+              <Text style={styles.addLineBtnText}>Add</Text>
+            </TouchableOpacity>
+          </View>
           {lineItems.map((li, index) => (
             <LineItemRow
               key={index}
@@ -612,15 +613,6 @@ export default function InvoiceEditScreen() {
               onPickItem={handlePickItemForLine}
             />
           ))}
-
-          <TouchableOpacity
-            style={styles.addLineBtn}
-            onPress={handleAddLine}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
-            <Text style={styles.addLineBtnText}>Add Line Item</Text>
-          </TouchableOpacity>
 
           {/* Summary */}
           <View style={styles.summaryCard}>
@@ -826,16 +818,13 @@ const styles = StyleSheet.create({
   addLineBtn: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: colors.brandLight,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.brand + "40",
-    paddingVertical: 12,
-    marginBottom: 16,
+    backgroundColor: colors.brand + "18",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 4,
   },
-  addLineBtnText: { fontSize: 14, fontWeight: "600", color: colors.brand },
+  addLineBtnText: { fontSize: 13, fontWeight: "700", color: colors.brand },
   summaryCard: {
     backgroundColor: colors.surface,
     borderRadius: 14,

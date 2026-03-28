@@ -7,7 +7,7 @@ sidebar:
 
 Hisaabo is a **self-hosted invoicing and business management app** designed for Indian small businesses. It replaces tools like MyBillBook, Vyaapaar, and Tally for teams that want to own their data and run the software on their own infrastructure.
 
-You get GST-compliant invoicing, party (customer/supplier) management, inventory tracking, payment recording, expense management, banking, and a built-in online store — all in one app, available on web, mobile (Android and iOS), and desktop, synced through one API.
+You get GST-compliant invoicing, party (customer/supplier) management, inventory tracking, payment recording, expense management, banking, and a built-in online store — all in one app. The full-featured web application works in any browser on any device. Hisaabo Cloud adds native Android/iOS apps and a desktop app for macOS, Windows, and Linux.
 
 ## Who is Hisaabo for?
 
@@ -22,7 +22,9 @@ Hisaabo is the right fit if you:
 Hisaabo is **not** a good fit if you need real-time inventory counting hardware integration (barcode scanners with live sync) or complex multi-warehouse logistics with zone-based picking.
 
 :::note
-Hisaabo is available on **web**, **Android**, **iOS**, and **desktop** — all synced through one API. The mobile app supports barcode scanning for item lookup and invoice PDF sharing via WhatsApp.
+**Self-hosted:** Access Hisaabo from any browser on any device — the web app is fully responsive and works on phones and tablets without installing anything.
+
+**Hisaabo Cloud:** Includes everything in self-hosted, plus native Android/iOS apps and a desktop app (macOS/Windows/Linux) with extras like barcode scanning and invoice PDF sharing via WhatsApp.
 :::
 
 ## Key features
@@ -59,7 +61,7 @@ One account can own and manage multiple businesses. Switch between businesses fr
 
 ## How it works
 
-Hisaabo is a full-stack application with a backend API, a web frontend, a mobile app (Expo/React Native for Android and iOS), and a desktop app (Tauri). You run the server on your own infrastructure using Docker. Your business data is stored in a PostgreSQL database that you control.
+Hisaabo is a full-stack application with a backend API and a web frontend. You run the server on your own infrastructure using Docker. Your business data is stored in a PostgreSQL database that you control.
 
 ```
 Your server
@@ -67,13 +69,18 @@ Your server
 ├── Hisaabo API (Node.js)  ← business logic
 └── Hisaabo Web (Vite)  ← browser interface
 
-Clients
-├── Web app (browser)
-├── Mobile app (Android / iOS)
-└── Desktop app (Tauri)
+Self-hosted access
+└── Web app (any browser, including mobile browsers)
+
+Hisaabo Cloud (additional)
+├── Native Android app
+├── Native iOS app
+└── Desktop app (macOS / Windows / Linux)
 ```
 
-All clients communicate with the API through tRPC — a type-safe RPC protocol. The web app uses session cookies for authentication; the mobile app uses Bearer token authentication via the `Authorization` header.
+The web app and all clients communicate with the API through tRPC — a type-safe RPC protocol. The web app uses session cookies for authentication; the native mobile app uses Bearer token authentication via the `Authorization` header.
+
+The native mobile and desktop apps connect to Hisaabo Cloud by default. Self-hosted users access the same full feature set through the web app, which is fully responsive on all screen sizes.
 
 ## What you need to get started
 

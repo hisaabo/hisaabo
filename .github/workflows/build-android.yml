@@ -1,0 +1,136 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build method: eas (cloud) or local (self-hosted Gradle)"
+        required: true
+        default: eas
+        type: choice
+        options:
+          - eas
+          - local
+      profile:
+        description: "EAS build profile (only used when build_type=eas)"
+        required: false
+        default: preview
+        type: choice
+        options:
+          - development
+          - preview
+          - production
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      - "packages/shared/**"
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── EAS cloud build ───────────────────────────────────────────────────────
+  # Delegates compilation to Expo's managed build infrastructure.
+  # Requires EXPO_TOKEN secret set in repository settings.
+  # Set build_type=eas (default) for cloud builds.
+  build-eas:
+    name: EAS Cloud Build (Android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'eas')
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli@latest
+
+      - name: Trigger EAS build (no-wait)
+        # --no-wait submits the build and exits immediately.
+        # The build runs asynchronously on Expo's servers.
+        # Monitor at https://expo.dev/accounts/<owner>/projects/hisaabo/builds
+        run: >
+          eas build
+          --platform android
+          --profile ${{ github.event.inputs.profile || 'preview' }}
+          --non-interactive
+          --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+  # ── Local Gradle build ────────────────────────────────────────────────────
+  # Runs the full Android build on a GitHub-hosted runner with the Android SDK.
+  # Produces an APK artifact downloadable from the workflow run.
+  # Trigger via workflow_dispatch with build_type=local.
+  build-local:
+    name: Local Gradle Build (Android APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.build_type == 'local'
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Expo prebuild (generate native Android project)
+        run: npx expo prebuild --platform android --clean
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+        working-directory: apps/mobile/android
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hisaabo-android-debug-${{ github.sha }}
+          path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14

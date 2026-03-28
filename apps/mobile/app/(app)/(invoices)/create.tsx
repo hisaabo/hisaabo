@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Modal,
   FlatList,
+  SectionList,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -22,6 +23,8 @@ import { formatCurrency } from "../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
+import { useContacts, type PhoneContact } from "../../../src/hooks/useContacts";
+import { DatePickerField } from "../../../src/components/ui";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -46,14 +49,14 @@ function newLineItem(): LineItem {
 
 // ── Helpers ────────────────────────────────────────────────────
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+function todayDate() {
+  return new Date();
 }
 
-function in30daysISO() {
+function in30daysDate() {
   const d = new Date();
   d.setDate(d.getDate() + 30);
-  return d.toISOString().slice(0, 10);
+  return d;
 }
 
 function safeNum(s: string) {
@@ -71,6 +74,12 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
+// ── Phone number normalization for de-duplication ──────────────
+
+function normalizePhone(p: string): string {
+  return p.replace(/\D/g, "").slice(-10);
+}
+
 // ── Party Picker Modal ──────────────────────────────────────────
 
 interface PartyPickerProps {
@@ -80,17 +89,123 @@ interface PartyPickerProps {
   onClose: () => void;
 }
 
+type PickerSection = {
+  title: string;
+  data: PickerRow[];
+};
+
+type PickerRow =
+  | { kind: "party"; id: string; name: string; phone?: string | null }
+  | { kind: "contact"; contact: PhoneContact };
+
 function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const partyType = type === "sale" ? "customer" : "supplier";
+
+  const { contacts, permission, requestAccess } = useContacts();
+  const [creatingFromContact, setCreatingFromContact] = useState(false);
 
   const { data, isLoading } = trpc.party.list.useQuery(
     { type: partyType, search: debouncedSearch || undefined, page: 1, limit: 50 },
     { enabled: visible }
   );
 
+  const createPartyMutation = trpc.party.create.useMutation();
+
   const parties = data?.data ?? [];
+
+  // Build a set of normalized party phone numbers for de-duplication
+  const partyPhones = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of parties) {
+      if (p.phone) set.add(normalizePhone(p.phone));
+    }
+    return set;
+  }, [parties]);
+
+  // Filter contacts: remove those already matching an existing party by phone
+  const uniqueContacts = useMemo(() => {
+    if (permission !== "granted") return [];
+    return contacts.filter(
+      (c) => c.phone && !partyPhones.has(normalizePhone(c.phone))
+    );
+  }, [contacts, partyPhones, permission]);
+
+  // Apply search filter to contacts
+  const filteredContacts = useMemo(() => {
+    if (!debouncedSearch) return uniqueContacts;
+    const q = debouncedSearch.toLowerCase();
+    return uniqueContacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone && c.phone.includes(debouncedSearch))
+    );
+  }, [uniqueContacts, debouncedSearch]);
+
+  // Build sections for SectionList
+  const sections = useMemo<PickerSection[]>(() => {
+    const result: PickerSection[] = [];
+
+    const partyRows: PickerRow[] = parties.map((p) => ({
+      kind: "party" as const,
+      id: p.id,
+      name: p.name,
+      phone: p.phone,
+    }));
+
+    if (partyRows.length > 0) {
+      result.push({ title: "Your Parties", data: partyRows });
+    }
+
+    if (permission === "granted" && filteredContacts.length > 0) {
+      const contactRows: PickerRow[] = filteredContacts.map((c) => ({
+        kind: "contact" as const,
+        contact: c,
+      }));
+      result.push({ title: "Phone Contacts", data: contactRows });
+    }
+
+    return result;
+  }, [parties, filteredContacts, permission]);
+
+  const handleContactSelect = useCallback(
+    async (contact: PhoneContact) => {
+      Alert.alert(
+        "Create party from contact?",
+        `${contact.name}${contact.phone ? `\n${contact.phone}` : ""}`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Create",
+            onPress: async () => {
+              setCreatingFromContact(true);
+              try {
+                const newParty = await createPartyMutation.mutateAsync({
+                  type: partyType,
+                  name: contact.name,
+                  phone: contact.phone || undefined,
+                  email: contact.email || undefined,
+                });
+                haptic.success();
+                Alert.alert("Party created from contact");
+                onSelect({ id: newParty.id, name: newParty.name, phone: newParty.phone });
+                onClose();
+              } catch (err: any) {
+                haptic.error();
+                Alert.alert("Error", err?.message ?? "Failed to create party");
+              } finally {
+                setCreatingFromContact(false);
+              }
+            },
+          },
+        ]
+      );
+    },
+    [partyType, createPartyMutation, onSelect, onClose]
+  );
+
+  const isEmpty = !isLoading && sections.length === 0;
 
   return (
     <Modal visible={visible} animationType="slide" transparent presentationStyle="overFullScreen">
@@ -109,7 +224,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
             <Ionicons name="search-outline" size={15} color={colors.textMuted} style={modalStyles.searchIcon} />
             <TextInput
               style={modalStyles.searchInput}
-              placeholder="Search..."
+              placeholder="Search parties & contacts..."
               placeholderTextColor={colors.textMuted}
               value={search}
               onChangeText={setSearch}
@@ -123,38 +238,108 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
             )}
           </View>
 
+          {/* Permission prompt banner */}
+          {permission === "undetermined" && (
+            <View style={pickerStyles.permissionBanner}>
+              <View style={pickerStyles.permissionBannerContent}>
+                <Ionicons name="phone-portrait-outline" size={20} color={colors.info} />
+                <View style={pickerStyles.permissionBannerText}>
+                  <Text style={pickerStyles.permissionTitle}>Import from contacts</Text>
+                  <Text style={pickerStyles.permissionSubtitle}>
+                    Allow access to show your phone contacts alongside your parties.
+                  </Text>
+                </View>
+              </View>
+              <View style={pickerStyles.permissionActions}>
+                <TouchableOpacity
+                  onPress={() => {
+                    // Dismiss by doing nothing — permission stays undetermined
+                    // but we won't show the banner again this session
+                  }}
+                  style={pickerStyles.permissionBtnSecondary}
+                >
+                  <Text style={pickerStyles.permissionBtnSecondaryText}>Not now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={requestAccess} style={pickerStyles.permissionBtnPrimary}>
+                  <Text style={pickerStyles.permissionBtnPrimaryText}>Allow</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Loading overlay for party creation from contact */}
+          {creatingFromContact && (
+            <View style={pickerStyles.creatingOverlay}>
+              <ActivityIndicator color={colors.brand} size="small" />
+              <Text style={pickerStyles.creatingText}>Creating party...</Text>
+            </View>
+          )}
+
           {isLoading ? (
             <ActivityIndicator style={{ marginTop: 32 }} color={colors.brand} />
+          ) : isEmpty ? (
+            <Text style={modalStyles.emptyText}>
+              {debouncedSearch ? "No parties or contacts found" : "No parties yet"}
+            </Text>
           ) : (
-            <FlatList
-              data={parties}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={modalStyles.listContent}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={modalStyles.listItem}
-                  onPress={() => {
-                    onSelect(item);
-                    onClose();
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View style={modalStyles.listItemIcon}>
-                    <Ionicons name="person-outline" size={16} color={colors.brand} />
-                  </View>
-                  <View>
-                    <Text style={modalStyles.listItemName}>{item.name}</Text>
-                    {item.phone && (
-                      <Text style={modalStyles.listItemSub}>{item.phone}</Text>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <Text style={modalStyles.emptyText}>
-                  {debouncedSearch ? "No parties found" : "Start typing to search"}
-                </Text>
+            <SectionList
+              sections={sections}
+              keyExtractor={(item, index) =>
+                item.kind === "party" ? item.id : `contact-${item.contact.id}`
               }
+              contentContainerStyle={modalStyles.listContent}
+              stickySectionHeadersEnabled={false}
+              renderSectionHeader={({ section }) => (
+                <Text style={pickerStyles.sectionHeader}>{section.title}</Text>
+              )}
+              renderItem={({ item }) => {
+                if (item.kind === "party") {
+                  return (
+                    <TouchableOpacity
+                      style={modalStyles.listItem}
+                      onPress={() => {
+                        onSelect({ id: item.id, name: item.name, phone: item.phone });
+                        onClose();
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[modalStyles.listItemIcon, pickerStyles.partyIcon]}>
+                        <Ionicons name="person-outline" size={16} color={colors.info} />
+                      </View>
+                      <View style={modalStyles.listItemContent}>
+                        <Text style={modalStyles.listItemName}>{item.name}</Text>
+                        {item.phone && (
+                          <Text style={modalStyles.listItemSub}>{item.phone}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }
+
+                // Contact row
+                const contact = item.contact;
+                return (
+                  <TouchableOpacity
+                    style={modalStyles.listItem}
+                    onPress={() => handleContactSelect(contact)}
+                    activeOpacity={0.7}
+                    disabled={creatingFromContact}
+                  >
+                    <View style={[modalStyles.listItemIcon, pickerStyles.contactIcon]}>
+                      <Ionicons name="call-outline" size={16} color={colors.success} />
+                    </View>
+                    <View style={modalStyles.listItemContent}>
+                      <Text style={modalStyles.listItemName}>{contact.name}</Text>
+                      {contact.phone && (
+                        <Text style={modalStyles.listItemSub}>{contact.phone}</Text>
+                      )}
+                    </View>
+                    <View style={pickerStyles.newBadge}>
+                      <Text style={pickerStyles.newBadgeText}>NEW</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
             />
           )}
         </View>
@@ -162,6 +347,101 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
     </Modal>
   );
 }
+
+const pickerStyles = StyleSheet.create({
+  sectionHeader: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  partyIcon: {
+    backgroundColor: colors.infoBg,
+  },
+  contactIcon: {
+    backgroundColor: colors.successBg,
+  },
+  newBadge: {
+    backgroundColor: colors.successBg,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  newBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.success,
+  },
+  permissionBanner: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: colors.infoBg,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.info + "30",
+    padding: 14,
+  },
+  permissionBannerContent: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  permissionBannerText: {
+    flex: 1,
+  },
+  permissionTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  permissionSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 16,
+  },
+  permissionActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 10,
+    gap: 10,
+  },
+  permissionBtnSecondary: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  permissionBtnSecondaryText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  permissionBtnPrimary: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: colors.info,
+    borderRadius: 8,
+  },
+  permissionBtnPrimaryText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  creatingOverlay: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    gap: 8,
+  },
+  creatingText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+});
 
 // ── Item Picker Modal ──────────────────────────────────────────
 
@@ -403,52 +683,6 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
   );
 }
 
-// ── Date Input ─────────────────────────────────────────────────
-// Simple text input for YYYY-MM-DD dates with basic validation
-
-interface DateInputProps {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  nextRef?: React.RefObject<TextInput>;
-}
-
-function DateInput({ label, value, onChange, nextRef }: DateInputProps) {
-  const [raw, setRaw] = useState(value);
-
-  const handleBlur = () => {
-    // Accept YYYY-MM-DD; fallback to original if invalid
-    const trimmed = raw.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed) && !isNaN(Date.parse(trimmed))) {
-      onChange(trimmed);
-    } else {
-      setRaw(value);
-    }
-  };
-
-  useEffect(() => {
-    setRaw(value);
-  }, [value]);
-
-  return (
-    <View style={styles.dateCard}>
-      <Text style={styles.dateLabel}>{label}</Text>
-      <TextInput
-        style={styles.dateInput}
-        value={raw}
-        onChangeText={setRaw}
-        onBlur={handleBlur}
-        placeholder="YYYY-MM-DD"
-        placeholderTextColor={colors.textMuted}
-        keyboardType="numbers-and-punctuation"
-        maxLength={10}
-        returnKeyType={nextRef ? "next" : "done"}
-        onSubmitEditing={() => nextRef?.current?.focus()}
-      />
-    </View>
-  );
-}
-
 // ── Main Create Screen ────────────────────────────────────────
 
 export default function InvoiceCreateScreen() {
@@ -462,15 +696,13 @@ export default function InvoiceCreateScreen() {
     id: string;
     name: string;
   } | null>(null);
-  const [invoiceDate, setInvoiceDate] = useState(todayISO());
-  const [dueDate, setDueDate] = useState(in30daysISO());
+  const [invoiceDate, setInvoiceDate] = useState(todayDate());
+  const [dueDate, setDueDate] = useState(in30daysDate());
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
-
-  const dueDateRef = useRef<TextInput>(null);
 
   const createMutation = trpc.invoice.create.useMutation({
     onSuccess: (data) => {
@@ -555,7 +787,7 @@ export default function InvoiceCreateScreen() {
   );
 
   const handleAddLine = useCallback(() => {
-    setLineItems((prev) => [...prev, newLineItem()]);
+    setLineItems((prev) => [newLineItem(), ...prev]); // prepend — new item at top
   }, []);
 
   const doCreate = useCallback(() => {
@@ -585,8 +817,8 @@ export default function InvoiceCreateScreen() {
       partyId: selectedParty.id,
       type: invoiceType,
       documentType: "invoice",
-      invoiceDate: new Date(invoiceDate).toISOString(),
-      dueDate: new Date(dueDate).toISOString(),
+      invoiceDate: invoiceDate.toISOString(),
+      dueDate: dueDate.toISOString(),
       notes: notes.trim() || undefined,
       additionalCharges: "0",
       invoiceDiscount: "0",
@@ -684,30 +916,42 @@ export default function InvoiceCreateScreen() {
             <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
           </TouchableOpacity>
 
-          {/* Dates — editable text inputs */}
+          {/* Dates */}
           <Text style={styles.sectionLabel}>Dates</Text>
           <View style={styles.datesRow}>
-            <DateInput
-              label="Invoice Date"
-              value={invoiceDate}
-              onChange={setInvoiceDate}
-              nextRef={dueDateRef}
-            />
-            <DateInput
-              label="Due Date"
-              value={dueDate}
-              onChange={setDueDate}
-            />
+            <View style={styles.dateCard}>
+              <DatePickerField
+                label="Invoice Date"
+                value={invoiceDate}
+                onChange={setInvoiceDate}
+              />
+            </View>
+            <View style={styles.dateCard}>
+              <DatePickerField
+                label="Due Date"
+                value={dueDate}
+                onChange={setDueDate}
+                minimumDate={invoiceDate}
+              />
+            </View>
           </View>
 
           {/* Line Items */}
+          {/* Items section header with running total */}
           <View style={styles.lineItemsHeader}>
-            <Text style={styles.sectionLabel}>Items</Text>
-            <Text style={styles.lineCount}>
-              {lineItems.length} {lineItems.length === 1 ? "item" : "items"}
-            </Text>
+            <View>
+              <Text style={styles.sectionLabel}>Items</Text>
+              <Text style={styles.lineCount}>
+                {lineItems.filter(l => l.description).length} {lineItems.filter(l => l.description).length === 1 ? "item" : "items"} · {formatCurrency(totals.total)}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.addItemBtn} onPress={handleAddLine} activeOpacity={0.7}>
+              <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
+              <Text style={styles.addItemBtnText}>Add</Text>
+            </TouchableOpacity>
           </View>
 
+          {/* Line items — newest at top */}
           {lineItems.map((li, idx) => (
             <LineItemRow
               key={idx}
@@ -719,11 +963,6 @@ export default function InvoiceCreateScreen() {
               onPickItem={handlePickItemForLine}
             />
           ))}
-
-          <TouchableOpacity style={styles.addItemBtn} onPress={handleAddLine} activeOpacity={0.7}>
-            <Ionicons name="add-circle-outline" size={18} color={colors.brand} />
-            <Text style={styles.addItemBtnText}>Add Item</Text>
-          </TouchableOpacity>
 
           {/* Notes */}
           <Text style={styles.sectionLabel}>Notes (optional)</Text>
@@ -937,14 +1176,15 @@ const styles = StyleSheet.create({
   },
   lineItemsHeader: {
     flexDirection: "row",
-    alignItems: "baseline",
+    alignItems: "center",
     justifyContent: "space-between",
     marginTop: 16,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   lineCount: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textMuted,
+    marginTop: 2,
   },
   lineItemCard: {
     backgroundColor: colors.surface,
@@ -1046,19 +1286,15 @@ const styles = StyleSheet.create({
   addItemBtn: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.brand + "40",
-    borderStyle: "dashed",
-    paddingVertical: 14,
-    gap: 8,
-    marginBottom: 4,
+    backgroundColor: colors.brand + "18",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 4,
   },
   addItemBtnText: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 13,
+    fontWeight: "700",
     color: colors.brand,
   },
   notesInput: {

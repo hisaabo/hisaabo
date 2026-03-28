@@ -74,6 +74,10 @@ export default defineConfig({
           autogenerate: { directory: "self-hosting" },
         },
         {
+          label: "AI & Automation",
+          autogenerate: { directory: "ai" },
+        },
+        {
           label: "Reference",
           autogenerate: { directory: "reference" },
         },

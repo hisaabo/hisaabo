@@ -21,6 +21,7 @@ import { formatCurrency } from "../../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 interface LineItem {
   itemId?: string;
@@ -34,7 +35,7 @@ interface LineItem {
 function newLineItem(): LineItem {
   return { description: "", quantity: "1", unitPrice: "0", taxPercent: "0", discountPercent: "0" };
 }
-function todayISO() { return new Date().toISOString(); }
+function todayDate() { return new Date(); }
 function safeNum(s: string) { const n = parseFloat(s); return isNaN(n) ? 0 : n; }
 
 function PartyPickerModal({ visible, onSelect, onClose }: {
@@ -150,7 +151,7 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
 export default function DeliveryChallanCreateScreen() {
   const router = useRouter();
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
-  const [invoiceDate] = useState(todayISO());
+  const [invoiceDate, setInvoiceDate] = useState(todayDate());
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
@@ -188,7 +189,7 @@ export default function DeliveryChallanCreateScreen() {
     if (validItems.length === 0) { Alert.alert("Validation", "Add at least one item."); return; }
     createMutation.mutate({
       partyId: selectedParty.id, type: "sale", documentType: "delivery_challan",
-      invoiceDate, notes: notes.trim() || undefined,
+      invoiceDate: invoiceDate.toISOString(), notes: notes.trim() || undefined,
       additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
       lineItems: validItems.map((li) => ({ itemId: li.itemId, description: li.description.trim(), quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })),
     });
@@ -220,8 +221,11 @@ export default function DeliveryChallanCreateScreen() {
 
           <Text style={s.sectionLabel}>Date</Text>
           <View style={s.dateCard}>
-            <Text style={s.dateLabel}>Challan Date</Text>
-            <Text style={s.dateValue}>{new Date(invoiceDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</Text>
+            <DatePickerField
+              label="Challan Date"
+              value={invoiceDate}
+              onChange={setInvoiceDate}
+            />
           </View>
 
           <View style={s.lineItemsHeader}>

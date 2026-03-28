@@ -7,21 +7,154 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
+  Switch,
+  Modal,
+  Platform,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import * as LocalAuthentication from "expo-local-authentication";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
 import { useBusinessStore } from "../../../../src/stores/business";
+import { useBiometricStore } from "../../../../src/stores/biometric";
 import { colors } from "../../../../src/lib/theme";
+import { haptic } from "../../../../src/lib/haptics";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
+
+const PIN_LENGTH = 4;
 
 export default function ProfileScreen() {
   const router = useRouter();
   const logout = useAuthStore((s) => s.logout);
   const clearBusiness = useBusinessStore((s) => s.clearBusiness);
+
+  // Biometric / security state
+  const biometricEnabled = useBiometricStore((s) => s.biometricEnabled);
+  const pinEnabled = useBiometricStore((s) => s.pinEnabled);
+  const enableBiometric = useBiometricStore((s) => s.enableBiometric);
+  const disableBiometric = useBiometricStore((s) => s.disableBiometric);
+  const setStorePin = useBiometricStore((s) => s.setPin);
+  const clearStorePin = useBiometricStore((s) => s.clearPin);
+  const checkHardware = useBiometricStore((s) => s.checkHardware);
+
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricLabel, setBiometricLabel] = useState("Fingerprint / Face ID");
+
+  // PIN modal state
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [pinStep, setPinStep] = useState<"create" | "confirm">("create");
+  const [newPinValue, setNewPinValue] = useState("");
+  const [confirmPinValue, setConfirmPinValue] = useState("");
+  const [pinError, setPinError] = useState("");
+
+  useEffect(() => {
+    checkHardware().then(({ available, types }) => {
+      setBiometricAvailable(available);
+      if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+        setBiometricLabel("Face ID");
+      } else if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+        setBiometricLabel("Fingerprint");
+      }
+    });
+  }, [checkHardware]);
+
+  const handleToggleBiometric = useCallback(async (value: boolean) => {
+    if (value) {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: "Verify to enable biometric unlock",
+        cancelLabel: "Cancel",
+        disableDeviceFallback: true,
+      });
+      if (result.success) {
+        await enableBiometric();
+        haptic.success();
+      } else {
+        haptic.error();
+      }
+    } else {
+      await disableBiometric();
+      haptic.light();
+    }
+  }, [enableBiometric, disableBiometric]);
+
+  const handleChangePin = useCallback(() => {
+    setPinStep("create");
+    setNewPinValue("");
+    setConfirmPinValue("");
+    setPinError("");
+    setPinModalVisible(true);
+  }, []);
+
+  const handleRemovePin = useCallback(() => {
+    Alert.alert(
+      "Remove PIN",
+      "Are you sure you want to remove your PIN lock?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            await clearStorePin();
+            haptic.success();
+          },
+        },
+      ]
+    );
+  }, [clearStorePin]);
+
+  const handlePinDigit = useCallback((digit: string) => {
+    haptic.light();
+    setPinError("");
+    if (pinStep === "create") {
+      setNewPinValue((prev) => {
+        if (prev.length >= PIN_LENGTH) return prev;
+        const next = prev + digit;
+        if (next.length === PIN_LENGTH) {
+          setTimeout(() => {
+            setPinStep("confirm");
+            setConfirmPinValue("");
+          }, 200);
+        }
+        return next;
+      });
+    } else {
+      setConfirmPinValue((prev) => {
+        if (prev.length >= PIN_LENGTH) return prev;
+        const next = prev + digit;
+        if (next.length === PIN_LENGTH) {
+          setTimeout(async () => {
+            if (next === newPinValue) {
+              await setStorePin(next);
+              haptic.success();
+              setPinModalVisible(false);
+            } else {
+              haptic.error();
+              setPinError("PINs do not match. Try again.");
+              setConfirmPinValue("");
+              setPinStep("create");
+              setNewPinValue("");
+            }
+          }, 200);
+        }
+        return next;
+      });
+    }
+  }, [pinStep, newPinValue, setStorePin]);
+
+  const handlePinDelete = useCallback(() => {
+    haptic.light();
+    setPinError("");
+    if (pinStep === "create") {
+      setNewPinValue((prev) => prev.slice(0, -1));
+    } else {
+      setConfirmPinValue((prev) => prev.slice(0, -1));
+    }
+  }, [pinStep]);
 
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
@@ -274,6 +407,146 @@ export default function ProfileScreen() {
           )}
         </Card>
 
+        {/* Security */}
+        <Text style={styles.sectionLabel}>Security</Text>
+        <View style={styles.securityList}>
+          {/* Biometric toggle */}
+          {biometricAvailable && (
+            <>
+              <View style={styles.securityRow}>
+                <View style={styles.securityIconWrap}>
+                  <Ionicons name="finger-print" size={20} color={colors.brand} />
+                </View>
+                <View style={styles.securityText}>
+                  <Text style={styles.securityLabel}>{biometricLabel}</Text>
+                  <Text style={styles.securityDesc}>Unlock with biometrics</Text>
+                </View>
+                <Switch
+                  value={biometricEnabled}
+                  onValueChange={handleToggleBiometric}
+                  trackColor={{ false: colors.border, true: "rgba(99,102,241,0.5)" }}
+                  thumbColor={biometricEnabled ? colors.brand : colors.textMuted}
+                />
+              </View>
+              <View style={styles.securityDivider} />
+            </>
+          )}
+
+          {/* Change / Set PIN */}
+          <TouchableOpacity
+            style={styles.securityRow}
+            onPress={handleChangePin}
+            activeOpacity={0.7}
+          >
+            <View style={styles.securityIconWrap}>
+              <Ionicons name="keypad-outline" size={20} color={colors.brand} />
+            </View>
+            <View style={styles.securityText}>
+              <Text style={styles.securityLabel}>{pinEnabled ? "Change PIN" : "Set up PIN"}</Text>
+              <Text style={styles.securityDesc}>
+                {pinEnabled ? "Update your 4-digit PIN" : "Add a 4-digit PIN lock"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </TouchableOpacity>
+
+          {/* Remove PIN (only shown if PIN is set) */}
+          {pinEnabled && (
+            <>
+              <View style={styles.securityDivider} />
+              <TouchableOpacity
+                style={styles.securityRow}
+                onPress={handleRemovePin}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.securityIconWrap, { backgroundColor: colors.dangerBg }]}>
+                  <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                </View>
+                <View style={styles.securityText}>
+                  <Text style={[styles.securityLabel, { color: colors.danger }]}>Remove PIN</Text>
+                  <Text style={styles.securityDesc}>Remove PIN lock from app</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.danger} />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* PIN Creation Modal */}
+        <Modal visible={pinModalVisible} transparent animationType="slide" statusBarTranslucent>
+          <View style={styles.pinModalOverlay}>
+            <View style={styles.pinModalSheet}>
+              <View style={styles.pinModalHandle} />
+              <Text style={styles.pinModalTitle}>
+                {pinStep === "create" ? "Create a 4-digit PIN" : "Confirm your PIN"}
+              </Text>
+
+              <View style={styles.pinDotRow}>
+                {Array.from({ length: PIN_LENGTH }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.pinDot,
+                      i < (pinStep === "create" ? newPinValue : confirmPinValue).length
+                        ? styles.pinDotFilled
+                        : styles.pinDotEmpty,
+                    ]}
+                  />
+                ))}
+              </View>
+
+              {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
+
+              <View style={styles.pinNumPad}>
+                {[
+                  ["1", "2", "3"],
+                  ["4", "5", "6"],
+                  ["7", "8", "9"],
+                  ["", "0", "del"],
+                ].map((row, rowIndex) => (
+                  <View key={rowIndex} style={styles.pinNumRow}>
+                    {row.map((key) => {
+                      if (key === "") {
+                        return <View key="empty" style={styles.pinNumKeyEmpty} />;
+                      }
+                      if (key === "del") {
+                        return (
+                          <TouchableOpacity
+                            key="del"
+                            style={styles.pinNumKey}
+                            onPress={handlePinDelete}
+                            activeOpacity={0.6}
+                          >
+                            <Ionicons name="backspace-outline" size={22} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                        );
+                      }
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={styles.pinNumKey}
+                          onPress={() => handlePinDigit(key)}
+                          activeOpacity={0.6}
+                        >
+                          <Text style={styles.pinNumKeyText}>{key}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={styles.pinCancelBtn}
+                onPress={() => setPinModalVisible(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.pinCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         {/* Danger Zone */}
         <Text style={styles.sectionLabel}>Session</Text>
         <View style={styles.dangerList}>
@@ -454,6 +727,136 @@ const styles = StyleSheet.create({
   changeEmailNote: {
     fontSize: 12,
     color: colors.textMuted,
+  },
+
+  // Security section
+  securityList: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+    marginBottom: 20,
+  },
+  securityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 14,
+  },
+  securityDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  securityIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: colors.brandLight,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  securityText: { flex: 1 },
+  securityLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  securityDesc: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+
+  // PIN modal
+  pinModalOverlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.6)",
+  },
+  pinModalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+    paddingTop: 12,
+    alignItems: "center",
+  },
+  pinModalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    marginBottom: 24,
+  },
+  pinModalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: 20,
+  },
+  pinDotRow: {
+    flexDirection: "row",
+    gap: 16,
+    marginBottom: 8,
+  },
+  pinDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+  },
+  pinDotFilled: {
+    backgroundColor: colors.brand,
+  },
+  pinDotEmpty: {
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    borderColor: colors.border,
+  },
+  pinErrorText: {
+    fontSize: 13,
+    color: colors.danger,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  pinNumPad: {
+    marginTop: 16,
+    gap: 10,
+  },
+  pinNumRow: {
+    flexDirection: "row",
+    gap: 18,
+    justifyContent: "center",
+  },
+  pinNumKey: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pinNumKeyEmpty: {
+    width: 60,
+    height: 60,
+  },
+  pinNumKeyText: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  pinCancelBtn: {
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  pinCancelText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    fontWeight: "500",
   },
 
   // Danger zone

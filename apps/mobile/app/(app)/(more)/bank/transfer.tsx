@@ -20,6 +20,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
+import { DatePickerField } from "../../../../src/components/ui";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "other";
 
@@ -99,7 +100,7 @@ function AccountPickerModal({
   );
 }
 
-function todayISO() { return new Date().toISOString(); }
+function todayDate() { return new Date(); }
 
 export default function BankTransferScreen() {
   const router = useRouter();
@@ -108,7 +109,7 @@ export default function BankTransferScreen() {
   const [toAccount, setToAccount] = useState<Account | null>(null);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [txDate] = useState(todayISO());
+  const [txDate, setTxDate] = useState(todayDate());
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
 
@@ -153,7 +154,7 @@ export default function BankTransferScreen() {
       toAccountId: toAccount!.id,
       amount: amt.toFixed(2),
       description: description.trim() || undefined,
-      transactionDate: txDate,
+      transactionDate: txDate.toISOString(),
     });
   };
 
@@ -235,6 +236,7 @@ export default function BankTransferScreen() {
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor={colors.textMuted}
+            returnKeyType="done"
           />
 
           {/* Description */}
@@ -252,12 +254,11 @@ export default function BankTransferScreen() {
 
           {/* Date */}
           <Text style={s.sectionLabel}>Date</Text>
-          <View style={s.datePill}>
-            <Ionicons name="calendar-outline" size={15} color={colors.textMuted} />
-            <Text style={s.datePillText}>
-              {new Date(txDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-            </Text>
-          </View>
+          <DatePickerField
+            label="Transfer Date"
+            value={txDate}
+            onChange={setTxDate}
+          />
 
           <View style={{ height: 100 }} />
         </ScrollView>
