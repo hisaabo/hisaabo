@@ -1,0 +1,254 @@
+---
+title: Self-Hosting Setup
+description: Install Hisaabo on your own server using Docker Compose. Covers prerequisites, environment variables, first run, and production configuration.
+sidebar:
+  order: 1
+---
+
+This guide walks you through running Hisaabo on your own server from scratch. You will have a working instance in about 15 minutes.
+
+## Prerequisites
+
+- A Linux server (Ubuntu 22.04 LTS recommended, but any modern Linux distribution works)
+- Docker 24+ and Docker Compose v2+ installed ([install guide](https://docs.docker.com/engine/install/ubuntu/))
+- At least 1 GB of RAM and 10 GB of disk space
+- A domain name or subdomain pointing to your server (for production with HTTPS)
+
+:::note
+You can also run Hisaabo on a local machine for personal use. The steps are identical; just skip the DNS/HTTPS parts.
+:::
+
+## Step 1: Create a project directory
+
+```bash
+mkdir hisaabo && cd hisaabo
+```
+
+## Step 2: Create your environment file
+
+Create a file named `.env` in the `hisaabo` directory. Start from the template below and fill in your values:
+
+```bash
+# ── Database ──────────────────────────────────────────────────
+DATABASE_URL=postgresql://hisaabo:YOUR_STRONG_PASSWORD@postgres:5432/hisaabo
+
+# ── API Server ────────────────────────────────────────────────
+PORT=3000
+CORS_ORIGINS=https://YOUR_DOMAIN
+NODE_ENV=production
+
+# ── App URL (used in magic link emails) ───────────────────────
+APP_URL=https://YOUR_DOMAIN
+
+# ── Email (optional — magic links print to console if not set)
+RESEND_API_KEY=
+EMAIL_FROM=Hisaabo <noreply@yourdomain.com>
+
+# ── Multi-tenancy (leave false for personal/single-org use) ───
+MULTI_TENANT=false
+CONTROL_DATABASE_URL=
+
+# ── Cloudflare Turnstile (bot protection for online store) ────
+TURNSTILE_SECRET_KEY=
+VITE_TURNSTILE_SITE_KEY=
+
+# ── PostgreSQL credentials (used by the postgres container) ───
+POSTGRES_USER=hisaabo
+POSTGRES_PASSWORD=YOUR_STRONG_PASSWORD
+POSTGRES_DB=hisaabo
+```
+
+:::caution[Use a strong password]
+Replace `YOUR_STRONG_PASSWORD` with a randomly generated password. You can generate one with `openssl rand -base64 32`. Use the **same password** in both `DATABASE_URL` and `POSTGRES_PASSWORD`.
+:::
+
+### Environment variable reference
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | PostgreSQL connection string. Use `postgres` as the hostname when using the bundled container. |
+| `PORT` | Yes | Port the API listens on inside the container. Keep this as `3000`. |
+| `CORS_ORIGINS` | Yes | Comma-separated list of allowed origins. Set to your frontend domain. |
+| `NODE_ENV` | Yes | Set to `production` for a live server. |
+| `APP_URL` | Yes | Full URL of your Hisaabo web frontend, including `https://`. Used in magic link emails. |
+| `RESEND_API_KEY` | No | If set, magic link emails are sent via [Resend](https://resend.com). If not set, magic links are printed to the API container log. |
+| `EMAIL_FROM` | No | Sender name and address for email, for example `Hisaabo <noreply@yourdomain.com>`. |
+| `MULTI_TENANT` | No | Set to `true` only for a cloud SaaS deployment serving multiple unrelated organisations. Leave `false` for personal or single-business use. |
+| `TURNSTILE_SECRET_KEY` / `VITE_TURNSTILE_SITE_KEY` | No | Cloudflare Turnstile keys for bot protection on the online store. Get keys from the [Cloudflare dashboard](https://dash.cloudflare.com/). Leave blank to disable bot protection (fine for private installs). |
+
+## Step 3: Create your Docker Compose file
+
+Create `docker-compose.yml`:
+
+```yaml
+services:
+  api:
+    image: ghcr.io/hisaabo/hisaabo-api:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_ENV: production
+      PORT: 3000
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      APP_URL: ${APP_URL}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      MULTI_TENANT: ${MULTI_TENANT:-false}
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hisaabo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-hisaabo}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hisaabo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+```
+
+:::note
+The PostgreSQL port is **not** exposed to the host by default — only the API container connects to it. This is intentional for security. If you need direct database access for debugging, temporarily add `ports: ["5432:5432"]` under the `postgres` service.
+:::
+
+## Step 4: Start the containers
+
+```bash
+docker compose up -d
+```
+
+On first start, the API container automatically runs database migrations before accepting traffic. You can watch this with:
+
+```bash
+docker compose logs -f api
+```
+
+You will see output like:
+
+```
+Running database migrations...
+Migrations complete
+Server listening on port 3000
+```
+
+## Step 5: Set up a reverse proxy (production)
+
+For a production server, place Nginx or Caddy in front of the API to handle HTTPS.
+
+### Caddy (recommended — automatic HTTPS)
+
+Install Caddy on your server, then create `/etc/caddy/Caddyfile`:
+
+```
+your-domain.com {
+  reverse_proxy localhost:3000
+}
+```
+
+Reload Caddy: `sudo systemctl reload caddy`
+
+Caddy automatically obtains and renews a Let's Encrypt certificate for your domain.
+
+### Nginx
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Use Certbot to get an SSL certificate: `sudo certbot --nginx -d your-domain.com`
+
+## Step 6: Deploy the web frontend
+
+The Docker Compose setup above runs the **API server** only. You need to deploy the web frontend separately. Options:
+
+- **Static hosting**: Build the web app (`pnpm --filter @hisaabo/web build`) and host the `apps/web/dist/` output on any static file server, CDN, or platform (Vercel, Netlify, Cloudflare Pages).
+- **Same server**: Serve the built files from Nginx or Caddy alongside the reverse proxy.
+
+Set the `CORS_ORIGINS` environment variable on the API to include the URL where your web frontend is hosted.
+
+## Step 7: Create your account
+
+Open your web frontend URL in your browser. The first time you visit, you will see the registration page. Create an account with your email address and a password.
+
+After signing in, you will be prompted to [create your first business](/getting-started/create-business).
+
+:::tip[All-in-one deployment with ONCE]
+If you prefer a single-container deployment, Hisaabo supports [Basecamp ONCE](https://once.com/) which bundles PostgreSQL and the API into one container. See [Self-Hosting Reference](/self-hosting) for details.
+:::
+
+## Updating Hisaabo
+
+To update to the latest version:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The API container runs migrations automatically on each startup, so schema changes are applied without any manual steps.
+
+## Backing up your data
+
+Your data lives in the `pgdata` Docker volume. To back it up:
+
+```bash
+# Create a compressed SQL dump
+docker compose exec postgres pg_dump -U hisaabo hisaabo | gzip > backup-$(date +%Y%m%d).sql.gz
+```
+
+To restore from a backup:
+
+```bash
+gunzip -c backup-20250101.sql.gz | docker compose exec -T postgres psql -U hisaabo hisaabo
+```
+
+:::caution[Back up regularly]
+Set up a cron job to run the backup command daily and copy the files off the server. A server failure without a recent backup means permanent data loss.
+:::
+
+## Frequently asked questions
+
+**The container starts but I see a database connection error.**
+Check that `DATABASE_URL` in your `.env` uses `postgres` (the service name) as the hostname — not `localhost`. Inside the Docker network, `localhost` refers to the API container itself, not the PostgreSQL container.
+
+**Magic links are not arriving in email.**
+If `RESEND_API_KEY` is not set, magic links are printed to the API container log. Run `docker compose logs api | grep "magic"` to find the link. To send real emails, create a free account at [Resend](https://resend.com), add your sending domain, and set `RESEND_API_KEY` in your `.env`.
+
+**How do I run Hisaabo on a local machine for testing?**
+Use the development `docker-compose.yml` that ships with the source code, which exposes PostgreSQL on port 5432 and does not require HTTPS. Run `docker compose up -d` from the repository root to start only PostgreSQL, then run `pnpm dev` to start the API and web servers locally.
+
+**Can I run multiple Hisaabo instances on the same server?**
+Yes, use different ports and different `pgdata` volume names for each instance.

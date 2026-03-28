@@ -25,16 +25,16 @@ export function ConfirmDialog({
   return (
     <Modal open={open} onClose={onCancel} className="max-w-sm">
       <div className="pb-2">
-        <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <p className="text-sm font-semibold text-text-primary">
           {title}
         </p>
         {description && (
-          <p className="text-sm mt-2" style={{ color: "var(--text-secondary)" }}>
+          <p className="text-sm mt-2 text-text-secondary">
             {description}
           </p>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2 pt-4" style={{ borderTop: "1px solid var(--border-light)" }}>
+      <div className="flex items-center justify-end gap-2 pt-4 border-t border-border-light">
         <button
           type="button"
           className="btn-ghost"

@@ -1,30 +1,33 @@
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
+import { colors } from "../../../../src/lib/theme";
+import { PressableRow } from "../../../../src/components/ui";
 
 interface SettingItem {
   label: string;
   icon: string;
   description: string;
   danger?: boolean;
+  route?: string;
 }
 
 const SETTINGS: SettingItem[] = [
-  { label: "Business Details", icon: "business-outline", description: "Name, GST, address" },
-  { label: "Team", icon: "people-outline", description: "Members and roles" },
+  { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business" },
+  { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
   { label: "Online Store", icon: "storefront-outline", description: "Store settings" },
-  { label: "Profile", icon: "person-outline", description: "Name, email, password" },
+  { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
   { label: "Sign Out", icon: "log-out-outline", description: "End your session", danger: true },
 ];
 
@@ -60,6 +63,10 @@ export default function SettingsScreen() {
       );
       return;
     }
+    if (item.route) {
+      router.push(item.route as any);
+      return;
+    }
     Alert.alert(item.label, "This setting is coming soon");
   };
 
@@ -68,7 +75,7 @@ export default function SettingsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Settings</Text>
         <View style={{ width: 40 }} />
@@ -78,7 +85,7 @@ export default function SettingsScreen() {
         {/* App Info */}
         <View style={styles.appInfoCard}>
           <View style={styles.appIconWrapper}>
-            <Ionicons name="calculator-outline" size={32} color="#6366f1" />
+            <Ionicons name="calculator-outline" size={32} color={colors.brand} />
           </View>
           <View>
             <Text style={styles.appName}>Hisaabo</Text>
@@ -92,25 +99,23 @@ export default function SettingsScreen() {
             const isLast = index === SETTINGS.length - 1;
             const isSignOut = item.danger;
             return (
-              <TouchableOpacity
+              <PressableRow
                 key={item.label}
                 style={[
                   styles.settingRow,
                   !isLast && styles.settingRowBorder,
-                  isSignOut && styles.settingRowDanger,
                 ]}
                 onPress={() => handleItemPress(item)}
-                activeOpacity={0.7}
                 disabled={logoutMutation.isPending && isSignOut}
               >
                 <View style={[
                   styles.settingIconWrapper,
-                  { backgroundColor: isSignOut ? "rgba(239,68,68,0.12)" : "rgba(99,102,241,0.12)" },
+                  { backgroundColor: isSignOut ? "rgba(239,68,68,0.12)" : colors.brandLight },
                 ]}>
                   <Ionicons
                     name={item.icon as any}
                     size={20}
-                    color={isSignOut ? "#ef4444" : "#6366f1"}
+                    color={isSignOut ? colors.danger : colors.brand}
                   />
                 </View>
                 <View style={styles.settingText}>
@@ -120,15 +125,15 @@ export default function SettingsScreen() {
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
                 {logoutMutation.isPending && isSignOut ? (
-                  <ActivityIndicator color="#ef4444" size="small" />
+                  <ActivityIndicator color={colors.danger} size="small" />
                 ) : (
                   <Ionicons
                     name="chevron-forward"
                     size={18}
-                    color={isSignOut ? "#ef4444" : "#6b7280"}
+                    color={isSignOut ? colors.danger : colors.textMuted}
                   />
                 )}
-              </TouchableOpacity>
+              </PressableRow>
             );
           })}
         </View>
@@ -141,7 +146,7 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0f0f1a" },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -149,10 +154,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   content: { padding: 16, paddingBottom: 48 },
 
   // App Info Card
@@ -160,10 +165,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 16,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 20,
     marginBottom: 24,
   },
@@ -171,19 +176,19 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 16,
-    backgroundColor: "rgba(99,102,241,0.12)",
+    backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
   },
-  appName: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
-  appVersion: { fontSize: 13, color: "#6b7280", marginTop: 2 },
+  appName: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
+  appVersion: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
 
   // Settings List
   settingsList: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     overflow: "hidden",
   },
   settingRow: {
@@ -195,7 +200,7 @@ const styles = StyleSheet.create({
   },
   settingRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   settingRowDanger: {},
   settingIconWrapper: {
@@ -206,13 +211,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   settingText: { flex: 1 },
-  settingLabel: { fontSize: 15, fontWeight: "600", color: "#ffffff" },
-  settingLabelDanger: { color: "#ef4444" },
-  settingDescription: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+  settingLabel: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  settingLabelDanger: { color: colors.danger },
+  settingDescription: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 
   footer: {
     textAlign: "center",
-    color: "#6b7280",
+    color: colors.textMuted,
     fontSize: 12,
     marginTop: 32,
   },

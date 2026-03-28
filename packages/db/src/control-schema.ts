@@ -104,6 +104,8 @@ export const magicLinkTokens = pgTable("magic_link_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   tokenHash: text("token_hash").notNull(),
+  // Populated for email-change tokens so confirmEmailChange doesn't trust client-supplied userId
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   usedAt: timestamp("used_at", { withTimezone: true }),
   ipAddress: text("ip_address"),

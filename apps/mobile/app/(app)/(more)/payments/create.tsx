@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   ScrollView,
   TextInput,
@@ -12,10 +11,13 @@ import {
   Modal,
   FlatList,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
+import { colors } from "../../../../src/lib/theme";
+import { haptic } from "../../../../src/lib/haptics";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -118,6 +120,7 @@ export default function CreatePaymentScreen() {
 
     const dateStr = new Date(paymentDate + "T00:00:00.000Z").toISOString();
 
+    haptic.success();
     createPayment.mutate({
       partyId: selectedParty.id,
       amount: parseFloat(amount).toFixed(2),
@@ -141,7 +144,7 @@ export default function CreatePaymentScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Record Payment</Text>
         <View style={{ width: 40 }} />
@@ -159,7 +162,7 @@ export default function CreatePaymentScreen() {
             <Text style={selectedParty ? styles.selectorTextSelected : styles.selectorTextPlaceholder}>
               {selectedParty?.name ?? "Select party..."}
             </Text>
-            <Ionicons name="chevron-down" size={18} color="#6b7280" />
+            <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
 
@@ -169,7 +172,7 @@ export default function CreatePaymentScreen() {
           <TextInput
             style={styles.input}
             placeholder="0.00"
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={amount}
             onChangeText={setAmount}
             keyboardType="decimal-pad"
@@ -206,7 +209,7 @@ export default function CreatePaymentScreen() {
             value={paymentDate}
             onChangeText={setPaymentDate}
             placeholder="YYYY-MM-DD"
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
           />
         </View>
 
@@ -216,7 +219,7 @@ export default function CreatePaymentScreen() {
           <TextInput
             style={styles.input}
             placeholder="Cheque no., UTR, etc."
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={referenceNumber}
             onChangeText={setReferenceNumber}
           />
@@ -228,7 +231,7 @@ export default function CreatePaymentScreen() {
           <TextInput
             style={[styles.input, styles.textArea]}
             placeholder="Additional notes..."
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={notes}
             onChangeText={setNotes}
             multiline
@@ -242,7 +245,7 @@ export default function CreatePaymentScreen() {
           <View style={styles.section}>
             <Text style={styles.label}>Allocate to Invoices</Text>
             {invoicesLoading ? (
-              <ActivityIndicator color="#6366f1" style={{ marginTop: 8 }} />
+              <ActivityIndicator color={colors.brand} style={{ marginTop: 8 }} />
             ) : !unpaidInvoices || unpaidInvoices.length === 0 ? (
               <Text style={styles.emptyInvoices}>No unpaid invoices for this party</Text>
             ) : (
@@ -255,7 +258,7 @@ export default function CreatePaymentScreen() {
                       style={[styles.checkbox, isSelected && styles.checkboxChecked]}
                       onPress={() => toggleAllocation(inv.id, inv.balance)}
                     >
-                      {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+                      {isSelected && <Ionicons name="checkmark" size={14} color={colors.textPrimary} />}
                     </TouchableOpacity>
                     <View style={styles.invoiceInfo}>
                       <Text style={styles.invoiceNumber}>{inv.invoiceNumber}</Text>
@@ -270,7 +273,7 @@ export default function CreatePaymentScreen() {
                         onChangeText={(v) => updateAllocationAmount(inv.id, v)}
                         keyboardType="decimal-pad"
                         placeholder="0.00"
-                        placeholderTextColor="#6b7280"
+                        placeholderTextColor={colors.textMuted}
                       />
                     )}
                   </View>
@@ -288,7 +291,7 @@ export default function CreatePaymentScreen() {
           activeOpacity={0.85}
         >
           {createPayment.isPending ? (
-            <ActivityIndicator color="#ffffff" size="small" />
+            <ActivityIndicator color={colors.textPrimary} size="small" />
           ) : (
             <Text style={styles.submitBtnText}>Record Payment</Text>
           )}
@@ -301,22 +304,22 @@ export default function CreatePaymentScreen() {
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Select Party</Text>
             <TouchableOpacity onPress={() => { setPartyModalVisible(false); setPartySearch(""); }}>
-              <Ionicons name="close" size={24} color="#ffffff" />
+              <Ionicons name="close" size={24} color={colors.textPrimary} />
             </TouchableOpacity>
           </View>
           <View style={styles.searchWrapper}>
-            <Ionicons name="search-outline" size={18} color="#6b7280" style={{ marginRight: 8 }} />
+            <Ionicons name="search-outline" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
             <TextInput
               style={styles.searchInput}
               placeholder="Search parties..."
-              placeholderTextColor="#6b7280"
+              placeholderTextColor={colors.textMuted}
               value={partySearch}
               onChangeText={setPartySearch}
               autoFocus
             />
           </View>
           {partiesLoading ? (
-            <ActivityIndicator color="#6366f1" style={{ marginTop: 40 }} />
+            <ActivityIndicator color={colors.brand} style={{ marginTop: 40 }} />
           ) : (
             <FlatList
               data={parties}
@@ -340,7 +343,7 @@ export default function CreatePaymentScreen() {
                     <Text style={styles.partyName}>{item.name}</Text>
                     {item.phone && <Text style={styles.partyPhone}>{item.phone}</Text>}
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color="#6b7280" />
+                  <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                 </TouchableOpacity>
               )}
             />
@@ -352,7 +355,7 @@ export default function CreatePaymentScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0f0f1a" },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -360,21 +363,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   content: { padding: 16, paddingBottom: 40 },
   section: { marginBottom: 20 },
-  label: { fontSize: 12, fontWeight: "600", color: "#9ca3af", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
+  label: { fontSize: 12, fontWeight: "600", color: colors.textSecondary, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
   input: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: "#ffffff",
+    color: colors.textPrimary,
     fontSize: 15,
   },
   textArea: { minHeight: 80, paddingTop: 12 },
@@ -382,33 +385,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  selectorTextSelected: { color: "#ffffff", fontSize: 15, flex: 1 },
-  selectorTextPlaceholder: { color: "#6b7280", fontSize: 15, flex: 1 },
+  selectorTextSelected: { color: colors.textPrimary, fontSize: 15, flex: 1 },
+  selectorTextPlaceholder: { color: colors.textMuted, fontSize: 15, flex: 1 },
   modeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   modeChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#2d2d44",
-    backgroundColor: "#1a1a2e",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  modeChipText: { fontSize: 13, fontWeight: "600", color: "#9ca3af" },
-  emptyInvoices: { color: "#6b7280", fontSize: 13, marginTop: 8 },
+  modeChipText: { fontSize: 13, fontWeight: "600", color: colors.textSecondary },
+  emptyInvoices: { color: colors.textMuted, fontSize: 13, marginTop: 8 },
   invoiceRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 12,
     marginTop: 8,
     gap: 10,
@@ -418,38 +421,38 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxChecked: { backgroundColor: "#6366f1", borderColor: "#6366f1" },
+  checkboxChecked: { backgroundColor: colors.brand, borderColor: colors.brand },
   invoiceInfo: { flex: 1 },
-  invoiceNumber: { fontSize: 14, fontWeight: "600", color: "#ffffff" },
-  invoiceBalance: { fontSize: 12, color: "#9ca3af", marginTop: 2 },
+  invoiceNumber: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+  invoiceBalance: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   allocationInput: {
     width: 90,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
     borderWidth: 1,
-    borderColor: "#6366f1",
+    borderColor: colors.brand,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    color: "#ffffff",
+    color: colors.textPrimary,
     fontSize: 13,
     textAlign: "right",
   },
   submitBtn: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
     marginTop: 8,
   },
   submitBtnDisabled: { opacity: 0.6 },
-  submitBtnText: { color: "#ffffff", fontSize: 16, fontWeight: "700" },
+  submitBtnText: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
 
   // Modal
-  modal: { flex: 1, backgroundColor: "#0f0f1a" },
+  modal: { flex: 1, backgroundColor: colors.bg },
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -457,38 +460,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
-  modalTitle: { fontSize: 18, fontWeight: "700", color: "#ffffff" },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
   searchWrapper: {
     flexDirection: "row",
     alignItems: "center",
     margin: 16,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     paddingHorizontal: 12,
     height: 44,
   },
-  searchInput: { flex: 1, color: "#ffffff", fontSize: 14, height: "100%" },
+  searchInput: { flex: 1, color: colors.textPrimary, fontSize: 14, height: "100%" },
   partyItem: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#1e1e32",
+    borderBottomColor: colors.surface,
     gap: 12,
   },
   partyAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
   },
-  partyAvatarText: { fontSize: 16, fontWeight: "700", color: "#6366f1" },
-  partyName: { fontSize: 15, fontWeight: "600", color: "#ffffff" },
-  partyPhone: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+  partyAvatarText: { fontSize: 16, fontWeight: "700", color: colors.brand },
+  partyName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
+  partyPhone: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 });

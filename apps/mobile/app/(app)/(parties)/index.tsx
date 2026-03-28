@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   FlatList,
   TouchableOpacity,
@@ -10,10 +9,13 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { FAB, SearchBar, PressableRow, EmptyState, QueryError } from "../../../src/components/ui";
 
 type PartyType = "customer" | "supplier";
 
@@ -64,9 +66,8 @@ export default function PartiesScreen() {
     const isReceivable = balance >= 0;
 
     return (
-      <TouchableOpacity
+      <PressableRow
         style={styles.listItem}
-        activeOpacity={0.7}
         onPress={() => router.push(`/(app)/(parties)/${item.id}` as never)}
       >
         <View style={styles.itemLeft}>
@@ -99,22 +100,18 @@ export default function PartiesScreen() {
             {isReceivable ? "Receivable" : "Payable"}
           </Text>
         </View>
-      </TouchableOpacity>
+      </PressableRow>
     );
   };
 
   const renderEmpty = () => {
     if (isLoading) return null;
     return (
-      <View style={styles.emptyState}>
-        <Ionicons name="people-outline" size={56} color="#2d2d44" />
-        <Text style={styles.emptyTitle}>No {activeTab}s found</Text>
-        <Text style={styles.emptySubtitle}>
-          {search
-            ? "Try a different search term"
-            : `Add your first ${activeTab} using the + button`}
-        </Text>
-      </View>
+      <EmptyState
+        icon="people-outline"
+        title={`No ${activeTab}s found`}
+        description={search ? "Try a different search term" : `Add your first ${activeTab} using the + button`}
+      />
     );
   };
 
@@ -122,7 +119,7 @@ export default function PartiesScreen() {
     if (!isLoading || parties.length === 0) return null;
     return (
       <View style={styles.footer}>
-        <ActivityIndicator color="#6366f1" />
+        <ActivityIndicator color={colors.brand} />
       </View>
     );
   };
@@ -174,32 +171,17 @@ export default function PartiesScreen() {
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
-        <Ionicons
-          name="search-outline"
-          size={18}
-          color="#6b7280"
-          style={styles.searchIcon}
-        />
-        <TextInput
-          style={styles.searchInput}
-          placeholder={`Search ${activeTab}s...`}
-          placeholderTextColor="#6b7280"
+        <SearchBar
           value={search}
           onChangeText={handleSearch}
-          returnKeyType="search"
-          autoCapitalize="none"
+          placeholder={`Search ${activeTab}s...`}
         />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => handleSearch("")}>
-            <Ionicons name="close-circle" size={18} color="#6b7280" />
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Party List */}
       {isLoading && page === 1 ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#6366f1" size="large" />
+          <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
@@ -210,27 +192,21 @@ export default function PartiesScreen() {
           ListFooterComponent={renderFooter}
           onEndReached={loadMore}
           onEndReachedThreshold={0.3}
-          contentContainerStyle={parties.length === 0 ? styles.listEmpty : undefined}
+          contentContainerStyle={[parties.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#6366f1"
-              colors={["#6366f1"]}
+              tintColor={colors.brand}
+              colors={[colors.brand]}
             />
           }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
+          keyboardDismissMode="on-drag"
         />
       )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.85}
-        onPress={() => router.push("/(app)/(parties)/create" as never)}
-      >
-        <Ionicons name="add" size={28} color="#ffffff" />
-      </TouchableOpacity>
+      <FAB onPress={() => router.push("/(app)/(parties)/create" as never)} />
     </SafeAreaView>
   );
 }
@@ -238,7 +214,7 @@ export default function PartiesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   header: {
     flexDirection: "row",
@@ -251,13 +227,13 @@ const styles = StyleSheet.create({
   screenTitle: {
     fontSize: 26,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   countBadge: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#6366f1",
-    backgroundColor: "rgba(99,102,241,0.15)",
+    color: colors.brand,
+    backgroundColor: colors.brandLight,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
@@ -267,11 +243,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     marginHorizontal: 20,
     marginBottom: 12,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 4,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   segmentTab: {
     flex: 1,
@@ -280,36 +256,19 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   segmentTabActive: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
   },
   segmentTabText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   segmentTabTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   searchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
     marginHorizontal: 20,
     marginBottom: 12,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#2d2d44",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: "#ffffff",
-    fontSize: 15,
-    padding: 0,
   },
   loadingContainer: {
     flex: 1,
@@ -325,7 +284,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 14,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   itemLeft: {
     flexDirection: "row",
@@ -337,7 +296,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
@@ -346,7 +305,7 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 17,
     fontWeight: "700",
-    color: "#6366f1",
+    color: colors.brand,
   },
   itemInfo: {
     flex: 1,
@@ -354,16 +313,16 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
     marginBottom: 2,
   },
   itemSecondary: {
     fontSize: 13,
-    color: "#9ca3af",
+    color: colors.textSecondary,
   },
   itemSecondaryMuted: {
     fontSize: 13,
-    color: "#6b7280",
+    color: colors.textMuted,
     fontStyle: "italic",
   },
   itemRight: {
@@ -375,56 +334,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   balanceGreen: {
-    color: "#10b981",
+    color: colors.success,
   },
   balanceRed: {
-    color: "#ef4444",
+    color: colors.danger,
   },
   balanceLabel: {
     fontSize: 11,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   separator: {
     height: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     marginLeft: 76,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 40,
-    gap: 12,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#ffffff",
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: "#6b7280",
-    textAlign: "center",
-    lineHeight: 20,
   },
   footer: {
     paddingVertical: 20,
     alignItems: "center",
-  },
-  fab: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#6366f1",
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-    shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
   },
 });

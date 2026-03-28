@@ -1,0 +1,162 @@
+name: Feature Parity Check
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/api/**"
+      - "feature-parity.yaml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  parity-check:
+    name: Check Feature Parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install tsx
+        run: npm install -g tsx
+
+      - name: Get changed files
+        id: changed
+        run: |
+          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+          # Detect what areas changed
+          echo "touches_api=$(echo "$FILES" | grep -c 'packages/api/src/routers/' || true)" >> $GITHUB_OUTPUT
+          echo "touches_web=$(echo "$FILES" | grep -c 'apps/web/' || true)" >> $GITHUB_OUTPUT
+          echo "touches_mobile=$(echo "$FILES" | grep -c 'apps/mobile/' || true)" >> $GITHUB_OUTPUT
+          echo "touches_parity=$(echo "$FILES" | grep -c 'feature-parity.yaml' || true)" >> $GITHUB_OUTPUT
+
+      - name: Validate parity matrix
+        id: validate
+        run: |
+          set +e
+          OUTPUT=$(npx tsx scripts/check-parity.ts --validate 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+      - name: Scan tRPC coverage
+        id: scan
+        run: |
+          set +e
+          OUTPUT=$(npx tsx scripts/check-parity.ts --scan 2>&1)
+          echo "$OUTPUT"
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check changed files for parity gaps
+        id: changed_check
+        run: |
+          set +e
+          OUTPUT=$(npx tsx scripts/check-parity.ts --changed ${{ steps.changed.outputs.files }} 2>&1)
+          echo "$OUTPUT"
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Generate report
+        id: report
+        run: |
+          set +e
+          OUTPUT=$(npx tsx scripts/check-parity.ts --report 2>&1)
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const validateOutput = `${{ steps.validate.outputs.output }}`.trim();
+            const scanOutput = `${{ steps.scan.outputs.output }}`.trim();
+            const changedOutput = `${{ steps.changed_check.outputs.output }}`.trim();
+
+            const touchesApi = '${{ steps.changed.outputs.touches_api }}' !== '0';
+            const touchesWeb = '${{ steps.changed.outputs.touches_web }}' !== '0';
+            const touchesMobile = '${{ steps.changed.outputs.touches_mobile }}' !== '0';
+            const touchesParity = '${{ steps.changed.outputs.touches_parity }}' !== '0';
+
+            let body = `## Feature Parity Report\n\n`;
+
+            // What this PR touches
+            const areas = [];
+            if (touchesApi) areas.push('API');
+            if (touchesWeb) areas.push('Web');
+            if (touchesMobile) areas.push('Mobile');
+            if (touchesParity) areas.push('Parity Matrix');
+            body += `**PR touches**: ${areas.join(', ') || 'None of the tracked areas'}\n\n`;
+
+            // Changed files check
+            if (changedOutput && !changedOutput.includes('No parity issues')) {
+              body += `### Parity Warnings\n\n\`\`\`\n${changedOutput}\n\`\`\`\n\n`;
+            }
+
+            // Validation summary (truncated)
+            const validateLines = validateOutput.split('\n');
+            const summaryLine = validateLines.find(l => l.includes('Summary:'));
+            if (summaryLine) {
+              body += `### Matrix Validation\n\n${summaryLine.trim()}\n\n`;
+            }
+
+            // tRPC scan summary (just the parity line)
+            const scanLines = scanOutput.split('\n');
+            const parityLine = scanLines.find(l => l.includes('Overall parity'));
+            if (parityLine) {
+              body += `### tRPC Coverage\n\n${parityLine.trim()}\n\n`;
+            }
+
+            // Collapsible details
+            body += `<details>\n<summary>Full scan output</summary>\n\n\`\`\`\n${scanOutput}\n\`\`\`\n\n</details>\n`;
+
+            // Find and update existing comment or create new
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Feature Parity Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if validation errors
+        if: steps.validate.outputs.exit_code != '0'
+        run: exit 1

@@ -1,0 +1,91 @@
+---
+title: GST Compliance Overview
+description: How Hisaabo handles GST compliance — GSTIN storage, automatic CGST/SGST/IGST calculation, GSTR-1 and GSTR-3B report generation, and CSV export for filing.
+sidebar:
+  order: 1
+---
+
+Hisaabo is designed to make GST compliance as automatic as possible. This page gives you an overview of how GST flows through the system from invoice creation to report generation.
+
+## How GST is calculated on invoices
+
+See [GST on Invoices](/invoicing/gst-on-invoices) for the full explanation. In summary:
+
+1. You set a tax rate (0%, 5%, 12%, 18%, or 28%) on each item.
+2. You set your business's 2-digit state code in Settings.
+3. You set each party's 2-digit state code on their party record.
+4. When you create an invoice, Hisaabo compares state codes to determine CGST+SGST (same state) or IGST (different states).
+
+## GST report generation
+
+Hisaabo generates two key GST reports: **GSTR-1** and **GSTR-3B**. Both are computed from your invoice and payment data — there is no manual data entry into the reports.
+
+Reports cover outward supplies (sales) for GSTR-1 and both outward (sales) and inward (purchases) supplies for the ITC calculation in GSTR-3B.
+
+:::note
+GST reports are available for **all** businesses — both GST-registered and unregistered. For unregistered businesses, the reports show total sales and purchase figures without GST breakdown. For registered businesses, full CGST/SGST/IGST splits are shown.
+:::
+
+## GSTR-1
+
+**GSTR-1** is the monthly return for outward supplies (sales). Hisaabo generates it with the following sections:
+
+| Section | What it contains |
+|---|---|
+| **B2B** | Sale invoices to GST-registered parties (parties with a GSTIN) |
+| **B2C Large** | Inter-state sale invoices to unregistered parties exceeding ₹2.5 lakh |
+| **B2C Small** | Intra-state and small inter-state sales to unregistered parties, aggregated by tax rate |
+| **HSN Summary** | Total quantity and value sold, broken down by HSN code |
+| **Credit Notes** | Credit note documents issued during the period |
+| **Debit Notes** | Debit note documents issued during the period |
+
+See [GSTR-1](/gst/gstr1) for detailed instructions.
+
+## GSTR-3B
+
+**GSTR-3B** is the monthly summary return. Hisaabo generates:
+
+| Section | What it contains |
+|---|---|
+| **3.1 Outward Supplies** | Total taxable value and tax broken down by IGST, CGST, SGST |
+| **3.2 Inter-state to unregistered** | State-wise IGST on large inter-state B2C supplies |
+| **4 ITC (Input Tax Credit)** | GST paid on purchase invoices |
+| **Tax Payable** | Total output tax (from sales) |
+| **Net Tax** | Tax payable minus ITC = tax you owe to the government |
+
+## CSV export
+
+GSTR-1 can be exported as a CSV file formatted for upload to the GST portal. Each section (B2B, B2CS, etc.) is exported as a separate section within the CSV.
+
+To export: open the GSTR-1 report for the desired month and click **Export CSV**.
+
+## Current limitations
+
+- Exports are in a generic CSV format. The official GST portal requires JSON upload or the offline utility. You may need to reformat the CSV before uploading.
+- Zero-rated supplies (SEZ, export of goods) are not separately tracked — they appear as regular inter-state supplies.
+- Composition scheme dealers do not have GSTR-4 generation. Composition businesses can use Hisaabo for record-keeping but must prepare their GSTR-4 manually.
+- The HSN summary uses HSN code `0000` for line items where the item does not have an HSN code set.
+
+## Filing workflow (recommended)
+
+1. At the end of each month, open **GST** in the left navigation.
+2. Select the month and year, then view the **GSTR-1** report.
+3. Verify the totals match your expectation. If an invoice is missing, check that it is not in `cancelled` status — cancelled invoices are excluded from reports.
+4. Export the GSTR-1 CSV.
+5. Use the GST Offline Utility or your CA's software to prepare the final filing from the CSV.
+6. File GSTR-1 on the GST portal by the 11th of the following month.
+7. Review the **GSTR-3B** report for your ITC and net tax payable calculation.
+8. File GSTR-3B and pay any tax due by the 20th of the following month.
+
+## Frequently asked questions
+
+**My GSTIN is not showing on the invoice PDF. What is wrong?**
+Go to Settings → Business Profile and confirm that:
+1. Your GST Registration Type is set to "Regular" or "Composition" (not "Unregistered").
+2. Your GSTIN is entered correctly in the GSTIN field.
+
+**A sale invoice is not appearing in the GSTR-1 report. Why?**
+Cancelled invoices are excluded from all GST reports. Check the invoice status. Also check that the invoice date falls within the reporting period and that the document type is "invoice" (quotations and delivery challans are not included in GSTR-1).
+
+**How do I handle invoices for the previous month that I created this month?**
+GSTR-1 uses the invoice date, not the creation date. If you create an invoice today but set the invoice date to last month, it will appear in last month's GSTR-1 report.

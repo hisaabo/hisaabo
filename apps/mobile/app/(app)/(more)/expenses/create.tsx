@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   ScrollView,
   TextInput,
@@ -10,9 +9,12 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { colors } from "../../../../src/lib/theme";
+import { haptic } from "../../../../src/lib/haptics";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -67,6 +69,7 @@ export default function CreateExpenseScreen() {
 
     const dateStr = new Date(expenseDate + "T00:00:00.000Z").toISOString();
 
+    haptic.success();
     createExpense.mutate({
       category: category.trim(),
       description: description.trim() || undefined,
@@ -82,7 +85,7 @@ export default function CreateExpenseScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Add Expense</Text>
         <View style={{ width: 40 }} />
@@ -95,7 +98,7 @@ export default function CreateExpenseScreen() {
           <TextInput
             style={styles.input}
             placeholder="e.g. Rent, Utilities, Salaries..."
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={category}
             onChangeText={(v) => { setCategory(v); setShowCategorySuggestions(true); }}
             onFocus={() => setShowCategorySuggestions(true)}
@@ -123,7 +126,7 @@ export default function CreateExpenseScreen() {
           <TextInput
             style={[styles.input, styles.textArea]}
             placeholder="Describe the expense..."
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={description}
             onChangeText={setDescription}
             multiline
@@ -138,7 +141,7 @@ export default function CreateExpenseScreen() {
           <TextInput
             style={styles.input}
             placeholder="0.00"
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={amount}
             onChangeText={setAmount}
             keyboardType="decimal-pad"
@@ -175,7 +178,7 @@ export default function CreateExpenseScreen() {
             value={expenseDate}
             onChangeText={setExpenseDate}
             placeholder="YYYY-MM-DD"
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
           />
         </View>
 
@@ -185,7 +188,7 @@ export default function CreateExpenseScreen() {
           <TextInput
             style={styles.input}
             placeholder="Bill no., receipt no., etc."
-            placeholderTextColor="#6b7280"
+            placeholderTextColor={colors.textMuted}
             value={referenceNumber}
             onChangeText={setReferenceNumber}
           />
@@ -199,7 +202,7 @@ export default function CreateExpenseScreen() {
           activeOpacity={0.85}
         >
           {createExpense.isPending ? (
-            <ActivityIndicator color="#ffffff" size="small" />
+            <ActivityIndicator color={colors.textPrimary} size="small" />
           ) : (
             <Text style={styles.submitBtnText}>Add Expense</Text>
           )}
@@ -210,7 +213,7 @@ export default function CreateExpenseScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0f0f1a" },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -218,35 +221,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   content: { padding: 16, paddingBottom: 40 },
   section: { marginBottom: 20 },
   label: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#9ca3af",
+    color: colors.textSecondary,
     marginBottom: 8,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: "#ffffff",
+    color: colors.textPrimary,
     fontSize: 15,
   },
   textArea: { minHeight: 80, paddingTop: 12 },
   suggestions: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     borderRadius: 12,
     marginTop: 4,
     overflow: "hidden",
@@ -255,26 +258,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
-  suggestionText: { fontSize: 14, color: "#ffffff" },
+  suggestionText: { fontSize: 14, color: colors.textPrimary },
   modeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   modeChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#2d2d44",
-    backgroundColor: "#1a1a2e",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  modeChipText: { fontSize: 13, fontWeight: "600", color: "#9ca3af" },
+  modeChipText: { fontSize: 13, fontWeight: "600", color: colors.textSecondary },
   submitBtn: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
     marginTop: 8,
   },
   submitBtnDisabled: { opacity: 0.6 },
-  submitBtnText: { color: "#ffffff", fontSize: 16, fontWeight: "700" },
+  submitBtnText: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
 });

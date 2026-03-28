@@ -2,18 +2,19 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  TextInput,
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
 
 type ItemTypeFilter = "product" | "service" | null;
 
@@ -69,9 +70,8 @@ export default function ItemsScreen() {
     const isAltUnit = item.itemMode === "alt_units";
 
     return (
-      <TouchableOpacity
+      <PressableRow
         style={styles.listItem}
-        activeOpacity={0.7}
         onPress={() => router.push(`/(app)/(items)/${item.id}` as never)}
       >
         <View style={styles.itemLeft}>
@@ -88,7 +88,7 @@ export default function ItemsScreen() {
                 item.itemType === "service" ? "briefcase-outline" : "cube-outline"
               }
               size={20}
-              color={item.itemType === "service" ? "#8b5cf6" : "#6366f1"}
+              color={item.itemType === "service" ? "#8b5cf6" : colors.brand}
             />
           </View>
           <View style={styles.itemInfo}>
@@ -118,7 +118,7 @@ export default function ItemsScreen() {
                 ]}
               >
                 {itemLowStock && (
-                  <Ionicons name="warning-outline" size={11} color="#f59e0b" />
+                  <Ionicons name="warning-outline" size={11} color={colors.warning} />
                 )}{" "}
                 {parseFloat(item.stockQuantity ?? "0").toFixed(
                   parseFloat(item.stockQuantity ?? "0") % 1 === 0 ? 0 : 2
@@ -142,22 +142,18 @@ export default function ItemsScreen() {
           </Text>
           <Text style={styles.priceLabel}>Sale price</Text>
         </View>
-      </TouchableOpacity>
+      </PressableRow>
     );
   };
 
   const renderEmpty = () => {
     if (isLoading) return null;
     return (
-      <View style={styles.emptyState}>
-        <Ionicons name="cube-outline" size={56} color="#2d2d44" />
-        <Text style={styles.emptyTitle}>No items found</Text>
-        <Text style={styles.emptySubtitle}>
-          {search
-            ? "Try a different search term"
-            : "Add your first item using the + button"}
-        </Text>
-      </View>
+      <EmptyState
+        icon="cube-outline"
+        title="No items found"
+        description={search ? "Try a different search term" : "Add your first item using the + button"}
+      />
     );
   };
 
@@ -165,7 +161,7 @@ export default function ItemsScreen() {
     if (page === 1 || items.length >= total) return null;
     return (
       <View style={styles.footer}>
-        <ActivityIndicator color="#6366f1" />
+        <ActivityIndicator color={colors.brand} />
       </View>
     );
   };
@@ -179,26 +175,11 @@ export default function ItemsScreen() {
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
-        <Ionicons
-          name="search-outline"
-          size={18}
-          color="#6b7280"
-          style={styles.searchIcon}
-        />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search items..."
-          placeholderTextColor="#6b7280"
+        <SearchBar
           value={search}
           onChangeText={handleSearch}
-          returnKeyType="search"
-          autoCapitalize="none"
+          placeholder="Search items..."
         />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => handleSearch("")}>
-            <Ionicons name="close-circle" size={18} color="#6b7280" />
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Filter Row */}
@@ -237,7 +218,7 @@ export default function ItemsScreen() {
           <Ionicons
             name="cube-outline"
             size={13}
-            color={itemType === "product" ? "#ffffff" : "#6b7280"}
+            color={itemType === "product" ? colors.textPrimary : colors.textMuted}
           />
           <Text
             style={[
@@ -262,7 +243,7 @@ export default function ItemsScreen() {
           <Ionicons
             name="briefcase-outline"
             size={13}
-            color={itemType === "service" ? "#ffffff" : "#6b7280"}
+            color={itemType === "service" ? colors.textPrimary : colors.textMuted}
           />
           <Text
             style={[
@@ -290,7 +271,7 @@ export default function ItemsScreen() {
           <Ionicons
             name="warning-outline"
             size={13}
-            color={lowStock ? "#f59e0b" : "#6b7280"}
+            color={lowStock ? colors.warning : colors.textMuted}
           />
           <Text
             style={[
@@ -306,7 +287,7 @@ export default function ItemsScreen() {
       {/* Item List */}
       {isLoading && page === 1 ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#6366f1" size="large" />
+          <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
@@ -317,27 +298,21 @@ export default function ItemsScreen() {
           ListFooterComponent={renderFooter}
           onEndReached={loadMore}
           onEndReachedThreshold={0.3}
-          contentContainerStyle={items.length === 0 ? styles.listEmpty : undefined}
+          contentContainerStyle={[items.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#6366f1"
-              colors={["#6366f1"]}
+              tintColor={colors.brand}
+              colors={[colors.brand]}
             />
           }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
+          keyboardDismissMode="on-drag"
         />
       )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.85}
-        onPress={() => router.push("/(app)/(items)/create" as never)}
-      >
-        <Ionicons name="add" size={28} color="#ffffff" />
-      </TouchableOpacity>
+      <FAB onPress={() => router.push("/(app)/(items)/create" as never)} />
     </SafeAreaView>
   );
 }
@@ -345,7 +320,7 @@ export default function ItemsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   header: {
     flexDirection: "row",
@@ -358,38 +333,21 @@ const styles = StyleSheet.create({
   screenTitle: {
     fontSize: 26,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   countBadge: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#6366f1",
-    backgroundColor: "rgba(99,102,241,0.15)",
+    color: colors.brand,
+    backgroundColor: colors.brandLight,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
     overflow: "hidden",
   },
   searchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
     marginHorizontal: 20,
     marginBottom: 10,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#2d2d44",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: "#ffffff",
-    fontSize: 15,
-    padding: 0,
   },
   filterRow: {
     flexDirection: "row",
@@ -405,13 +363,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 20,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   filterChipActive: {
-    backgroundColor: "#6366f1",
-    borderColor: "#6366f1",
+    backgroundColor: colors.brand,
+    borderColor: colors.brand,
   },
   filterChipOutline: {
     flexDirection: "row",
@@ -422,22 +380,22 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "transparent",
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   filterChipOutlineActive: {
-    borderColor: "#f59e0b",
+    borderColor: colors.warning,
     backgroundColor: "rgba(245,158,11,0.1)",
   },
   filterChipText: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   filterChipTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   filterChipTextWarning: {
-    color: "#f59e0b",
+    color: colors.warning,
   },
   filterSpacer: {
     flex: 1,
@@ -456,7 +414,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 14,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   itemLeft: {
     flexDirection: "row",
@@ -472,7 +430,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   itemIconBoxProduct: {
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
     borderWidth: 1,
     borderColor: "rgba(99,102,241,0.25)",
   },
@@ -493,12 +451,12 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
     flex: 1,
   },
   itemSku: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
     fontFamily: "monospace",
   },
   stockText: {
@@ -506,10 +464,10 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   stockNormal: {
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   stockLow: {
-    color: "#f59e0b",
+    color: colors.warning,
   },
   badgeVariant: {
     paddingHorizontal: 6,
@@ -536,53 +494,19 @@ const styles = StyleSheet.create({
   salePrice: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   priceLabel: {
     fontSize: 11,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   separator: {
     height: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     marginLeft: 76,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 40,
-    gap: 12,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#ffffff",
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: "#6b7280",
-    textAlign: "center",
-    lineHeight: 20,
   },
   footer: {
     paddingVertical: 20,
     alignItems: "center",
-  },
-  fab: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#6366f1",
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-    shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
   },
 });

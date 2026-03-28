@@ -1,0 +1,81 @@
+---
+title: Reports
+description: Financial reports in Hisaabo — dashboard summary, receivables and payables, expense breakdown, and GST reports. All reports are computed from live invoice data.
+sidebar:
+  order: 1
+---
+
+Hisaabo's reports give you an at-a-glance view of your business health. All reports are computed in real time from your invoice, payment, and expense data.
+
+## Dashboard
+
+The dashboard is the first page you see after selecting a business. It shows key metrics for the **current financial year** (by default April to March, configurable per business):
+
+| Metric | What it shows |
+|---|---|
+| **Total Sales** | Sum of all sale invoice totals in the financial year |
+| **Total Purchases** | Sum of all purchase invoice totals in the financial year |
+| **Total Expenses** | Sum of all recorded expenses in the financial year |
+| **Total Receivable** | Sum of outstanding amounts owed by customers (unpaid/partial sale invoices) |
+| **Total Payable** | Sum of outstanding amounts owed to suppliers (unpaid/partial purchase invoices) |
+| **Cash in Hand** | Net cash position: payments received from customers minus payments made to suppliers minus expenses |
+
+The dashboard also shows a **Recent Invoices** table with the 10 most recent invoices across all types.
+
+### Custom date range
+
+You can override the financial year default by selecting a custom date range on the dashboard. The metrics update to reflect only the selected period.
+
+### Financial year start
+
+By default the financial year starts on **1 April**. If your business uses a calendar year or a different start date, change the `Financial Year Start Month` setting in Settings → Business Profile.
+
+## Receivables and payables
+
+**Receivables** — money owed to you by customers:
+
+| Column | Meaning |
+|---|---|
+| Party | Customer name |
+| Total Invoiced | Sum of all unpaid/partial sale invoices |
+| Amount Paid | Total payments received |
+| Outstanding | Amount still owed |
+| Oldest Invoice | Date of the oldest unpaid invoice |
+
+**Payables** — money you owe to suppliers:
+
+Same structure, but for purchase invoices.
+
+Filter by party, date range, or status to narrow down the view.
+
+## Sales report
+
+A breakdown of sales by period, showing total sales, total tax, and total invoices per month.
+
+## Expense report
+
+Total expenses grouped by **category** for a date range you choose. Shows the amount and percentage contribution of each category.
+
+## GST reports
+
+See [GST Compliance Overview](/gst) and [GSTR-1](/gst/gstr1) for detailed documentation on GSTR-1 and GSTR-3B reports.
+
+## Stock report
+
+A snapshot of current stock levels across all items. Useful for physical inventory counts. Filter to show only items below their low-stock alert threshold.
+
+## Frequently asked questions
+
+**My dashboard sales figure does not match what I expect. What might cause this?**
+
+Common causes:
+- Cancelled invoices are excluded. If you cancelled some invoices, their amount is not counted.
+- Draft invoices are included in the total. Even invoices in draft status count toward the sales total.
+- Purchase invoices are not included in the sales figure. Make sure you are looking at the Sales card, not total invoices.
+- The date filter. If you have a custom date range set, it applies to the dashboard too. Reset to "This Financial Year" to see the full year.
+
+**Can I export report data to Excel?**
+The dashboard and reports do not have a direct Excel export. For detailed analysis, export invoices or payments from the respective list views as CSV and open them in Excel or Google Sheets.
+
+**The receivables figure looks wrong. Is it including paid invoices?**
+No. Receivables only count sale invoices with `status = sent`, `status = partial`, or `status = unfulfilled`. Fully paid invoices (status = `paid`) and cancelled invoices are excluded.

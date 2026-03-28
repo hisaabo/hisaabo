@@ -22,6 +22,22 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// Safe IP extraction from a raw Request — mirrors the logic in server.ts getClientIp().
+// Prefers cf-connecting-ip (Cloudflare, strips spoofed values at CDN edge).
+// Falls back to the LAST entry of x-forwarded-for (set by the closest trusted proxy).
+function getClientIpFromRequest(req: Request): string | null {
+  const cfIp = req.headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+
+  return null;
+}
+
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 async function getOrCreateDefaultTenant(userId: string): Promise<string> {
@@ -75,7 +91,7 @@ async function createSessionForUser(
     userId,
     tenantId: resolvedTenantId,
     expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
-    ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+    ipAddress: getClientIpFromRequest(ctx.req),
     userAgent: ctx.req.headers.get("user-agent") || null,
   });
 
@@ -201,7 +217,7 @@ export const authRouter = router({
       email,
       tokenHash: tokenH,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+      ipAddress: getClientIpFromRequest(ctx.req),
     });
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
@@ -319,13 +335,15 @@ export const authRouter = router({
       await controlDb.insert(magicLinkTokens).values({
         email: email, // Store the NEW email
         tokenHash,
+        // Store the requesting user's ID so confirmEmailChange doesn't trust client-supplied userId
+        userId: ctx.user!.id,
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-        ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+        ipAddress: getClientIpFromRequest(ctx.req),
       });
 
-      // Send verification to new email
+      // Send verification to new email — no userId in URL; it is bound to the token server-side
       const baseUrl = process.env.APP_URL || "http://localhost:5173";
-      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}&userId=${ctx.user!.id}`;
+      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}`;
 
       await emailService.sendMagicLink(email, verifyUrl);
 
@@ -333,8 +351,10 @@ export const authRouter = router({
     }),
 
   // ── Confirm email change ─────────────────────────────────────
+  // userId is intentionally NOT accepted from client input — it is read from the
+  // server-side token record to prevent account takeover via token substitution.
   confirmEmailChange: publicProcedure
-    .input(z.object({ token: z.string(), userId: z.string().uuid() }))
+    .input(z.object({ token: z.string() }))
     .mutation(async ({ input }) => {
       const tokenH = hashToken(input.token);
 
@@ -352,10 +372,15 @@ export const authRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
       }
 
-      // Update the user's email
+      // Require that this token was issued for an email-change request (has a bound userId)
+      if (!tokenRow.userId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
+      }
+
+      // Update the user's email using the userId stored in the token — never from client input
       await controlDb.update(users)
         .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, input.userId));
+        .where(eq(users.id, tokenRow.userId));
 
       return { success: true, newEmail: tokenRow.email };
     }),
@@ -375,7 +400,18 @@ export const authRouter = router({
 
   // ── Logout all sessions ──────────────────────────────────────
   logoutAll: protectedProcedure.mutation(async ({ ctx }) => {
+    // Fetch all session IDs before deleting so we can evict them from the in-memory cache
+    const userSessions = await controlDb
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, ctx.user!.id));
+
     await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
+
+    for (const s of userSessions) {
+      invalidateSessionCache(s.id);
+    }
+
     clearSessionCookie(ctx.resHeaders);
     return { success: true };
   }),

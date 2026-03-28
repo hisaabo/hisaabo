@@ -202,6 +202,7 @@ function PartiesPage() {
         <EmptyState
           title="No parties found"
           description="Add your first customer or supplier to get started."
+          encouragement="No customers yet? Add your first customer to create an invoice."
           action={
             <button className="btn-primary" onClick={() => setShowAddModal(true)}>
               + Add Party
@@ -433,11 +434,17 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                 <p
                   className={cn(
                     "text-2xl font-bold tabular-nums",
-                    isPositiveBalance ? "text-red-600" : balanceNum < 0 ? "text-emerald-600" : "text-text-primary"
+                    isPositiveBalance ? "text-emerald-600" : balanceNum < 0 ? "text-red-600" : "text-text-primary"
                   )}
                 >
                   {formatCurrency(party.balance)}
                 </p>
+                {isPositiveBalance && (
+                  <p className="text-xs font-medium text-emerald-600">Receivable</p>
+                )}
+                {balanceNum < 0 && (
+                  <p className="text-xs font-medium text-red-600">Payable</p>
+                )}
                 <p className="text-xs text-text-tertiary">
                   Opening: {formatCurrency(party.openingBalance)}
                 </p>

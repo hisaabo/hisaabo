@@ -186,6 +186,28 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async (tx) => {
+          // Security: validate that partyId belongs to the current business.
+          const [partyCheck] = await tx.select({ id: parties.id })
+            .from(parties)
+            .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+            .limit(1);
+          if (!partyCheck) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+          }
+
+          // Security: validate that every itemId in line items belongs to the current business.
+          const createLineItemIds = input.lineItems
+            .map((li) => li.itemId)
+            .filter((id): id is string => Boolean(id));
+          if (createLineItemIds.length > 0) {
+            const ownedItems = await tx.select({ id: items.id })
+              .from(items)
+              .where(and(inArray(items.id, createLineItemIds), eq(items.businessId, ctx.businessId)));
+            if (ownedItems.length !== new Set(createLineItemIds).size) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
+            }
+          }
+
           // Determine prefix/counter columns for this document type
           const cols = bizColumns[docType as KnownDocType];
 

@@ -44,18 +44,16 @@ export function Disclosure({
         className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg hover:bg-surface-1 transition-colors text-left"
       >
         {icon && (
-          <span className="shrink-0" style={{ color: "var(--text-tertiary)" }}>
+          <span className="shrink-0 text-text-tertiary">
             {icon}
           </span>
         )}
 
         <span
-          className="flex-1 text-sm font-medium flex items-center gap-1.5"
-          style={
-            hasFilled
-              ? { color: "var(--text-primary)" }
-              : { color: "var(--text-secondary)" }
-          }
+          className={cn(
+            "flex-1 text-sm font-medium flex items-center gap-1.5",
+            hasFilled ? "text-text-primary" : "text-text-secondary"
+          )}
         >
           {hasFilled && (
             <span
@@ -67,23 +65,16 @@ export function Disclosure({
         </span>
 
         {hasFilled && (
-          <span
-            className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium"
-            style={{
-              background: "var(--surface-2)",
-              color: "var(--text-secondary)",
-            }}
-          >
+          <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-surface-2 text-text-secondary">
             {count} filled
           </span>
         )}
 
         <ChevronRightIcon
           className={cn(
-            "w-4 h-4 shrink-0 transition-transform duration-200",
+            "w-4 h-4 shrink-0 transition-transform duration-200 text-text-tertiary",
             open && "rotate-90"
           )}
-          style={{ color: "var(--text-tertiary)" }}
         />
       </button>
 
@@ -104,15 +95,12 @@ export function Disclosure({
 
 function ChevronRightIcon({
   className,
-  style,
 }: {
   className?: string;
-  style?: React.CSSProperties;
 }) {
   return (
     <svg
       className={className}
-      style={style}
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

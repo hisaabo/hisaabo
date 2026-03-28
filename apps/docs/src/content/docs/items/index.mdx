@@ -1,0 +1,125 @@
+---
+title: Items & Inventory Overview
+description: Manage products and services in Hisaabo. Understand simple items, alternate-unit items, and variant items — with stock tracking, HSN codes, and low-stock alerts.
+sidebar:
+  order: 1
+---
+
+An **item** in Hisaabo is a product or service that you sell or purchase. Items appear in your invoice line items, and stock quantities are automatically adjusted when you create invoices.
+
+## Item types
+
+| Type | Use for |
+|---|---|
+| **Product** | Physical goods with trackable stock (fabric, electronics, stationery, etc.) |
+| **Service** | Work or labour with no physical stock (installation, consulting, delivery charges) |
+
+Service items have stock tracking disabled — their stock quantity is always shown as N/A.
+
+## Item modes
+
+Hisaabo supports three item modes. Choose the right mode when creating the item:
+
+| Mode | Use for |
+|---|---|
+| **Simple** | Single unit, single price. Most items fit here. |
+| **Alternate Units** | Same item sold or purchased in different units (e.g. cloth sold by metre but tracked in rolls) |
+| **Variants** | Same item with multiple configurations (e.g. t-shirt in S/M/L × Red/Blue) |
+
+See [Variants](/items/variants) and [Units & Conversions](/items/units-and-conversions) for the advanced modes.
+
+## Adding an item
+
+Go to **Items** in the left navigation and click **New Item**.
+
+### Required fields
+
+| Field | Notes |
+|---|---|
+| **Name** | Must be unique within your business (case-insensitive) |
+| **Item Type** | Product or Service |
+| **Unit** | Base unit of measurement. See [Supported Units](/reference/supported-units). |
+
+### Important fields
+
+| Field | Notes |
+|---|---|
+| **Sale Price** | Your default selling price per unit (excluding tax if tax-exclusive) |
+| **Purchase Price** | Your default buying price per unit |
+| **Tax %** | GST rate: 0%, 5%, 12%, 18%, or 28%. Applied to every invoice line item using this item. |
+| **Tax Inclusive** | If enabled, the sale price already includes GST. The taxable value is back-calculated. |
+| **HSN Code** | Harmonised System of Nomenclature code (for products) or SAC code (for services). Printed on invoices and used in GSTR-1 HSN summary. |
+
+### Stock tracking fields
+
+| Field | Notes |
+|---|---|
+| **Stock Quantity** | Current stock (opening stock when you first create the item). Updated automatically on invoices. |
+| **Low Stock Alert** | When stock falls at or below this number, the item is flagged in the low-stock view. |
+
+### Other fields
+
+| Field | Notes |
+|---|---|
+| **SKU** | Your internal stock-keeping unit number or barcode. Not required but useful for search. |
+| **Category** | Free-text category for grouping items (e.g. "Electronics", "Clothing", "Services"). |
+| **Description** | Internal notes about the item. Not shown on invoices. |
+
+## How stock is tracked
+
+Stock is stored as `NUMERIC(15,3)` in the database — it supports fractional quantities (for example, 2.5 kg). The system updates stock atomically inside the same transaction as each invoice:
+
+- **Sale invoice created** → stock quantity decreases
+- **Purchase invoice created** → stock quantity increases
+- **Invoice line items edited** → original stock change is reversed, new change is applied
+- **Invoice cancelled/deleted** → stock change is **not** automatically reversed (see note below)
+
+:::caution[Deletion does not reverse stock]
+When you cancel or delete an invoice, the stock adjustment is not automatically reversed. If you need to add stock back, use the **Stock Adjustment** feature (Items → select item → Adjust Stock) or create a purchase invoice for the returned quantity.
+:::
+
+## Stock adjustments
+
+You can manually adjust stock outside of invoices. Common uses:
+- Opening stock entry when migrating to Hisaabo
+- Physical inventory count correction
+- Writing off damaged or expired goods
+
+To adjust stock: open the item, click **Adjust Stock**, and enter:
+- **Quantity change**: positive to add stock, negative to remove stock
+- **Reason**: for example, "Physical count correction" or "Goods damaged"
+- **Adjustment date**: defaults to today, but you can backdate the adjustment
+
+Every adjustment is logged with the previous stock, new stock, quantity change, reason, date, and the user who made the change. You can view the full adjustment history on the item detail page. For items with variants, you can adjust stock per variant individually.
+
+## Low-stock alerts
+
+Items where `stockQuantity <= lowStockAlert` appear in the **Low Stock** filter on the items list. Use this to quickly see what needs reordering.
+
+:::tip
+Set a low-stock alert threshold on every item you actively purchase. Check the low-stock view weekly before placing purchase orders.
+:::
+
+## Online store visibility
+
+Each item can be enabled for your [Online Store](/online-store). When enabled, you can set:
+- A separate **Store Price** (defaults to sale price if not set)
+- A **Store Category** (different from the internal category)
+- A **Store Description** (customer-facing, different from internal description)
+- A **Sort Order** (controls the order items appear in the store)
+
+Stock management for the store follows the same rules as regular invoices. If the store is running low on stock, it appears in the low-stock view.
+
+## Frequently asked questions
+
+**Can I have the same item name for different businesses?**
+Yes. Item names are unique per business, not across your entire Hisaabo account.
+
+**Can I change an item's mode after creation?**
+No. The item mode (simple, alternate units, variants) is fixed at creation time. If you need a different mode, create a new item.
+
+**Does Hisaabo support negative stock?**
+Yes, stock can go negative if you sell more than you have in stock. There is no hard block on selling below zero. The low-stock alert and the negative value in the stock column are the signals to notice.
+
+**How do I set the HSN code for a service item?**
+Services use **SAC** (Services Accounting Code) rather than HSN. Enter the SAC code in the HSN field — both are 4-8 digit codes and are handled identically by Hisaabo.

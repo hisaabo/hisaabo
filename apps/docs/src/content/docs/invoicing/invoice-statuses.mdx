@@ -1,0 +1,103 @@
+---
+title: Invoice Statuses
+description: Understand the invoice status workflow in Hisaabo — draft, unfulfilled, sent, paid, partial, overdue, and cancelled.
+sidebar:
+  order: 5
+---
+
+Every invoice in Hisaabo has a status that reflects where it is in the billing lifecycle. Statuses help you track what is outstanding, what has been paid, and what needs follow-up.
+
+## Status definitions
+
+| Status | Meaning |
+|---|---|
+| `draft` | The invoice has been created but not yet sent to the party. It is still being worked on. |
+| `unfulfilled` | The invoice has been issued but the goods or services have not yet been delivered. |
+| `sent` | The invoice has been sent to the party and is awaiting payment. |
+| `paid` | The invoice is fully paid — the total amount paid equals the total amount due. |
+| `partial` | One or more payments have been received but the full amount is not yet paid. |
+| `overdue` | The due date has passed and the invoice is not fully paid. |
+| `cancelled` | The invoice has been cancelled or soft-deleted. Cancelled invoices do not appear in reports. |
+
+## Typical workflow
+
+The most common path for a sale invoice is:
+
+```
+draft → sent → partial → paid
+```
+
+Or for a cash-on-delivery sale:
+
+```
+draft → paid  (record the full payment immediately)
+```
+
+For purchase invoices where you need to track fulfilment:
+
+```
+draft → unfulfilled → sent → paid
+```
+
+## How statuses change
+
+### Manual changes
+
+You can manually change an invoice's status at any time by opening the invoice and selecting a new status from the **Status** dropdown. This is useful when you send an invoice by email and want to mark it as `sent`, or when you agree with a customer to waive a balance and want to mark it as `paid`.
+
+### Automatic changes via payments
+
+When you [record a payment](/payments) against an invoice:
+
+- If the payment covers the full remaining balance → status becomes `paid`
+- If the payment is partial → status becomes `partial`
+- If you delete a payment that brought the invoice to `paid` → status reverts to `partial` or `sent`
+
+### Overdue detection
+
+The dashboard and invoice list show overdue invoices based on their due date. The status is not automatically updated to `overdue` in the database — the UI derives this from the due date field. If you filter by `overdue` in the invoice list, you see invoices where the due date is in the past and the status is not `paid` or `cancelled`.
+
+### Cancellation
+
+Deleting an invoice (available to Admin users) sets the status to `cancelled` and soft-deletes the record (the `deleted_at` field is set). Cancelled invoices:
+- Do not appear in the default invoice list
+- Do not count in GST reports
+- Do not affect party balances
+- Do not reverse the stock adjustment
+
+:::caution[Stock is not reversed on cancellation]
+If you cancel a sale invoice, the stock that was decremented when the invoice was created is **not** automatically restored. If you need to reverse the stock change, create a purchase invoice for the same items (or a sales return document), or manually adjust the stock.
+:::
+
+## Status and editing
+
+An invoice can be freely edited (line items, party, date, charges) while its status is anything other than `paid`.
+
+If an invoice is `paid`, the system blocks editing with the message: "Cannot edit a paid invoice. Remove payments first." To edit a paid invoice:
+
+1. Open the invoice
+2. Delete or reduce the payment(s) that paid it
+3. The status reverts automatically
+4. Edit the invoice
+5. Re-record the payment
+
+## Permissions
+
+| Action | Minimum role required |
+|---|---|
+| Change status | Seller |
+| Delete (cancel) invoice | Admin |
+| Delete invoice within 2 hours (unpaid) | Seller Manager |
+
+Seller Managers can only delete unpaid invoices created within the last 2 hours. Admins and Superadmins can delete any invoice regardless of status or age (except already-paid invoices require manual payment deletion first). Accountants can view invoices but cannot change their status or delete them.
+
+## Frequently asked questions
+
+**I want to mark an old unpaid invoice as "written off" without recording a payment. How do I do that?**
+Change the status manually to `cancelled`. This removes it from the outstanding receivables view. It will still appear in the invoice history but not in active reports. Alternatively, record a payment with mode `other` and amount equal to the outstanding balance, then add a note "Written off".
+
+**Can I restore a cancelled invoice?**
+Change the status back to `draft`, `sent`, or whichever status is appropriate. The invoice data is not deleted (it is a soft delete), so all the line items and party details are intact.
+
+**Why does the invoice list show "Overdue" for some invoices but the status shows "Sent"?**
+The "Overdue" label in the list view is computed on the fly: any invoice with `status = sent` or `status = partial` and a past due date is visually shown as overdue. The database status field itself is not changed automatically.

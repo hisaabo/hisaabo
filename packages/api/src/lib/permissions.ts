@@ -125,7 +125,8 @@ export function mapDbRole(dbRole: string): string {
     "seller": "seller",
     "accountant": "accountant",
   };
-  return mapping[dbRole] || "seller";
+  // Unknown roles map to an empty string — defineAbilityFor hits the default case (no permissions)
+  return mapping[dbRole] ?? "";
 }
 
 // Helper to enforce CASL permissions in tRPC procedures

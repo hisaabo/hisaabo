@@ -1,0 +1,128 @@
+---
+title: Online Store Overview
+description: Publish a customer-facing online store from Hisaabo. Customers browse items, place orders, and you manage fulfilment — all integrated with your invoicing.
+sidebar:
+  order: 1
+---
+
+The **Online Store** feature lets you publish a public storefront where customers can browse your products and place orders. Each order automatically creates a draft invoice in your Hisaabo account, linking your online sales directly to your invoicing and stock management.
+
+## How it works
+
+1. You enable the store in Settings and choose a URL slug (for example, `myshop`).
+2. You choose which items to display in the store and set store prices and categories.
+3. Customers visit `https://your-hisaabo-server.com/store/myshop` and browse your products.
+4. They add items to their cart, fill in their name, phone, delivery address, and submit the order.
+5. You receive the order in Hisaabo's store orders view.
+6. You confirm, prepare, and dispatch the order.
+7. When you confirm the order, the linked draft invoice moves to `sent` status.
+8. When the order is delivered, you record payment as usual.
+
+## Setting up the store
+
+### Step 1: Enable and configure
+
+Go to **Settings → Online Store** (or via the left navigation under **Store**). Click **Enable Store** and configure:
+
+| Setting | Notes |
+|---|---|
+| **Store Slug** | Your store's URL path, for example `sharma-electronics`. Must be lowercase letters, numbers, and hyphens. Must start and end with a letter or number (not a hyphen). 3-50 characters. Must be unique across all Hisaabo stores. |
+| **Tagline** | A short tagline displayed below your business name on the storefront. Maximum 200 characters. |
+| **Accent Colour** | Hex colour code for the storefront's primary colour (for example, `#6366f1`). |
+| **Min Order Amount** | Minimum cart total required to place an order. Leave blank for no minimum. |
+| **Delivery Note** | A note displayed on the checkout page (for example, "Delivery within 2–3 business days"). Maximum 500 characters. |
+| **WhatsApp Number** | If set, a WhatsApp button appears on the storefront so customers can contact you directly. |
+| **Allow Negative Stock** | If enabled, customers can order items that are out of stock. If disabled, out-of-stock items cannot be added to the cart. |
+| **Order Prefix** | Prefix for store order numbers (default: `ORD`). Order numbers are sequential: ORD-00001, ORD-00002, etc. |
+
+### Step 2: Add items to the store
+
+Go to **Store → Items** (or **Items → Store Settings** from any item). Items are not visible in the store by default.
+
+For each item you want to list:
+1. Enable **Show in Store** for that item.
+2. Optionally set a **Store Price** (defaults to the item's sale price if not set).
+3. Set a **Store Category** to group items in the storefront.
+4. Write a **Store Description** — customer-facing text describing the item.
+5. Set a **Sort Order** to control the display order (lower number appears first).
+
+You can also bulk-enable or bulk-disable items from the **Store → Items** list using checkboxes.
+
+For items with **variants**, you enable/disable each variant individually and can set a separate store price per variant. Customers see an attribute selector (for example, Size and Color dropdowns) on the store product page. If a variant is out of stock and negative stock is disabled, it will not be available for ordering.
+
+For items with **alternate units**, customers see a unit selector on the store product page. Each unit shows its configured store price (or sale price if no store price is set).
+
+### Step 3: Test your store
+
+Your store URL is shown in the Store Settings page. Open it in an incognito browser window to see the customer view.
+
+## Managing orders
+
+Incoming orders appear in **Store → Orders**. Each order shows:
+
+- Order number and date
+- Customer name, phone, and delivery address
+- Total amount and item count
+- Current status
+
+### Order statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | Customer placed the order, awaiting your confirmation |
+| `confirmed` | You have reviewed and accepted the order |
+| `preparing` | Order is being picked and packed |
+| `ready` | Order is packed and ready for dispatch or pickup |
+| `delivered` | Order has been delivered to the customer |
+| `cancelled` | Order was cancelled (by you or the customer) |
+
+### Confirming an order
+
+Click **Confirm** on a pending order. This:
+- Changes the order status from `pending` to `confirmed`
+- Updates the linked draft invoice from `draft` to `sent`
+
+### Advancing through fulfilment
+
+After confirmation, you can advance the status through `preparing` → `ready` → `delivered` from the order detail view.
+
+### Cancelling an order
+
+Click **Cancel** and optionally enter a reason. This:
+- Changes the order status to `cancelled`
+- Sets the linked invoice to `cancelled`
+
+:::caution[Stock is not restored on cancellation]
+Cancelling an order does not automatically restore the stock that was deducted when the invoice was created. If you need to restore stock, create a purchase invoice or manually adjust the stock on the item.
+:::
+
+## How orders create invoices
+
+When a customer places an order, Hisaabo automatically:
+
+1. Creates a sale invoice with document type `invoice`
+2. Links each cart item as an invoice line item
+3. Sets the invoice status to `draft`
+4. Links the invoice to the store order record
+
+The customer's name and phone become the party for the invoice. If a party with the same phone number already exists, the existing party is reused.
+
+## Bot protection
+
+For production stores, it is strongly recommended to configure **Cloudflare Turnstile** to prevent bot orders. Set the `TURNSTILE_SECRET_KEY` and `VITE_TURNSTILE_SITE_KEY` environment variables. See [Self-Hosting Setup](/getting-started/self-hosting) for where to get these keys.
+
+Without Turnstile, the checkout form is accessible to automated scripts.
+
+## Frequently asked questions
+
+**Can customers pay online directly through the store?**
+Not currently. The store is an order-collection tool. Collect payment separately (via UPI QR shown on the invoice PDF, or by calling the customer).
+
+**Can I have multiple stores for one business?**
+No. Each business has one store. If you need multiple storefronts, create additional businesses in Hisaabo.
+
+**The store slug I want is taken. How can I check who has it?**
+The `checkSlug` API checks uniqueness across all businesses in your Hisaabo instance. If it is taken and you are the owner of the other business, change that business's slug in its settings.
+
+**Can I customise the store's appearance beyond the accent colour?**
+The storefront template is currently fixed. If you are self-hosting, you can modify the React components in `packages/web` to customise the layout. CSS-level customisation is limited to the accent colour through the settings.

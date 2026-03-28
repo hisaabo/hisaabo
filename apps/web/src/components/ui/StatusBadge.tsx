@@ -8,46 +8,46 @@ interface StatusConfig {
 
 const statusConfig: Record<string, StatusConfig> = {
   paid: {
-    bg: "bg-emerald-50",
-    text: "text-emerald-700",
+    bg: "bg-emerald-50 dark:bg-emerald-950",
+    text: "text-emerald-700 dark:text-emerald-400",
     dot: "bg-emerald-500",
   },
   sent: {
-    bg: "bg-blue-50",
-    text: "text-blue-700",
+    bg: "bg-blue-50 dark:bg-blue-950",
+    text: "text-blue-700 dark:text-blue-400",
     dot: "bg-blue-500",
   },
   draft: {
-    bg: "bg-gray-100",
-    text: "text-gray-600",
-    dot: "bg-gray-400",
+    bg: "bg-surface-2",
+    text: "text-text-secondary",
+    dot: "bg-text-tertiary",
   },
   unfulfilled: {
-    bg: "bg-orange-50",
-    text: "text-orange-700",
+    bg: "bg-orange-50 dark:bg-orange-950",
+    text: "text-orange-700 dark:text-orange-400",
     dot: "bg-orange-500",
   },
   partial: {
-    bg: "bg-amber-50",
-    text: "text-amber-700",
+    bg: "bg-amber-50 dark:bg-amber-950",
+    text: "text-amber-700 dark:text-amber-400",
     dot: "bg-amber-500",
   },
   overdue: {
-    bg: "bg-red-50",
-    text: "text-red-700",
+    bg: "bg-red-50 dark:bg-red-950",
+    text: "text-red-700 dark:text-red-400",
     dot: "bg-red-500",
   },
   cancelled: {
-    bg: "bg-gray-50",
-    text: "text-gray-500",
-    dot: "bg-gray-300",
+    bg: "bg-surface-2",
+    text: "text-text-tertiary",
+    dot: "bg-text-tertiary",
   },
 };
 
 const defaultConfig: StatusConfig = {
-  bg: "bg-gray-100",
-  text: "text-gray-600",
-  dot: "bg-gray-400",
+  bg: "bg-surface-2",
+  text: "text-text-secondary",
+  dot: "bg-text-tertiary",
 };
 
 interface StatusBadgeProps {

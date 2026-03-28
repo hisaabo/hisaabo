@@ -1,0 +1,127 @@
+---
+title: GST on Invoices
+description: How Hisaabo handles CGST, SGST, and IGST on invoices. Understand intra-state vs inter-state detection, tax-inclusive pricing, and GST registration types.
+sidebar:
+  order: 3
+---
+
+GST on a Hisaabo invoice is determined by two things: the **tax rate** on each line item, and whether the supply is **intra-state** or **inter-state**. This page explains how both are determined and what happens in edge cases.
+
+## Tax rates
+
+Each item in your catalogue has a `Tax %` field. The standard GST rates are:
+
+| Rate | Common use |
+|---|---|
+| 0% | Exempted goods (most fresh produce, books, etc.) |
+| 5% | Essential goods (edible oils, tea, coffee, etc.) |
+| 12% | Processed foods, computers, etc. |
+| 18% | Most manufactured goods, most services |
+| 28% | Luxury goods, automobiles, aerated drinks, etc. |
+
+You can enter any tax percentage up to 56% (to accommodate cess-inclusive rates). You can also override the tax rate per line item on an invoice. This is useful when the same supplier charges different rates for different items in a single bill.
+
+## Intra-state vs inter-state detection
+
+Hisaabo determines CGST+SGST versus IGST using **2-digit GST state codes**:
+
+- If your business's state code equals the party's state code → **intra-state** → CGST + SGST (each = tax / 2)
+- If the state codes differ → **inter-state** → IGST (= full tax)
+
+### Example
+
+Your business is in Maharashtra (state code `27`). You create a sale invoice for a customer in Karnataka (state code `29`).
+
+| Line item | Unit Price | Qty | Tax Rate | Tax Amount | Split |
+|---|---|---|---|---|---|
+| Steel Shelf | ₹10,000 | 1 | 18% | ₹1,800 | IGST ₹1,800 |
+
+Now, same business but a customer also in Maharashtra (state code `27`):
+
+| Line item | Unit Price | Qty | Tax Rate | Tax Amount | Split |
+|---|---|---|---|---|---|
+| Steel Shelf | ₹10,000 | 1 | 18% | ₹1,800 | CGST ₹900 + SGST ₹900 |
+
+### Setting up state codes correctly
+
+1. Go to **Settings → Business Profile** and set your **State Code** (2 digits).
+2. On each party, set their **State Code** in the party edit form.
+
+:::caution[State code takes priority over state name]
+Hisaabo uses the numeric state code for intra/inter-state detection. If you have the state code set on both the business and the party, it will be used. If state code is missing on either side, Hisaabo falls back to comparing the text **State** field (case-insensitive). To avoid ambiguity, always set the 2-digit state code.
+:::
+
+## Tax-inclusive pricing
+
+By default, item prices are **tax-exclusive** — tax is added on top of the listed price. For example, an item priced at ₹1,000 with 18% GST produces a total of ₹1,180.
+
+If you want your displayed price to already include tax (useful for retail where you show shelf prices with tax), enable **Tax Inclusive** on the item. With tax-inclusive pricing:
+
+- The displayed price is the final price (for example, ₹1,180)
+- The taxable value is back-calculated: `₹1,180 / 1.18 = ₹1,000`
+- The tax amount is `₹180`
+
+This distinction matters for GSTR-1, which requires the taxable value and tax amount separately.
+
+## GST registration types
+
+### Regular (GSTIN holder)
+
+You charge GST on every taxable sale and can claim Input Tax Credit (ITC) on purchases. GSTR-1 and GSTR-3B are generated for your outward supplies and ITC.
+
+### Composition scheme
+
+Composition dealers pay GST at a flat rate on turnover and cannot collect GST from customers. Hisaabo handles this by:
+- Not showing GST columns on customer-facing invoices for composition businesses
+- Still letting you record purchase invoices (no ITC for composition dealers)
+
+### Unregistered
+
+If your business turnover is below the GST threshold (₹20 lakh for services, ₹40 lakh for goods in most states), you do not need to register. Hisaabo generates invoices without any GST breakdown. You can still use the invoicing features fully.
+
+## Credit notes and debit notes
+
+### Credit notes
+
+A credit note reduces the customer's outstanding amount. Common uses:
+- Customer returns goods
+- You over-charged and need to correct the invoice
+- You agreed to a post-sale discount
+
+Create a credit note by selecting document type **Credit Note** when creating a document. Link it to the original invoice using the **Reference Document** field.
+
+In GSTR-1, credit notes appear under section CDN (Credit/Debit Notes) with the original invoice number. They reduce your output tax liability.
+
+### Debit notes
+
+A debit note increases the customer's outstanding amount. Common uses:
+- You under-charged and need to raise an additional amount
+- Additional freight or packing charges agreed after the invoice
+
+Create a debit note by selecting document type **Debit Note**. Like credit notes, link to the original invoice.
+
+In GSTR-1, debit notes appear under CDN and increase your output tax liability.
+
+## How GST appears on the PDF
+
+On the invoice PDF:
+
+- The line items table shows the HSN/SAC code (from the item), the tax rate %, and the tax amount per line
+- The totals section splits the tax amount into CGST + SGST (intra-state) or IGST (inter-state)
+- Your GSTIN appears at the top of the invoice, and the party's GSTIN appears in the bill-to section (if the party has a GSTIN)
+
+The PDF layout is designed to meet standard GST invoice requirements under Rule 46 of the CGST Rules.
+
+## Frequently asked questions
+
+**I have a customer with no GSTIN (unregistered). How do I handle their invoices?**
+Leave the GSTIN field blank on that party. The invoice is still valid. In GSTR-1, invoices to unregistered parties are reported under B2C (B2C Small or B2C Large depending on invoice value and whether the supply is inter-state).
+
+**What is the B2CL threshold?**
+Inter-state invoices to unregistered persons with a total value exceeding ₹2.5 lakh (₹2,50,000) are reported under **B2C Large** in GSTR-1 with state-wise breakup. Smaller inter-state invoices and all intra-state invoices to unregistered persons are reported under **B2C Small** aggregated by tax rate.
+
+**My party is in a Special Economic Zone (SEZ). How do I handle that?**
+Currently, Hisaabo classifies all supplies as either intra-state (CGST+SGST) or inter-state (IGST) based on state codes. SEZ supplies (which are technically zero-rated) need to be tracked manually outside Hisaabo's GST reports for now.
+
+**Can I apply different tax rates on different line items of the same invoice?**
+Yes. Each line item has its own tax rate. A single invoice can have items at 0%, 5%, 12%, 18%, and 28% simultaneously. The PDF shows the breakup per tax rate.

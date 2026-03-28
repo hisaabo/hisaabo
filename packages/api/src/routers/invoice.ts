@@ -116,6 +116,32 @@ export const invoiceRouter = router({
     requireCan(ctx.ability, "create", "Invoice");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const invoice = await ctx.db.transaction(async (tx) => {
+      // Security: validate that the partyId belongs to the current business before
+      // creating the invoice. Without this check an attacker could associate an
+      // invoice with a party from a different business within the same tenant.
+      const [partyCheck] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!partyCheck) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
+      // Security: validate that every itemId in line items belongs to the current business.
+      // Without this an attacker could reference items from another business — which would
+      // allow stock manipulation on entities they do not own.
+      const lineItemIds = input.lineItems
+        .map((li) => li.itemId)
+        .filter((id): id is string => Boolean(id));
+      if (lineItemIds.length > 0) {
+        const ownedItems = await tx.select({ id: items.id })
+          .from(items)
+          .where(and(inArray(items.id, lineItemIds), eq(items.businessId, ctx.businessId)));
+        if (ownedItems.length !== new Set(lineItemIds).size) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
+        }
+      }
+
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
         prefix: businesses.invoicePrefix,
@@ -287,6 +313,32 @@ export const invoiceRouter = router({
 
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
         if (existing.status === "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit a paid invoice. Remove payments first." });
+
+        // Security: validate partyId belongs to this business before applying the update.
+        if (input.partyId) {
+          const [partyCheck] = await tx.select({ id: parties.id })
+            .from(parties)
+            .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+            .limit(1);
+          if (!partyCheck) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+          }
+        }
+
+        // Security: validate itemIds in line items belong to this business.
+        if (input.lineItems) {
+          const updateLineItemIds = input.lineItems
+            .map((li) => li.itemId)
+            .filter((id): id is string => Boolean(id));
+          if (updateLineItemIds.length > 0) {
+            const ownedItems = await tx.select({ id: items.id })
+              .from(items)
+              .where(and(inArray(items.id, updateLineItemIds), eq(items.businessId, ctx.businessId)));
+            if (ownedItems.length !== new Set(updateLineItemIds).size) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
+            }
+          }
+        }
 
         // 2. Build update payload
         const updates: Record<string, any> = { updatedAt: new Date() };

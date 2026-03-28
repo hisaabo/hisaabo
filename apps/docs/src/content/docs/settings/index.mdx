@@ -1,0 +1,77 @@
+---
+title: Settings
+description: Configure your Hisaabo business profile, invoice numbering, financial year, online store, team members, and account preferences.
+sidebar:
+  order: 1
+---
+
+Settings is where you configure your business profile, invoice numbering, team access, and personal account preferences.
+
+## Business Profile
+
+Found in **Settings → Business Profile**.
+
+Update your business name, legal name, contact details, and address. The most critical fields here are:
+
+- **State Code** — the 2-digit GST state code. Used for CGST/SGST vs IGST determination. See [Create Your Business](/getting-started/create-business#step-2-address).
+- **GST Registration Type** — Regular, Composition, or Unregistered.
+- **GSTIN** — your GST Identification Number, printed on all invoices and GST reports.
+
+Changes to the business profile take effect immediately on all future documents. Existing invoices are not retrospectively updated.
+
+## Invoice Numbering
+
+Configure the prefix and starting number for each document type:
+
+| Document Type | Default Prefix |
+|---|---|
+| Invoice | INV |
+| Payment | PAY |
+| Quotation | QTN |
+| Credit Note | CN |
+| Delivery Challan | DC |
+| Proforma | PI |
+| Store Order | ORD |
+
+To reset the counter — for example, at the start of a new financial year — update the **Next Number** field. Note that this does not reset already-used numbers; it just tells the system what the next invoice number will be. Ensure the new starting number is higher than any existing number to avoid conflicts.
+
+## Financial Year
+
+**Financial Year Start Month** controls which month the financial year begins. The default is April (month 4). Change this to 1 (January) for a calendar year, or any other month if your business uses a different cycle.
+
+The financial year start affects:
+- Dashboard "this financial year" totals
+- The default date range for new reports
+
+## Online Store
+
+See [Online Store Overview](/online-store) for full documentation. Key settings:
+
+- **Enable/Disable Store** — toggle the store on or off
+- **Store Slug** — the URL path for your storefront
+- **Accent Colour** — brand colour for the storefront
+- **WhatsApp Number** — appears as a contact button on the storefront
+- **Min Order Amount** — minimum cart value to place an order
+
+## Team
+
+Manage team members from **Settings → Team**. See [Team & Roles](/team) for the full guide.
+
+## Account
+
+Personal account settings:
+
+- **Name** — your display name (shown on invoices in the `createdByName` field)
+- **Email** — your login email. Changing this requires re-verification via magic link.
+- **Password** — change your account password. Requires your current password.
+
+## Frequently asked questions
+
+**Can I change my business's GSTIN?**
+Yes. Update it in Business Profile. All future invoices will show the new GSTIN. Existing invoices (already generated PDFs) are not affected unless you regenerate the PDF.
+
+**I want to start fresh invoice numbering for the new financial year. How?**
+Go to Settings → Invoice Numbering and set the Next Invoice Number to 1 (and adjust the prefix if you want to include the year, for example `INV-25-26`). This will produce `INV-25-26-00001` as the next invoice.
+
+**Can I change the currency?**
+Hisaabo defaults to INR for all monetary values. The currency field exists in the database but the UI always displays amounts as INR. Multi-currency support is not available in the current version.

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -21,6 +21,10 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const login = useAuthStore((s) => s.login);
+
+  const emailRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmPasswordRef = useRef<TextInput>(null);
 
   const registerMutation = trpc.auth.register.useMutation({
     onSuccess: async (data) => {
@@ -67,12 +71,16 @@ export default function RegisterScreen() {
                 placeholderTextColor="#6b7280"
                 autoCapitalize="words"
                 autoCorrect={false}
+                returnKeyType="next"
+                onSubmitEditing={() => emailRef.current?.focus()}
+                blurOnSubmit={false}
               />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email</Text>
               <TextInput
+                ref={emailRef}
                 style={styles.input}
                 value={email}
                 onChangeText={setEmail}
@@ -81,30 +89,40 @@ export default function RegisterScreen() {
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
+                returnKeyType="next"
+                onSubmitEditing={() => passwordRef.current?.focus()}
+                blurOnSubmit={false}
               />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Password</Text>
               <TextInput
+                ref={passwordRef}
                 style={styles.input}
                 value={password}
                 onChangeText={setPassword}
                 placeholder="Choose a password"
                 placeholderTextColor="#6b7280"
                 secureTextEntry
+                returnKeyType="next"
+                onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+                blurOnSubmit={false}
               />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Confirm Password</Text>
               <TextInput
+                ref={confirmPasswordRef}
                 style={styles.input}
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 placeholder="Repeat your password"
                 placeholderTextColor="#6b7280"
                 secureTextEntry
+                returnKeyType="done"
+                onSubmitEditing={handleRegister}
               />
             </View>
 

@@ -650,6 +650,7 @@ function InvoicesPage() {
           }
           title="No invoices found"
           description={`No ${type === "sale" ? "sales" : "purchase"} invoices${status ? ` with status "${status}"` : ""}.`}
+          encouragement={!search && !status ? "Create your first invoice — it only takes a minute." : undefined}
           action={
             <button
               className="btn-primary"
@@ -726,8 +727,8 @@ function InvoicesPage() {
                               updateStatus.mutate({ id: inv.id, status: "sent" })
                             }
                           />
-                          {/* Context actions — visible on hover */}
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {/* Context actions — always visible at reduced opacity, full on hover */}
+                          <div className="flex items-center gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
                             {(inv.status === "draft" || inv.status === "unfulfilled") && (
                               <button
                                 onClick={() =>

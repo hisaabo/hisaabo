@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -12,11 +11,16 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { haptic } from "../../../src/lib/haptics";
+import { QueryError } from "../../../src/components/ui";
 
 type DetailTab = "stats" | "priceHistory" | "stockMovements";
 
@@ -33,7 +37,7 @@ export default function ItemDetailScreen() {
   const [adjustQty, setAdjustQty] = useState("");
   const [adjustReason, setAdjustReason] = useState("");
 
-  const { data: item, isLoading } = trpc.item.getById.useQuery(
+  const { data: item, isLoading, refetch: refetchItem, isRefetching: isRefetchingItem } = trpc.item.getById.useQuery(
     { id: id ?? "" },
     { enabled: !!id }
   );
@@ -55,6 +59,35 @@ export default function ItemDetailScreen() {
       { id: id ?? "" },
       { enabled: !!id && activeTab === "stockMovements" }
     );
+
+  const deleteItem = trpc.item.delete.useMutation({
+    onSuccess: () => {
+      utils.item.list.invalidate();
+      router.back();
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message || "Failed to delete item");
+    },
+  });
+
+  const handleDelete = () => {
+    if (!item) return;
+    Alert.alert(
+      "Delete Item",
+      `Delete "${item.name}"? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            haptic.error();
+            deleteItem.mutate({ id: item.id });
+          },
+        },
+      ]
+    );
+  };
 
   const adjustStock = trpc.item.adjustStock.useMutation({
     onSuccess: () => {
@@ -78,6 +111,7 @@ export default function ItemDetailScreen() {
     const finalQty =
       adjustDirection === "remove" ? `-${adjustQty}` : adjustQty;
 
+    haptic.medium();
     adjustStock.mutate({
       itemId: id ?? "",
       quantity: finalQty,
@@ -90,7 +124,7 @@ export default function ItemDetailScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#6366f1" size="large" />
+          <ActivityIndicator color={colors.brand} size="large" />
         </View>
       </SafeAreaView>
     );
@@ -99,9 +133,7 @@ export default function ItemDetailScreen() {
   if (!item) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.errorText}>Item not found</Text>
-        </View>
+        <QueryError message="Item not found" onRetry={() => {}} />
       </SafeAreaView>
     );
   }
@@ -132,21 +164,33 @@ export default function ItemDetailScreen() {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={22} color="#ffffff" />
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => router.push(`/(app)/(items)/edit/${id}` as never)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="create-outline" size={22} color="#6366f1" />
-        </TouchableOpacity>
+        <View style={styles.topNavActions}>
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={() => router.push({ pathname: "/(app)/(items)/edit", params: { id } } as never)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="create-outline" size={22} color={colors.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={handleDelete}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="trash-outline" size={20} color={colors.danger} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[3]}
+        refreshControl={
+          <RefreshControl refreshing={isRefetchingItem} onRefresh={refetchItem} tintColor={colors.brand} colors={[colors.brand]} />
+        }
       >
         {/* Item Header */}
         <View style={styles.itemHeader}>
@@ -165,7 +209,7 @@ export default function ItemDetailScreen() {
                   : "cube-outline"
               }
               size={30}
-              color={item.itemType === "service" ? "#8b5cf6" : "#6366f1"}
+              color={item.itemType === "service" ? "#8b5cf6" : colors.brand}
             />
           </View>
           <View style={styles.itemHeaderInfo}>
@@ -261,7 +305,7 @@ export default function ItemDetailScreen() {
                     <Ionicons
                       name="warning-outline"
                       size={14}
-                      color="#f59e0b"
+                      color={colors.warning}
                     />
                     <Text style={styles.lowStockText}>
                       Low stock · Alert at{" "}
@@ -280,7 +324,7 @@ export default function ItemDetailScreen() {
                 onPress={() => setAdjustModalVisible(true)}
                 activeOpacity={0.8}
               >
-                <Ionicons name="swap-vertical-outline" size={18} color="#ffffff" />
+                <Ionicons name="swap-vertical-outline" size={18} color={colors.textPrimary} />
                 <Text style={styles.adjustButtonText}>Adjust</Text>
               </TouchableOpacity>
             </View>
@@ -392,7 +436,7 @@ export default function ItemDetailScreen() {
         {activeTab === "stats" && (
           <View style={styles.tabContent}>
             {statsLoading ? (
-              <ActivityIndicator color="#6366f1" style={styles.tabLoader} />
+              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
             ) : salesStats ? (
               <View style={styles.statsGrid}>
                 <View style={styles.statCard}>
@@ -428,7 +472,7 @@ export default function ItemDetailScreen() {
         {activeTab === "priceHistory" && (
           <View style={styles.tabContent}>
             {priceHistoryLoading ? (
-              <ActivityIndicator color="#6366f1" style={styles.tabLoader} />
+              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
             ) : priceHistory && priceHistory.length > 0 ? (
               priceHistory.map((ph, idx) => (
                 <View
@@ -475,7 +519,7 @@ export default function ItemDetailScreen() {
                 <Ionicons
                   name="pricetag-outline"
                   size={40}
-                  color="#2d2d44"
+                  color={colors.border}
                 />
                 <Text style={styles.emptyTabText}>No price history</Text>
               </View>
@@ -487,7 +531,7 @@ export default function ItemDetailScreen() {
         {activeTab === "stockMovements" && (
           <View style={styles.tabContent}>
             {stockMovementsLoading ? (
-              <ActivityIndicator color="#6366f1" style={styles.tabLoader} />
+              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
             ) : stockMovements && stockMovements.length > 0 ? (
               stockMovements.map((sm, idx) => (
                 <View
@@ -513,7 +557,7 @@ export default function ItemDetailScreen() {
                           : "arrow-up-outline"
                       }
                       size={16}
-                      color={sm.direction === "in" ? "#10b981" : "#ef4444"}
+                      color={sm.direction === "in" ? colors.success : colors.danger}
                     />
                   </View>
                   <View style={styles.movementInfo}>
@@ -544,7 +588,7 @@ export default function ItemDetailScreen() {
                 <Ionicons
                   name="git-commit-outline"
                   size={40}
-                  color="#2d2d44"
+                  color={colors.border}
                 />
                 <Text style={styles.emptyTabText}>No stock movements</Text>
               </View>
@@ -574,7 +618,7 @@ export default function ItemDetailScreen() {
                 onPress={() => setAdjustModalVisible(false)}
                 activeOpacity={0.7}
               >
-                <Ionicons name="close" size={22} color="#9ca3af" />
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -588,7 +632,7 @@ export default function ItemDetailScreen() {
                     : currentStock.toFixed(2)}
                 </Text>
               </View>
-              <Ionicons name="arrow-forward" size={20} color="#6b7280" />
+              <Ionicons name="arrow-forward" size={20} color={colors.textMuted} />
               <View style={styles.stockPreviewItem}>
                 <Text style={styles.stockPreviewLabel}>After Adjust</Text>
                 <Text
@@ -632,7 +676,7 @@ export default function ItemDetailScreen() {
                 <Ionicons
                   name="add-circle-outline"
                   size={18}
-                  color={adjustDirection === "add" ? "#10b981" : "#6b7280"}
+                  color={adjustDirection === "add" ? colors.success : colors.textMuted}
                 />
                 <Text
                   style={[
@@ -654,7 +698,7 @@ export default function ItemDetailScreen() {
                 <Ionicons
                   name="remove-circle-outline"
                   size={18}
-                  color={adjustDirection === "remove" ? "#ef4444" : "#6b7280"}
+                  color={adjustDirection === "remove" ? colors.danger : colors.textMuted}
                 />
                 <Text
                   style={[
@@ -675,7 +719,7 @@ export default function ItemDetailScreen() {
               <TextInput
                 style={styles.modalInput}
                 placeholder="0"
-                placeholderTextColor="#6b7280"
+                placeholderTextColor={colors.textMuted}
                 value={adjustQty}
                 onChangeText={setAdjustQty}
                 keyboardType="decimal-pad"
@@ -689,7 +733,7 @@ export default function ItemDetailScreen() {
               <TextInput
                 style={styles.modalInput}
                 placeholder="e.g. Physical count, damage..."
-                placeholderTextColor="#6b7280"
+                placeholderTextColor={colors.textMuted}
                 value={adjustReason}
                 onChangeText={setAdjustReason}
               />
@@ -705,7 +749,7 @@ export default function ItemDetailScreen() {
               activeOpacity={0.8}
             >
               {adjustStock.isPending ? (
-                <ActivityIndicator color="#ffffff" size="small" />
+                <ActivityIndicator color={colors.textPrimary} size="small" />
               ) : (
                 <Text style={styles.modalConfirmText}>Confirm Adjustment</Text>
               )}
@@ -720,7 +764,7 @@ export default function ItemDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   loadingContainer: {
     flex: 1,
@@ -728,7 +772,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   errorText: {
-    color: "#ef4444",
+    color: colors.danger,
     fontSize: 16,
   },
   topNav: {
@@ -745,7 +789,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
+  },
+  topNavActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   editButton: {
     width: 40,
@@ -753,7 +802,15 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
+  },
+  deleteButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(239,68,68,0.12)",
   },
   scrollView: {
     flex: 1,
@@ -773,7 +830,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   itemIconLargeProduct: {
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
     borderWidth: 2,
     borderColor: "rgba(99,102,241,0.3)",
   },
@@ -789,7 +846,7 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 20,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   badgesRow: {
     flexDirection: "row",
@@ -797,7 +854,7 @@ const styles = StyleSheet.create({
   },
   typeBadge: {
     alignSelf: "flex-start",
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
@@ -807,7 +864,7 @@ const styles = StyleSheet.create({
   typeBadgeText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#6366f1",
+    color: colors.brand,
   },
   modeBadgeVariant: {
     alignSelf: "flex-start",
@@ -840,16 +897,16 @@ const styles = StyleSheet.create({
   card: {
     marginHorizontal: 20,
     marginBottom: 12,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 16,
   },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",
-    color: "#6b7280",
+    color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 12,
@@ -865,13 +922,13 @@ const styles = StyleSheet.create({
   },
   infoCellLabel: {
     fontSize: 11,
-    color: "#6b7280",
+    color: colors.textMuted,
     marginBottom: 3,
   },
   infoCellValue: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   skuValue: {
     fontFamily: "monospace",
@@ -888,14 +945,14 @@ const styles = StyleSheet.create({
     lineHeight: 44,
   },
   stockNormal: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   stockLow: {
-    color: "#f59e0b",
+    color: colors.warning,
   },
   stockUnit: {
     fontSize: 14,
-    color: "#6b7280",
+    color: colors.textMuted,
     marginTop: 2,
   },
   lowStockAlert: {
@@ -912,19 +969,19 @@ const styles = StyleSheet.create({
   },
   lowStockText: {
     fontSize: 12,
-    color: "#f59e0b",
+    color: colors.warning,
     fontWeight: "600",
   },
   lowStockThreshold: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
     marginTop: 4,
   },
   adjustButton: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 12,
@@ -932,7 +989,7 @@ const styles = StyleSheet.create({
   adjustButtonText: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   variantRow: {
     flexDirection: "row",
@@ -942,7 +999,7 @@ const styles = StyleSheet.create({
   },
   variantRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   variantInfo: {
     flex: 1,
@@ -950,11 +1007,11 @@ const styles = StyleSheet.create({
   variantAttrs: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   variantSku: {
     fontSize: 11,
-    color: "#6b7280",
+    color: colors.textMuted,
     fontFamily: "monospace",
     marginTop: 2,
   },
@@ -965,11 +1022,11 @@ const styles = StyleSheet.create({
   variantPrice: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   variantStock: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   variantTotalRow: {
     flexDirection: "row",
@@ -977,26 +1034,26 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#2d2d44",
+    borderTopColor: colors.border,
   },
   variantTotalLabel: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#9ca3af",
+    color: colors.textSecondary,
   },
   variantTotalValue: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   tabBar: {
     flexDirection: "row",
     marginHorizontal: 20,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 4,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   tab: {
     flex: 1,
@@ -1005,15 +1062,15 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   tabActive: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
   },
   tabText: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   tabTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   tabContent: {
     paddingTop: 12,
@@ -1030,23 +1087,23 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     minWidth: "44%",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 16,
     alignItems: "center",
   },
   statCardValue: {
     fontSize: 20,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
     marginBottom: 4,
     textAlign: "center",
   },
   statCardLabel: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   historyRow: {
     flexDirection: "row",
@@ -1057,7 +1114,7 @@ const styles = StyleSheet.create({
   },
   historyRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: "#1a1a2e",
+    borderBottomColor: colors.surface,
   },
   historyLeft: {
     flex: 1,
@@ -1066,15 +1123,15 @@ const styles = StyleSheet.create({
   historyDocNum: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   historyDate: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   historyParty: {
     fontSize: 12,
-    color: "#9ca3af",
+    color: colors.textSecondary,
   },
   historyRight: {
     alignItems: "flex-end",
@@ -1083,11 +1140,11 @@ const styles = StyleSheet.create({
   historyPrice: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   historyQty: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   historyTypeBadge: {
     paddingHorizontal: 8,
@@ -1095,7 +1152,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   historyTypeSale: {
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
   },
   historyTypePurchase: {
     backgroundColor: "rgba(245,158,11,0.15)",
@@ -1103,7 +1160,7 @@ const styles = StyleSheet.create({
   historyTypeText: {
     fontSize: 10,
     fontWeight: "700",
-    color: "#9ca3af",
+    color: colors.textSecondary,
   },
   movementRow: {
     flexDirection: "row",
@@ -1114,7 +1171,7 @@ const styles = StyleSheet.create({
   },
   movementRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: "#1a1a2e",
+    borderBottomColor: colors.surface,
   },
   movementArrow: {
     width: 34,
@@ -1136,15 +1193,15 @@ const styles = StyleSheet.create({
   movementDoc: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   movementDate: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   movementParty: {
     fontSize: 12,
-    color: "#9ca3af",
+    color: colors.textSecondary,
   },
   movementRight: {
     alignItems: "flex-end",
@@ -1154,10 +1211,10 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   movementQtyIn: {
-    color: "#10b981",
+    color: colors.success,
   },
   movementQtyOut: {
-    color: "#ef4444",
+    color: colors.danger,
   },
   emptyTab: {
     alignItems: "center",
@@ -1166,7 +1223,7 @@ const styles = StyleSheet.create({
   },
   emptyTabText: {
     fontSize: 15,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   // Modal
   modalOverlay: {
@@ -1175,18 +1232,18 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   modalSheet: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingBottom: 40,
     borderTopWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   modalHandle: {
     width: 40,
     height: 4,
-    backgroundColor: "#2d2d44",
+    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: "center",
     marginTop: 12,
@@ -1201,19 +1258,19 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   stockPreviewRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 24,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
     borderRadius: 14,
     padding: 16,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   stockPreviewItem: {
     alignItems: "center",
@@ -1221,18 +1278,18 @@ const styles = StyleSheet.create({
   },
   stockPreviewLabel: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   stockPreviewValue: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   stockPreviewGreen: {
-    color: "#10b981",
+    color: colors.success,
   },
   stockPreviewRed: {
-    color: "#ef4444",
+    color: colors.danger,
   },
   directionToggle: {
     flexDirection: "row",
@@ -1247,28 +1304,28 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   directionOptionAdd: {
-    borderColor: "#10b981",
+    borderColor: colors.success,
     backgroundColor: "rgba(16,185,129,0.1)",
   },
   directionOptionRemove: {
-    borderColor: "#ef4444",
+    borderColor: colors.danger,
     backgroundColor: "rgba(239,68,68,0.1)",
   },
   directionText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   directionTextAdd: {
-    color: "#10b981",
+    color: colors.success,
   },
   directionTextRemove: {
-    color: "#ef4444",
+    color: colors.danger,
   },
   modalField: {
     marginBottom: 16,
@@ -1276,21 +1333,21 @@ const styles = StyleSheet.create({
   modalFieldLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#9ca3af",
+    color: colors.textSecondary,
     marginBottom: 8,
   },
   modalInput: {
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   modalConfirmButton: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
@@ -1302,6 +1359,6 @@ const styles = StyleSheet.create({
   modalConfirmText: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
 });

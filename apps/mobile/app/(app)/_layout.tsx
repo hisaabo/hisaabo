@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 import { useBusinessStore } from "../../src/stores/business";
+import { colors } from "../../src/lib/theme";
 
 export default function AppLayout() {
   const token = useAuthStore((s) => s.token);
@@ -13,6 +14,10 @@ export default function AppLayout() {
   });
   const setBusiness = useBusinessStore((s) => s.setBusiness);
   const businessId = useBusinessStore((s) => s.businessId);
+
+  const { data: lowStockCount } = trpc.item.lowStockCount.useQuery(undefined, {
+    enabled: !!businessId,
+  });
 
   // Auto-select first business
   useEffect(() => {
@@ -27,9 +32,9 @@ export default function AppLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: "#0f0f1a", borderTopColor: "#1e1e32" },
-        tabBarActiveTintColor: "#6366f1",
-        tabBarInactiveTintColor: "#6b7280",
+        tabBarStyle: { backgroundColor: colors.bg, borderTopColor: colors.surface },
+        tabBarActiveTintColor: colors.brand,
+        tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
       }}
     >
@@ -67,6 +72,8 @@ export default function AppLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="cube-outline" size={size} color={color} />
           ),
+          tabBarBadge: lowStockCount && lowStockCount > 0 ? lowStockCount : undefined,
+          tabBarBadgeStyle: { backgroundColor: colors.danger, fontSize: 10 },
         }}
       />
       <Tabs.Screen

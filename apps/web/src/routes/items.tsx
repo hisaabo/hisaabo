@@ -341,6 +341,7 @@ function ItemsPage() {
         <EmptyState
           title="No items found"
           description="Add products or services to start creating invoices."
+          encouragement="Your inventory is empty. Add your first product to start billing."
           action={
             <button className="btn-primary" onClick={() => setShowAddModal(true)}>
               + Add Item

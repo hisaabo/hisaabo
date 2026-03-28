@@ -171,6 +171,7 @@ function PaymentsPage() {
         <EmptyState
           title="No payments recorded yet"
           description="Record your first payment to start tracking cash flow."
+          encouragement="Once you start invoicing, payments will show here."
           action={
             <button className="btn-primary" onClick={() => setShowPanel(true)}>
               + Record Payment

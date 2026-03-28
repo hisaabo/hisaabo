@@ -132,8 +132,8 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
 
   if (isLoading) return <ReportSkeleton />;
   if (error) return (
-    <div className="card px-5 py-4 border-red-200 bg-red-50">
-      <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
+    <div className="card px-5 py-4 border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+      <p className="text-sm text-red-700 dark:text-red-400">Failed to load report: {error.message}</p>
     </div>
   );
   if (!data) return (
@@ -266,8 +266,8 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
 
   if (isLoading) return <ReportSkeleton />;
   if (error) return (
-    <div className="card px-5 py-4 border-red-200 bg-red-50">
-      <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
+    <div className="card px-5 py-4 border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+      <p className="text-sm text-red-700 dark:text-red-400">Failed to load report: {error.message}</p>
     </div>
   );
   if (!data) return (

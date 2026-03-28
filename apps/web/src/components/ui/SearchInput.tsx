@@ -11,8 +11,7 @@ export function SearchInput({ value, onChange, placeholder = "Search...", classN
   return (
     <div className={cn("relative", className)}>
       <svg
-        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-        style={{ color: "var(--text-tertiary)" }}
+        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none text-text-tertiary"
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
         viewBox="0 0 24 24"
@@ -35,8 +34,7 @@ export function SearchInput({ value, onChange, placeholder = "Search...", classN
       {value && (
         <button
           type="button"
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors"
-          style={{ color: "var(--text-tertiary)" }}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors text-text-tertiary"
           onClick={() => onChange("")}
           aria-label="Clear search"
         >

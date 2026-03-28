@@ -2,19 +2,19 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   FlatList,
-  TextInput,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
+import { colors } from "../../../../src/lib/theme";
+import { FAB, SearchBar, PressableRow, EmptyState } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -27,10 +27,10 @@ const MODE_COLORS: Record<PaymentMode, { bg: string; text: string }> = {
 };
 
 function ModeBadge({ mode }: { mode: string }) {
-  const colors = MODE_COLORS[mode as PaymentMode] ?? MODE_COLORS.other;
+  const modeColors = MODE_COLORS[mode as PaymentMode] ?? MODE_COLORS.other;
   return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>
+    <View style={[styles.badge, { backgroundColor: modeColors.bg }]}>
+      <Text style={[styles.badgeText, { color: modeColors.text }]}>
         {mode.charAt(0).toUpperCase() + mode.slice(1)}
       </Text>
     </View>
@@ -63,14 +63,6 @@ export default function PaymentsScreen() {
     setPage(1);
   }, []);
 
-  const handleItemPress = useCallback((payment: { paymentNumber: string | null; partyName: string; amount: string }) => {
-    Alert.alert(
-      payment.paymentNumber ?? "Payment",
-      `Party: ${payment.partyName}\nAmount: ${formatCurrency(payment.amount)}`,
-      [{ text: "Close" }]
-    );
-  }, []);
-
   const payments = data?.data ?? [];
 
   return (
@@ -78,7 +70,7 @@ export default function PaymentsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Payments</Text>
         <View style={{ width: 40 }} />
@@ -86,50 +78,43 @@ export default function PaymentsScreen() {
 
       {/* Search Bar */}
       <View style={styles.searchWrapper}>
-        <Ionicons name="search-outline" size={18} color="#6b7280" style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search payments or parties..."
-          placeholderTextColor="#6b7280"
+        <SearchBar
           value={search}
           onChangeText={handleSearch}
-          returnKeyType="search"
+          placeholder="Search payments or parties..."
         />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => handleSearch("")}>
-            <Ionicons name="close-circle" size={18} color="#6b7280" />
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* List */}
       {isLoading && !data ? (
         <View style={styles.centered}>
-          <ActivityIndicator color="#6366f1" size="large" />
+          <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
           data={payments}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
+          keyboardDismissMode="on-drag"
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
               onRefresh={handleRefresh}
-              tintColor="#6366f1"
+              tintColor={colors.brand}
+              colors={[colors.brand]}
             />
           }
           ListEmptyComponent={
-            <View style={styles.centered}>
-              <Ionicons name="card-outline" size={48} color="#2d2d44" />
-              <Text style={styles.emptyText}>No payments found</Text>
-            </View>
+            <EmptyState
+              icon="card-outline"
+              title="No payments found"
+              description={search ? "Try a different search term" : "Record your first payment"}
+            />
           }
           renderItem={({ item }) => (
-            <TouchableOpacity
+            <PressableRow
               style={styles.card}
-              onPress={() => handleItemPress(item)}
-              activeOpacity={0.7}
+              onPress={() => router.push(`/(more)/payments/${item.id}` as never)}
             >
               <View style={styles.cardRow}>
                 <View style={styles.cardLeft}>
@@ -144,7 +129,7 @@ export default function PaymentsScreen() {
                 </Text>
                 <ModeBadge mode={item.mode} />
               </View>
-            </TouchableOpacity>
+            </PressableRow>
           )}
           onEndReached={() => {
             if (data && page * PAGE_SIZE < data.total) {
@@ -155,20 +140,13 @@ export default function PaymentsScreen() {
         />
       )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push("/(more)/payments/create")}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="add" size={28} color="#ffffff" />
-      </TouchableOpacity>
+      <FAB onPress={() => router.push("/(more)/payments/create" as never)} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0f0f1a" },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -176,44 +154,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#2d2d44",
+    borderBottomColor: colors.border,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
+  title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   searchWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
     margin: 16,
-    backgroundColor: "#1a1a2e",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#2d2d44",
-    paddingHorizontal: 12,
-    height: 44,
-  },
-  searchIcon: { marginRight: 8 },
-  searchInput: {
-    flex: 1,
-    color: "#ffffff",
-    fontSize: 14,
-    height: "100%",
   },
   listContent: { paddingHorizontal: 16, paddingBottom: 100 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80 },
-  emptyText: { color: "#6b7280", marginTop: 12, fontSize: 14 },
   card: {
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 14,
     marginBottom: 10,
   },
   cardRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
   cardLeft: { flex: 1, marginRight: 12 },
-  paymentNumber: { fontSize: 13, fontWeight: "600", color: "#9ca3af" },
-  partyName: { fontSize: 16, fontWeight: "600", color: "#ffffff", marginTop: 2 },
-  amount: { fontSize: 17, fontWeight: "700", color: "#ffffff" },
+  paymentNumber: { fontSize: 13, fontWeight: "600", color: colors.textSecondary },
+  partyName: { fontSize: 16, fontWeight: "600", color: colors.textPrimary, marginTop: 2 },
+  amount: { fontSize: 17, fontWeight: "700", color: colors.textPrimary },
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -221,29 +183,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#2d2d44",
+    borderTopColor: colors.border,
   },
-  date: { fontSize: 12, color: "#6b7280" },
+  date: { fontSize: 12, color: colors.textMuted },
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   badgeText: { fontSize: 11, fontWeight: "600", textTransform: "capitalize" },
-  fab: {
-    position: "absolute",
-    bottom: 32,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#6366f1",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
-  },
 });

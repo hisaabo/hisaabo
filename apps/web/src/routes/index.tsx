@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { keepPreviousData } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   BarChart,
@@ -12,10 +13,113 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { trpc } from "@/lib/trpc";
+import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PillTabs } from "@/components/ui/Tabs";
+
+// ─── Milestone banner ─────────────────────────────────────────────────────────
+
+const MILESTONES: Array<{ count: number; message: string }> = [
+  { count: 1,   message: "Your first invoice — the beginning of something great." },
+  { count: 10,  message: "10 invoices created. You're in the rhythm now." },
+  { count: 50,  message: "50 invoices and counting. Solid momentum." },
+  { count: 100, message: "100 invoices. Your business is moving." },
+  { count: 250, message: "250 invoices. That's impressive consistency." },
+  { count: 500, message: "500 invoices. You're running a real operation." },
+];
+
+const SALES_MILESTONES: Array<{ amount: number; message: string }> = [
+  { amount: 100000,   message: "First \u20b91 lakh in sales — well done." },
+  { amount: 500000,   message: "\u20b95 lakhs in sales. You're building something." },
+  { amount: 1000000,  message: "\u20b910 lakhs in sales. Keep going." },
+  { amount: 5000000,  message: "\u20b950 lakhs in sales. Remarkable progress." },
+  { amount: 10000000, message: "\u20b91 crore in sales. That's a milestone worth marking." },
+];
+
+function getMilestoneKey(businessId: string, type: "invoices" | "sales", value: number) {
+  return `hisaabo_milestone_${businessId}_${type}_${value}`;
+}
+
+function checkMilestone(
+  businessId: string,
+  totalInvoices: number,
+  totalSales: number
+): { message: string; key: string } | null {
+  // Check invoice count milestones (highest crossed, not yet dismissed)
+  for (let i = MILESTONES.length - 1; i >= 0; i--) {
+    const m = MILESTONES[i];
+    if (totalInvoices >= m.count) {
+      const key = getMilestoneKey(businessId, "invoices", m.count);
+      if (!localStorage.getItem(key)) {
+        return { message: m.message, key };
+      }
+      break; // only show highest uncelebrated milestone
+    }
+  }
+
+  // Check sales amount milestones
+  for (let i = SALES_MILESTONES.length - 1; i >= 0; i--) {
+    const m = SALES_MILESTONES[i];
+    if (totalSales >= m.amount) {
+      const key = getMilestoneKey(businessId, "sales", m.amount);
+      if (!localStorage.getItem(key)) {
+        return { message: m.message, key };
+      }
+      break;
+    }
+  }
+
+  return null;
+}
+
+function MilestoneBanner({
+  message,
+  milestoneKey,
+}: {
+  message: string;
+  milestoneKey: string;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed) return null;
+
+  function dismiss() {
+    localStorage.setItem(milestoneKey, "1");
+    setDismissed(true);
+  }
+
+  return (
+    <div className="mb-4 animate-milestone-enter">
+      <div className="px-4 py-3 rounded-xl border border-brand-200 bg-brand-50 dark:bg-brand-950/20 dark:border-brand-800/50 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <svg
+            className="w-4 h-4 text-brand-600 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+          </svg>
+          <p className="text-sm text-brand-700 dark:text-brand-300">{message}</p>
+        </div>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="shrink-0 p-1 rounded-lg text-brand-500 hover:text-brand-700 hover:bg-brand-100 dark:hover:bg-brand-900/40 transition-colors"
+          aria-label="Dismiss"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,
@@ -149,13 +253,39 @@ function ChartCard({
 // ─── Charts ───────────────────────────────────────────────────────────────────
 
 function SalesTrendChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
-  const { data: raw } = trpc.dashboard.salesTrend.useQuery({ months: 6, fromDate, toDate });
+  // For "all time" (no dates), fetch 24 months of history
+  const { data: raw } = trpc.dashboard.salesTrend.useQuery({
+    months: fromDate ? 12 : 24,
+    fromDate,
+    toDate,
+  }, { placeholderData: keepPreviousData });
 
-  const data = raw?.map((r) => ({
-    month: new Date(r.month).toLocaleString("en-IN", { month: "short", year: "2-digit" }),
-    invoiced: parseFloat(r.invoiced),
-    collected: parseFloat(r.collected),
-  }));
+  // If data spans > 12 months, aggregate by FY (Apr-Mar) instead of monthly
+  const data = (() => {
+    if (!raw || raw.length === 0) return undefined;
+
+    if (raw.length > 12) {
+      // Aggregate by financial year
+      const fyMap = new Map<string, { invoiced: number; collected: number }>();
+      for (const r of raw) {
+        const d = new Date(r.month);
+        const m = d.getMonth();
+        const fyStart = m < 3 ? d.getFullYear() - 1 : d.getFullYear();
+        const label = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`;
+        const existing = fyMap.get(label) || { invoiced: 0, collected: 0 };
+        existing.invoiced += parseFloat(r.invoiced);
+        existing.collected += parseFloat(r.collected);
+        fyMap.set(label, existing);
+      }
+      return [...fyMap.entries()].map(([month, v]) => ({ month, ...v }));
+    }
+
+    return raw.map((r) => ({
+      month: new Date(r.month).toLocaleString("en-IN", { month: "short", year: "2-digit" }),
+      invoiced: parseFloat(r.invoiced),
+      collected: parseFloat(r.collected),
+    }));
+  })();
 
   if (!data || data.length === 0) {
     return (
@@ -197,7 +327,7 @@ function InvoiceStatusChart({ fromDate, toDate }: { fromDate?: string; toDate?: 
   const { data } = trpc.dashboard.invoiceStatusBreakdown.useQuery({
     fromDate,
     toDate,
-  });
+  }, { placeholderData: keepPreviousData });
 
   const total = data ? data.reduce((sum, d) => sum + d.count, 0) : 0;
 
@@ -272,26 +402,116 @@ function InvoiceStatusChart({ fromDate, toDate }: { fromDate?: string; toDate?: 
   );
 }
 
-function TopOutstandingChart() {
-  const { data: raw } = trpc.dashboard.topOutstanding.useQuery({ limit: 5 });
+function TopSellingChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
+  const [itemType, setItemType] = useState("all");
+  const { data: raw } = trpc.dashboard.topSellingItems.useQuery({
+    limit: 5,
+    itemType: itemType === "all" ? undefined : itemType as "product" | "service",
+    fromDate,
+    toDate,
+  }, { placeholderData: keepPreviousData });
 
   if (!raw || raw.length === 0) {
     return (
-      <ChartCard title="Top Outstanding" responsive={false}>
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border-light flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary">Top Selling</h3>
+          <PillTabs tabs={TOP_SELLING_TABS} value={itemType} onChange={setItemType} size="sm" />
+        </div>
+        <div className="px-4 py-4" style={{ height: 260 }}>
+          <ChartEmpty />
+        </div>
+      </div>
+    );
+  }
+
+  const data = raw.map((r) => ({
+    name: r.itemName,
+    amount: parseFloat(r.totalAmount),
+    qty: parseFloat(r.totalQty),
+    unit: r.unit || "pcs",
+    invoices: r.invoiceCount,
+  }));
+
+  const chartData = [...data].reverse(); // bottom-to-top for horizontal bar
+  const barColor = itemType === "service" ? "#8b5cf6" : "#6366f1"; // purple for services, indigo for products/all
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-3 border-b border-border-light flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-text-primary">Top Selling</h3>
+        <PillTabs tabs={TOP_SELLING_TABS} value={itemType} onChange={setItemType} size="sm" />
+      </div>
+      <div className="px-4 py-4" style={{ height: 260 }}>
+        {renderResponsive(
+          <BarChart
+            layout="vertical"
+            data={chartData}
+            margin={{ top: 4, right: 60, left: 0, bottom: 0 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" horizontal={false} />
+            <XAxis
+              type="number"
+              tickFormatter={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)}
+              tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="name"
+              tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
+              tickFormatter={(v: string) => v.length > 14 ? v.slice(0, 12) + "…" : v}
+              axisLine={false}
+              tickLine={false}
+              width={90}
+            />
+            <Tooltip
+              {...tooltipStyle}
+              formatter={(value: any, _name: any, props: any) => {
+                const item = data.find((d) => d.name === props.payload.name);
+                return [formatCurrency(String(value)) + (item ? ` (${item.qty.toLocaleString()} ${item.unit})` : ""), "Revenue"];
+              }}
+            />
+            <Bar dataKey="amount" name="Revenue" fill={barColor} radius={[0, 3, 3, 0]} maxBarSize={18} label={{ position: "right", fontSize: 10, fill: "var(--text-tertiary)", formatter: (v: any) => v >= 100000 ? `${(Number(v) / 100000).toFixed(1)}L` : `${(Number(v) / 1000).toFixed(0)}K` }} />
+          </BarChart>,
+          "100%", "100%"
+        )}
+      </div>
+    </div>
+  );
+}
+
+const TOP_SELLING_TABS = [
+  { value: "all", label: "All" },
+  { value: "product", label: "Products" },
+  { value: "service", label: "Services" },
+];
+
+function TopCustomersChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
+  const { data: raw } = trpc.dashboard.topCustomers.useQuery(
+    { limit: 5, fromDate, toDate },
+    { placeholderData: keepPreviousData }
+  );
+
+  if (!raw || raw.length === 0) {
+    return (
+      <ChartCard title="Top Customers" responsive={false}>
         <ChartEmpty />
       </ChartCard>
     );
   }
 
   const data = raw.map((r) => ({
-    partyName: r.partyName,
-    outstanding: parseFloat(r.outstanding),
+    name: r.partyName,
+    revenue: parseFloat(r.totalAmount),
+    invoices: r.invoiceCount,
   }));
 
-  const chartData = [...data].reverse(); // bottom-to-top for horizontal bar
+  const chartData = [...data].reverse();
 
   return (
-    <ChartCard title="Top Outstanding" height={260}>
+    <ChartCard title="Top Customers" height={260}>
       <BarChart
         layout="vertical"
         data={chartData}
@@ -300,14 +520,14 @@ function TopOutstandingChart() {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" horizontal={false} />
         <XAxis
           type="number"
-          tickFormatter={(v: number) => `${(v / 100000).toFixed(1)}L`}
+          tickFormatter={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)}
           tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
           type="category"
-          dataKey="partyName"
+          dataKey="name"
           tick={{ fontSize: 11, fill: "var(--text-secondary)" }}
           axisLine={false}
           tickLine={false}
@@ -315,83 +535,14 @@ function TopOutstandingChart() {
         />
         <Tooltip
           {...tooltipStyle}
-          formatter={(value: any) => formatCurrency(String(value))}
+          formatter={(value: any, _name: any, props: any) => {
+            const customer = data.find((d) => d.name === props.payload.name);
+            return [formatCurrency(String(value)) + (customer ? ` (${customer.invoices} invoices)` : ""), "Revenue"];
+          }}
         />
-        <Bar dataKey="outstanding" name="Outstanding" fill="#f59e0b" radius={[0, 3, 3, 0]} maxBarSize={18} label={{ position: "right", fontSize: 10, fill: "var(--text-tertiary)", formatter: (v: any) => `${(Number(v) / 1000).toFixed(0)}K` }} />
+        <Bar dataKey="revenue" name="Revenue" fill="#10b981" radius={[0, 3, 3, 0]} maxBarSize={18} label={{ position: "right", fontSize: 10, fill: "var(--text-tertiary)", formatter: (v: any) => v >= 100000 ? `${(Number(v) / 100000).toFixed(1)}L` : `${(Number(v) / 1000).toFixed(0)}K` }} />
       </BarChart>
     </ChartCard>
-  );
-}
-
-function ExpensesByCategoryChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
-  const { data: raw } = trpc.dashboard.expensesByCategory.useQuery({ fromDate, toDate });
-
-  const data = raw?.map((r) => ({
-    category: r.category,
-    amount: parseFloat(r.total),
-  }));
-
-  if (!data || data.length === 0) {
-    return (
-      <ChartCard title="Expenses by Category" responsive={false}>
-        <ChartEmpty />
-      </ChartCard>
-    );
-  }
-
-  return (
-    <div className="card overflow-hidden">
-      <div className="px-5 py-3 border-b border-border-light">
-        <h3 className="text-sm font-semibold text-text-primary">Expenses by Category</h3>
-      </div>
-      <div className="px-4 py-4" style={{ height: 260 }}>
-        <div className="flex flex-col h-full">
-          <div className="relative flex-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data}
-                  dataKey="amount"
-                  nameKey="category"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={52}
-                  outerRadius={76}
-                  paddingAngle={2}
-                >
-                  {data.map((entry, index) => (
-                    <Cell
-                      key={entry.category}
-                      fill={EXPENSE_COLORS[index % EXPENSE_COLORS.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  {...tooltipStyle}
-                  formatter={(value: any) => formatCurrency(String(value))}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          {/* Legend */}
-          <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 pb-1">
-            {data.map((entry, index) => (
-              <span key={entry.category} className="flex items-center gap-1 text-[11px] text-text-secondary">
-                <span
-                  className="inline-block rounded-full"
-                  style={{
-                    width: 8,
-                    height: 8,
-                    background: EXPENSE_COLORS[index % EXPENSE_COLORS.length],
-                  }}
-                />
-                {entry.category}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -405,31 +556,7 @@ function ChartEmpty() {
 
 // ─── Period selector ──────────────────────────────────────────────────────────
 
-function PeriodSelector({
-  value,
-  onChange,
-}: {
-  value: PeriodId;
-  onChange: (p: PeriodId) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-1 border border-border-light">
-      {PERIODS.map((p) => (
-        <button
-          key={p.id}
-          onClick={() => onChange(p.id)}
-          className={
-            p.id === value
-              ? "px-3 py-1 rounded-md text-xs font-semibold bg-surface-0 text-text-primary shadow-sm transition-all"
-              : "px-3 py-1 rounded-md text-xs font-medium text-text-tertiary hover:text-text-secondary transition-colors"
-          }
-        >
-          {p.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+const PERIOD_TABS = PERIODS.map((p) => ({ value: p.id, label: p.label }));
 
 // ─── Summary cards ────────────────────────────────────────────────────────────
 
@@ -512,17 +639,43 @@ function PageSkeleton() {
 
 function DashboardPage() {
   const [period, setPeriod] = useState<PeriodId>("this-fy");
+  const [isPending, startTransition] = useTransition();
   const { from, to } = getPeriodDates(period);
 
+  function handlePeriodChange(p: PeriodId) {
+    startTransition(() => setPeriod(p));
+  }
+
   const { data, isLoading } = trpc.dashboard.summary.useQuery(
-    from || to ? { fromDate: from, toDate: to } : undefined
+    from || to ? { fromDate: from, toDate: to } : undefined,
+    { placeholderData: keepPreviousData }
   );
 
   const { data: statusBreakdown } = trpc.dashboard.invoiceStatusBreakdown.useQuery(
-    from || to ? { fromDate: from, toDate: to } : {}
+    from || to ? { fromDate: from, toDate: to } : {},
+    { placeholderData: keepPreviousData }
   );
 
-  if (isLoading) return <PageSkeleton />;
+  // All-time stats for milestone checks — fetched once, independent of period
+  const { data: allTimeBreakdown } = trpc.dashboard.invoiceStatusBreakdown.useQuery(
+    {},
+    { staleTime: 5 * 60 * 1000 }
+  );
+  const { data: allTimeSummary } = trpc.dashboard.summary.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000 }
+  );
+
+  const businessId = getBusinessId() ?? "default";
+  const totalAllTimeInvoices = allTimeBreakdown
+    ? allTimeBreakdown.reduce((sum, s) => sum + s.count, 0)
+    : 0;
+  const totalAllTimeSales = allTimeSummary ? parseFloat(allTimeSummary.totalSales) : 0;
+  const milestone = allTimeBreakdown && allTimeSummary
+    ? checkMilestone(businessId, totalAllTimeInvoices, totalAllTimeSales)
+    : null;
+
+  if (isLoading && !data) return <PageSkeleton />;
 
   if (!data) {
     return (
@@ -553,7 +706,7 @@ function DashboardPage() {
         title="Dashboard"
         actions={
           <div className="flex items-center gap-3">
-            <PeriodSelector value={period} onChange={setPeriod} />
+            <PillTabs tabs={PERIOD_TABS} value={period} onChange={(v) => handlePeriodChange(v as PeriodId)} size="sm" />
             <Link to="/invoices" className="btn-primary">
               + New Invoice
             </Link>
@@ -561,6 +714,10 @@ function DashboardPage() {
         }
       />
 
+      <div style={{ opacity: isPending ? 0.6 : 1, transition: "opacity 0.15s ease" }}>
+      {milestone && (
+        <MilestoneBanner message={milestone.message} milestoneKey={milestone.key} />
+      )}
       <SummaryCards data={data} period={period} />
 
       {/* Profit indicator cards */}
@@ -609,8 +766,9 @@ function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SalesTrendChart fromDate={from} toDate={to} />
         <InvoiceStatusChart fromDate={from} toDate={to} />
-        <TopOutstandingChart />
-        <ExpensesByCategoryChart fromDate={from} toDate={to} />
+        <TopSellingChart fromDate={from} toDate={to} />
+        <TopCustomersChart fromDate={from} toDate={to} />
+      </div>
       </div>
     </div>
   );

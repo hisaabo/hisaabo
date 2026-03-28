@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -18,43 +19,14 @@ import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { haptic } from "../../../src/lib/haptics";
+import { StatusBadge, Card, QueryError, Skeleton } from "../../../src/components/ui";
 
-const C = {
-  bg: "#0f0f1a",
-  surface: "#1a1a2e",
-  border: "#2d2d44",
-  brand: "#6366f1",
-  textPrimary: "#ffffff",
-  textSecondary: "#9ca3af",
-  textMuted: "#6b7280",
-  success: "#10b981",
-  danger: "#ef4444",
-  warning: "#f59e0b",
-  info: "#3b82f6",
-};
+// Alias for backward compatibility with inline color references
+const C = colors;
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
-
-const STATUS_COLORS: Record<StatusKey, { bg: string; text: string }> = {
-  draft: { bg: "#374151", text: "#d1d5db" },
-  unfulfilled: { bg: "#374151", text: "#d1d5db" },
-  sent: { bg: "#1e3a5f", text: "#60a5fa" },
-  paid: { bg: "#064e3b", text: "#34d399" },
-  partial: { bg: "#451a03", text: "#fbbf24" },
-  overdue: { bg: "#450a0a", text: "#f87171" },
-  cancelled: { bg: "#374151", text: "#9ca3af" },
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const colors = STATUS_COLORS[status as StatusKey] ?? { bg: "#374151", text: "#d1d5db" };
-  return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Text>
-    </View>
-  );
-}
 
 async function sharePDF(
   invoiceId: string,
@@ -85,21 +57,21 @@ type NextStatus = { label: string; status: StatusKey; color: string };
 function getNextStatuses(current: string): NextStatus[] {
   switch (current) {
     case "draft":
-      return [{ label: "Mark as Sent", status: "sent", color: C.info }];
+      return [{ label: "Mark as Sent", status: "sent", color: colors.info }];
     case "sent":
     case "unfulfilled":
       return [
-        { label: "Mark as Paid", status: "paid", color: C.success },
-        { label: "Mark as Partial", status: "partial", color: C.warning },
-        { label: "Mark as Overdue", status: "overdue", color: C.danger },
+        { label: "Mark as Paid", status: "paid", color: colors.success },
+        { label: "Mark as Partial", status: "partial", color: colors.warning },
+        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
       ];
     case "partial":
       return [
-        { label: "Mark as Paid", status: "paid", color: C.success },
-        { label: "Mark as Overdue", status: "overdue", color: C.danger },
+        { label: "Mark as Paid", status: "paid", color: colors.success },
+        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
       ];
     case "overdue":
-      return [{ label: "Mark as Paid", status: "paid", color: C.success }];
+      return [{ label: "Mark as Paid", status: "paid", color: colors.success }];
     default:
       return [];
   }
@@ -111,7 +83,7 @@ export default function InvoiceDetailScreen() {
   const businessId = useBusinessStore((s) => s.businessId);
   const [sharingPDF, setSharingPDF] = useState(false);
 
-  const { data: invoice, isLoading, refetch } = trpc.invoice.getById.useQuery(
+  const { data: invoice, isLoading, refetch, isRefetching } = trpc.invoice.getById.useQuery(
     { id: id ?? "" },
     { enabled: !!id }
   );
@@ -121,13 +93,19 @@ export default function InvoiceDetailScreen() {
     onError: (err) => Alert.alert("Error", err.message),
   });
 
+  const utils = trpc.useUtils();
+
   const deleteInvoice = trpc.invoice.delete.useMutation({
-    onSuccess: () => router.back(),
+    onSuccess: () => {
+      utils.invoice.list.invalidate();
+      router.back();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
 
   const handleStatusChange = (status: StatusKey) => {
     if (!invoice) return;
+    haptic.medium();
     Alert.alert(
       "Change Status",
       `Mark invoice as ${status}?`,
@@ -151,7 +129,10 @@ export default function InvoiceDetailScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => deleteInvoice.mutate({ id: invoice.id }),
+          onPress: () => {
+            haptic.error();
+            deleteInvoice.mutate({ id: invoice.id });
+          },
         },
       ]
     );
@@ -174,11 +155,14 @@ export default function InvoiceDetailScreen() {
       <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={22} color={C.textPrimary} />
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
           </TouchableOpacity>
         </View>
-        <View style={styles.centeredWrap}>
-          <ActivityIndicator size="large" color={C.brand} />
+        <View style={styles.scrollContent}>
+          <Skeleton width="60%" height={20} borderRadius={8} style={{ marginBottom: 12 }} />
+          <Skeleton width="100%" height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+          <Skeleton width="100%" height={80} borderRadius={16} style={{ marginBottom: 12 }} />
+          <Skeleton width="100%" height={120} borderRadius={16} />
         </View>
       </SafeAreaView>
     );
@@ -189,13 +173,10 @@ export default function InvoiceDetailScreen() {
       <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={22} color={C.textPrimary} />
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
           </TouchableOpacity>
         </View>
-        <View style={styles.centeredWrap}>
-          <Ionicons name="alert-circle-outline" size={48} color={C.textMuted} />
-          <Text style={styles.notFoundText}>Invoice not found</Text>
-        </View>
+        <QueryError message="Invoice not found" onRetry={() => refetch()} />
       </SafeAreaView>
     );
   }
@@ -218,7 +199,7 @@ export default function InvoiceDetailScreen() {
       {/* Top bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color={C.textPrimary} />
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.topBarCenter}>
           <Text style={styles.topBarTitle}>{invoice.invoiceNumber}</Text>
@@ -230,12 +211,20 @@ export default function InvoiceDetailScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={refetch}
+            tintColor={colors.brand}
+            colors={[colors.brand]}
+          />
+        }
       >
         {/* Party Info Card */}
         <View style={styles.card}>
           <View style={styles.cardRow}>
             <View style={styles.cardIconWrap}>
-              <Ionicons name="person-outline" size={18} color={C.brand} />
+              <Ionicons name="person-outline" size={18} color={colors.brand} />
             </View>
             <View style={styles.cardInfo}>
               <Text style={styles.cardLabel}>
@@ -323,7 +312,7 @@ export default function InvoiceDetailScreen() {
           {parseFloat(invoice.discountAmount ?? "0") > 0 && (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Discount</Text>
-              <Text style={[styles.totalValue, { color: C.success }]}>
+              <Text style={[styles.totalValue, { color: colors.success }]}>
                 -{formatCurrency(invoice.discountAmount ?? "0")}
               </Text>
             </View>
@@ -337,13 +326,13 @@ export default function InvoiceDetailScreen() {
             <>
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Paid</Text>
-                <Text style={[styles.totalValue, { color: C.success }]}>
+                <Text style={[styles.totalValue, { color: colors.success }]}>
                   {formatCurrency(amountPaid)}
                 </Text>
               </View>
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Balance</Text>
-                <Text style={[styles.totalValue, { color: balance > 0 ? C.warning : C.success }]}>
+                <Text style={[styles.totalValue, { color: balance > 0 ? colors.warning : colors.success }]}>
                   {formatCurrency(balance)}
                 </Text>
               </View>
@@ -387,6 +376,25 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
+        {/* Edit Invoice (only for draft/sent) */}
+        {(invoice.status === "draft" || invoice.status === "sent") && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push({ pathname: "/(app)/(invoices)/edit", params: { id: invoice.id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="create-outline"
+                size={18}
+                color={colors.brand}
+                style={styles.actionIcon}
+              />
+              <Text style={[styles.actionBtnText, { color: colors.brand }]}>Edit Invoice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* PDF Share */}
         <View style={styles.actionGroup}>
           <TouchableOpacity
@@ -396,16 +404,16 @@ export default function InvoiceDetailScreen() {
             disabled={sharingPDF}
           >
             {sharingPDF ? (
-              <ActivityIndicator size="small" color={C.brand} style={styles.actionIcon} />
+              <ActivityIndicator size="small" color={colors.brand} style={styles.actionIcon} />
             ) : (
               <Ionicons
                 name="share-outline"
                 size={18}
-                color={C.brand}
+                color={colors.brand}
                 style={styles.actionIcon}
               />
             )}
-            <Text style={[styles.actionBtnText, { color: C.brand }]}>
+            <Text style={[styles.actionBtnText, { color: colors.brand }]}>
               {sharingPDF ? "Generating PDF..." : "Share PDF (A4)"}
             </Text>
           </TouchableOpacity>
@@ -416,8 +424,8 @@ export default function InvoiceDetailScreen() {
             activeOpacity={0.7}
             disabled={sharingPDF}
           >
-            <Ionicons name="print-outline" size={18} color={C.brand} style={styles.actionIcon} />
-            <Text style={[styles.actionBtnText, { color: C.brand }]}>Share PDF (Thermal)</Text>
+            <Ionicons name="print-outline" size={18} color={colors.brand} style={styles.actionIcon} />
+            <Text style={[styles.actionBtnText, { color: colors.brand }]}>Share PDF (Thermal)</Text>
           </TouchableOpacity>
         </View>
 
@@ -430,16 +438,16 @@ export default function InvoiceDetailScreen() {
             disabled={deleteInvoice.isPending}
           >
             {deleteInvoice.isPending ? (
-              <ActivityIndicator size="small" color={C.danger} style={styles.actionIcon} />
+              <ActivityIndicator size="small" color={colors.danger} style={styles.actionIcon} />
             ) : (
               <Ionicons
                 name="trash-outline"
                 size={18}
-                color={C.danger}
+                color={colors.danger}
                 style={styles.actionIcon}
               />
             )}
-            <Text style={[styles.actionBtnText, { color: C.danger }]}>Delete Invoice</Text>
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete Invoice</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -450,7 +458,7 @@ export default function InvoiceDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: C.bg,
+    backgroundColor: colors.bg,
   },
   topBar: {
     flexDirection: "row",
@@ -463,9 +471,9 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -475,7 +483,7 @@ const styles = StyleSheet.create({
   topBarTitle: {
     fontSize: 17,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   scroll: {
     flex: 1,
@@ -492,13 +500,13 @@ const styles = StyleSheet.create({
   },
   notFoundText: {
     fontSize: 16,
-    color: C.textMuted,
+    color: colors.textMuted,
   },
   card: {
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     padding: 16,
     marginBottom: 12,
   },
@@ -511,7 +519,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: C.brand + "20",
+    backgroundColor: colors.brand + "20",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -521,17 +529,17 @@ const styles = StyleSheet.create({
   },
   cardLabel: {
     fontSize: 11,
-    color: C.textMuted,
+    color: colors.textMuted,
     fontWeight: "500",
   },
   cardValue: {
     fontSize: 16,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   cardSubValue: {
     fontSize: 13,
-    color: C.textSecondary,
+    color: colors.textSecondary,
   },
   datesRow: {
     flexDirection: "row",
@@ -544,23 +552,23 @@ const styles = StyleSheet.create({
   dateDivider: {
     width: 1,
     height: 40,
-    backgroundColor: C.border,
+    backgroundColor: colors.border,
     marginHorizontal: 16,
   },
   dateLabel: {
     fontSize: 11,
-    color: C.textMuted,
+    color: colors.textMuted,
     fontWeight: "500",
   },
   dateValue: {
     fontSize: 14,
     fontWeight: "600",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   sectionTitle: {
     fontSize: 13,
     fontWeight: "700",
-    color: C.textMuted,
+    color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     marginBottom: 8,
@@ -572,7 +580,7 @@ const styles = StyleSheet.create({
   },
   tableDivider: {
     height: 1,
-    backgroundColor: C.border,
+    backgroundColor: colors.border,
     marginBottom: 8,
   },
   tableRow: {
@@ -581,11 +589,11 @@ const styles = StyleSheet.create({
   },
   rowDivider: {
     height: 1,
-    backgroundColor: C.border + "60",
+    backgroundColor: colors.border + "60",
   },
   tableCell: {
     fontSize: 12,
-    color: C.textSecondary,
+    color: colors.textSecondary,
   },
   tableDescCol: {
     flex: 2,
@@ -600,16 +608,16 @@ const styles = StyleSheet.create({
   lineDesc: {
     fontSize: 13,
     fontWeight: "600",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   lineTax: {
     fontSize: 10,
-    color: C.textMuted,
+    color: colors.textMuted,
     marginTop: 2,
   },
   lineNum: {
     fontSize: 13,
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   totalRow: {
     flexDirection: "row",
@@ -619,31 +627,31 @@ const styles = StyleSheet.create({
   },
   totalLabel: {
     fontSize: 14,
-    color: C.textSecondary,
+    color: colors.textSecondary,
   },
   totalValue: {
     fontSize: 14,
-    color: C.textPrimary,
+    color: colors.textPrimary,
     fontWeight: "500",
   },
   totalDivider: {
     height: 1,
-    backgroundColor: C.border,
+    backgroundColor: colors.border,
     marginVertical: 8,
   },
   totalLabelBold: {
     fontSize: 16,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   totalValueBold: {
     fontSize: 18,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   notesText: {
     fontSize: 14,
-    color: C.textSecondary,
+    color: colors.textSecondary,
     lineHeight: 20,
   },
   actionGroup: {
@@ -657,15 +665,15 @@ const styles = StyleSheet.create({
   actionBtn: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
   dangerBtn: {
-    borderColor: C.danger + "40",
+    borderColor: colors.danger + "40",
   },
   actionIcon: {
     marginRight: 10,

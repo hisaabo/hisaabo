@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -10,11 +9,18 @@ import {
   FlatList,
   Linking,
   Alert,
+  RefreshControl,
+  Share,
+  TextInput,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { colors } from "../../../src/lib/theme";
+import { haptic } from "../../../src/lib/haptics";
+import { Card, QueryError } from "../../../src/components/ui";
 
 type LedgerTab = "ledger" | "topItems";
 
@@ -23,8 +29,11 @@ export default function PartyDetailScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<LedgerTab>("ledger");
   const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerFrom, setLedgerFrom] = useState("");
+  const [ledgerTo, setLedgerTo] = useState("");
+  const [showDateFilter, setShowDateFilter] = useState(false);
 
-  const { data: party, isLoading: partyLoading } =
+  const { data: party, isLoading: partyLoading, refetch: refetchParty, isRefetching: isRefetchingParty } =
     trpc.party.getById.useQuery({ id: id ?? "" }, { enabled: !!id });
 
   const { data: stats } = trpc.party.getStats.useQuery(
@@ -32,9 +41,17 @@ export default function PartyDetailScreen() {
     { enabled: !!id }
   );
 
+  const ledgerInput: { partyId: string; page: number; limit: number; fromDate?: string; toDate?: string } = {
+    partyId: id ?? "",
+    page: ledgerPage,
+    limit: 50,
+  };
+  if (ledgerFrom) ledgerInput.fromDate = new Date(ledgerFrom + "T00:00:00.000Z").toISOString();
+  if (ledgerTo) ledgerInput.toDate = new Date(ledgerTo + "T23:59:59.999Z").toISOString();
+
   const { data: ledgerData, isLoading: ledgerLoading } =
     trpc.party.ledger.useQuery(
-      { partyId: id ?? "", page: ledgerPage, limit: 50 },
+      ledgerInput,
       { enabled: !!id && activeTab === "ledger" }
     );
 
@@ -44,11 +61,42 @@ export default function PartyDetailScreen() {
       { enabled: !!id && activeTab === "topItems" }
     );
 
+  const utils = trpc.useUtils();
+
+  const deleteParty = trpc.party.delete.useMutation({
+    onSuccess: () => {
+      utils.party.list.invalidate();
+      router.back();
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message || "Failed to delete party");
+    },
+  });
+
+  const handleDelete = () => {
+    if (!party) return;
+    Alert.alert(
+      "Delete Party",
+      `Delete ${party.name}? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            haptic.error();
+            deleteParty.mutate({ id: party.id });
+          },
+        },
+      ]
+    );
+  };
+
   if (partyLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#6366f1" size="large" />
+          <ActivityIndicator color={colors.brand} size="large" />
         </View>
       </SafeAreaView>
     );
@@ -57,9 +105,7 @@ export default function PartyDetailScreen() {
   if (!party) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.errorText}>Party not found</Text>
-        </View>
+        <QueryError message="Party not found" onRetry={() => {}} />
       </SafeAreaView>
     );
   }
@@ -73,6 +119,31 @@ export default function PartyDetailScreen() {
     }
   };
 
+  const handleExportLedger = async () => {
+    if (!ledgerData?.data || ledgerData.data.length === 0) {
+      Alert.alert("No data", "Nothing to export.");
+      return;
+    }
+    const lines = [
+      "Date,Document,Type,Debit,Credit,Balance",
+      ...ledgerData.data.map((e) =>
+        [
+          e.date,
+          e.documentNumber,
+          e.type,
+          e.debit,
+          e.credit,
+          e.runningBalance,
+        ].join(",")
+      ),
+    ].join("\n");
+    try {
+      await Share.share({ message: lines, title: `Ledger - ${party.name}` });
+    } catch {
+      // User cancelled
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Top Nav */}
@@ -82,21 +153,33 @@ export default function PartyDetailScreen() {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={22} color="#ffffff" />
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => router.push(`/(app)/(parties)/edit/${id}` as never)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="create-outline" size={22} color="#6366f1" />
-        </TouchableOpacity>
+        <View style={styles.topNavActions}>
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="create-outline" size={22} color={colors.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={handleDelete}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="trash-outline" size={20} color={colors.danger} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[3]}
+        refreshControl={
+          <RefreshControl refreshing={isRefetchingParty} onRefresh={refetchParty} tintColor={colors.brand} colors={[colors.brand]} />
+        }
       >
         {/* Header */}
         <View style={styles.partyHeader}>
@@ -151,25 +234,25 @@ export default function PartyDetailScreen() {
           <Text style={styles.sectionLabel}>Contact Details</Text>
           {party.phone && (
             <View style={styles.contactRow}>
-              <Ionicons name="call-outline" size={16} color="#6b7280" />
+              <Ionicons name="call-outline" size={16} color={colors.textMuted} />
               <Text style={styles.contactText}>{party.phone}</Text>
             </View>
           )}
           {party.email && (
             <View style={styles.contactRow}>
-              <Ionicons name="mail-outline" size={16} color="#6b7280" />
+              <Ionicons name="mail-outline" size={16} color={colors.textMuted} />
               <Text style={styles.contactText}>{party.email}</Text>
             </View>
           )}
           {party.gstin && (
             <View style={styles.contactRow}>
-              <Ionicons name="document-text-outline" size={16} color="#6b7280" />
+              <Ionicons name="document-text-outline" size={16} color={colors.textMuted} />
               <Text style={styles.contactText}>GST: {party.gstin}</Text>
             </View>
           )}
           {party.billingAddress && (
             <View style={styles.contactRow}>
-              <Ionicons name="location-outline" size={16} color="#6b7280" />
+              <Ionicons name="location-outline" size={16} color={colors.textMuted} />
               <Text style={styles.contactText} numberOfLines={2}>
                 {[party.billingAddress, party.city, party.state, party.pincode]
                   .filter(Boolean)
@@ -190,19 +273,19 @@ export default function PartyDetailScreen() {
               onPress={handleCall}
               activeOpacity={0.7}
             >
-              <Ionicons name="call-outline" size={20} color="#10b981" />
-              <Text style={[styles.actionButtonText, { color: "#10b981" }]}>
+              <Ionicons name="call-outline" size={20} color={colors.success} />
+              <Text style={[styles.actionButtonText, { color: colors.success }]}>
                 Call
               </Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => router.push(`/(app)/(parties)/edit/${id}` as never)}
+            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
             activeOpacity={0.7}
           >
-            <Ionicons name="create-outline" size={20} color="#6366f1" />
-            <Text style={[styles.actionButtonText, { color: "#6366f1" }]}>
+            <Ionicons name="create-outline" size={20} color={colors.brand} />
+            <Text style={[styles.actionButtonText, { color: colors.brand }]}>
               Edit
             </Text>
           </TouchableOpacity>
@@ -210,51 +293,101 @@ export default function PartyDetailScreen() {
             style={[styles.actionButton, styles.actionButtonPrimary]}
             activeOpacity={0.7}
           >
-            <Ionicons name="receipt-outline" size={20} color="#ffffff" />
-            <Text style={[styles.actionButtonText, { color: "#ffffff" }]}>
+            <Ionicons name="receipt-outline" size={20} color={colors.textPrimary} />
+            <Text style={[styles.actionButtonText, { color: colors.textPrimary }]}>
               New Invoice
             </Text>
           </TouchableOpacity>
         </View>
 
         {/* Tab Headers (sticky) */}
-        <View style={styles.tabBar}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === "ledger" && styles.tabActive]}
-            onPress={() => setActiveTab("ledger")}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === "ledger" && styles.tabTextActive,
-              ]}
+        <View style={styles.tabHeaderWrapper}>
+          <View style={styles.tabBar}>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "ledger" && styles.tabActive]}
+              onPress={() => setActiveTab("ledger")}
+              activeOpacity={0.7}
             >
-              Ledger
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === "topItems" && styles.tabActive]}
-            onPress={() => setActiveTab("topItems")}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === "topItems" && styles.tabTextActive,
-              ]}
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "ledger" && styles.tabTextActive,
+                ]}
+              >
+                Ledger
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "topItems" && styles.tabActive]}
+              onPress={() => setActiveTab("topItems")}
+              activeOpacity={0.7}
             >
-              Top Items
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "topItems" && styles.tabTextActive,
+                ]}
+              >
+                Top Items
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {activeTab === "ledger" && (
+            <View style={styles.ledgerActions}>
+              <TouchableOpacity
+                style={styles.ledgerActionBtn}
+                onPress={() => setShowDateFilter(!showDateFilter)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={16}
+                  color={showDateFilter ? colors.brand : colors.textMuted}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.ledgerActionBtn}
+                onPress={handleExportLedger}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="share-outline" size={16} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
+        {activeTab === "ledger" && showDateFilter && (
+          <View style={styles.dateFilterRow}>
+            <View style={styles.dateField}>
+              <Text style={styles.dateFieldLabel}>From</Text>
+              <TextInput
+                style={styles.dateFieldInput}
+                value={ledgerFrom}
+                onChangeText={setLedgerFrom}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="numbers-and-punctuation"
+              />
+            </View>
+            <View style={styles.dateField}>
+              <Text style={styles.dateFieldLabel}>To</Text>
+              <TextInput
+                style={styles.dateFieldInput}
+                value={ledgerTo}
+                onChangeText={setLedgerTo}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="numbers-and-punctuation"
+              />
+            </View>
+          </View>
+        )}
 
         {/* Ledger Tab */}
         {activeTab === "ledger" && (
           <View style={styles.tabContent}>
             {ledgerLoading ? (
               <ActivityIndicator
-                color="#6366f1"
+                color={colors.brand}
                 style={styles.tabLoader}
               />
             ) : ledgerData?.data && ledgerData.data.length > 0 ? (
@@ -287,7 +420,7 @@ export default function PartyDetailScreen() {
                           }
                           size={14}
                           color={
-                            entry.type === "payment" ? "#10b981" : "#6366f1"
+                            entry.type === "payment" ? colors.success : colors.brand
                           }
                         />
                       </View>
@@ -326,7 +459,7 @@ export default function PartyDetailScreen() {
                 <Ionicons
                   name="document-text-outline"
                   size={40}
-                  color="#2d2d44"
+                  color={colors.border}
                 />
                 <Text style={styles.emptyTabText}>No ledger entries</Text>
               </View>
@@ -338,7 +471,7 @@ export default function PartyDetailScreen() {
         {activeTab === "topItems" && (
           <View style={styles.tabContent}>
             {topItemsLoading ? (
-              <ActivityIndicator color="#6366f1" style={styles.tabLoader} />
+              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
             ) : topItems && topItems.length > 0 ? (
               topItems.map((item, idx) => (
                 <View key={item.itemId ?? idx} style={styles.topItemRow}>
@@ -359,7 +492,7 @@ export default function PartyDetailScreen() {
               ))
             ) : (
               <View style={styles.emptyTab}>
-                <Ionicons name="cube-outline" size={40} color="#2d2d44" />
+                <Ionicons name="cube-outline" size={40} color={colors.border} />
                 <Text style={styles.emptyTabText}>No items sold yet</Text>
               </View>
             )}
@@ -375,7 +508,7 @@ export default function PartyDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0f0f1a",
+    backgroundColor: colors.bg,
   },
   loadingContainer: {
     flex: 1,
@@ -383,7 +516,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   errorText: {
-    color: "#ef4444",
+    color: colors.danger,
     fontSize: 16,
   },
   topNav: {
@@ -400,7 +533,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
+  },
+  topNavActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   editButton: {
     width: 40,
@@ -408,7 +546,15 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
+  },
+  deleteButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(239,68,68,0.12)",
   },
   scrollView: {
     flex: 1,
@@ -424,7 +570,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
@@ -433,7 +579,7 @@ const styles = StyleSheet.create({
   partyAvatarTextLarge: {
     fontSize: 26,
     fontWeight: "700",
-    color: "#6366f1",
+    color: colors.brand,
   },
   partyHeaderInfo: {
     flex: 1,
@@ -442,11 +588,11 @@ const styles = StyleSheet.create({
   partyName: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   typeBadge: {
     alignSelf: "flex-start",
-    backgroundColor: "rgba(99,102,241,0.2)",
+    backgroundColor: colors.brandLight,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
@@ -456,21 +602,21 @@ const styles = StyleSheet.create({
   typeBadgeText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#6366f1",
+    color: colors.brand,
   },
   card: {
     marginHorizontal: 20,
     marginBottom: 12,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     padding: 16,
   },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",
-    color: "#6b7280",
+    color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 10,
@@ -487,14 +633,14 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   balanceGreen: {
-    color: "#10b981",
+    color: colors.success,
   },
   balanceRed: {
-    color: "#ef4444",
+    color: colors.danger,
   },
   balanceDirection: {
     fontSize: 13,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   statsColumn: {
     flexDirection: "row",
@@ -507,17 +653,17 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   statLabel: {
     fontSize: 11,
-    color: "#6b7280",
+    color: colors.textMuted,
     marginTop: 2,
   },
   statDivider: {
     width: 1,
     height: 36,
-    backgroundColor: "#2d2d44",
+    backgroundColor: colors.border,
   },
   contactRow: {
     flexDirection: "row",
@@ -527,13 +673,13 @@ const styles = StyleSheet.create({
   },
   contactText: {
     fontSize: 14,
-    color: "#9ca3af",
+    color: colors.textSecondary,
     flex: 1,
     lineHeight: 20,
   },
   noContactText: {
     fontSize: 14,
-    color: "#6b7280",
+    color: colors.textMuted,
     fontStyle: "italic",
   },
   actionsRow: {
@@ -548,30 +694,74 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
     paddingVertical: 12,
   },
   actionButtonPrimary: {
-    backgroundColor: "#6366f1",
-    borderColor: "#6366f1",
+    backgroundColor: colors.brand,
+    borderColor: colors.brand,
     flex: 1.5,
   },
   actionButtonText: {
     fontSize: 14,
     fontWeight: "600",
   },
-  tabBar: {
-    flexDirection: "row",
+  tabHeaderWrapper: {
     marginHorizontal: 20,
     marginBottom: 0,
-    backgroundColor: "#1a1a2e",
+  },
+  tabBar: {
+    flexDirection: "row",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 4,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
+  },
+  ledgerActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 4,
+    marginTop: 8,
+  },
+  ledgerActionBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dateFilterRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginHorizontal: 20,
+    marginTop: 8,
+  },
+  dateField: {
+    flex: 1,
+  },
+  dateFieldLabel: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  dateFieldInput: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: colors.textPrimary,
+    fontSize: 12,
   },
   tab: {
     flex: 1,
@@ -580,15 +770,15 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   tabActive: {
-    backgroundColor: "#6366f1",
+    backgroundColor: colors.brand,
   },
   tabText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   tabTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   tabContent: {
     paddingTop: 12,
@@ -603,20 +793,20 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     paddingVertical: 10,
     paddingHorizontal: 14,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: colors.surface,
     borderRadius: 10,
     marginBottom: 4,
     borderWidth: 1,
-    borderColor: "#2d2d44",
+    borderColor: colors.border,
   },
   ledgerOpeningLabel: {
     fontSize: 13,
-    color: "#6b7280",
+    color: colors.textMuted,
     fontWeight: "600",
   },
   ledgerOpeningValue: {
     fontSize: 14,
-    color: "#9ca3af",
+    color: colors.textSecondary,
     fontWeight: "600",
   },
   ledgerRow: {
@@ -625,7 +815,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#1a1a2e",
+    borderBottomColor: colors.surface,
     gap: 12,
   },
   ledgerIconCol: {
@@ -640,7 +830,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   ledgerTypeIconInvoice: {
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
   },
   ledgerTypeIconPayment: {
     backgroundColor: "rgba(16,185,129,0.15)",
@@ -652,15 +842,15 @@ const styles = StyleSheet.create({
   ledgerDocNumber: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   ledgerDate: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   ledgerStatus: {
     fontSize: 11,
-    color: "#f59e0b",
+    color: colors.warning,
     fontWeight: "600",
     textTransform: "capitalize",
   },
@@ -671,16 +861,16 @@ const styles = StyleSheet.create({
   ledgerDebit: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#10b981",
+    color: colors.success,
   },
   ledgerCredit: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#ef4444",
+    color: colors.danger,
   },
   ledgerBalance: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   topItemRow: {
     flexDirection: "row",
@@ -688,21 +878,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#1a1a2e",
+    borderBottomColor: colors.surface,
     gap: 14,
   },
   topItemRank: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "rgba(99,102,241,0.15)",
+    backgroundColor: colors.brandLight,
     alignItems: "center",
     justifyContent: "center",
   },
   topItemRankText: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#6366f1",
+    color: colors.brand,
   },
   topItemInfo: {
     flex: 1,
@@ -710,17 +900,17 @@ const styles = StyleSheet.create({
   topItemName: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#ffffff",
+    color: colors.textPrimary,
     marginBottom: 2,
   },
   topItemQty: {
     fontSize: 12,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
   topItemAmount: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   emptyTab: {
     alignItems: "center",
@@ -729,6 +919,6 @@ const styles = StyleSheet.create({
   },
   emptyTabText: {
     fontSize: 15,
-    color: "#6b7280",
+    color: colors.textMuted,
   },
 });

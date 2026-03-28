@@ -141,6 +141,8 @@ export const paymentRouter = router({
 
       if (!defaultAccountId) return null;
 
+      // Security: always scope the final fetch by businessId to prevent
+      // returning a bank account that belongs to a different business (defence-in-depth).
       const [account] = await ctx.db.select({
         id: bankAccounts.id,
         accountName: bankAccounts.accountName,
@@ -149,7 +151,10 @@ export const paymentRouter = router({
         isDefault: bankAccounts.isDefault,
       })
         .from(bankAccounts)
-        .where(eq(bankAccounts.id, defaultAccountId))
+        .where(and(
+          eq(bankAccounts.id, defaultAccountId),
+          eq(bankAccounts.businessId, ctx.businessId),
+        ))
         .limit(1);
 
       return account ?? null;
@@ -159,6 +164,15 @@ export const paymentRouter = router({
     requireCan(ctx.ability, "create", "Payment");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const payment = await ctx.db.transaction(async (tx) => {
+      // Security: validate that partyId belongs to the current business.
+      const [partyCheck] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!partyCheck) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,

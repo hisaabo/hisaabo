@@ -23,7 +23,8 @@ export async function logAudit(
       metadata: params.metadata ? JSON.stringify(params.metadata) : null,
       ipAddress: params.ipAddress || null,
     });
-  } catch {
+  } catch (err) {
     // Never let audit logging break the main operation
+    console.error("[audit] Failed to write audit log:", err);
   }
 }

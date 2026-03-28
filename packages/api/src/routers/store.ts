@@ -328,11 +328,16 @@ export const storeRouter = router({
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
 
       // Fetch linked invoice + line items if available
+      // Security: always scope invoice lookup to the current business to prevent
+      // leaking invoices from other businesses via a cross-reference in invoiceId.
       let invoice = null;
       let lineItems: typeof invoiceItems.$inferSelect[] = [];
       if (order.invoiceId) {
         const [inv] = await ctx.db.select().from(invoices)
-          .where(eq(invoices.id, order.invoiceId))
+          .where(and(
+            eq(invoices.id, order.invoiceId),
+            eq(invoices.businessId, ctx.businessId),
+          ))
           .limit(1);
         invoice = inv ?? null;
 

@@ -253,6 +253,7 @@ export const partyRouter = router({
       partyId: z.string().uuid(),
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),
+      limit: z.number().int().min(1).max(5000).default(1000),
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
@@ -289,14 +290,14 @@ export const partyRouter = router({
           type: invoices.type,
           totalAmount: invoices.totalAmount,
           status: invoices.status,
-        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate),
+        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate).limit(input.limit),
         ctx.db.select({
           id: payments.id,
           paymentNumber: payments.paymentNumber,
           date: payments.paymentDate,
           amount: payments.amount,
           mode: payments.mode,
-        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate),
+        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate).limit(input.limit),
       ]);
 
       // Build ledger entries interleaved by date.
@@ -364,6 +365,7 @@ export const partyRouter = router({
       partyId: z.string().uuid(),
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),
+      limit: z.number().int().min(1).max(5000).default(1000),
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
@@ -400,14 +402,14 @@ export const partyRouter = router({
           type: invoices.type,
           totalAmount: invoices.totalAmount,
           status: invoices.status,
-        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate),
+        }).from(invoices).where(and(...invoiceConditions)).orderBy(invoices.invoiceDate).limit(input.limit),
         ctx.db.select({
           id: payments.id,
           paymentNumber: payments.paymentNumber,
           date: payments.paymentDate,
           amount: payments.amount,
           mode: payments.mode,
-        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate),
+        }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate).limit(input.limit),
       ]);
 
       const entries = [
@@ -483,6 +485,7 @@ export const partyRouter = router({
     .input(z.object({
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),
+      limit: z.number().int().min(1).max(5000).default(1000),
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
@@ -519,7 +522,8 @@ export const partyRouter = router({
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(and(...invoiceConditions))
-          .orderBy(invoices.invoiceDate),
+          .orderBy(invoices.invoiceDate)
+          .limit(input.limit),
 
         ctx.db.select({
           paymentDate: payments.paymentDate,
@@ -531,7 +535,8 @@ export const partyRouter = router({
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...paymentConditions))
-          .orderBy(payments.paymentDate),
+          .orderBy(payments.paymentDate)
+          .limit(input.limit),
 
         ctx.db.select({
           expenseDate: expenses.expenseDate,
@@ -541,7 +546,8 @@ export const partyRouter = router({
           mode: expenses.mode,
         }).from(expenses)
           .where(and(...expenseConditions))
-          .orderBy(expenses.expenseDate),
+          .orderBy(expenses.expenseDate)
+          .limit(input.limit),
       ]);
 
       type TallyVoucher = {

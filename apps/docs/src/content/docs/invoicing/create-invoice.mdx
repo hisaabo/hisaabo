@@ -1,0 +1,141 @@
+---
+title: Create an Invoice
+description: Step-by-step guide to creating a sale or purchase invoice in Hisaabo, including line items, discounts, additional charges, and round-off.
+sidebar:
+  order: 2
+---
+
+This guide walks you through creating a sale invoice from start to finish. Purchase invoices follow the same steps — the only difference is that you select a supplier instead of a customer, and stock increases rather than decreases.
+
+## Before you start
+
+Make sure you have:
+- At least one party (customer for sale, supplier for purchase) in your [Parties](/parties) list
+- At least one item in your [Items](/items) catalogue (optional — you can type a description directly on the line item)
+
+## Step 1: Open the new invoice form
+
+From the left navigation, click **Invoices**, then click **New Invoice**. You can also press the keyboard shortcut `N` from the invoice list.
+
+## Step 2: Select the invoice type and party
+
+1. Choose **Sale** or **Purchase** from the type selector at the top of the form.
+2. Click the **Party** field and start typing the customer's or supplier's name. The dropdown shows matching parties. Select the one you want.
+
+If the party does not exist yet, you can create them inline by clicking **+ Add new party** in the dropdown. This opens a quick-add modal where you enter at minimum the party name.
+
+## Step 3: Set the invoice date and due date
+
+- **Invoice date** — defaults to today. Change it if you are backdating an invoice.
+- **Due date** — optional. If set, the invoice status changes to `overdue` after this date if it is still unpaid.
+
+## Step 4: Add line items
+
+Each line item represents one product or service on the invoice. Click **Add Line Item** or press `Tab` after the last field of an existing line item.
+
+For each line item, fill in:
+
+| Field | Required | Notes |
+|---|---|---|
+| Description | Yes | Type to search your items catalogue. Selecting an item auto-fills unit price, tax rate, and HSN. Or type a custom description. |
+| Quantity | Yes | Number of units. Supports decimals (for example, `2.5` for 2.5 kg). |
+| Unit | No | The unit this quantity is in. Defaults to the item's base unit. For alternate-unit items, you can switch to the alternate unit and the conversion is applied automatically. |
+| Unit Price | Yes | Price per unit in INR. |
+| Tax % | No | GST rate. Auto-filled from the item, but you can override it. |
+| Discount % | No | Line-level discount. Calculated before tax. |
+
+The **Total** column shows the computed amount for each line item: `(quantity × unitPrice × (1 - discount%)) × (1 + tax%)`.
+
+### Selecting item variants
+
+If an item has variants (for example, a t-shirt in multiple sizes and colours), a **Variant** dropdown appears after you select the item. Choose the specific variant. The variant's stock is tracked separately from the parent item.
+
+### Reordering line items
+
+Drag and drop line items using the handle on the left edge of each row to reorder them. The order is preserved in the PDF.
+
+## Step 5: Apply discounts and additional charges
+
+Below the line items table, you can add:
+
+### Invoice-level discount
+
+An additional discount applied to the invoice total (after line-item discounts). You can enter it as:
+- A flat **amount** in INR (for example, ₹500 off)
+- A **percentage** of the subtotal (for example, 2%)
+
+### Additional charges
+
+Custom charges added on top of the invoice total — for example, delivery charges, packing fees, or handling charges. Click **Add Charge** and enter a label and amount. You can add multiple charges.
+
+### Round-off
+
+If you want to round the invoice total to the nearest whole rupee (or any value), enter the round-off amount in the **Round Off** field. This can be positive (round up) or negative (round down).
+
+## Step 6: Add notes and terms
+
+- **Notes** — internal or customer-facing notes printed on the invoice PDF (for example, "Thank you for your business").
+- **Terms and Conditions** — your standard payment terms printed at the bottom of the PDF.
+
+## Step 7: Preview the total
+
+The invoice summary panel on the right (or below the form on mobile) shows:
+
+| Field | Meaning |
+|---|---|
+| Subtotal | Sum of all line item amounts before tax |
+| Tax Amount | Total GST (split into CGST/SGST or IGST on the PDF) |
+| Discount | Total discount applied |
+| Additional Charges | Sum of extra charges |
+| Round Off | Round-off amount |
+| **Total** | The amount due from the customer |
+
+## Step 8: Save the invoice
+
+Click **Create Invoice**. The invoice is saved with status `draft` and a sequential invoice number is assigned (for example, `INV-00001`).
+
+From the invoice detail view, you can:
+- [Download the PDF](/invoicing/invoice-pdf)
+- [Record a payment](/payments)
+- Change the status (for example, mark as `sent` after you email it)
+- Edit the invoice if the status is not `paid`
+
+:::caution[Cannot edit paid invoices]
+Once an invoice is fully paid (status `paid`), you cannot edit it. To make a correction, remove the payment first, then edit the invoice, then re-record the payment.
+:::
+
+## How totals are calculated
+
+Hisaabo uses fixed-point arithmetic (strings passed through the shared `calcLineItem` and `calcInvoiceTotals` utilities) — not floating-point JavaScript numbers — for all monetary calculations. This avoids rounding errors.
+
+For a single line item:
+
+```
+taxableAmount = quantity × unitPrice × (1 - discountPercent / 100)
+taxAmount     = taxableAmount × (taxPercent / 100)
+totalAmount   = taxableAmount + taxAmount
+```
+
+For the invoice:
+
+```
+subtotal          = sum of all line item taxableAmounts
+taxTotal          = sum of all line item taxAmounts
+invoiceDiscount   = flat amount or (subtotal × discountPercent / 100)
+chargesTotal      = sum of all additional charge amounts
+total             = subtotal + taxTotal - invoiceDiscount + chargesTotal + roundOff
+```
+
+## Frequently asked questions
+
+**Can I add a line item without linking it to an item in my catalogue?**
+Yes. Type any text in the Description field without selecting from the dropdown. The line item will have no item link and will not affect stock quantities.
+
+**What happens to stock when I create an invoice?**
+Stock is updated inside the same database transaction as the invoice. Sale invoices reduce stock; purchase invoices increase stock. If you have alternate units, the quantity is converted to the base unit first.
+
+**Can I duplicate an existing invoice?**
+Not directly from the UI in the current version. The quickest workaround is to open the invoice you want to duplicate, note the details, and create a new invoice with the same party and line items.
+
+**How do I handle a return from a customer?**
+Create a **Credit Note** (choose document type "Credit Note" when creating the document). Reference the original invoice in the Reference Document field. The credit note will appear in your GSTR-1 report under the credit notes section. See [GST on Invoices](/invoicing/gst-on-invoices) for how credit notes affect your GST liability.

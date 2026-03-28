@@ -4,7 +4,8 @@ import { QueryClient } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 
-export const trpc = createTRPCReact<AppRouter>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const trpc: ReturnType<typeof createTRPCReact<AppRouter>> = createTRPCReact<AppRouter>() as any;
 
 // Business ID stored in memory — set after user selects a business
 let currentBusinessId: string | null = null;

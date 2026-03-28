@@ -1,0 +1,117 @@
+/* ── Hisaabo brand theme for Starlight ────────────────────────── */
+
+/* Light mode */
+:root {
+  --sl-color-accent-low: #eef2ff;
+  --sl-color-accent: #6366f1;
+  --sl-color-accent-high: #312e81;
+  --sl-color-white: #1a1a2e;
+  --sl-color-gray-1: #3f3f5a;
+  --sl-color-gray-2: #585878;
+  --sl-color-gray-3: #8888a0;
+  --sl-color-gray-4: #c8c8d8;
+  --sl-color-gray-5: #e8e8f0;
+  --sl-color-gray-6: #f4f4f8;
+  --sl-color-black: #fafafe;
+  --sl-font: "DM Sans", system-ui, -apple-system, sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #fafafe;
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-inline-code: #f0f0f6;
+  --sl-color-hairline-light: #e8e8f0;
+  --sl-color-hairline: #d8d8e4;
+}
+
+/* Dark mode */
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #1e1b4b;
+  --sl-color-accent: #818cf8;
+  --sl-color-accent-high: #e0e7ff;
+  --sl-color-white: #f8f8fc;
+  --sl-color-gray-1: #d0d0e0;
+  --sl-color-gray-2: #a0a0b8;
+  --sl-color-gray-3: #6b7280;
+  --sl-color-gray-4: #3d3d54;
+  --sl-color-gray-5: #2d2d44;
+  --sl-color-gray-6: #1a1a2e;
+  --sl-color-black: #0f0f1a;
+  --sl-color-bg-nav: #0a0a14;
+  --sl-color-bg-sidebar: #0f0f1a;
+  --sl-color-bg: #12121f;
+  --sl-color-bg-inline-code: #1a1a2e;
+  --sl-color-hairline-light: #2d2d44;
+  --sl-color-hairline: #3d3d54;
+}
+
+/* ── Typography polish ───────────────────────────────────────── */
+
+.sl-markdown-content h1 {
+  letter-spacing: -0.03em;
+}
+
+.sl-markdown-content h2 {
+  letter-spacing: -0.02em;
+}
+
+/* Code blocks */
+.sl-markdown-content pre {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 12px;
+}
+
+.sl-markdown-content code:not(pre code) {
+  border-radius: 5px;
+  padding: 0.15em 0.4em;
+  font-size: 0.875em;
+}
+
+/* ── Sidebar polish ──────────────────────────────────────────── */
+
+nav.sidebar a[aria-current="page"] {
+  font-weight: 600;
+}
+
+/* ── Hero section (landing page) ─────────────────────────────── */
+
+.hero {
+  padding-block: 3rem;
+}
+
+/* ── Admonition / callout refinements ────────────────────────── */
+
+.starlight-aside {
+  border-radius: 12px;
+  border-left-width: 3px;
+}
+
+.starlight-aside--tip {
+  --sl-color-asides-text-accent: #10b981;
+}
+
+.starlight-aside--caution {
+  --sl-color-asides-text-accent: #f59e0b;
+}
+
+.starlight-aside--danger {
+  --sl-color-asides-text-accent: #ef4444;
+}
+
+/* ── Card grid on landing page ───────────────────────────────── */
+
+.card-grid .card {
+  border-radius: 16px;
+}
+
+/* ── Table improvements ──────────────────────────────────────── */
+
+.sl-markdown-content table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sl-markdown-content th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

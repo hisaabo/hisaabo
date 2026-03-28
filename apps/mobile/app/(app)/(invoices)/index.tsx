@@ -4,29 +4,21 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  TextInput,
   StyleSheet,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
-
-const C = {
-  bg: "#0f0f1a",
-  surface: "#1a1a2e",
-  border: "#2d2d44",
-  brand: "#6366f1",
-  textPrimary: "#ffffff",
-  textSecondary: "#9ca3af",
-  textMuted: "#6b7280",
-  success: "#10b981",
-  danger: "#ef4444",
-  warning: "#f59e0b",
-  info: "#3b82f6",
-};
+import { colors } from "../../../src/lib/theme";
+import {
+  StatusBadge,
+  FAB,
+  SearchBar,
+  PressableRow,
+  EmptyState,
+  QueryError,
+} from "../../../src/components/ui";
 
 type InvoiceType = "sale" | "purchase";
 type StatusFilter = "all" | "draft" | "sent" | "partial" | "overdue" | "paid" | "cancelled";
@@ -40,29 +32,6 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "paid", label: "Paid" },
   { key: "cancelled", label: "Cancelled" },
 ];
-
-type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
-
-const STATUS_COLORS: Record<StatusKey, { bg: string; text: string }> = {
-  draft: { bg: "#374151", text: "#d1d5db" },
-  unfulfilled: { bg: "#374151", text: "#d1d5db" },
-  sent: { bg: "#1e3a5f", text: "#60a5fa" },
-  paid: { bg: "#064e3b", text: "#34d399" },
-  partial: { bg: "#451a03", text: "#fbbf24" },
-  overdue: { bg: "#450a0a", text: "#f87171" },
-  cancelled: { bg: "#374151", text: "#9ca3af" },
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const colors = STATUS_COLORS[status as StatusKey] ?? { bg: "#374151", text: "#d1d5db" };
-  return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Text>
-    </View>
-  );
-}
 
 const PAGE_SIZE = 20;
 
@@ -82,7 +51,7 @@ export default function InvoicesScreen() {
     documentType: "invoice" as const,
   };
 
-  const { data, isLoading, refetch, isRefetching } =
+  const { data, isLoading, isError, refetch, isRefetching } =
     trpc.invoice.list.useQuery(queryInput);
 
   const invoices = data?.data ?? [];
@@ -140,20 +109,11 @@ export default function InvoicesScreen() {
 
       {/* Search */}
       <View style={styles.searchWrap}>
-        <Ionicons name="search-outline" size={16} color={C.textMuted} style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search by invoice # or party..."
-          placeholderTextColor={C.textMuted}
+        <SearchBar
           value={search}
           onChangeText={handleSearchChange}
-          returnKeyType="search"
+          placeholder="Search by invoice # or party..."
         />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => handleSearchChange("")}>
-            <Ionicons name="close-circle" size={16} color={C.textMuted} />
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Status Filters */}
@@ -194,10 +154,9 @@ export default function InvoicesScreen() {
   );
 
   const renderItem = ({ item }: { item: typeof invoices[0] }) => (
-    <TouchableOpacity
+    <PressableRow
       style={styles.invoiceRow}
       onPress={() => router.push(`/(invoices)/${item.id}` as never)}
-      activeOpacity={0.7}
     >
       <View style={styles.invoiceLeft}>
         <Text style={styles.invoiceNumber}>{item.invoiceNumber}</Text>
@@ -210,31 +169,23 @@ export default function InvoicesScreen() {
         <Text style={styles.invoiceAmount}>{formatCurrency(item.totalAmount)}</Text>
         <StatusBadge status={item.status} />
       </View>
-    </TouchableOpacity>
+    </PressableRow>
   );
 
-  const ListEmpty = isLoading ? (
-    <View style={styles.centeredWrap}>
-      <ActivityIndicator size="large" color={C.brand} />
-    </View>
-  ) : (
-    <View style={styles.emptyWrap}>
-      <Ionicons name="receipt-outline" size={48} color={C.textMuted} />
-      <Text style={styles.emptyTitle}>No invoices found</Text>
-      <Text style={styles.emptySubtitle}>
-        {search ? "Try a different search term" : "Create your first invoice"}
-      </Text>
-    </View>
+  const ListEmpty = isError ? (
+    <QueryError message="Failed to load invoices" onRetry={refetch} />
+  ) : isLoading ? null : (
+    <EmptyState
+      icon="receipt-outline"
+      title="No invoices found"
+      description={search ? "Try a different search term" : "Create your first invoice"}
+    />
   );
 
   const ListFooter =
     hasMore ? (
       <TouchableOpacity style={styles.loadMoreBtn} onPress={handleLoadMore}>
-        {isLoading ? (
-          <ActivityIndicator size="small" color={C.brand} />
-        ) : (
-          <Text style={styles.loadMoreText}>Load more</Text>
-        )}
+        <Text style={styles.loadMoreText}>Load more</Text>
       </TouchableOpacity>
     ) : null;
 
@@ -255,16 +206,10 @@ export default function InvoicesScreen() {
         showsVerticalScrollIndicator={false}
         onRefresh={refetch}
         refreshing={isRefetching}
+        keyboardDismissMode="on-drag"
       />
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push("/(invoices)/create" as never)}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="add" size={28} color="#ffffff" />
-      </TouchableOpacity>
+      <FAB onPress={() => router.push("/(invoices)/create" as never)} />
     </SafeAreaView>
   );
 }
@@ -272,7 +217,7 @@ export default function InvoicesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: C.bg,
+    backgroundColor: colors.bg,
   },
   headerBar: {
     paddingHorizontal: 16,
@@ -282,7 +227,7 @@ const styles = StyleSheet.create({
   screenTitle: {
     fontSize: 24,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   flatListContent: {
     paddingBottom: 100,
@@ -293,10 +238,10 @@ const styles = StyleSheet.create({
   },
   typeToggle: {
     flexDirection: "row",
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     padding: 4,
     marginBottom: 12,
   },
@@ -307,35 +252,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   typeBtnActive: {
-    backgroundColor: C.brand,
+    backgroundColor: colors.brand,
   },
   typeBtnText: {
     fontSize: 13,
     fontWeight: "600",
-    color: C.textMuted,
+    color: colors.textMuted,
   },
   typeBtnTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: C.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: C.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     marginBottom: 12,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: C.textPrimary,
-    padding: 0,
   },
   statusFilterList: {
     gap: 8,
@@ -345,37 +273,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
   },
   statusFilterBtnActive: {
-    backgroundColor: C.brand,
-    borderColor: C.brand,
+    backgroundColor: colors.brand,
+    borderColor: colors.brand,
   },
   statusFilterText: {
     fontSize: 12,
     fontWeight: "600",
-    color: C.textMuted,
+    color: colors.textMuted,
   },
   statusFilterTextActive: {
-    color: "#ffffff",
+    color: colors.textPrimary,
   },
   countText: {
     fontSize: 12,
-    color: C.textMuted,
+    color: colors.textMuted,
     marginBottom: 8,
   },
   invoiceRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
@@ -387,15 +315,15 @@ const styles = StyleSheet.create({
   invoiceNumber: {
     fontSize: 14,
     fontWeight: "700",
-    color: C.textPrimary,
+    color: colors.textPrimary,
   },
   partyName: {
     fontSize: 13,
-    color: C.textSecondary,
+    color: colors.textSecondary,
   },
   invoiceDate: {
     fontSize: 11,
-    color: C.textMuted,
+    color: colors.textMuted,
   },
   invoiceRight: {
     alignItems: "flex-end",
@@ -404,64 +332,21 @@ const styles = StyleSheet.create({
   invoiceAmount: {
     fontSize: 15,
     fontWeight: "700",
-    color: C.textPrimary,
-  },
-  badge: {
-    borderRadius: 20,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: "600",
-  },
-  centeredWrap: {
-    paddingTop: 80,
-    alignItems: "center",
-  },
-  emptyWrap: {
-    paddingTop: 80,
-    alignItems: "center",
-    gap: 10,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: C.textSecondary,
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    color: C.textMuted,
+    color: colors.textPrimary,
   },
   loadMoreBtn: {
     marginHorizontal: 16,
     marginTop: 4,
     paddingVertical: 12,
-    backgroundColor: C.surface,
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: colors.border,
     alignItems: "center",
   },
   loadMoreText: {
     fontSize: 14,
     fontWeight: "600",
-    color: C.brand,
-  },
-  fab: {
-    position: "absolute",
-    bottom: 24,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: C.brand,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: C.brand,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
+    color: colors.brand,
   },
 });

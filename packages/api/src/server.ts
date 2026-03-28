@@ -32,21 +32,70 @@ app.use("*", cors({
   maxAge: 86400,
 }));
 
-// ── Rate limiting (in-memory, per IP) ─────────────────────────
-// Authenticated users get 600 req/min (imports can burst).
-// Unauthenticated users get 60 req/min (brute force protection).
+// ── Safe IP extraction ─────────────────────────────────────────
+// x-forwarded-for is client-controlled when not behind a trusted proxy.
+// Trusting it directly allows anyone to spoof their IP and bypass rate limits.
+// Cloudflare's cf-connecting-ip is stripped of spoofed values by the CDN layer.
+// When behind a reverse proxy we take the LAST entry in x-forwarded-for
+// (appended by the proxy itself), not the first (which the client can forge).
+function getClientIp(c: Context): string {
+  // Cloudflare provides the real client IP — trust it unconditionally
+  const cfIp = c.req.header("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  // Behind a reverse proxy take the LAST entry — the proxy's own addition
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+
+  return "unknown";
+}
+
+// ── Rate limiting (in-memory, per IP, origin-aware) ───────────
+// Same-origin (.hisaabo.in) requests get higher limits (own apps).
+// External/third-party origins get strict limits.
+// Unauthenticated external requests get the lowest tier.
 const rateMap = new Map<string, { count: number; reset: number }>();
+
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
+
+function isSameOrigin(c: Context): boolean {
+  const origin = c.req.header("origin") || "";
+  // Same-origin: no Origin header (server-side calls), or matches configured CORS origins
+  if (!origin) return true;
+  if (CORS_ORIGINS.some((allowed) => origin === allowed)) return true;
+  // Match *.hisaabo.in subdomains
+  if (/^https?:\/\/([a-z0-9-]+\.)?hisaabo\.in$/i.test(origin)) return true;
+  return false;
+}
+
+// Rate limits per minute:
+// Same-origin authenticated: 120 (normal app usage)
+// Same-origin unauthenticated: 60 (login attempts, public pages)
+// External authenticated: 60 (API consumers with valid session)
+// External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
-  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+  const ip = getClientIp(c);
   const hasSession = c.req.header("cookie")?.includes("session_id=")
     || c.req.header("authorization")?.startsWith("Bearer ");
-  const limit = hasSession ? 600 : 60;
-  const key = hasSession ? `auth:${ip}` : `anon:${ip}`;
+  const sameOrigin = isSameOrigin(c);
+
+  let limit: number;
+  let tier: string;
+  if (sameOrigin && hasSession) { limit = 120; tier = "same-auth"; }
+  else if (sameOrigin) { limit = 60; tier = "same-anon"; }
+  else if (hasSession) { limit = 60; tier = "ext-auth"; }
+  else { limit = 10; tier = "ext-anon"; }
+
+  const key = `${tier}:${ip}`;
   const now = Date.now();
   const entry = rateMap.get(key);
   if (!entry || now > entry.reset) {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
   } else if (entry.count >= limit) {
+    c.header("Retry-After", "60");
     return c.json({ error: "Too many requests" }, 429);
   } else {
     entry.count++;
@@ -147,6 +196,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   // Get tenant DB for invoice data
   const db = await getTenantDb(sessionRow.tenantId);
 
+  // Verify the business exists in this tenant (prevents cross-tenant access)
+  const [bizCheck] = await db.select({ id: businesses.id })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  if (!bizCheck) return c.json({ error: "Business not found" }, 403);
+
   // Fetch invoice with party and business
   const [invoice] = await db.select().from(invoices)
     .where(and(eq(invoices.id, invoiceId), eq(invoices.businessId, businessId))).limit(1);
@@ -239,7 +295,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   return new Response(new Uint8Array(pdfBuffer), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf"`,
     },
   });
 });
@@ -270,6 +326,13 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   if (!businessId) return c.json({ error: "No business selected" }, 400);
 
   const db = await getTenantDb(sessionRow.tenantId);
+
+  // Verify the business exists in this tenant (prevents cross-tenant access)
+  const [bizOwnerCheck] = await db.select({ id: businesses.id })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  if (!bizOwnerCheck) return c.json({ error: "Business not found" }, 403);
 
   // Validate party belongs to this business
   const [party] = await db.select().from(parties)
@@ -382,7 +445,13 @@ const slugCache = new Map<string, { tenantId: string; businessId: string; expire
 // ── Cloudflare Turnstile verification ────────────────────────
 async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
   const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) return true; // Skip in dev if not configured
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[turnstile] CRITICAL: TURNSTILE_SECRET_KEY not set in production!");
+      return false;
+    }
+    return true; // Allow in dev
+  }
 
   const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
     method: "POST",
@@ -676,7 +745,7 @@ app.post("/store/:slug/identify", async (c) => {
   }
 
   // Validate Turnstile
-  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const ip = getClientIp(c) || null;
   const valid = await verifyTurnstile(turnstileToken, ip);
   if (!valid) return c.json({ error: "Verification failed" }, 403);
 
@@ -735,7 +804,7 @@ app.post("/store/:slug/order", async (c) => {
   } = body as Record<string, unknown>;
 
   // Validate Turnstile for order submission
-  const orderIp = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const orderIp = getClientIp(c) || null;
   const turnstileValid = await verifyTurnstile(
     typeof orderTurnstileToken === "string" ? orderTurnstileToken : "",
     orderIp,
@@ -1030,6 +1099,23 @@ app.post("/store/:slug/order", async (c) => {
           itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + parseFloat(li.quantity) * factor);
         }
       }
+
+      // Acquire row-level locks before writing stock to prevent concurrent order races.
+      const itemIdsToLock = [...itemStockMap.keys()];
+      if (itemIdsToLock.length > 0) {
+        await tx.select({ id: items.id, stockQuantity: items.stockQuantity })
+          .from(items)
+          .where(inArray(items.id, itemIdsToLock))
+          .for("update");
+      }
+      const variantIdsToLock = [...variantStockMap.keys()];
+      if (variantIdsToLock.length > 0) {
+        await tx.select({ id: itemVariants.id, stockQuantity: itemVariants.stockQuantity })
+          .from(itemVariants)
+          .where(inArray(itemVariants.id, variantIdsToLock))
+          .for("update");
+      }
+
       for (const [itemId, totalQty] of itemStockMap) {
         await tx.update(items).set({
           stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
@@ -1158,7 +1244,7 @@ app.get("/", (c) => {
 app.notFound((c) => {
   // Return JSON for API-like paths
   if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
-    return c.json({ error: "Not found", path: c.req.path }, 404);
+    return c.json({ error: "Not found" }, 404);
   }
   return c.html(brandedHtml(
     "Not Found",

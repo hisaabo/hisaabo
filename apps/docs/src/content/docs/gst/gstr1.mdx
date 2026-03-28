@@ -1,0 +1,153 @@
+---
+title: GSTR-1 Report
+description: Generate and export your GSTR-1 report in Hisaabo. Understand the B2B, B2CS, B2CL, and HSN summary sections and how to prepare for GST portal filing.
+sidebar:
+  order: 2
+---
+
+GSTR-1 is the monthly return you file with the GST portal listing all your outward supplies (sales). Hisaabo generates this report automatically from your invoice data.
+
+## Generating the report
+
+1. Click **GST** in the left navigation.
+2. Select **GSTR-1** from the tabs.
+3. Choose the **Year** and **Month**.
+4. Click **Generate**.
+
+The report loads immediately — it is computed in real time from your invoice data. There is no caching, so it always reflects the latest state of your invoices.
+
+## Report sections
+
+### B2B — Outward supplies to registered persons
+
+This section lists every sale invoice to a party that has a **GSTIN** in Hisaabo.
+
+| Column | Meaning |
+|---|---|
+| Party GSTIN | Buyer's GST registration number |
+| Party Name | Buyer's name |
+| Invoice Number | Your invoice number |
+| Invoice Date | Date of the invoice |
+| Invoice Type | "Regular" for standard invoices |
+| Taxable Value | Invoice subtotal (before tax) |
+| CGST | Central GST amount |
+| SGST | State GST amount |
+| IGST | Integrated GST amount |
+| Total Invoice Value | Full invoice amount including tax |
+
+One row per invoice. Intra-state invoices have CGST and SGST values; inter-state invoices have an IGST value.
+
+### B2CL — B2C Large
+
+Inter-state sale invoices to **unregistered parties** (no GSTIN) where the invoice total exceeds ₹2,50,000.
+
+Shown aggregated by state:
+
+| Column | Meaning |
+|---|---|
+| State | Destination state of the buyer |
+| Taxable Value | Total taxable value for that state |
+| IGST | Total IGST for that state |
+
+### B2CS — B2C Small
+
+All other sales to unregistered parties — intra-state sales of any amount, and small inter-state sales under ₹2,50,000.
+
+Shown aggregated by tax rate:
+
+| Column | Meaning |
+|---|---|
+| Tax Rate % | GST rate (0, 5, 12, 18, or 28) |
+| Taxable Value | Total taxable value at this rate |
+| CGST | Total CGST |
+| SGST | Total SGST |
+| IGST | Total IGST |
+
+### HSN Summary
+
+This section aggregates total quantity sold and value, broken down by HSN code. The GST portal requires HSN-wise data for businesses above certain turnover thresholds.
+
+| Column | Meaning |
+|---|---|
+| HSN | HSN or SAC code |
+| Description | Item description for context (from the first item with this HSN) |
+| Quantity | Total quantity sold |
+| Taxable Value | Total taxable value |
+| CGST / SGST / IGST | Tax amounts |
+| Total Value | Total including tax |
+
+:::note
+Items without an HSN code are reported under HSN `0000`. To get accurate HSN summaries, ensure every item in your catalogue has an HSN or SAC code set.
+:::
+
+### Credit Notes
+
+All documents with document type `credit_note` issued during the period.
+
+| Column | Meaning |
+|---|---|
+| Invoice Number | Credit note number |
+| Original Invoice Number | The original invoice being corrected (if linked via Reference Document) |
+| Invoice Date | Date of the credit note |
+| Party Name | Customer's name |
+| Party GSTIN | Customer's GSTIN |
+| Total Amount | Full credit note value |
+| Taxable Amount | Taxable value (subtotal) |
+| Tax Amount | Total GST on the credit note |
+
+### Debit Notes
+
+All documents with document type `debit_note` issued during the period. Same structure as credit notes.
+
+## Summary totals
+
+At the bottom of the report:
+
+| Field | Meaning |
+|---|---|
+| Total Invoices | Number of sale invoices in the period |
+| Total Taxable Value | Sum of all invoice subtotals |
+| Total CGST | Sum of all CGST |
+| Total SGST | Sum of all SGST |
+| Total IGST | Sum of all IGST |
+| Total Tax | CGST + SGST + IGST |
+| Total Invoice Value | Sum of all invoice totals |
+
+## Exporting as CSV
+
+Click **Export CSV** to download the report as a comma-separated values file named `GSTR1_Apr_2025.csv` (month and year in the filename).
+
+The CSV includes all sections (B2B, B2CS, B2CL, HSN summary) separated by blank lines and section headers.
+
+**To upload to the GST portal:**
+1. Download the CSV from Hisaabo.
+2. Open the GST Offline Utility (available from the GST portal).
+3. Import the CSV (or manually enter the data from the CSV into the utility).
+4. Validate and generate the JSON file.
+5. Upload the JSON to the GST portal.
+
+## What invoices are included
+
+The GSTR-1 report includes all sale invoices (`type = sale`, `documentType = invoice`) where:
+- The invoice date is within the selected month and year
+- The invoice status is **not** `cancelled`
+
+Excluded:
+- Cancelled invoices
+- Purchase invoices
+- Quotations, proformas, delivery challans (non-invoice document types)
+
+:::note
+Draft invoices **are** included in the GSTR-1 report if their date falls within the reporting period. If you have draft invoices that should not appear in the report, either change their date or cancel them before generating the report.
+:::
+
+## Frequently asked questions
+
+**I filed GSTR-1 but then found a mistake. Can I amend it?**
+GSTR-1 amendments are handled on the GST portal directly. Correct the invoice in Hisaabo, re-generate the GSTR-1, and use the amended figures when filing your next month's return or an amendment return on the portal.
+
+**Why is my total in Hisaabo's GSTR-1 different from my GSTR-2A/2B on the portal?**
+GSTR-2A/2B reflects your suppliers' filings, not your own. The discrepancy is normal if your suppliers are yet to file or if there are timing differences. Hisaabo's GSTR-1 only covers your outward supplies.
+
+**A large B2C invoice is not appearing in B2CL. Why?**
+Check that the party's state code is different from your business's state code (it must be inter-state) and that the party has no GSTIN (unregistered). Also confirm the invoice total exceeds ₹2,50,000.

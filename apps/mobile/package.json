@@ -23,6 +23,7 @@
     "expo-constants": "~17.0.0",
     "expo-file-system": "~18.0.0",
     "expo-font": "~13.0.0",
+    "expo-haptics": "55.0.10-canary-20260327-0789fbc",
     "expo-linking": "~7.0.0",
     "expo-local-authentication": "~15.0.0",
     "expo-router": "~4.0.0",

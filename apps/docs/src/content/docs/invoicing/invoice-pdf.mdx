@@ -1,0 +1,103 @@
+---
+title: Invoice PDF
+description: Download and share invoice PDFs in A4, A5 landscape, or 80mm thermal roll format. Includes your business logo, GSTIN, HSN codes, tax breakdown, bank details, and UPI QR code.
+sidebar:
+  order: 4
+---
+
+Every invoice in Hisaabo can be downloaded as a PDF and shared with your customer or supplier. PDFs are generated on the server using the NotoSans font family, which supports all Indic scripts.
+
+## PDF formats
+
+Three formats are available:
+
+| Format | Use case |
+|---|---|
+| **A4 portrait** | Standard invoices, email attachments, filing |
+| **A5 landscape** | Compact invoices for retail counters |
+| **80mm thermal** | Point-of-sale thermal printers (80mm roll) |
+
+Select the format from the **Download PDF** dropdown on the invoice detail page.
+
+## What is included in the PDF
+
+### Header section
+- Your business name and legal name
+- Your GSTIN (if GST registered)
+- Your PAN
+- Your business phone, email, and address
+- Document title (INVOICE, TAX INVOICE, QUOTATION, etc.)
+- Invoice number and date
+- Due date (if set)
+
+### Bill to / Ship to section
+- Party name
+- Party GSTIN (if available)
+- Party billing address, city, state, and pincode
+
+### Line items table
+
+Each row shows:
+- Item description
+- HSN or SAC code (pulled from the item catalogue)
+- Quantity and unit
+- Unit price
+- Discount % (if any)
+- GST rate %
+- GST amount
+- Total amount
+
+### Totals section
+- Subtotal (taxable value)
+- GST breakdown — CGST + SGST for intra-state, or IGST for inter-state
+- Discount amount (if any)
+- Additional charges (if any)
+- Round-off (if any)
+- **Total amount** (highlighted)
+- Amount paid
+- **Balance due** (total minus amount paid)
+
+### Notes and terms
+Your invoice notes and terms and conditions are printed below the totals.
+
+### Payment details (optional)
+
+If you have set up a bank account as the default for your business, the PDF can show:
+- Bank name
+- Account name
+- Account number
+- IFSC code
+
+### UPI QR code (optional)
+
+If you configure a UPI ID on your business (or on the linked bank account), a QR code is printed on the invoice. Your customer can scan it with any UPI app (PhonePe, Google Pay, Paytm, etc.) to pay the exact invoice amount directly.
+
+:::tip[Enable UPI QR on invoices]
+Go to Settings → Bank Accounts, edit your account, and enter the UPI ID (for example, `yourbusiness@upi` or `9876543210@paytm`). Then set that account as the default. The QR code will appear on all new PDFs.
+:::
+
+## Downloading a PDF
+
+1. Open an invoice from the invoice list.
+2. Click the **Download PDF** button (or the dropdown arrow for format selection).
+3. The PDF is generated and downloaded to your device.
+
+You can also share the PDF directly by clicking **Share** — this copies a download link to the clipboard (requires the invoice to be accessible from your server's URL).
+
+## Fonts and script support
+
+PDFs use **NotoSans Regular** and **NotoSans Bold** — fonts that cover Latin, Devanagari, and other Indian scripts. Party names, item descriptions, and notes in Hindi, Marathi, or other languages will render correctly in the PDF.
+
+## Frequently asked questions
+
+**Can I put my business logo on the invoice PDF?**
+Logo support is available through the business settings. Upload a PNG or JPG logo in Settings → Business Profile. The logo appears in the top-left corner of the A4 and A5 formats.
+
+**The thermal PDF text is too small. Can I adjust it?**
+The thermal format is optimised for 80mm roll printers at the standard 203 DPI. The font size is fixed to fit the roll width. If text is too small on your specific printer, check your printer's scaling settings.
+
+**Can I customise the invoice template?**
+The PDF template is currently fixed in the codebase (`packages/api/src/lib/invoice-pdf.ts`). If you are self-hosting, you can modify this file and rebuild the Docker image to customise the layout. Community-contributed custom templates are welcome via pull request.
+
+**Is the PDF generated on the server or in the browser?**
+The PDF is generated on the **server** using PDFKit (a Node.js library). This means it works correctly regardless of the browser or device the user is on, and the output is always consistent.

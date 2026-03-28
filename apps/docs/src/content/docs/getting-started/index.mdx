@@ -1,0 +1,101 @@
+---
+title: What is Hisaabo?
+description: Hisaabo is a self-hosted invoicing and business management app built for Indian small businesses. Manage GST invoices, parties, inventory, payments, and expenses — all from your own server.
+sidebar:
+  order: 1
+---
+
+Hisaabo is a **self-hosted invoicing and business management app** designed for Indian small businesses. It replaces tools like MyBillBook, Vyaapaar, and Tally for teams that want to own their data and run the software on their own infrastructure.
+
+You get GST-compliant invoicing, party (customer/supplier) management, inventory tracking, payment recording, expense management, banking, and a built-in online store — all in one app, available on web, mobile (Android and iOS), and desktop, synced through one API.
+
+## Who is Hisaabo for?
+
+Hisaabo is the right fit if you:
+
+- Run a small business in India with GST needs (regular, composition, or unregistered)
+- Want your business data on your own server, not locked in a third-party cloud
+- Have basic technical ability to run a Docker container (or have someone who can)
+- Need to manage multiple businesses from one account
+- Want to move away from MyBillBook or a similar tool and keep your existing data
+
+Hisaabo is **not** a good fit if you need real-time inventory counting hardware integration (barcode scanners with live sync) or complex multi-warehouse logistics with zone-based picking.
+
+:::note
+Hisaabo is available on **web**, **Android**, **iOS**, and **desktop** — all synced through one API. The mobile app supports barcode scanning for item lookup and invoice PDF sharing via WhatsApp.
+:::
+
+## Key features
+
+### GST-compliant invoicing
+Create sale and purchase invoices with automatic CGST/SGST/IGST calculation. The system detects whether a transaction is intra-state or inter-state based on the 2-digit GST state codes you configure on your business and each party. Invoice numbers are assigned atomically — no duplicates, no gaps.
+
+### Multiple document types
+Beyond standard invoices, you can create quotations, proforma invoices, delivery challans, credit notes, debit notes, sales returns, and purchase returns — all from the same interface with sequential numbering per type.
+
+### Party management
+Maintain a ledger for every customer and supplier. Track opening balances, credit limits, credit periods, GSTIN, PAN, billing and shipping addresses, and bank details. View a running balance statement for any party at any time.
+
+### Items and inventory
+Add products and services with sale price, purchase price, HSN/SAC code, GST rate, and stock tracking. Three item modes are supported: simple items, items with alternate units (for example, selling cloth by the metre but tracking in rolls), and items with variants (for example, t-shirts in multiple sizes and colours).
+
+### Payments
+Record payments against invoices with support for cash, bank transfer, UPI, and cheque. A single payment can be allocated across multiple invoices. The system automatically updates each invoice's paid amount and status.
+
+### Expenses
+Log business expenses by category with a payment mode and optional reference number. Expenses appear in your dashboard totals and financial year summaries.
+
+### GST reports
+Generate GSTR-1 and GSTR-3B reports for any month directly from your invoice data. Export GSTR-1 as CSV for uploading to the GST portal.
+
+### Online store
+Publish a customer-facing storefront at a URL you choose (for example, `yourshop.hisaabo.in`). Customers browse your items, place orders, and provide their delivery details. Each order automatically creates a draft invoice in your account.
+
+### Banking
+Track multiple bank accounts, UPI accounts, and cash balances. Payments can be linked to a bank account, automatically creating a transaction in that account. Transfer money between accounts with a dedicated transfer feature.
+
+### Multi-business support
+One account can own and manage multiple businesses. Switch between businesses from the navigation bar.
+
+## How it works
+
+Hisaabo is a full-stack application with a backend API, a web frontend, a mobile app (Expo/React Native for Android and iOS), and a desktop app (Tauri). You run the server on your own infrastructure using Docker. Your business data is stored in a PostgreSQL database that you control.
+
+```
+Your server
+├── PostgreSQL database  ← your data
+├── Hisaabo API (Node.js)  ← business logic
+└── Hisaabo Web (Vite)  ← browser interface
+
+Clients
+├── Web app (browser)
+├── Mobile app (Android / iOS)
+└── Desktop app (Tauri)
+```
+
+All clients communicate with the API through tRPC — a type-safe RPC protocol. The web app uses session cookies for authentication; the mobile app uses Bearer token authentication via the `Authorization` header.
+
+## What you need to get started
+
+- A Linux server (VPS, cloud VM, or a home server) with Docker and Docker Compose installed
+- A PostgreSQL 16 instance (included in the Docker Compose setup)
+- About 15 minutes
+
+Ready to install? Continue to [Self-Hosting Setup](/getting-started/self-hosting).
+
+## Frequently asked questions
+
+**Is Hisaabo free?**
+Yes. Hisaabo is open-source software. You pay for your own server; the software itself has no licence fee.
+
+**Does Hisaabo work without internet?**
+Yes. Once installed on your server, Hisaabo runs entirely on your local network. Your data never leaves your server unless you configure email delivery.
+
+**Can I import data from MyBillBook?**
+Yes. Hisaabo supports importing parties, items, invoices, and payments from MyBillBook export files. See [Import Data](/getting-started/import-data) for the step-by-step process.
+
+**How is security handled?**
+Passwords are hashed with Argon2id. Sessions use HttpOnly, Secure, SameSite=Lax cookies with a 30-day expiry. The mobile app authenticates via Bearer token in the `Authorization` header (using the same session ID). The API applies rate limiting (120 requests per minute per IP). All requests require authentication except the online store's public-facing product listing.
+
+**Does it support multiple users per business?**
+Yes. You can invite team members and assign them roles: Superadmin, Admin, Seller Manager, Seller, or Accountant. Each role has different permissions. See [Team & Roles](/team) for details.

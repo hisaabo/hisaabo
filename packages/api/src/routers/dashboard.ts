@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, payments, expenses, parties, businesses } from "@hisaabo/db";
+import { invoices, invoiceItems, items, payments, expenses, parties, businesses } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -301,6 +301,79 @@ export const dashboardRouter = router({
           COALESCE(${parties.openingBalance}::numeric, 0) +
           COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric ELSE 0 END), 0)
         ) DESC`)
+        .limit(input.limit);
+
+      return results;
+    }),
+
+  topCustomers: viewerProcedure
+    .input(z.object({
+      limit: z.number().int().min(3).max(20).default(5),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+      const conditions = [
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.type, "sale"),
+        eq(invoices.documentType, sql`'invoice'`),
+        sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+      ];
+      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+
+      const results = await ctx.db
+        .select({
+          partyId: parties.id,
+          partyName: parties.name,
+          totalAmount: sql<string>`SUM(${invoices.totalAmount}::numeric)::text`,
+          invoiceCount: sql<number>`COUNT(*)::int`,
+        })
+        .from(invoices)
+        .innerJoin(parties, eq(parties.id, invoices.partyId))
+        .where(and(...conditions))
+        .groupBy(parties.id, parties.name)
+        .orderBy(sql`SUM(${invoices.totalAmount}::numeric) DESC`)
+        .limit(input.limit);
+
+      return results;
+    }),
+
+  topSellingItems: viewerProcedure
+    .input(z.object({
+      limit: z.number().int().min(3).max(20).default(5),
+      itemType: z.enum(["product", "service"]).optional(),
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+      const conditions = [
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.type, "sale"),
+        eq(invoices.documentType, sql`'invoice'`),
+        sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+      ];
+      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      if (input.itemType) conditions.push(eq(items.itemType, input.itemType));
+
+      const results = await ctx.db
+        .select({
+          itemId: invoiceItems.itemId,
+          itemName: sql<string>`COALESCE(${items.name}, ${invoiceItems.description})`,
+          unit: items.unit,
+          totalQty: sql<string>`SUM(${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1))::text`,
+          totalAmount: sql<string>`SUM(${invoiceItems.totalAmount}::numeric)::text`,
+          invoiceCount: sql<number>`COUNT(DISTINCT ${invoices.id})::int`,
+        })
+        .from(invoiceItems)
+        .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+        .leftJoin(items, eq(items.id, invoiceItems.itemId))
+        .where(and(...conditions))
+        .groupBy(invoiceItems.itemId, items.name, invoiceItems.description, items.unit)
+        .orderBy(sql`SUM(${invoiceItems.totalAmount}::numeric) DESC`)
         .limit(input.limit);
 
       return results;
