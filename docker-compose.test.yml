@@ -1,0 +1,32 @@
+# Test database for running integration tests locally.
+#
+# Start with:
+#   docker compose -f docker-compose.test.yml up -d
+#
+# This creates a RAM-backed PostgreSQL instance on port 5433 (to avoid
+# conflicting with the dev database on 5432). The tmpfs mount means all
+# data is wiped when the container stops — intentional for a test database.
+#
+# Set in your environment before running API integration tests:
+#   export TEST_DATABASE_URL=postgresql://test:test@localhost:5433/hisaabo_test
+#   pnpm --filter @hisaabo/api test
+
+services:
+  test-db:
+    image: postgres:16-alpine
+    container_name: hisaabo_test_db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: hisaabo_test
+    # RAM-backed storage: blazing fast for tests, no persistence between runs.
+    # This is intentional — each test run starts from a clean schema.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d hisaabo_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

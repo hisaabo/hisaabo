@@ -12,7 +12,9 @@
     "db:reset": "pnpm --filter @hisaabo/db db:reset",
     "db:studio": "pnpm --filter @hisaabo/db studio",
     "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
-    "typecheck": "turbo typecheck"
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test"
   },
   "devDependencies": {
     "oxlint": "^1.56.0",

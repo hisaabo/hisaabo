@@ -13,6 +13,10 @@
       "dependsOn": ["^build"]
     },
     "lint": {},
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
     "db:generate": {
       "cache": false
     },

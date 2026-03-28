@@ -11,7 +11,9 @@
     "prebuild": "expo prebuild",
     "build:apk": "bash scripts/build-apk.sh",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --deny-warnings ./app ./src"
+    "lint": "oxlint --deny-warnings ./app ./src",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
@@ -46,7 +48,18 @@
   },
   "devDependencies": {
     "@hisaabo/api": "workspace:*",
+    "@testing-library/jest-native": "^5.0.0",
+    "@testing-library/react-native": "^12.0.0",
     "@types/react": "~18.3.0",
+    "jest": "^29.0.0",
+    "jest-expo": "~52.0.0",
     "typescript": "~5.7.0"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFilesAfterEnv": ["@testing-library/jest-native/extend-expect"],
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg|@trpc|superjson)"
+    ]
   }
 }
