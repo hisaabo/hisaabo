@@ -1,40 +1,22 @@
 const { getDefaultConfig } = require("expo/metro-config");
-const path = require("path");
 
-const projectRoot = __dirname;
-const monorepoRoot = path.resolve(projectRoot, "../..");
+const config = getDefaultConfig(__dirname);
 
-const config = getDefaultConfig(projectRoot);
+// Expo SDK 55 auto-detects the pnpm monorepo and sets watchFolders +
+// nodeModulesPaths correctly.  No manual overrides needed.
 
-// Watch the monorepo root for shared packages
-config.watchFolders = [monorepoRoot];
-
-// Resolve modules from both the project and monorepo root node_modules.
-// Expo's getDefaultConfig already detects the monorepo, but we set this
-// explicitly to be safe with pnpm's hoisting layout.
-config.resolver.nodeModulesPaths = [
-  path.resolve(projectRoot, "node_modules"),
-  path.resolve(monorepoRoot, "node_modules"),
-];
-
-// Enable package.json "exports" field resolution. Many modern packages
-// (copy-anything, is-what, etc.) only declare entry points via "exports"
-// and have no "main" field. Without this, Metro cannot resolve them.
-config.resolver.unstable_enablePackageExports = true;
-
-// Condition names for export map resolution. "require" and "import" are
-// the defaults from Expo; we add "react-native" so packages that ship
-// React Native-specific bundles are picked up correctly on all platforms.
+// Condition names for export map resolution.  Metro's module system is
+// CommonJS-based, so we must use "require" (not "import").  Including
+// "import" causes @babel/runtime helpers (e.g. interopRequireDefault) to
+// resolve to their ESM wrapper which exports `{ default: fn }` instead
+// of the function directly, producing the runtime error:
+//   "_interopRequireDefault is not a function (it is Object)"
+// "react-native" is listed first so packages that ship RN-specific
+// bundles via their exports map are picked up correctly.
 config.resolver.unstable_conditionNames = [
-  "require",
-  "import",
   "react-native",
+  "require",
 ];
-
-// Do NOT enable disableHierarchicalLookup. In a pnpm monorepo the
-// transitive deps of hoisted packages (e.g. superjson -> copy-anything)
-// live as siblings in root node_modules. Hierarchical lookup is needed
-// so Metro can walk up from a package's directory and find its deps.
 
 // Resolve .js imports to .ts source files (shared package uses Node ESM
 // .js extensions in its imports, e.g. import { x } from './validators.js')

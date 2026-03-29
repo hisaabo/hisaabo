@@ -4,7 +4,7 @@
     "strict": true,
     "module": "ESNext",
     "skipLibCheck": true,
-    "types": ["jest", "@testing-library/jest-native"],
+    "types": ["jest", "@testing-library/react-native"],
     "paths": {
       "@/*": [
         "./src/*"

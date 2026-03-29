@@ -7,7 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "hisaabo",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "backgroundColor": "#0f0f1a"
     },
