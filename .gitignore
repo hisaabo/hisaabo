@@ -34,3 +34,4 @@ backups/
 
 feature-parity.yaml
 .expo/
+.astro/
