@@ -28,6 +28,7 @@ export const registerSchema = z.object({
   name: z.string().min(2).max(100),
   password: z.string().min(8).max(128),
   confirmPassword: z.string(),
+  turnstileToken: z.string().optional(),
 }).refine((d) => d.password === d.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
@@ -35,6 +36,7 @@ export const registerSchema = z.object({
 
 export const magicLinkRequestSchema = z.object({
   email: z.string().email().max(255),
+  turnstileToken: z.string().optional(),
 });
 
 export const magicLinkVerifySchema = z.object({
@@ -377,6 +379,17 @@ export const paymentSummaryInputSchema = z.object({
   toDate: z.string().datetime(),
   type: z.enum(["received", "made", "both"]).default("both"),
   bankAccountId: z.string().uuid().optional(),
+});
+
+// ── API Keys ───────────────────────────────────────────────────
+
+export const createApiKeySchema = z.object({
+  name: z.string().min(1).max(100),
+  expiresAt: z.string().datetime().optional(),
+});
+
+export const revokeApiKeySchema = z.object({
+  id: z.string().uuid(),
 });
 
 // ── Dashboard ──────────────────────────────────────────────────

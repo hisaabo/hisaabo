@@ -115,6 +115,25 @@ export const magicLinkTokens = pgTable("magic_link_tokens", {
   index("magic_link_tokens_hash_idx").on(t.tokenHash),
 ]);
 
+// ── API Keys ───────────────────────────────────────────────────
+
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  // Store the hash, never the raw key
+  keyHash: text("key_hash").notNull(),
+  // First 20 chars of the raw key for display: "hisaabo_key_abc12345..."
+  keyPrefix: text("key_prefix").notNull(),
+  name: text("name").notNull(), // User-given label like "CLI", "CI/CD", "MCP Server"
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }), // null = never expires
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("api_keys_user_idx").on(t.userId),
+  index("api_keys_hash_idx").on(t.keyHash),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const tenantsRelations = relations(tenants, ({ many }) => ({
@@ -124,7 +143,9 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
 
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
-  tenantMemberships: many(tenantMembers),
+  tenantMemberships: many(tenantMembers, { relationName: "memberUser" }),
+  invitedMembers: many(tenantMembers, { relationName: "memberInviter" }),
+  apiKeys: many(apiKeys),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -134,11 +155,16 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const tenantMembersRelations = relations(tenantMembers, ({ one }) => ({
   tenant: one(tenants, { fields: [tenantMembers.tenantId], references: [tenants.id] }),
-  user: one(users, { fields: [tenantMembers.userId], references: [users.id] }),
-  inviter: one(users, { fields: [tenantMembers.invitedBy], references: [users.id] }),
+  user: one(users, { fields: [tenantMembers.userId], references: [users.id], relationName: "memberUser" }),
+  inviter: one(users, { fields: [tenantMembers.invitedBy], references: [users.id], relationName: "memberInviter" }),
 }));
 
 export const invitationsRelations = relations(invitations, ({ one }) => ({
   tenant: one(tenants, { fields: [invitations.tenantId], references: [tenants.id] }),
   inviter: one(users, { fields: [invitations.invitedBy], references: [users.id] }),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, { fields: [apiKeys.userId], references: [users.id] }),
+  tenant: one(tenants, { fields: [apiKeys.tenantId], references: [tenants.id] }),
 }));
