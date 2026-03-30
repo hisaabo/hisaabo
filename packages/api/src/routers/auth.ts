@@ -292,9 +292,11 @@ export const authRouter = router({
     });
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
-    const magicLinkUrl = `${baseUrl}/auth/verify?token=${encodeURIComponent(rawToken)}`;
+    const tokenParam = `token=${encodeURIComponent(rawToken)}`;
+    const magicLinkUrl = `${baseUrl}/auth/verify?${tokenParam}`;
+    const deepLinkUrl = `hisaabo://auth/verify?${tokenParam}`;
 
-    await emailService.sendMagicLink(email, magicLinkUrl);
+    await emailService.sendMagicLink(email, magicLinkUrl, deepLinkUrl);
 
     return { success: true }; // Always success — no email enumeration
   }),

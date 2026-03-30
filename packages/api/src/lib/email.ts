@@ -12,12 +12,12 @@ function escapeHtml(str: string): string {
 }
 
 interface EmailService {
-  sendMagicLink(to: string, magicLinkUrl: string): Promise<void>;
+  sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void>;
   sendInvitation(to: string, inviteUrl: string, businessName: string, inviterName: string | null): Promise<void>;
 }
 
 class ConsoleEmailService implements EmailService {
-  async sendMagicLink(to: string, magicLinkUrl: string): Promise<void> {
+  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
       throw new Error("Email service not configured");
@@ -26,7 +26,8 @@ class ConsoleEmailService implements EmailService {
     console.log("╔══════════════════════════════════════════════════════════╗");
     console.log(`║  Magic link for ${to.padEnd(40)}║`);
     console.log("╠══════════════════════════════════════════════════════════╣");
-    console.log(`║  ${magicLinkUrl}`);
+    console.log(`║  Web:     ${magicLinkUrl}`);
+    if (deepLinkUrl) console.log(`║  Desktop: ${deepLinkUrl}`);
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log("");
   }
@@ -54,7 +55,13 @@ class ResendEmailService implements EmailService {
     private fromAddress: string,
   ) {}
 
-  async sendMagicLink(to: string, magicLinkUrl: string): Promise<void> {
+  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void> {
+    // The primary button uses the web URL (works everywhere).
+    // If a deep link is available, show it as a secondary option for desktop app users.
+    const deepLinkHtml = deepLinkUrl
+      ? `<p style="color: #555; font-size: 13px; margin-top: 12px;">Using the desktop app? <a href="${escapeHtml(deepLinkUrl)}" style="color: #4f46e5; text-decoration: underline;">Click here to open in Hisaabo</a></p>`
+      : "";
+
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -72,6 +79,7 @@ class ResendEmailService implements EmailService {
             <a href="${escapeHtml(magicLinkUrl)}" style="display: inline-block; padding: 12px 24px; background: #4f46e5; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 16px 0;">
               Sign in to Hisaabo
             </a>
+            ${deepLinkHtml}
             <p style="color: #999; font-size: 13px; margin-top: 24px;">If you didn't request this, you can safely ignore this email.</p>
             <p style="color: #bbb; font-size: 12px;">Or copy this link: ${escapeHtml(magicLinkUrl)}</p>
           </div>
