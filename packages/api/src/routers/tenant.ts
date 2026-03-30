@@ -181,19 +181,22 @@ export const tenantRouter = router({
         return { tenantId: invitation.tenantId };
       }
 
-      // Create membership
-      await controlDb.insert(tenantMembers).values({
-        tenantId: invitation.tenantId,
-        userId: ctx.user.id,
-        role: invitation.role,
-        invitedBy: invitation.invitedBy ?? undefined,
-        acceptedAt: new Date(),
-      });
+      // Create membership and mark invitation accepted atomically so a crash
+      // between the two writes cannot leave the user as a member with a
+      // re-usable invitation link.
+      await controlDb.transaction(async (tx) => {
+        await tx.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
 
-      // Mark invitation as accepted
-      await controlDb.update(invitations)
-        .set({ acceptedAt: new Date() })
-        .where(eq(invitations.id, invitation.id));
+        await tx.update(invitations)
+          .set({ acceptedAt: new Date() })
+          .where(eq(invitations.id, invitation.id));
+      });
 
       return { tenantId: invitation.tenantId };
     }),

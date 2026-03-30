@@ -222,40 +222,43 @@ export const itemRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
-      const [item] = await ctx.db.select()
-        .from(items)
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
-      if (!item) throw new Error("Item not found");
+      return ctx.db.transaction(async (tx) => {
+        const [item] = await tx.select()
+          .from(items)
+          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+        if (!item) throw new Error("Item not found");
 
-      const isBase = item.unit === input.oldUnit;
-      const updates: Record<string, unknown> = { updatedAt: new Date() };
+        const isBase = item.unit === input.oldUnit;
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
 
-      if (isBase) {
-        // Renaming the base unit
-        updates.unit = input.newUnit;
-        // Also update unitVariants if they reference the old unit name in display
-      } else {
-        // Renaming an alt unit — update unitVariants array
-        const variants = (item.unitVariants as Array<{ unit: string; conversionFactor: number; salePrice: string }>) || [];
-        updates.unitVariants = variants.map((v) =>
-          v.unit === input.oldUnit ? { ...v, unit: input.newUnit } : v
-        );
-      }
+        if (isBase) {
+          // Renaming the base unit
+          updates.unit = input.newUnit;
+          // Also update unitVariants if they reference the old unit name in display
+        } else {
+          // Renaming an alt unit — update unitVariants array
+          const variants = (item.unitVariants as Array<{ unit: string; conversionFactor: number; salePrice: string }>) || [];
+          updates.unitVariants = variants.map((v) =>
+            v.unit === input.oldUnit ? { ...v, unit: input.newUnit } : v
+          );
+        }
 
-      // Update the item
-      await ctx.db.update(items)
-        .set(updates)
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+        // Update the item and cascade to invoice line items atomically so a
+        // crash between the two writes never leaves them in an inconsistent state.
+        await tx.update(items)
+          .set(updates)
+          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
 
-      // Cascade: update selectedUnit on all invoice line items for this item
-      await ctx.db.update(invoiceItems)
-        .set({ selectedUnit: input.newUnit })
-        .where(and(
-          eq(invoiceItems.itemId, input.id),
-          eq(invoiceItems.selectedUnit, input.oldUnit),
-        ));
+        // Cascade: update selectedUnit on all invoice line items for this item
+        await tx.update(invoiceItems)
+          .set({ selectedUnit: input.newUnit })
+          .where(and(
+            eq(invoiceItems.itemId, input.id),
+            eq(invoiceItems.selectedUnit, input.oldUnit),
+          ));
 
-      return { success: true, renamedFrom: input.oldUnit, renamedTo: input.newUnit };
+        return { success: true, renamedFrom: input.oldUnit, renamedTo: input.newUnit };
+      });
     }),
 
   delete: adminProcedure

@@ -96,6 +96,12 @@ The shared `document.convert` mutation handles converting any document type to a
 
 ### Shipments
 
+**Configuring shipping** — Settings → Shipping has three sections:
+
+- **Built-in delivery methods**: `self_pickup` (default), `hand_delivery`, `bus`, `transport`, `courier`, `post`. Always available, cannot be removed.
+- **Custom delivery methods**: Businesses can add their own channels (e.g. "Dunzo", "Porter", "Local Tempo") with a name and a "has tracking" toggle. Stored in `businesses.customShippingMethods` (JSONB).
+- **Carrier API integration**: 7 Indian carriers pre-configured — Delhivery, BlueDart, DTDC, Ecom Express, India Post, Shadowfax, Xpressbees. Each carrier card accepts an API key and account ID, has an enable toggle, and displays a per-business webhook URL (`POST /webhooks/shipping/:businessId`). Credentials are stored in `businesses.carrierCredentials` (JSONB). Status updates pushed to that webhook are recorded in the `shipmentEvents` table.
+
 A `shipment` tRPC router with 5 endpoints, all scoped to the active business via `businessProcedure`.
 
 **Table and relationships**

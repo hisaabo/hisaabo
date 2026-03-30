@@ -37,7 +37,7 @@ export const importRouter = router({
           .map(r => r.name.toLowerCase())
       );
 
-      const newParties = [];
+      const newParties: (typeof parties.$inferInsert)[] = [];
       for (const p of input.parties) {
         // Check if party with same name already exists (case-insensitive)
         if (existingPartyNames.has(p.name.toLowerCase())) {
@@ -66,10 +66,13 @@ export const importRouter = router({
       }
 
       if (newParties.length > 0) {
-        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
-        for (let i = 0; i < newParties.length; i += 500) {
-          await ctx.db.insert(parties).values(newParties.slice(i, i + 500));
-        }
+        // Wrap all chunks in a single transaction so a mid-batch failure rolls
+        // back all chunks rather than leaving partial data committed.
+        await ctx.db.transaction(async (tx) => {
+          for (let i = 0; i < newParties.length; i += 500) {
+            await tx.insert(parties).values(newParties.slice(i, i + 500));
+          }
+        });
       }
 
       return { created, skipped, total: input.parties.length };
@@ -143,7 +146,7 @@ export const importRouter = router({
       }
 
       const unmappedUnits = new Set<string>();
-      const newItems = [];
+      const newItems: (typeof items.$inferInsert)[] = [];
       for (const item of input.items) {
         // Check if item with same name already exists (case-insensitive)
         if (existingItemNames.has(item.name.toLowerCase())) {
@@ -177,10 +180,13 @@ export const importRouter = router({
       }
 
       if (newItems.length > 0) {
-        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
-        for (let i = 0; i < newItems.length; i += 500) {
-          await ctx.db.insert(items).values(newItems.slice(i, i + 500));
-        }
+        // Wrap all chunks in a single transaction so a mid-batch failure rolls
+        // back all chunks rather than leaving partial data committed.
+        await ctx.db.transaction(async (tx) => {
+          for (let i = 0; i < newItems.length; i += 500) {
+            await tx.insert(items).values(newItems.slice(i, i + 500));
+          }
+        });
       }
 
       return { created, skipped, total: input.items.length, unmappedUnits: Array.from(unmappedUnits) };
@@ -737,58 +743,63 @@ export const importRouter = router({
           .sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime());
 
         if (needsPayment.length > 0) {
-          const [biz2] = await ctx.db
-            .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
-            .from(businesses)
-            .where(eq(businesses.id, ctx.businessId))
-            .for("update");
+          // Wrap counter increment + payment inserts + invoice updates in one transaction
+          // so a mid-sequence failure cannot leave the counter advanced without matching
+          // payment rows, or payments inserted without invoice amountPaid updated.
+          await ctx.db.transaction(async (tx) => {
+            const [biz2] = await tx
+              .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+              .from(businesses)
+              .where(eq(businesses.id, ctx.businessId))
+              .for("update");
 
-          let counter2 = biz2.nextNum;
-          const directPaymentRows = needsPayment.map((inv) => {
-            const shortfall = money.sub(inv.totalAmount, inv.amountPaid);
-            const paymentNumber = `${biz2.prefix}-${String(counter2).padStart(5, "0")}`;
-            counter2++;
-            return {
-              id: crypto.randomUUID(),
-              businessId: ctx.businessId,
-              partyId: inv.partyId,
-              invoiceId: inv.id,
-              paymentNumber,
-              amount: shortfall,
-              discount: "0",
-              mode: "cash" as const,
-              paymentDate: inv.invoiceDate,
-              notes: `Auto-created for direct-paid invoice ${inv.invoiceNumber}`,
-              createdByUserId: ctx.user!.id,
-              createdByName: ctx.user!.name,
-              source: input.source,
-            };
+            let counter2 = biz2.nextNum;
+            const directPaymentRows = needsPayment.map((inv) => {
+              const shortfall = money.sub(inv.totalAmount, inv.amountPaid);
+              const paymentNumber = `${biz2.prefix}-${String(counter2).padStart(5, "0")}`;
+              counter2++;
+              return {
+                id: crypto.randomUUID(),
+                businessId: ctx.businessId,
+                partyId: inv.partyId,
+                invoiceId: inv.id,
+                paymentNumber,
+                amount: shortfall,
+                discount: "0",
+                mode: "cash" as const,
+                paymentDate: inv.invoiceDate,
+                notes: `Auto-created for direct-paid invoice ${inv.invoiceNumber}`,
+                createdByUserId: ctx.user!.id,
+                createdByName: ctx.user!.name,
+                source: input.source,
+              };
+            });
+
+            await tx.update(businesses)
+              .set({ nextPaymentNumber: counter2 })
+              .where(eq(businesses.id, ctx.businessId));
+
+            for (let i = 0; i < directPaymentRows.length; i += 500) {
+              await tx.insert(payments).values(directPaymentRows.slice(i, i + 500));
+            }
+
+            // Update amountPaid + status on these invoices
+            for (const dp of directPaymentRows) {
+              await tx.execute(sql`
+                UPDATE invoices SET
+                  amount_paid = amount_paid::numeric + ${dp.amount}::numeric,
+                  status = CASE
+                    WHEN (amount_paid::numeric + ${dp.amount}::numeric) >= total_amount::numeric THEN 'paid'
+                    WHEN (amount_paid::numeric + ${dp.amount}::numeric) > 0 THEN 'partial'
+                    ELSE status
+                  END,
+                  updated_at = NOW()
+                WHERE id = ${dp.invoiceId} AND business_id = ${ctx.businessId}
+              `);
+            }
+
+            directCreated = directPaymentRows.length;
           });
-
-          await ctx.db.update(businesses)
-            .set({ nextPaymentNumber: counter2 })
-            .where(eq(businesses.id, ctx.businessId));
-
-          for (let i = 0; i < directPaymentRows.length; i += 500) {
-            await ctx.db.insert(payments).values(directPaymentRows.slice(i, i + 500));
-          }
-
-          // Update amountPaid + status on these invoices
-          for (const dp of directPaymentRows) {
-            await ctx.db.execute(sql`
-              UPDATE invoices SET
-                amount_paid = amount_paid::numeric + ${dp.amount}::numeric,
-                status = CASE
-                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) >= total_amount::numeric THEN 'paid'
-                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) > 0 THEN 'partial'
-                  ELSE status
-                END,
-                updated_at = NOW()
-              WHERE id = ${dp.invoiceId} AND business_id = ${ctx.businessId}
-            `);
-          }
-
-          directCreated = directPaymentRows.length;
         }
       }
 
@@ -839,47 +850,50 @@ export const importRouter = router({
         return { created: 0, total: 0, errors: [] };
       }
 
-      // Get the payment counter
-      const [biz] = await ctx.db
-        .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
-        .from(businesses)
-        .where(eq(businesses.id, ctx.businessId))
-        .for("update");
+      // Wrap counter increment + payment inserts in one transaction so a failure
+      // never leaves the counter advanced without matching payment rows.
+      await ctx.db.transaction(async (tx) => {
+        const [biz] = await tx
+          .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+          .from(businesses)
+          .where(eq(businesses.id, ctx.businessId))
+          .for("update");
 
-      let counter = biz.nextNum;
+        let counter = biz.nextNum;
 
-      // Create a payment for each unmatched invoice
-      const paymentRows = rows.map((inv) => {
-        const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
-        counter++;
-        return {
-          id: crypto.randomUUID(),
-          businessId: ctx.businessId,
-          partyId: inv.party_id,
-          invoiceId: inv.id,
-          paymentNumber,
-          amount: inv.amount_paid,
-          discount: "0",
-          mode: "cash" as const,
-          paymentDate: new Date(inv.invoice_date),
-          notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
-          createdByUserId: ctx.user!.id,
-          createdByName: ctx.user!.name,
-          source: input.source,
-        };
+        // Create a payment for each unmatched invoice
+        const paymentRows = rows.map((inv) => {
+          const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
+          counter++;
+          return {
+            id: crypto.randomUUID(),
+            businessId: ctx.businessId,
+            partyId: inv.party_id,
+            invoiceId: inv.id,
+            paymentNumber,
+            amount: inv.amount_paid,
+            discount: "0",
+            mode: "cash" as const,
+            paymentDate: new Date(inv.invoice_date),
+            notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
+            createdByUserId: ctx.user!.id,
+            createdByName: ctx.user!.name,
+            source: input.source,
+          };
+        });
+
+        // Update counter
+        await tx.update(businesses)
+          .set({ nextPaymentNumber: counter })
+          .where(eq(businesses.id, ctx.businessId));
+
+        // Batch insert in chunks
+        for (let i = 0; i < paymentRows.length; i += 500) {
+          await tx.insert(payments).values(paymentRows.slice(i, i + 500));
+        }
+
+        created = paymentRows.length;
       });
-
-      // Update counter
-      await ctx.db.update(businesses)
-        .set({ nextPaymentNumber: counter })
-        .where(eq(businesses.id, ctx.businessId));
-
-      // Batch insert in chunks
-      for (let i = 0; i < paymentRows.length; i += 500) {
-        await ctx.db.insert(payments).values(paymentRows.slice(i, i + 500));
-      }
-
-      created = paymentRows.length;
 
       return { created, total: rows.length, errors };
     }),

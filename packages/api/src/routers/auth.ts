@@ -145,14 +145,39 @@ export const authRouter = router({
       parallelism: 4,
     });
 
-    const [user] = await controlDb.insert(users).values({
-      email: input.email,
-      name: input.name,
-      passwordHash,
-    }).returning({ id: users.id, email: users.email, name: users.name });
+    // Insert user, assign tenant (has its own inner tx), and create session in
+    // one outer transaction. This prevents a crash between user-insert and
+    // session-insert from leaving a registered-but-unloggable account.
+    // Note: assignTenantToNewUser uses controlDb.transaction internally which
+    // Drizzle composes via savepoints in this nested context.
+    const { user, sessionToken } = await controlDb.transaction(async (tx) => {
+      const [user] = await tx.insert(users).values({
+        email: input.email,
+        name: input.name,
+        passwordHash,
+      }).returning({ id: users.id, email: users.email, name: users.name });
 
-    await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
-    const sessionToken = await createSessionForUser(user.id, ctx);
+      await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
+
+      const sessionId = nanoid(64);
+      const memberships = await tx
+        .select({ tenantId: tenantMembers.tenantId })
+        .from(tenantMembers)
+        .where(eq(tenantMembers.userId, user.id));
+      const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await tx.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        tenantId: resolvedTenantId,
+        expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+        ipAddress: getClientIpFromRequest(ctx.req),
+        userAgent: ctx.req.headers.get("user-agent") || null,
+      });
+
+      setSessionCookie(ctx.resHeaders, sessionId);
+      return { user, sessionToken: sessionId };
+    });
 
     return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
@@ -251,32 +276,55 @@ export const authRouter = router({
 
     const email = tokenRow.email;
 
-    // Look up or create user
-    let [user] = await controlDb
-      .select({ id: users.id, email: users.email, name: users.name })
-      .from(users)
-      .where(eq(users.email, email))
-      .limit(1);
-
+    // Wrap user upsert + session creation in a transaction so a crash between
+    // them never leaves a created user without a usable session.
+    // assignTenantToNewUser uses its own controlDb.transaction internally;
+    // Drizzle composes these via savepoints when called inside an outer tx.
     let isNewUser = false;
 
-    if (!user) {
-      isNewUser = true;
-      const [newUser] = await controlDb.insert(users).values({
-        email,
-        emailVerified: true,
-      }).returning({ id: users.id, email: users.email, name: users.name });
-      user = newUser;
+    const { user, sessionToken } = await controlDb.transaction(async (tx) => {
+      // Look up or create user
+      let [user] = await tx
+        .select({ id: users.id, email: users.email, name: users.name })
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
 
-      await assignTenantToNewUser(user.id, email.split("@")[0]);
-    } else {
-      // Mark email as verified for existing users
-      await controlDb.update(users)
-        .set({ emailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, user.id));
-    }
+      if (!user) {
+        isNewUser = true;
+        const [newUser] = await tx.insert(users).values({
+          email,
+          emailVerified: true,
+        }).returning({ id: users.id, email: users.email, name: users.name });
+        user = newUser;
 
-    const sessionToken = await createSessionForUser(user.id, ctx);
+        await assignTenantToNewUser(user.id, email.split("@")[0]);
+      } else {
+        // Mark email as verified for existing users
+        await tx.update(users)
+          .set({ emailVerified: true, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      }
+
+      const sessionId = nanoid(64);
+      const memberships = await tx
+        .select({ tenantId: tenantMembers.tenantId })
+        .from(tenantMembers)
+        .where(eq(tenantMembers.userId, user.id));
+      const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await tx.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        tenantId: resolvedTenantId,
+        expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+        ipAddress: getClientIpFromRequest(ctx.req),
+        userAgent: ctx.req.headers.get("user-agent") || null,
+      });
+
+      setSessionCookie(ctx.resHeaders, sessionId);
+      return { user, sessionToken: sessionId };
+    });
 
     return {
       user: { id: user.id, email: user.email, name: user.name },

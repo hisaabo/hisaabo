@@ -44,22 +44,26 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
-    const [biz] = await ctx.db.insert(businesses).values({
-      ...input,
-      createdByUserId: ctx.user.id,
-    }).returning();
+    return ctx.db.transaction(async (tx) => {
+      const [biz] = await tx.insert(businesses).values({
+        ...input,
+        createdByUserId: ctx.user.id,
+      }).returning();
 
-    // Auto-create a Cash account for every new business
-    await ctx.db.insert(bankAccounts).values({
-      businessId: biz.id,
-      accountName: "Cash",
-      accountType: "cash",
-      openingBalance: "0",
-      currentBalance: "0",
-      isDefault: false,
+      // Auto-create a Cash account for every new business — must be atomic with
+      // business creation so a failed account insert never leaves a business
+      // without its default Cash account.
+      await tx.insert(bankAccounts).values({
+        businessId: biz.id,
+        accountName: "Cash",
+        accountType: "cash",
+        openingBalance: "0",
+        currentBalance: "0",
+        isDefault: false,
+      });
+
+      return biz;
     });
-
-    return biz;
   }),
 
   update: tenantProcedure

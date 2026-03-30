@@ -288,26 +288,28 @@ export const invoiceRouter = router({
         }).where(eq(itemVariants.id, variantId));
       }
 
+      // Auto-create a shipment entry only when a shipping charge is present on a
+      // sale invoice. Kept inside the transaction so a failed shipment insert
+      // rolls back the whole invoice rather than leaving a charged invoice with
+      // no corresponding shipment record.
+      if (input.type === "sale") {
+        const shippingCharge = (input.charges ?? []).find((c) =>
+          /shipping|delivery|freight|transport/i.test(c.label)
+        );
+        if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
+          await tx.insert(shipments).values({
+            businessId: ctx.businessId,
+            invoiceId: invoice.id,
+            partyId: input.partyId,
+            mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
+            cost: shippingCharge.amount,
+            status: "pending",
+          });
+        }
+      }
+
       return invoice;
     });
-
-    // Auto-create a shipment entry only when a shipping charge is present on a sale invoice.
-    // Self-pickup invoices (no shipping charge) don't get a shipment record.
-    if (input.type === "sale") {
-      const shippingCharge = (input.charges ?? []).find((c) =>
-        /shipping|delivery|freight|transport/i.test(c.label)
-      );
-      if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
-        await ctx.db.insert(shipments).values({
-          businessId: ctx.businessId,
-          invoiceId: invoice.id,
-          partyId: input.partyId,
-          mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
-          cost: shippingCharge.amount,
-          status: "pending",
-        });
-      }
-    }
 
     await logAudit(ctx.db, {
       businessId: ctx.businessId,
