@@ -6,6 +6,8 @@
  *   party_create  — create a new customer or supplier
  *   party_get     — get party details including outstanding balance
  *   party_ledger  — get full transaction ledger for a party
+ *   party_update  — update an existing party's details
+ *   party_delete  — delete a party record
  */
 
 import { z } from "zod";
@@ -138,6 +140,91 @@ export function registerPartyTools(server: McpServer, client: HisaaboClient) {
         content: [{
           type: "text" as const,
           text: JSON.stringify(party, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_update",
+    [
+      "Update an existing customer or supplier's details.",
+      "Only provide fields you want to change — all other fields remain unchanged.",
+      "Note: 'type' (customer/supplier) cannot be changed after creation.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID to update."),
+      name: z.string().min(1).max(200).optional()
+        .describe("Updated name."),
+      phone: z.string().max(15).optional()
+        .describe("Updated phone number."),
+      email: z.string().email().optional()
+        .describe("Updated email address."),
+      gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional()
+        .describe("Updated GSTIN (15 characters)."),
+      billing_address: z.string().max(500).optional()
+        .describe("Updated billing address."),
+      shipping_address: z.string().max(500).optional()
+        .describe("Updated shipping address."),
+      city: z.string().max(100).optional()
+        .describe("Updated city."),
+      state: z.string().max(100).optional()
+        .describe("Updated state."),
+      pincode: z.string().max(10).optional()
+        .describe("Updated PIN code."),
+      category: z.string().max(100).optional()
+        .describe("Updated category tag."),
+      credit_period_days: z.number().int().min(0).max(365).optional()
+        .describe("Updated credit period in days."),
+      credit_limit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated credit limit as decimal string."),
+      contact_person_name: z.string().max(200).optional()
+        .describe("Updated contact person name."),
+    },
+    wrapTool(async (input) => {
+      const { party_id, ...fields } = input;
+      const party = await client.party.update(party_id, {
+        name: fields.name,
+        phone: fields.phone,
+        email: fields.email,
+        gstin: fields.gstin,
+        billingAddress: fields.billing_address,
+        shippingAddress: fields.shipping_address,
+        city: fields.city,
+        state: fields.state,
+        pincode: fields.pincode,
+        category: fields.category,
+        creditPeriodDays: fields.credit_period_days,
+        creditLimit: fields.credit_limit,
+        contactPersonName: fields.contact_person_name,
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(party, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_delete",
+    [
+      "Permanently delete a customer or supplier. Requires admin role.",
+      "Warning: this is a hard delete. Associated invoices and payments are not deleted, but the party reference will be broken.",
+      "Consider deactivating or archiving instead — only delete if the party was created in error.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID to delete."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.party.delete(input.party_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     })

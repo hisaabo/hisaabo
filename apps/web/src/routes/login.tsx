@@ -2,6 +2,28 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 
+/* ─── Cloudflare Turnstile window type ───────────────────────────────────── */
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        el: HTMLElement,
+        opts: {
+          sitekey: string;
+          size: "invisible" | "normal" | "flexible" | "compact";
+          callback: (token: string) => void;
+          "error-callback"?: () => void;
+          "expired-callback"?: () => void;
+          theme?: "light" | "dark" | "auto";
+        },
+      ) => string;
+      execute: (widgetId: string) => void;
+      reset: (widgetId: string) => void;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
+
 export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
@@ -351,8 +373,8 @@ function BrandPanel() {
           <div style={{ display: "flex", gap: 20 }}>
             {[
               { n: "GST Ready", icon: "✓" },
-              { n: "PDF Invoices", icon: "✓" },
-              { n: "Self-hosted", icon: "✓" },
+              { n: "100% Free", icon: "✓" },
+              { n: "Open Source", icon: "✓" },
             ].map(({ n, icon }) => (
               <div
                 key={n}
@@ -512,6 +534,85 @@ function LoginPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
 
+  // ── Turnstile (invisible CAPTCHA) ─────────────────────────────
+  const turnstileContainerRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetIdRef = useRef<string | null>(null);
+  // Resolves the pending execute() promise with the fresh token
+  const turnstileResolveRef = useRef<((token: string) => void) | null>(null);
+
+  useEffect(() => {
+    if (!turnstileContainerRef.current) return;
+
+    const sitekey =
+      (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
+      "1x00000000000000000000AA"; // Cloudflare test key — always passes in dev
+
+    function mount() {
+      if (!turnstileContainerRef.current || !window.turnstile) return;
+      // Guard against double-render (React StrictMode)
+      if (turnstileWidgetIdRef.current !== null) return;
+      turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
+        sitekey,
+        size: "invisible",
+        callback: (token: string) => {
+          // Resolve the pending execute() promise if one is waiting
+          if (turnstileResolveRef.current) {
+            turnstileResolveRef.current(token);
+            turnstileResolveRef.current = null;
+          }
+        },
+        "error-callback": () => {
+          setError("Verification failed. Please refresh and try again.");
+          turnstileResolveRef.current = null;
+        },
+        "expired-callback": () => {
+          turnstileResolveRef.current = null;
+        },
+      });
+    }
+
+    if (window.turnstile) {
+      mount();
+    } else {
+      // Script loads async — poll until ready
+      const interval = setInterval(() => {
+        if (window.turnstile) {
+          clearInterval(interval);
+          mount();
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+
+    return () => {
+      if (window.turnstile && turnstileWidgetIdRef.current !== null) {
+        window.turnstile.remove(turnstileWidgetIdRef.current);
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, []);
+
+  /**
+   * Triggers an invisible Turnstile challenge and waits for the token.
+   * Returns the token string, or null if TURNSTILE_SECRET_KEY is absent (dev mode).
+   */
+  function executeTurnstile(): Promise<string | null> {
+    if (!window.turnstile || turnstileWidgetIdRef.current === null) {
+      // Turnstile not loaded (e.g. blocked by ad-blocker) — let server decide
+      return Promise.resolve(null);
+    }
+    return new Promise<string>((resolve) => {
+      turnstileResolveRef.current = resolve;
+      window.turnstile!.execute(turnstileWidgetIdRef.current!);
+    }).then((token) => {
+      // Reset so the widget can be used again for the next submission
+      if (window.turnstile && turnstileWidgetIdRef.current !== null) {
+        window.turnstile.reset(turnstileWidgetIdRef.current);
+      }
+      return token;
+    });
+  }
+
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: () => {
       utils.auth.me.invalidate();
@@ -558,10 +659,11 @@ function LoginPage() {
   const isPending =
     loginMutation.isPending || registerMutation.isPending || magicLinkMutation.isPending;
 
-  function handleMagicLink(e: React.FormEvent) {
+  async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    magicLinkMutation.mutate({ email });
+    const turnstileToken = await executeTurnstile();
+    magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
   }
 
   function handlePasswordLogin(e: React.FormEvent) {
@@ -570,19 +672,21 @@ function LoginPage() {
     loginMutation.mutate({ email, password });
   }
 
-  function handleRegister(e: React.FormEvent) {
+  async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     if (password !== confirmPassword) {
       setError("Passwords don't match");
       return;
     }
-    registerMutation.mutate({ email, password, confirmPassword, name });
+    const turnstileToken = await executeTurnstile();
+    registerMutation.mutate({ email, password, confirmPassword, name, ...(turnstileToken ? { turnstileToken } : {}) });
   }
 
-  function handleResend() {
+  async function handleResend() {
     if (cooldown > 0) return;
-    magicLinkMutation.mutate({ email });
+    const turnstileToken = await executeTurnstile();
+    magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
     setCooldown(60);
   }
 
@@ -1000,6 +1104,9 @@ function LoginPage() {
           </div>
         </div>
       </div>
+
+      {/* Hidden Turnstile container — invisible widget needs a DOM node */}
+      <div ref={turnstileContainerRef} style={{ display: "none" }} aria-hidden="true" />
     </>
   );
 }

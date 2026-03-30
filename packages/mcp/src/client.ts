@@ -175,6 +175,9 @@ export class HisaaboClient {
       updateStatus(id: string, status: InvoiceStatus) {
         return c.mutate<InvoiceSummary>("invoice.updateStatus", { id, status });
       },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("invoice.delete", { id });
+      },
     };
   }
 
@@ -192,6 +195,12 @@ export class HisaaboClient {
       },
       ledger(partyId: string, input?: LedgerInput) {
         return c.query<LedgerResult>("party.ledger", { partyId, ...input });
+      },
+      update(id: string, data: Partial<PartyCreateInput>) {
+        return c.mutate<PartyDetail>("party.update", { id, data });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("party.delete", { id });
       },
     };
   }
@@ -211,6 +220,15 @@ export class HisaaboClient {
       adjustStock(input: StockAdjustInput) {
         return c.mutate<ItemSummary>("item.adjustStock", input);
       },
+      update(id: string, data: Partial<ItemCreateInput>) {
+        return c.mutate<ItemDetail>("item.update", { id, data });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("item.delete", { id });
+      },
+      categories() {
+        return c.query<string[]>("item.categories");
+      },
     };
   }
 
@@ -223,6 +241,15 @@ export class HisaaboClient {
       create(input: PaymentCreateInput) {
         return c.mutate<PaymentSummary>("payment.create", input);
       },
+      getById(id: string) {
+        return c.query<PaymentDetail | null>("payment.getById", { id });
+      },
+      update(input: PaymentUpdateInput) {
+        return c.mutate<PaymentSummary>("payment.update", input);
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("payment.delete", { id });
+      },
     };
   }
 
@@ -234,6 +261,15 @@ export class HisaaboClient {
       },
       create(input: ExpenseCreateInput) {
         return c.mutate<ExpenseSummary>("expense.create", input);
+      },
+      update(id: string, data: Partial<ExpenseCreateInput>) {
+        return c.mutate<ExpenseSummary>("expense.update", { id, data });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("expense.delete", { id });
+      },
+      categories() {
+        return c.query<string[]>("expense.categories");
       },
     };
   }
@@ -267,6 +303,150 @@ export class HisaaboClient {
       },
       gstr3b(input: GstReportInput) {
         return c.query<GstReportResult>("gst.gstr3b", input);
+      },
+      gstr1CSV(input: GstReportInput) {
+        return c.query<{ csv: string; filename: string }>("gst.gstr1CSV", input);
+      },
+    };
+  }
+
+  get shipment() {
+    const c = this;
+    return {
+      list(input: ShipmentListInput) {
+        return c.query<PaginatedResult<ShipmentSummary>>("shipment.list", input);
+      },
+      get(id: string) {
+        return c.query<ShipmentDetail | null>("shipment.getById", { id });
+      },
+      create(input: ShipmentCreateInput) {
+        return c.mutate<ShipmentDetail>("shipment.create", input);
+      },
+      update(input: ShipmentUpdateInput) {
+        return c.mutate<ShipmentDetail>("shipment.update", input);
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("shipment.delete", { id });
+      },
+    };
+  }
+
+  get bankAccount() {
+    const c = this;
+    return {
+      list() {
+        return c.query<BankAccountSummary[]>("bankAccount.list");
+      },
+      get(id: string) {
+        return c.query<BankAccountDetail | null>("bankAccount.getById", { id });
+      },
+      create(input: BankAccountCreateInput) {
+        return c.mutate<BankAccountSummary>("bankAccount.create", input);
+      },
+      update(id: string, data: Partial<BankAccountCreateInput>) {
+        return c.mutate<BankAccountSummary>("bankAccount.update", { id, data });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("bankAccount.delete", { id });
+      },
+      transfer(input: BankTransferInput) {
+        return c.mutate<BankTransferResult>("bankAccount.transfer", input);
+      },
+      listTransactions(input: BankTransactionListInput) {
+        return c.query<PaginatedResult<BankTransactionRow>>("bankAccount.listTransactions", input);
+      },
+      summary() {
+        return c.query<BankSummary>("bankAccount.summary");
+      },
+    };
+  }
+
+  get reports() {
+    const c = this;
+    return {
+      daybook(input: DaybookInput) {
+        return c.query<DaybookResult>("reports.daybook", input);
+      },
+      outstanding(input: OutstandingInput) {
+        return c.query<OutstandingResult>("reports.outstanding", input);
+      },
+      taxSummary(input: TaxSummaryInput) {
+        return c.query<TaxSummaryResult>("reports.taxSummary", input);
+      },
+      itemSales(input: ItemSalesInput) {
+        return c.query<ItemSalesResult>("reports.itemSales", input);
+      },
+      stockSummary(input: StockSummaryInput) {
+        return c.query<StockSummaryResult>("reports.stockSummary", input);
+      },
+      partyStatement(input: PartyStatementInput) {
+        return c.query<PartyStatementResult>("reports.partyStatement", input);
+      },
+      paymentSummary(input: PaymentSummaryInput) {
+        return c.query<PaymentSummaryResult>("reports.paymentSummary", input);
+      },
+    };
+  }
+
+  get store() {
+    const c = this;
+    return {
+      getSettings() {
+        return c.query<StoreSettings>("store.getSettings");
+      },
+      updateSettings(input: StoreSettingsUpdateInput) {
+        return c.mutate<StoreSettings>("store.updateSettings", input);
+      },
+      listOrders(input: StoreOrderListInput) {
+        return c.query<PaginatedResult<StoreOrderSummary>>("store.listOrders", input);
+      },
+      getOrder(id: string) {
+        return c.query<StoreOrderDetail | null>("store.getOrder", { id });
+      },
+      updateOrderStatus(input: { orderId: string; status: "preparing" | "ready" | "delivered" }) {
+        return c.mutate<{ success: boolean; status: string }>("store.updateOrderStatus", input);
+      },
+    };
+  }
+
+  get target() {
+    const c = this;
+    return {
+      list(input: TargetListInput) {
+        return c.query<TargetRow[]>("target.list", input);
+      },
+      create(input: TargetCreateInput) {
+        return c.mutate<TargetRow>("target.create", input);
+      },
+      getProgress(id: string) {
+        return c.query<TargetWithProgress>("target.getProgress", { id });
+      },
+      update(input: TargetUpdateInput) {
+        return c.mutate<TargetRow>("target.update", input);
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("target.delete", { id });
+      },
+      myTargets() {
+        return c.query<TargetWithProgress[]>("target.myTargets");
+      },
+    };
+  }
+
+  get import() {
+    const c = this;
+    return {
+      importParties(input: ImportPartiesInput) {
+        return c.mutate<ImportResult>("import.importParties", input);
+      },
+      importItems(input: ImportItemsInput) {
+        return c.mutate<ImportItemsResult>("import.importItems", input);
+      },
+      importInvoices(input: ImportInvoicesInput) {
+        return c.mutate<ImportResult>("import.importInvoices", input);
+      },
+      importPayments(input: ImportPaymentsInput) {
+        return c.mutate<ImportResult>("import.importPayments", input);
       },
     };
   }
@@ -635,4 +815,501 @@ export interface GstReportResult {
   b2c?: unknown;
   summary?: unknown;
   [key: string]: unknown;
+}
+
+// ── Payment types ──────────────────────────────────────────────
+
+export interface PaymentDetail extends PaymentSummary {
+  bankAccountId: string | null;
+  linkedInvoices: Array<{
+    invoiceId: string;
+    invoiceNumber: string;
+    invoiceDate: string;
+    totalAmount: string;
+    amountPaid: string;
+    status: string;
+    amount: string;
+  }>;
+}
+
+export interface PaymentUpdateInput {
+  id: string;
+  amount?: string;
+  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  discount?: string;
+  referenceNumber?: string | null;
+  paymentDate?: string;
+  notes?: string | null;
+  bankAccountId?: string | null;
+  allocations?: Array<{ invoiceId: string; amount: string }>;
+}
+
+// ── Shipment types ─────────────────────────────────────────────
+
+export type ShipmentStatus = "pending" | "shipped" | "in_transit" | "delivered" | "returned";
+
+export interface ShipmentSummary {
+  id: string;
+  invoiceId: string | null;
+  partyId: string | null;
+  carrier: string | null;
+  mode: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  cost: string;
+  weight: string | null;
+  status: ShipmentStatus;
+  shipmentDate: string | null;
+  estimatedDelivery: string | null;
+  actualDelivery: string | null;
+  notes: string | null;
+  createdAt: string;
+  invoiceNumber: string | null;
+  partyName: string | null;
+}
+
+export interface ShipmentDetail extends ShipmentSummary {
+  businessId: string;
+  shippingAddress: string | null;
+  shippingCity: string | null;
+  shippingPincode: string | null;
+  updatedAt: string;
+}
+
+export interface ShipmentListInput {
+  status?: ShipmentStatus | null;
+  invoiceId?: string | null;
+  partyId?: string | null;
+  page?: number;
+  limit?: number;
+}
+
+export interface ShipmentCreateInput {
+  invoiceId?: string;
+  partyId?: string;
+  carrier?: string;
+  mode?: string;
+  trackingNumber?: string;
+  trackingUrl?: string;
+  cost?: string;
+  weight?: string;
+  shippingAddress?: string;
+  shippingCity?: string;
+  shippingPincode?: string;
+  status?: ShipmentStatus;
+  shipmentDate?: string;
+  estimatedDelivery?: string;
+  notes?: string;
+}
+
+export interface ShipmentUpdateInput {
+  id: string;
+  carrier?: string;
+  mode?: string;
+  trackingNumber?: string;
+  trackingUrl?: string;
+  cost?: string;
+  weight?: string;
+  status?: ShipmentStatus;
+  shipmentDate?: string;
+  estimatedDelivery?: string;
+  actualDelivery?: string;
+  notes?: string;
+}
+
+// ── Bank account types ─────────────────────────────────────────
+
+export type BankAccountType = "savings" | "current" | "cash" | "credit" | "other";
+
+export interface BankAccountSummary {
+  id: string;
+  accountName: string;
+  accountNumber: string | null;
+  ifsc: string | null;
+  bankName: string | null;
+  accountType: BankAccountType;
+  openingBalance: string;
+  currentBalance: string;
+  isDefault: boolean;
+  createdAt: string;
+}
+
+export interface BankTransactionRow {
+  id: string;
+  businessId: string;
+  bankAccountId: string;
+  type: "deposit" | "withdrawal" | "transfer";
+  amount: string;
+  description: string | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  transactionDate: string;
+  createdAt: string;
+  balanceAfter: string;
+}
+
+export interface BankAccountDetail extends BankAccountSummary {
+  recentTransactions: BankTransactionRow[];
+}
+
+export interface BankAccountCreateInput {
+  accountName: string;
+  accountNumber?: string;
+  ifsc?: string;
+  bankName?: string;
+  accountType: BankAccountType;
+  openingBalance?: string;
+  isDefault?: boolean;
+}
+
+export interface BankTransferInput {
+  fromAccountId: string;
+  toAccountId: string;
+  amount: string;
+  description?: string;
+  transactionDate?: string;
+}
+
+export interface BankTransferResult {
+  withdrawal: BankTransactionRow;
+  deposit: BankTransactionRow;
+}
+
+export interface BankTransactionListInput {
+  bankAccountId: string;
+  fromDate?: string;
+  toDate?: string;
+  type?: "deposit" | "withdrawal" | "transfer";
+  page?: number;
+  limit?: number;
+}
+
+export interface BankSummary {
+  totalBalance: string;
+  cashInHand: string;
+  bankBalance: string;
+  accountCount: number;
+}
+
+// ── Reports types ──────────────────────────────────────────────
+
+export interface DaybookInput {
+  fromDate: string;
+  toDate: string;
+  typeFilter?: "all" | "invoices" | "payments" | "expenses";
+}
+
+export interface DaybookEntry {
+  id: string;
+  time: string;
+  entryType: "invoice" | "payment" | "expense";
+  number: string | null;
+  partyOrCategory: string;
+  debit: string;
+  credit: string;
+  mode: string | null;
+  status: string | null;
+  meta: Record<string, string | null>;
+}
+
+export interface DaybookResult {
+  entries: DaybookEntry[];
+  summary: {
+    totalSalesInvoiced: string;
+    totalPurchaseInvoiced: string;
+    totalPaymentsReceived: string;
+    totalPaymentsMade: string;
+    totalExpenses: string;
+    netCashMovement: string;
+  };
+}
+
+export interface OutstandingInput {
+  type?: "receivable" | "payable" | "both";
+  asOfDate?: string;
+}
+
+export interface OutstandingResult {
+  receivables: unknown | null;
+  payables: unknown | null;
+}
+
+export interface TaxSummaryInput {
+  fromDate: string;
+  toDate: string;
+  type?: "sales" | "purchases" | "both";
+}
+
+export interface TaxSummaryResult {
+  rows: unknown[];
+  summary: unknown;
+}
+
+export interface ItemSalesInput {
+  fromDate: string;
+  toDate: string;
+  category?: string;
+  itemType?: "product" | "service";
+  sortBy?: "revenue" | "quantity" | "invoices" | "margin";
+  compareToPrevious?: boolean;
+}
+
+export interface ItemSalesResult {
+  rows: unknown[];
+  summary: unknown;
+  [key: string]: unknown;
+}
+
+export interface StockSummaryInput {
+  category?: string;
+  showZeroStock?: boolean;
+}
+
+export interface StockSummaryResult {
+  rows: unknown[];
+  summary: unknown;
+  [key: string]: unknown;
+}
+
+export interface PartyStatementInput {
+  partyId: string;
+  fromDate?: string;
+  toDate?: string;
+}
+
+export interface PartyStatementResult {
+  [key: string]: unknown;
+}
+
+export interface PaymentSummaryInput {
+  fromDate: string;
+  toDate: string;
+  type?: "received" | "made" | "both";
+  bankAccountId?: string;
+}
+
+export interface PaymentSummaryResult {
+  [key: string]: unknown;
+}
+
+// ── Store types ────────────────────────────────────────────────
+
+export interface StoreSettings {
+  storeEnabled: boolean;
+  storeSlug: string | null;
+  storeTagline: string | null;
+  storeAccentColor: string | null;
+  storeMinOrderAmount: string | null;
+  storeDeliveryNote: string | null;
+  storeWhatsappNumber: string | null;
+  storeAllowNegativeStock: boolean;
+  storeOrderPrefix: string;
+  nextStoreOrderNumber: number;
+  currency: string;
+}
+
+export interface StoreSettingsUpdateInput {
+  storeEnabled?: boolean;
+  storeSlug?: string | null;
+  storeTagline?: string | null;
+  storeAccentColor?: string | null;
+  storeMinOrderAmount?: string | null;
+  storeDeliveryNote?: string | null;
+  storeWhatsappNumber?: string | null;
+  storeAllowNegativeStock?: boolean;
+  storeOrderPrefix?: string;
+}
+
+export type StoreOrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "delivered" | "cancelled";
+
+export interface StoreOrderSummary {
+  id: string;
+  orderNumber: string;
+  status: StoreOrderStatus;
+  customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  deliveryAddress: string | null;
+  deliveryCity: string | null;
+  deliveryPincode: string | null;
+  totalAmount: string;
+  itemCount: number;
+  invoiceId: string | null;
+  createdAt: string;
+  confirmedAt: string | null;
+}
+
+export interface StoreOrderDetail extends StoreOrderSummary {
+  invoice: unknown | null;
+  lineItems: unknown[];
+}
+
+export interface StoreOrderListInput {
+  status?: StoreOrderStatus | null;
+  fromDate?: string | null;
+  toDate?: string | null;
+  search?: string | null;
+  page?: number;
+  limit?: number;
+}
+
+// ── Target types ───────────────────────────────────────────────
+
+export type TargetType = "order_count" | "order_value" | "item_quantity";
+export type PeriodType = "daily" | "weekly" | "monthly" | "quarterly" | "custom";
+
+export interface TargetRow {
+  id: string;
+  businessId: string;
+  userId: string;
+  targetType: TargetType;
+  targetValue: string;
+  itemId: string | null;
+  periodType: PeriodType;
+  periodStart: string;
+  periodEnd: string;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface TargetProgress {
+  current: number;
+  target: number;
+  percentage: number;
+  remaining: number;
+  unit: string;
+  onTrack: boolean;
+  daysTotal: number;
+  daysElapsed: number;
+  daysRemaining: number;
+}
+
+export interface TargetWithProgress extends TargetRow {
+  progress: TargetProgress;
+}
+
+export interface TargetListInput {
+  userId?: string;
+  periodType?: PeriodType;
+  active?: boolean;
+  withProgress?: boolean;
+}
+
+export interface TargetCreateInput {
+  userId: string;
+  targetType: TargetType;
+  targetValue: string;
+  itemId?: string | null;
+  periodType: PeriodType;
+  periodStart: string;
+  periodEnd: string;
+  notes?: string | null;
+}
+
+export interface TargetUpdateInput {
+  id: string;
+  targetValue?: string;
+  itemId?: string | null;
+  periodType?: PeriodType;
+  periodStart?: string;
+  periodEnd?: string;
+  notes?: string | null;
+}
+
+// ── Import types ───────────────────────────────────────────────
+
+export interface ImportResult {
+  created: number;
+  skipped: number;
+  total: number;
+}
+
+export interface ImportItemsResult extends ImportResult {
+  unmappedUnits: string[];
+}
+
+export interface ImportPartyRecord {
+  name: string;
+  type?: "customer" | "supplier";
+  phone?: string;
+  email?: string;
+  gstin?: string;
+  pan?: string;
+  openingBalance?: string;
+  billingAddress?: string;
+  shippingAddress?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+}
+
+export interface ImportPartiesInput {
+  source?: string;
+  parties: ImportPartyRecord[];
+}
+
+export interface ImportItemRecord {
+  name: string;
+  itemType?: "product" | "service";
+  salePrice?: string;
+  purchasePrice?: string;
+  taxPercent?: string;
+  hsn?: string;
+  unit?: string;
+  stockQuantity?: string;
+  sku?: string;
+  category?: string;
+}
+
+export interface ImportItemsInput {
+  source?: string;
+  items: ImportItemRecord[];
+}
+
+export interface ImportInvoiceRecord {
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate?: string;
+  partyName: string;
+  type?: "sale" | "purchase";
+  status?: "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
+  totalAmount: string;
+  amountPaid?: string;
+  subtotal?: string;
+  taxAmount?: string;
+  discountAmount?: string;
+  notes?: string;
+  createdByName?: string;
+  lineItems?: Array<{
+    description: string;
+    quantity?: string;
+    unitPrice: string;
+    taxPercent?: string;
+    discountPercent?: string;
+    itemName?: string;
+  }>;
+}
+
+export interface ImportInvoicesInput {
+  source?: string;
+  autoCreatePayments?: boolean;
+  defaultPaymentMode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  invoices: ImportInvoiceRecord[];
+}
+
+export interface ImportPaymentRecord {
+  partyName: string;
+  amount: string;
+  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  paymentDate?: string;
+  paymentNumber?: string;
+  referenceNumber?: string;
+  notes?: string;
+  invoiceNumbers?: string[];
+}
+
+export interface ImportPaymentsInput {
+  source?: string;
+  paidInvoiceNumbers?: string[];
+  payments: ImportPaymentRecord[];
 }

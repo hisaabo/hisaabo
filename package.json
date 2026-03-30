@@ -2,7 +2,7 @@
   "name": "hisaabo",
   "private": true,
   "scripts": {
-    "dev": "turbo dev --filter=!@hisaabo/mobile --filter=!@hisaabo/mcp",
+    "dev": "turbo dev --filter=!@hisaabo/mobile --filter=!@hisaabo/mcp --filter=!@hisaabo/cli",
     "dev:mobile": "pnpm --filter @hisaabo/mobile dev",
     "dev:mobile:android": "pnpm --filter @hisaabo/mobile dev:android",
     "build": "turbo build",

@@ -7,6 +7,7 @@
  *   invoice_get           — fetch full invoice details (line items, payments, balance)
  *   invoice_update_status — change invoice status (mark sent, cancel, etc.)
  *   invoice_pdf_url       — get a URL to download/view the PDF (A4 or thermal)
+ *   invoice_delete        — soft-delete an invoice (admin or seller_manager within 2 hours)
  */
 
 import { z } from "zod";
@@ -191,6 +192,29 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const result = await client.invoice.updateStatus(input.invoice_id, input.status);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "invoice_delete",
+    [
+      "Soft-delete an invoice (marks it as cancelled and hides it from lists).",
+      "Admins can delete any invoice. Seller managers can only delete unpaid invoices created within the last 2 hours.",
+      "Paid invoices cannot be deleted — void them by recording a credit note instead.",
+      "This is a soft delete — the invoice is not physically removed from the database.",
+    ].join(" "),
+    {
+      invoice_id: z.string().uuid()
+        .describe("Invoice UUID to delete."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.invoice.delete(input.invoice_id);
       return {
         content: [{
           type: "text" as const,

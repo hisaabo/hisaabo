@@ -691,8 +691,8 @@ export default function LoginScreen() {
                 {/* Trust badges */}
                 <View style={styles.trustRow}>
                   <TrustBadge label="GST Ready" />
-                  <TrustBadge label="PDF Invoices" />
-                  <TrustBadge label="Self-hosted" />
+                  <TrustBadge label="100% Free" />
+                  <TrustBadge label="Open Source" />
                 </View>
 
                 {/* Tagline */}

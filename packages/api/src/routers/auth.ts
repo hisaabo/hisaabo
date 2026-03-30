@@ -4,11 +4,12 @@ import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import * as argon2 from "argon2";
-import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens } from "@hisaabo/db";
+import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, provisionTenantDatabase } from "@hisaabo/db";
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
 import { invalidateSessionCache } from "../context.js";
+import { verifyTurnstile } from "../lib/turnstile.js";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -114,11 +115,38 @@ async function assignTenantToNewUser(userId: string, displayName: string): Promi
   if (process.env.MULTI_TENANT === "true") {
     const tenantName = `${displayName}'s Organization`;
     const slug = generateSlug(tenantName);
+
+    // 1. Create the tenant row (DB config columns start null)
     const [tenant] = await controlDb.insert(tenants).values({
       name: tenantName,
       slug,
     }).returning({ id: tenants.id });
 
+    // 2. Provision the tenant database (CREATE DB, user, schema push).
+    //    Done outside the control-DB transaction because CREATE DATABASE cannot
+    //    run inside a transaction block in PostgreSQL.
+    let dbConfig: Awaited<ReturnType<typeof provisionTenantDatabase>>;
+    try {
+      dbConfig = await provisionTenantDatabase(tenant.id, slug);
+    } catch (err) {
+      // Roll back the orphaned tenant row so a retry can succeed cleanly
+      await controlDb.delete(tenants).where(eq(tenants.id, tenant.id));
+      throw err;
+    }
+
+    // 3. Persist the DB connection details onto the tenant row
+    await controlDb.update(tenants)
+      .set({
+        dbName: dbConfig.dbName,
+        dbHost: dbConfig.dbHost,
+        dbPort: dbConfig.dbPort,
+        dbUser: dbConfig.dbUser,
+        dbPassword: dbConfig.dbPassword,
+        updatedAt: new Date(),
+      })
+      .where(eq(tenants.id, tenant.id));
+
+    // 4. Create the owner membership
     await controlDb.insert(tenantMembers).values({
       tenantId: tenant.id,
       userId,
@@ -133,6 +161,15 @@ async function assignTenantToNewUser(userId: string, displayName: string): Promi
 export const authRouter = router({
   // ── Password registration (keeps working for self-hosted) ────
   register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
+    // Verify Turnstile token when provided (skipped in dev / self-hosted without secret key)
+    if (input.turnstileToken) {
+      const ip = getClientIpFromRequest(ctx.req);
+      const valid = await verifyTurnstile(input.turnstileToken, ip);
+      if (!valid) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Verification failed. Please refresh and try again." });
+      }
+    }
+
     const existing = await controlDb.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
     if (existing.length > 0) {
       throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
@@ -219,6 +256,15 @@ export const authRouter = router({
 
   // ── Magic link: request ──────────────────────────────────────
   sendMagicLink: publicProcedure.input(magicLinkRequestSchema).mutation(async ({ input, ctx }) => {
+    // Verify Turnstile token when provided (skipped in dev / self-hosted without secret key)
+    if (input.turnstileToken) {
+      const ip = getClientIpFromRequest(ctx.req);
+      const valid = await verifyTurnstile(input.turnstileToken, ip);
+      if (!valid) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Verification failed. Please refresh and try again." });
+      }
+    }
+
     const email = input.email.toLowerCase();
 
     // Rate limit: max 5 requests per email per 15 minutes

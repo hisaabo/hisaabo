@@ -15,6 +15,7 @@ import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { verifyTurnstile } from "./lib/turnstile.js";
 
 const app = new Hono();
 
@@ -448,30 +449,6 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 // ── Public Store API ─────────────────────────────────────────
 // Slug resolution cache: slug → { tenantId, businessId, expires }
 const slugCache = new Map<string, { tenantId: string; businessId: string; expires: number }>();
-
-// ── Cloudflare Turnstile verification ────────────────────────
-async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) {
-    if (process.env.NODE_ENV === "production") {
-      console.error("[turnstile] CRITICAL: TURNSTILE_SECRET_KEY not set in production!");
-      return false;
-    }
-    return true; // Allow in dev
-  }
-
-  const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      secret,
-      response: token,
-      remoteip: ip || undefined,
-    }),
-  });
-  const data = await res.json() as { success: boolean };
-  return data.success;
-}
 
 // Rate limit for order placement: phone → { count, reset }
 const orderRateMap = new Map<string, { count: number; reset: number }>();
