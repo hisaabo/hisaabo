@@ -30,13 +30,13 @@ jobs:
       - name: Get previous tag
         id: prev
         run: |
-          PREV=$(git tag --sort=-creatordate | head -2 | tail -1)
-          if [ -z "$PREV" ] || [ "$PREV" = "${{ github.ref_name }}" ]; then
-            # First tag — build everything
-            echo "ref=HEAD~50" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=$PREV" >> "$GITHUB_OUTPUT"
+          # Get the tag before the current one
+          PREV=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          if [ -z "$PREV" ]; then
+            # First tag ever — use the initial commit so everything builds
+            PREV=$(git rev-list --max-parents=0 HEAD)
           fi
+          echo "ref=$PREV" >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v3
         id: filter
