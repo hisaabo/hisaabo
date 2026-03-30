@@ -25,6 +25,7 @@ interface SettingItem {
 
 const SETTINGS: SettingItem[] = [
   { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business" },
+  { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents" },
   { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
   { label: "Online Store", icon: "storefront-outline", description: "Store settings" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },

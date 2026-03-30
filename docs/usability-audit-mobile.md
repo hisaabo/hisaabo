@@ -453,5 +453,3 @@ Issues would benefit from validation through:
 - Session replay or analytics funnel analysis for the invoice creation flow specifically
 
 ---
-
-*File location: `/home/saurabh/Coding/billkitaab/hisaabo/docs/usability-audit-mobile.md`*

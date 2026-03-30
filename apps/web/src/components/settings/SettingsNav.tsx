@@ -72,10 +72,21 @@ function StoreIcon() {
   );
 }
 
+function TargetIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
+    </svg>
+  );
+}
+
 const SETTINGS_TABS: SettingsTab[] = [
   { value: "business", label: "Business", icon: <BuildingIcon /> },
   { value: "documents", label: "Documents", icon: <DocumentIcon /> },
   { value: "team", label: "Team", icon: <UsersIcon /> },
+  { value: "targets", label: "Sales Targets", icon: <TargetIcon /> },
   { value: "appearance", label: "Appearance", icon: <PaletteIcon /> },
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },

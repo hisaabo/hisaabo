@@ -214,6 +214,50 @@ export const itemRouter = router({
       return item;
     }),
 
+  renameUnit: adminProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      oldUnit: z.string().min(1),
+      newUnit: z.string().min(1),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "Item");
+      const [item] = await ctx.db.select()
+        .from(items)
+        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+      if (!item) throw new Error("Item not found");
+
+      const isBase = item.unit === input.oldUnit;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+
+      if (isBase) {
+        // Renaming the base unit
+        updates.unit = input.newUnit;
+        // Also update unitVariants if they reference the old unit name in display
+      } else {
+        // Renaming an alt unit — update unitVariants array
+        const variants = (item.unitVariants as Array<{ unit: string; conversionFactor: number; salePrice: string }>) || [];
+        updates.unitVariants = variants.map((v) =>
+          v.unit === input.oldUnit ? { ...v, unit: input.newUnit } : v
+        );
+      }
+
+      // Update the item
+      await ctx.db.update(items)
+        .set(updates)
+        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+
+      // Cascade: update selectedUnit on all invoice line items for this item
+      await ctx.db.update(invoiceItems)
+        .set({ selectedUnit: input.newUnit })
+        .where(and(
+          eq(invoiceItems.itemId, input.id),
+          eq(invoiceItems.selectedUnit, input.oldUnit),
+        ));
+
+      return { success: true, renamedFrom: input.oldUnit, renamedTo: input.newUnit };
+    }),
+
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
@@ -232,6 +276,18 @@ export const itemRouter = router({
       const [row] = await ctx.db.select({
         totalSaleAmount: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.totalAmount}::numeric ELSE 0 END), 0)::text`,
         totalSaleQty: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1) ELSE 0 END), 0)::text`,
+        // Gross avg: list price per base unit (unitPrice before any discount or tax)
+        avgGrossPrice: sql<string>`COALESCE(
+          ROUND(
+            SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.unitPrice}::numeric * ${invoiceItems.quantity}::numeric ELSE 0 END)
+            / NULLIF(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1) ELSE 0 END), 0),
+          2), 0)::text`,
+        // Net avg: realized price per base unit (totalAmount minus tax, i.e. after discount, before tax)
+        avgNetPrice: sql<string>`COALESCE(
+          ROUND(
+            SUM(CASE WHEN ${invoices.type} = 'sale' THEN (${invoiceItems.totalAmount}::numeric - ${invoiceItems.taxAmount}::numeric) ELSE 0 END)
+            / NULLIF(SUM(CASE WHEN ${invoices.type} = 'sale' THEN ${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1) ELSE 0 END), 0),
+          2), 0)::text`,
         totalPurchaseAmount: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'purchase' THEN ${invoiceItems.totalAmount}::numeric ELSE 0 END), 0)::text`,
         totalPurchaseQty: sql<string>`COALESCE(SUM(CASE WHEN ${invoices.type} = 'purchase' THEN ${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1) ELSE 0 END), 0)::text`,
         saleInvoiceCount: sql<number>`COUNT(DISTINCT CASE WHEN ${invoices.type} = 'sale' THEN ${invoices.id} END)::int`,
@@ -248,13 +304,12 @@ export const itemRouter = router({
         );
 
       const totalSaleQty = parseFloat(row.totalSaleQty);
-      const totalSaleAmount = parseFloat(row.totalSaleAmount);
-      const avgSalePrice = totalSaleQty > 0 ? totalSaleAmount / totalSaleQty : 0;
 
       return {
         totalSaleAmount: row.totalSaleAmount,
         totalSaleQty: row.totalSaleQty,
-        avgSalePrice: avgSalePrice.toFixed(2),
+        avgGrossPrice: totalSaleQty > 0 ? row.avgGrossPrice : "0",
+        avgNetPrice: totalSaleQty > 0 ? row.avgNetPrice : "0",
         totalPurchaseAmount: row.totalPurchaseAmount,
         totalPurchaseQty: row.totalPurchaseQty,
         saleInvoiceCount: row.saleInvoiceCount,

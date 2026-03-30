@@ -96,7 +96,13 @@ export const documentRouter = router({
         .where(eq(invoiceItems.invoiceId, sourceDoc.id))
         .orderBy(invoiceItems.sortOrder);
 
-      // 2. Build createInvoiceSchema-compatible input from source
+      // 2. Build createInvoiceSchema-compatible input from source.
+      // When converting a delivery_challan to an invoice, skip the stock adjustment
+      // because the challan already decremented stock — we must not decrement again.
+      const skipStockAdjustment =
+        sourceDoc.documentType === "delivery_challan" &&
+        input.targetDocumentType === "invoice";
+
       const convertInput = createInvoiceSchema.parse({
         partyId: sourceDoc.partyId,
         type: sourceDoc.type,
@@ -108,6 +114,7 @@ export const documentRouter = router({
         additionalCharges: sourceDoc.additionalCharges,
         roundOff: sourceDoc.roundOff,
         referenceDocumentId: sourceDoc.id,
+        skipStockAdjustment,
         lineItems: sourceLineItems.map((li) => ({
           itemId: li.itemId ?? undefined,
           description: li.description,

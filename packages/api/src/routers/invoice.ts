@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, itemVariants, businesses, parties } from "@hisaabo/db";
+import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -30,7 +30,13 @@ export const invoiceRouter = router({
         isNull(invoices.deletedAt),
       ];
       if (input.type) conditions.push(eq(invoices.type, input.type));
-      if (input.status) conditions.push(eq(invoices.status, input.status));
+      if (input.status === "overdue") {
+        // Overdue is computed: due date has passed AND invoice is not paid/cancelled/draft
+        conditions.push(sql`${invoices.dueDate} < NOW()`);
+        conditions.push(sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`);
+      } else if (input.status) {
+        conditions.push(eq(invoices.status, input.status));
+      }
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
       if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
@@ -109,7 +115,26 @@ export const invoiceRouter = router({
           .where(eq(parties.id, invoice.partyId)).limit(1),
       ]);
 
-      return { ...invoice, lineItems, party: party ?? null };
+      // Fetch the base unit for each linked item so the UI can display a unit
+      // even when selectedUnit is null (i.e. the item's base unit was used)
+      const linkedItemIds = lineItems.map(li => li.itemId).filter((id): id is string => Boolean(id));
+      const itemUnitMap = new Map<string, string>();
+      if (linkedItemIds.length > 0) {
+        const itemUnits = await ctx.db
+          .select({ id: items.id, unit: items.unit })
+          .from(items)
+          .where(inArray(items.id, linkedItemIds));
+        for (const row of itemUnits) {
+          itemUnitMap.set(row.id, row.unit);
+        }
+      }
+
+      const lineItemsWithUnit = lineItems.map(li => ({
+        ...li,
+        itemUnit: li.itemId ? (itemUnitMap.get(li.itemId) ?? null) : null,
+      }));
+
+      return { ...invoice, lineItems: lineItemsWithUnit, party: party ?? null };
     }),
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
@@ -216,6 +241,7 @@ export const invoiceRouter = router({
         notes: input.notes,
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
+        deliveryMethod: input.deliveryMethod || "self_pickup",
         createdByUserId: ctx.user!.id,
         createdByName: ctx.user!.name,
       }).returning();
@@ -226,11 +252,13 @@ export const invoiceRouter = router({
         );
       }
 
-      // Update stock quantities for sale/purchase invoices
+      // Update stock quantities for sale/purchase invoices.
+      // Skip when skipStockAdjustment is set — used when converting from
+      // delivery_challan (which already decremented stock) to avoid double-counting.
       // Separate tracking for items (with conversion factor) and variants (no conversion)
       const itemStockMap = new Map<string, number>();
       const variantStockMap = new Map<string, number>();
-      for (const li of input.lineItems) {
+      if (!input.skipStockAdjustment) for (const li of input.lineItems) {
         if (li.variantId) {
           // Variant: stock lives on the variant, no conversion factor
           const qty = parseFloat(li.quantity);
@@ -263,6 +291,24 @@ export const invoiceRouter = router({
       return invoice;
     });
 
+    // Auto-create a shipment entry only when a shipping charge is present on a sale invoice.
+    // Self-pickup invoices (no shipping charge) don't get a shipment record.
+    if (input.type === "sale") {
+      const shippingCharge = (input.charges ?? []).find((c) =>
+        /shipping|delivery|freight|transport/i.test(c.label)
+      );
+      if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
+        await ctx.db.insert(shipments).values({
+          businessId: ctx.businessId,
+          invoiceId: invoice.id,
+          partyId: input.partyId,
+          mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
+          cost: shippingCharge.amount,
+          status: "pending",
+        });
+      }
+    }
+
     await logAudit(ctx.db, {
       businessId: ctx.businessId,
       userId: ctx.user!.id,
@@ -275,6 +321,23 @@ export const invoiceRouter = router({
 
     return invoice;
   }),
+
+  // Get the delivery method used on the most recent sale invoice for a party
+  lastDeliveryMethod: viewerProcedure
+    .input(z.object({ partyId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const [row] = await ctx.db.select({ deliveryMethod: invoices.deliveryMethod })
+        .from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.partyId, input.partyId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+        ))
+        .orderBy(desc(invoices.invoiceDate))
+        .limit(1);
+      return row?.deliveryMethod || "self_pickup";
+    }),
 
   updateStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))

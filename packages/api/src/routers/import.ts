@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions, shipments } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -104,9 +104,45 @@ export const importRouter = router({
           .map(r => r.name.toLowerCase())
       );
 
-      const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+      const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
       type ValidUnit = (typeof validUnits)[number];
 
+      // Map MyBillBook (and common variant) unit codes to our canonical units
+      function normalizeUnit(raw: string): ValidUnit {
+        const mapping: Record<string, ValidUnit> = {
+          "BAG": "bag", "BAGS": "bag",
+          "BOX": "box", "BOXES": "box",
+          "BTL": "btl", "BOTTLE": "btl", "BOTTLES": "btl",
+          "BUN": "bun", "BUNCH": "bun", "BUNCHES": "bun",
+          "EACH": "pcs",
+          "JAR": "jar", "JARS": "jar",
+          "KG": "kg", "KGS": "kg", "KILOGRAM": "kg", "KILOGRAMS": "kg",
+          "LTR": "l", "L": "l", "LITRE": "l", "LITRES": "l", "LITER": "l",
+          "ML": "ml", "MILLILITRE": "ml",
+          "M": "m", "METER": "m", "METRE": "m",
+          "CM": "cm", "CENTIMETER": "cm",
+          "FT": "ft", "FEET": "ft", "FOOT": "ft",
+          "IN": "in", "INCH": "in", "INCHES": "in",
+          "PAC": "pack", "PACK": "pack", "PACKS": "pack",
+          "PCS": "pcs", "PIECE": "pcs", "PIECES": "pcs", "NOS": "pcs", "NUMBERS": "pcs",
+          "PERSON": "person", "PERSONS": "person",
+          "PET": "pet",
+          "PKT": "pkt", "PACKET": "pkt", "PACKETS": "pkt",
+          "POCH": "pouch", "POUCH": "pouch", "POUCHES": "pouch",
+          "TON": "ton", "TONS": "ton", "TONNE": "ton",
+          "DOZEN": "dozen", "DZ": "dozen",
+          "PAIR": "pair", "PAIRS": "pair",
+          "SET": "set", "SETS": "set",
+          "G": "g", "GM": "g", "GMS": "g", "GRAM": "g", "GRAMS": "g",
+        };
+        const upper = raw.trim().toUpperCase();
+        // Check mapping first, then fall back to direct match against validUnits
+        if (mapping[upper]) return mapping[upper];
+        if ((validUnits as readonly string[]).includes(upper.toLowerCase())) return upper.toLowerCase() as ValidUnit;
+        return "other";
+      }
+
+      const unmappedUnits = new Set<string>();
       const newItems = [];
       for (const item of input.items) {
         // Check if item with same name already exists (case-insensitive)
@@ -115,10 +151,11 @@ export const importRouter = router({
           continue;
         }
 
-        // Validate unit against enum — fall back to "other" for unknown values
-        const unit: ValidUnit = (validUnits as readonly string[]).includes(item.unit)
-          ? (item.unit as ValidUnit)
-          : "other";
+        // Normalize unit using comprehensive mapping
+        const unit = normalizeUnit(item.unit);
+        if (unit === "other" && item.unit && item.unit.trim().toLowerCase() !== "other") {
+          unmappedUnits.add(item.unit.trim());
+        }
 
         newItems.push({
           businessId: ctx.businessId,
@@ -129,7 +166,7 @@ export const importRouter = router({
           taxPercent: item.taxPercent || "0",
           hsn: item.hsn || null,
           unit,
-          stockQuantity: item.stockQuantity || "0",
+          stockQuantity: "0", // always start at 0 — stock is built from imported invoices
           sku: item.sku || null,
           category: item.category || null,
           source: input.source,
@@ -146,7 +183,7 @@ export const importRouter = router({
         }
       }
 
-      return { created, skipped, total: input.items.length };
+      return { created, skipped, total: input.items.length, unmappedUnits: Array.from(unmappedUnits) };
     }),
 
   // ── Import invoices in batch (with optional line items) ─────────────────
@@ -175,6 +212,8 @@ export const importRouter = router({
           itemName: z.string().optional(),
           description: z.string(),
           quantity: z.string().default("1"),
+          unit: z.string().optional(),           // the unit this line was sold in (e.g. "KGS")
+          conversionFactor: z.string().optional(), // base units per this unit (e.g. "5" if 1 kg = 5 boxes)
           unitPrice: z.string(),
           taxPercent: z.string().default("0"),
           discountPercent: z.string().default("0"),
@@ -281,11 +320,14 @@ export const importRouter = router({
               discountPercent: li.discountPercent || "0",
             });
 
+            const cf = li.conversionFactor || "1";
             lineItemRows.push({
               invoiceId,
               itemId,
               description: li.description || li.itemName || "Imported item",
               quantity: li.quantity,
+              selectedUnit: li.unit || null,
+              conversionFactor: cf,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
               taxAmount: calc.taxAmount,
@@ -295,8 +337,9 @@ export const importRouter = router({
             });
 
             if (itemId) {
-              const qty = money.toNumber(li.quantity || "1");
-              stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + qty);
+              // Stock delta in base units: qty × conversionFactor
+              const baseQty = money.toNumber(li.quantity || "1") * money.toNumber(cf);
+              stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + baseQty);
             }
           }
         } else {
@@ -389,6 +432,31 @@ export const importRouter = router({
           const autoPayments = batch.map(b => b.autoPaymentRow).filter(Boolean);
           if (autoPayments.length > 0) {
             await tx.insert(payments).values(autoPayments);
+          }
+
+          // Auto-create shipment entries only for sale invoices with shipping charges
+          const shipmentRows = batch
+            .filter(b => b.invoiceRow.type === "sale")
+            .map(b => {
+              const charges = (b.invoiceRow.charges as Array<{ label: string; amount: string }>) || [];
+              const shippingCharge = charges.find((c) =>
+                /shipping|delivery|freight|transport/i.test(c.label)
+              );
+              if (!shippingCharge || parseFloat(shippingCharge.amount) <= 0) return null;
+              return {
+                businessId: b.invoiceRow.businessId,
+                invoiceId: b.invoiceId,
+                partyId: b.invoiceRow.partyId,
+                mode: "hand_delivery",
+                cost: shippingCharge.amount,
+                status: "delivered" as const,  // imported invoices are historical — shipment already happened
+                shipmentDate: b.invoiceRow.invoiceDate,
+                actualDelivery: b.invoiceRow.invoiceDate,
+              };
+            })
+            .filter(Boolean) as Array<{ businessId: string; invoiceId: string; partyId: string; mode: string; cost: string; status: "delivered"; shipmentDate: Date; actualDelivery: Date }>;
+          if (shipmentRows.length > 0) {
+            await tx.insert(shipments).values(shipmentRows);
           }
         });
       }

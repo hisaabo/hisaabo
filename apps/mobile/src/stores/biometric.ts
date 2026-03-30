@@ -39,8 +39,8 @@ interface BiometricState {
   /** Check if device supports biometric authentication */
   checkHardware: () => Promise<{ available: boolean; types: LocalAuthentication.AuthenticationType[] }>;
 
-  /** Attempt biometric authentication */
-  authenticate: () => Promise<boolean>;
+  /** Attempt biometric authentication. Returns { success, cancelled } */
+  authenticate: () => Promise<{ success: boolean; cancelled: boolean }>;
 
   /** Verify a PIN against stored hash */
   verifyPin: (pin: string) => Promise<boolean>;
@@ -160,9 +160,12 @@ export const useBiometricStore = create<BiometricState>((set, get) => ({
         disableDeviceFallback: true,
         fallbackLabel: "Use PIN",
       });
-      return result.success;
+      // When the user taps "Use PIN" / cancel on the system dialog,
+      // result.success is false and result.error is "user_cancel".
+      const cancelled = !result.success && result.error === "user_cancel";
+      return { success: result.success, cancelled };
     } catch {
-      return false;
+      return { success: false, cancelled: false };
     }
   },
 

@@ -11,6 +11,7 @@ export default function SettingsLayout() {
       <Stack.Screen name="business" options={{ headerShown: false }} />
       <Stack.Screen name="team" options={{ headerShown: false }} />
       <Stack.Screen name="profile" options={{ headerShown: false }} />
+      <Stack.Screen name="documents" options={{ headerShown: false }} />
     </Stack>
   );
 }

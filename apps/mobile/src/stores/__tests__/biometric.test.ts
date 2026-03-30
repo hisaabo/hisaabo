@@ -476,15 +476,15 @@ describe("biometric store — fingerprint/PIN lock management", () => {
   });
 
   // -------------------------------------------------------------------------
-  it("authenticate() returns true when LocalAuthentication.authenticateAsync succeeds", async () => {
+  it("authenticate() returns { success: true, cancelled: false } when LocalAuthentication.authenticateAsync succeeds", async () => {
     // WHAT: Happy path — user successfully scans their fingerprint or face.
-    // WHY: If this returns false despite a successful scan, the lock screen
+    // WHY: If this returns success=false despite a successful scan, the lock screen
     //      never dismisses and the user is locked out of their own app.
     mockAuthenticate.mockResolvedValue({ success: true });
 
     const result = await useBiometricStore.getState().authenticate();
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ success: true, cancelled: false });
     expect(mockAuthenticate).toHaveBeenCalledWith({
       promptMessage: "Unlock Hisaabo",
       cancelLabel: "Use PIN",
@@ -494,20 +494,31 @@ describe("biometric store — fingerprint/PIN lock management", () => {
   });
 
   // -------------------------------------------------------------------------
-  it("authenticate() returns false when the user cancels or the scan fails", async () => {
-    // WHAT: User presses "Use PIN" or covers the sensor — authentication is
-    //       not successful.
-    // WHY: Must return false so the lock screen stays visible and the user
-    //      is prompted to try again or use their PIN.
+  it("authenticate() returns { success: false, cancelled: true } when the user cancels", async () => {
+    // WHAT: User presses "Use PIN" (cancel) on the system biometric dialog.
+    // WHY: Must return cancelled=true so the lock screen can auto-switch to
+    //      PIN mode instead of showing a generic error.
+    mockAuthenticate.mockResolvedValue({ success: false, error: "user_cancel" });
+
+    const result = await useBiometricStore.getState().authenticate();
+
+    expect(result).toEqual({ success: false, cancelled: true });
+  });
+
+  // -------------------------------------------------------------------------
+  it("authenticate() returns { success: false, cancelled: false } when the scan fails", async () => {
+    // WHAT: User's fingerprint doesn't match or face is not recognized.
+    // WHY: Must return success=false so the lock screen stays visible and the
+    //      user is prompted to try again or use their PIN.
     mockAuthenticate.mockResolvedValue({ success: false });
 
     const result = await useBiometricStore.getState().authenticate();
 
-    expect(result).toBe(false);
+    expect(result).toEqual({ success: false, cancelled: false });
   });
 
   // -------------------------------------------------------------------------
-  it("authenticate() returns false when LocalAuthentication.authenticateAsync throws", async () => {
+  it("authenticate() returns { success: false, cancelled: false } when LocalAuthentication.authenticateAsync throws", async () => {
     // WHAT: The biometric API throws (hardware locked after too many failures,
     //       requires device credential re-entry, etc.).
     // WHY: Must fail closed (return false) — never grant access on an error.
@@ -515,6 +526,6 @@ describe("biometric store — fingerprint/PIN lock management", () => {
 
     const result = await useBiometricStore.getState().authenticate();
 
-    expect(result).toBe(false);
+    expect(result).toEqual({ success: false, cancelled: false });
   });
 });

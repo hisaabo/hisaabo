@@ -125,9 +125,13 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
 
   const attemptBiometric = useCallback(async () => {
     if (verifying) return;
-    const success = await authenticate();
-    if (success) {
+    const result = await authenticate();
+    if (result.success) {
       handleUnlockSuccess();
+    } else if (result.cancelled && pinEnabled) {
+      // User tapped "Use PIN" on the system biometric dialog
+      setMode("pin");
+      setError("");
     } else {
       haptic.error();
       const newCount = biometricFailCount + 1;
@@ -136,7 +140,11 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
         setMode("pin");
         setError("Too many attempts. Use PIN instead.");
       } else {
-        setError("Authentication failed. Tap to try again.");
+        setError(
+          pinEnabled
+            ? "Authentication failed. Tap to try again, or use PIN."
+            : "Authentication failed. Tap to try again."
+        );
       }
     }
   }, [authenticate, biometricFailCount, handleUnlockSuccess, pinEnabled, verifying]);

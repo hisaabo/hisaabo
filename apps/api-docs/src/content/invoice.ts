@@ -184,6 +184,7 @@ resp = httpx.get(
         { name: "roundOff", type: "string (decimal)", required: false, description: "Round-off adjustment (can be negative), e.g. `\"0.50\"`", default: "0" },
         { name: "notes", type: "string", required: false, description: "Internal or customer-facing notes (max 2000 chars)" },
         { name: "termsAndConditions", type: "string", required: false, description: "T&C text printed on the invoice (max 2000 chars)" },
+        { name: "deliveryMethod", type: "enum", required: false, description: "How the goods are delivered. Defaults to `\"self_pickup\"` if omitted. Self-pickup invoices do not auto-create a shipment record. Use `invoice.lastDeliveryMethod` to pre-populate this from the party's previous invoice.", default: "self_pickup", enumValues: ["self_pickup", "hand_delivery", "courier", "bus", "transport", "post"] },
         { name: "referenceDocumentId", type: "string (UUID)", required: false, description: "ID of the source document (e.g. quotation being converted to invoice)" },
       ],
       output: {
@@ -367,6 +368,52 @@ print("Total:  ", invoice["totalAmount"])    # "26250.00"`,
         "Deleting an invoice does NOT reverse stock adjustments. Reverse them manually via `item.adjustStock` if needed.",
         "An audit log entry is created for every deletion.",
       ],
+    },
+    {
+      id: "invoice-last-delivery-method",
+      method: "query",
+      path: "invoice.lastDeliveryMethod",
+      title: "Get Last Delivery Method",
+      description: "Returns the `deliveryMethod` from the most recent sale invoice for a given party. Used by the invoice form to auto-select the delivery method when creating a repeat invoice, reducing re-entry friction. Returns `null` if the party has no prior sale invoices.",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "partyId", type: "string (UUID)", required: true, description: "The party whose last sale invoice delivery method should be returned." },
+      ],
+      output: {
+        description: "The delivery method string from the party's most recent sale invoice, or `null`.",
+        example: { deliveryMethod: "courier" },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/invoice.lastDeliveryMethod?input=%7B%22json%22%3A%7B%22partyId%22%3A%22party-uuid%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const { deliveryMethod } = await trpc.invoice.lastDeliveryMethod.query({
+  partyId: "party-uuid",
+});
+// Use as the default value in the invoice form
+// deliveryMethod is null if no prior invoices exist for this party`,
+        python: `import httpx, urllib.parse, json
+
+params = urllib.parse.urlencode({
+    "input": json.dumps({"json": {"partyId": "party-uuid"}})
+})
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/invoice.lastDeliveryMethod?{params}",
+    headers={
+        "Authorization": f"Bearer {session_token}",
+        "x-business-id": business_id,
+    },
+)
+result = resp.json()["result"]["data"]["json"]
+delivery_method = result.get("deliveryMethod")  # None if no prior invoices`,
+      },
+      gotchas: [
+        "Only sale invoices are considered — purchase invoices are excluded.",
+        "Returns `null` (not an error) when no prior invoices exist. Always handle the null case before using the result as a default.",
+        "The returned value matches the `deliveryMethods` enum exported from `@hisaabo/shared`: `self_pickup`, `hand_delivery`, `courier`, `bus`, `transport`, `post`.",
+      ],
+      relatedEndpoints: ["invoice-create"],
     },
   ],
 };

@@ -57,6 +57,10 @@ export const businesses = pgTable("businesses", {
   storeDeliveryNote: text("store_delivery_note"),
   storeWhatsappNumber: text("store_whatsapp_number"),
   storeAllowNegativeStock: boolean("store_allow_negative_stock").default(false).notNull(),
+  // Custom shipping/delivery methods configured by the business (in addition to built-in ones)
+  customShippingMethods: jsonb("custom_shipping_methods").$type<Array<{ id: string; label: string; hasTracking: boolean }>>(),
+  // Carrier API credentials (encrypted at rest) — keyed by carrier slug
+  carrierCredentials: jsonb("carrier_credentials").$type<Record<string, { apiKey?: string; apiSecret?: string; accountId?: string; enabled: boolean }>>(),
   nextStoreOrderNumber: integer("next_store_order_number").default(1).notNull(),
   storeOrderPrefix: text("store_order_prefix").default("ORD").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -189,6 +193,7 @@ export const invoices = pgTable("invoices", {
   // No FK to users — plain UUID, users live in control schema (different DB in cloud mode)
   createdByUserId: uuid("created_by_user_id"),
   createdByName: text("created_by_name"), // denormalized for display + imports
+  deliveryMethod: text("delivery_method").default("self_pickup"), // self_pickup, hand_delivery, courier, bus, transport, post
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -351,6 +356,38 @@ export const stockAdjustments = pgTable("stock_adjustments", {
   index("stock_adj_date_idx").on(t.businessId, t.adjustmentDate),
 ]);
 
+// ── Sales Targets ─────────────────────────────────────────────
+
+export const salesTargets = pgTable("sales_targets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull(), // the seller this target is for — no FK (users live in control schema)
+
+  // Target type — what metric to track
+  targetType: text("target_type").notNull(), // "order_count" | "order_value" | "item_quantity"
+
+  // Target value
+  targetValue: numeric("target_value", { precision: 15, scale: 2 }).notNull(), // e.g., 50 orders, ₹500000, 1000 units
+
+  // Optional: specific item the target applies to (null = all items)
+  itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
+
+  // Period
+  periodType: text("period_type").notNull(), // "daily" | "weekly" | "monthly" | "quarterly" | "custom"
+  periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+  periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+
+  // Metadata
+  notes: text("notes"),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("sales_targets_business_idx").on(t.businessId),
+  index("sales_targets_user_idx").on(t.businessId, t.userId),
+  index("sales_targets_period_idx").on(t.businessId, t.periodStart, t.periodEnd),
+]);
+
 // ── Audit Log ──────────────────────────────────────────────────
 
 export const auditLog = pgTable("audit_log", {
@@ -368,6 +405,67 @@ export const auditLog = pgTable("audit_log", {
   index("audit_log_business_idx").on(t.businessId),
   index("audit_log_entity_idx").on(t.entityType, t.entityId),
   index("audit_log_date_idx").on(t.businessId, t.createdAt),
+]);
+
+// ── Shipments ─────────────────────────────────────────────────
+
+export const shipmentStatusEnum = pgEnum("shipment_status", [
+  "pending", "shipped", "in_transit", "delivered", "returned",
+]);
+
+export const shipments = pgTable("shipments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  partyId: uuid("party_id").references(() => parties.id, { onDelete: "set null" }),
+  // Shipping details
+  carrier: text("carrier"),                     // e.g. "Delhivery", "BlueDart", "Self", "Transport"
+  mode: text("mode"),                           // e.g. "courier", "transport", "hand_delivery", "post"
+  trackingNumber: text("tracking_number"),
+  trackingUrl: text("tracking_url"),
+  // Costs & weight
+  cost: numeric("cost", { precision: 15, scale: 2 }).default("0").notNull(),
+  weight: numeric("weight", { precision: 10, scale: 3 }),  // in kg
+  // Addresses
+  shippingAddress: text("shipping_address"),
+  shippingCity: text("shipping_city"),
+  shippingPincode: text("shipping_pincode"),
+  // Carrier API integration (future-proofing)
+  carrierOrderId: text("carrier_order_id"),    // carrier's internal order/AWB ID
+  labelUrl: text("label_url"),                  // shipping label PDF URL from carrier
+  manifestId: text("manifest_id"),              // carrier manifest/pickup ID
+  carrierMeta: jsonb("carrier_meta"),           // carrier-specific data (weight slabs, dimensions, COD, etc.)
+  // Status & dates
+  status: shipmentStatusEnum("status").default("pending").notNull(),
+  shipmentDate: timestamp("shipment_date", { withTimezone: true }),
+  estimatedDelivery: timestamp("estimated_delivery", { withTimezone: true }),
+  actualDelivery: timestamp("actual_delivery", { withTimezone: true }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("shipments_business_idx").on(t.businessId),
+  index("shipments_invoice_idx").on(t.invoiceId),
+  index("shipments_party_idx").on(t.partyId),
+  index("shipments_status_idx").on(t.businessId, t.status),
+  index("shipments_date_idx").on(t.businessId, t.shipmentDate),
+  index("shipments_carrier_order_idx").on(t.carrierOrderId),
+]);
+
+// Shipment status timeline — each event is a scan/status update from carrier or manual
+export const shipmentEvents = pgTable("shipment_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  shipmentId: uuid("shipment_id").notNull().references(() => shipments.id, { onDelete: "cascade" }),
+  status: text("status").notNull(),               // our status or carrier-specific status string
+  statusDetail: text("status_detail"),             // human-readable detail (e.g. "Package arrived at Mumbai hub")
+  location: text("location"),                      // scan location from carrier
+  source: text("source").default("manual"),        // "manual" | "webhook" | "api_poll"
+  carrierStatus: text("carrier_status"),           // raw carrier status code before mapping
+  eventTime: timestamp("event_time", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("shipment_events_shipment_idx").on(t.shipmentId),
+  index("shipment_events_time_idx").on(t.shipmentId, t.eventTime),
 ]);
 
 // ── Store Orders ───────────────────────────────────────────────
@@ -418,6 +516,7 @@ export const businessesRelations = relations(businesses, ({ many }) => ({
   expenses: many(expenses),
   bankAccounts: many(bankAccounts),
   storeOrders: many(storeOrders),
+  salesTargets: many(salesTargets),
 }));
 
 export const partiesRelations = relations(parties, ({ one, many }) => ({
@@ -480,4 +579,20 @@ export const stockAdjustmentsRelations = relations(stockAdjustments, ({ one }) =
   business: one(businesses, { fields: [stockAdjustments.businessId], references: [businesses.id] }),
   item: one(items, { fields: [stockAdjustments.itemId], references: [items.id] }),
   variant: one(itemVariants, { fields: [stockAdjustments.variantId], references: [itemVariants.id] }),
+}));
+
+export const shipmentsRelations = relations(shipments, ({ one, many }) => ({
+  business: one(businesses, { fields: [shipments.businessId], references: [businesses.id] }),
+  invoice: one(invoices, { fields: [shipments.invoiceId], references: [invoices.id] }),
+  party: one(parties, { fields: [shipments.partyId], references: [parties.id] }),
+  events: many(shipmentEvents),
+}));
+
+export const shipmentEventsRelations = relations(shipmentEvents, ({ one }) => ({
+  shipment: one(shipments, { fields: [shipmentEvents.shipmentId], references: [shipments.id] }),
+}));
+
+export const salesTargetsRelations = relations(salesTargets, ({ one }) => ({
+  business: one(businesses, { fields: [salesTargets.businessId], references: [businesses.id] }),
+  item: one(items, { fields: [salesTargets.itemId], references: [items.id] }),
 }));

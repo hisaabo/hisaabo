@@ -10,8 +10,8 @@ export default function GSTReportsScreen() {
         <View style={styles.iconWrapper}>
           <Ionicons name="pie-chart-outline" size={56} color={colors.brand} />
         </View>
-        <Text style={styles.heading}>GST Reports</Text>
-        <Text style={styles.subtext}>Generate GSTR-1, GSTR-3B, and other GST compliance reports.</Text>
+        <Text style={styles.heading}>GST Returns</Text>
+        <Text style={styles.subtext}>Generate GSTR-1, GSTR-3B, and other GST return data for filing.</Text>
         <View style={styles.comingSoon}>
           <Text style={styles.comingSoonText}>Coming soon</Text>
         </View>

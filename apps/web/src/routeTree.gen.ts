@@ -9,8 +9,10 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ShipmentsRouteImport } from './routes/shipments'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SalesReturnsRouteImport } from './routes/sales-returns'
+import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as QuotationsRouteImport } from './routes/quotations'
 import { Route as ProformaInvoicesRouteImport } from './routes/proforma-invoices'
 import { Route as PaymentsRouteImport } from './routes/payments'
@@ -27,6 +29,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
 
+const ShipmentsRoute = ShipmentsRouteImport.update({
+  id: '/shipments',
+  path: '/shipments',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -35,6 +42,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SalesReturnsRoute = SalesReturnsRouteImport.update({
   id: '/sales-returns',
   path: '/sales-returns',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const QuotationsRoute = QuotationsRouteImport.update({
@@ -127,8 +139,10 @@ export interface FileRoutesByFullPath {
   '/payments': typeof PaymentsRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
+  '/reports': typeof ReportsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/shipments': typeof ShipmentsRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -146,8 +160,10 @@ export interface FileRoutesByTo {
   '/payments': typeof PaymentsRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
+  '/reports': typeof ReportsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/shipments': typeof ShipmentsRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -166,8 +182,10 @@ export interface FileRoutesById {
   '/payments': typeof PaymentsRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
+  '/reports': typeof ReportsRoute
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
+  '/shipments': typeof ShipmentsRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -187,8 +205,10 @@ export interface FileRouteTypes {
     | '/payments'
     | '/proforma-invoices'
     | '/quotations'
+    | '/reports'
     | '/sales-returns'
     | '/settings'
+    | '/shipments'
     | '/auth/complete-profile'
     | '/auth/verify'
   fileRoutesByTo: FileRoutesByTo
@@ -206,8 +226,10 @@ export interface FileRouteTypes {
     | '/payments'
     | '/proforma-invoices'
     | '/quotations'
+    | '/reports'
     | '/sales-returns'
     | '/settings'
+    | '/shipments'
     | '/auth/complete-profile'
     | '/auth/verify'
   id:
@@ -225,8 +247,10 @@ export interface FileRouteTypes {
     | '/payments'
     | '/proforma-invoices'
     | '/quotations'
+    | '/reports'
     | '/sales-returns'
     | '/settings'
+    | '/shipments'
     | '/auth/complete-profile'
     | '/auth/verify'
   fileRoutesById: FileRoutesById
@@ -245,14 +269,23 @@ export interface RootRouteChildren {
   PaymentsRoute: typeof PaymentsRoute
   ProformaInvoicesRoute: typeof ProformaInvoicesRoute
   QuotationsRoute: typeof QuotationsRoute
+  ReportsRoute: typeof ReportsRoute
   SalesReturnsRoute: typeof SalesReturnsRoute
   SettingsRoute: typeof SettingsRoute
+  ShipmentsRoute: typeof ShipmentsRoute
   AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
   AuthVerifyRoute: typeof AuthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/shipments': {
+      id: '/shipments'
+      path: '/shipments'
+      fullPath: '/shipments'
+      preLoaderRoute: typeof ShipmentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -265,6 +298,13 @@ declare module '@tanstack/react-router' {
       path: '/sales-returns'
       fullPath: '/sales-returns'
       preLoaderRoute: typeof SalesReturnsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/quotations': {
@@ -389,8 +429,10 @@ const rootRouteChildren: RootRouteChildren = {
   PaymentsRoute: PaymentsRoute,
   ProformaInvoicesRoute: ProformaInvoicesRoute,
   QuotationsRoute: QuotationsRoute,
+  ReportsRoute: ReportsRoute,
   SalesReturnsRoute: SalesReturnsRoute,
   SettingsRoute: SettingsRoute,
+  ShipmentsRoute: ShipmentsRoute,
   AuthCompleteProfileRoute: AuthCompleteProfileRoute,
   AuthVerifyRoute: AuthVerifyRoute,
 }

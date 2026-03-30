@@ -594,4 +594,266 @@ export const dashboardRouter = router({
         },
       };
     }),
+
+  // ── Payment Mode Breakdown ────────────────────────────────────────────────
+
+  paymentModeBreakdown: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+      const conditions = [
+        eq(payments.businessId, ctx.businessId),
+        sql`${payments.deletedAt} IS NULL`,
+      ];
+      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+
+      const results = await ctx.db
+        .select({
+          mode: payments.mode,
+          total: sql<string>`SUM(${payments.amount}::numeric)::text`,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(payments)
+        .where(and(...conditions))
+        .groupBy(payments.mode)
+        .orderBy(sql`SUM(${payments.amount}::numeric) DESC`);
+
+      return results;
+    }),
+
+  // ── Collection Efficiency ─────────────────────────────────────────────────
+
+  collectionEfficiency: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      // Current period
+      const currConditions = [
+        eq(invoices.businessId, ctx.businessId),
+        eq(invoices.type, "sale"),
+        eq(invoices.documentType, "invoice"),
+        sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+      ];
+      if (input.fromDate) currConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
+      if (input.toDate) currConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+
+      const [curr] = await ctx.db
+        .select({
+          totalInvoiced: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+          totalCollected: sql<string>`COALESCE(SUM(${invoices.amountPaid}::numeric), 0)::text`,
+          invoiceCount: sql<number>`COUNT(*)::int`,
+        })
+        .from(invoices)
+        .where(and(...currConditions));
+
+      // Previous period — same duration, shifted back
+      let prevTotalInvoiced = "0";
+      let prevTotalCollected = "0";
+
+      if (input.fromDate && input.toDate) {
+        const from = new Date(input.fromDate);
+        const to = new Date(input.toDate);
+        const durationMs = to.getTime() - from.getTime();
+        const prevFrom = new Date(from.getTime() - durationMs);
+        const prevTo = new Date(from.getTime() - 1);
+
+        const prevConditions = [
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          gte(invoices.invoiceDate, prevFrom),
+          lte(invoices.invoiceDate, prevTo),
+        ];
+
+        const [prev] = await ctx.db
+          .select({
+            totalInvoiced: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+            totalCollected: sql<string>`COALESCE(SUM(${invoices.amountPaid}::numeric), 0)::text`,
+          })
+          .from(invoices)
+          .where(and(...prevConditions));
+
+        prevTotalInvoiced = prev?.totalInvoiced ?? "0";
+        prevTotalCollected = prev?.totalCollected ?? "0";
+      }
+
+      const invoiced = parseFloat(curr?.totalInvoiced ?? "0");
+      const collected = parseFloat(curr?.totalCollected ?? "0");
+      const efficiencyPct = invoiced > 0 ? Math.round((collected / invoiced) * 100) : 0;
+
+      const prevInvoiced = parseFloat(prevTotalInvoiced);
+      const prevCollected = parseFloat(prevTotalCollected);
+      const prevEfficiencyPct = prevInvoiced > 0 ? Math.round((prevCollected / prevInvoiced) * 100) : null;
+
+      return {
+        totalInvoiced: curr?.totalInvoiced ?? "0",
+        totalCollected: curr?.totalCollected ?? "0",
+        efficiencyPct,
+        prevEfficiencyPct,
+        invoiceCount: curr?.invoiceCount ?? 0,
+      };
+    }),
+
+  // ── Expense Category Breakdown ────────────────────────────────────────────
+
+  expenseCategoryBreakdown: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime().optional(),
+      toDate: z.string().datetime().optional(),
+      limit: z.number().int().min(3).max(20).default(8),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+      const conditions = [
+        eq(expenses.businessId, ctx.businessId),
+        sql`${expenses.deletedAt} IS NULL`,
+      ];
+      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+
+      const results = await ctx.db
+        .select({
+          category: expenses.category,
+          total: sql<string>`SUM(${expenses.amount}::numeric)::text`,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(expenses)
+        .where(and(...conditions))
+        .groupBy(expenses.category)
+        .orderBy(sql`SUM(${expenses.amount}::numeric) DESC`)
+        .limit(input.limit);
+
+      const [grandTotal] = await ctx.db
+        .select({
+          total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
+        })
+        .from(expenses)
+        .where(and(...conditions));
+
+      return {
+        categories: results,
+        grandTotal: grandTotal?.total ?? "0",
+      };
+    }),
+
+  // ── Monthly Comparison ────────────────────────────────────────────────────
+
+  monthlyComparison: viewerProcedure
+    .query(async ({ ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const now = new Date();
+      const currMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const currMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+      const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+
+      const [
+        [currSales],
+        [prevSales],
+        [currExpenses],
+        [prevExpenses],
+        [currPurchases],
+        [prevPurchases],
+      ] = await Promise.all([
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices).where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          gte(invoices.invoiceDate, currMonthStart),
+          lte(invoices.invoiceDate, currMonthEnd),
+        )),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices).where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          gte(invoices.invoiceDate, prevMonthStart),
+          lte(invoices.invoiceDate, prevMonthEnd),
+        )),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
+        }).from(expenses).where(and(
+          eq(expenses.businessId, ctx.businessId),
+          gte(expenses.expenseDate, currMonthStart),
+          lte(expenses.expenseDate, currMonthEnd),
+        )),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
+        }).from(expenses).where(and(
+          eq(expenses.businessId, ctx.businessId),
+          gte(expenses.expenseDate, prevMonthStart),
+          lte(expenses.expenseDate, prevMonthEnd),
+        )),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices).where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "purchase"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          gte(invoices.invoiceDate, currMonthStart),
+          lte(invoices.invoiceDate, currMonthEnd),
+        )),
+
+        ctx.db.select({
+          total: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)::text`,
+        }).from(invoices).where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.type, "purchase"),
+          eq(invoices.documentType, "invoice"),
+          sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+          gte(invoices.invoiceDate, prevMonthStart),
+          lte(invoices.invoiceDate, prevMonthEnd),
+        )),
+      ]);
+
+      function pctChange(curr: string, prev: string): number | null {
+        const c = parseFloat(curr);
+        const p = parseFloat(prev);
+        if (p === 0) return null;
+        return Math.round(((c - p) / p) * 100);
+      }
+
+      const currMonthName = currMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
+      const prevMonthName = prevMonthStart.toLocaleString("en-IN", { month: "short", year: "2-digit" });
+
+      return {
+        currMonth: currMonthName,
+        prevMonth: prevMonthName,
+        sales: {
+          curr: currSales?.total ?? "0",
+          prev: prevSales?.total ?? "0",
+          pctChange: pctChange(currSales?.total ?? "0", prevSales?.total ?? "0"),
+        },
+        purchases: {
+          curr: currPurchases?.total ?? "0",
+          prev: prevPurchases?.total ?? "0",
+          pctChange: pctChange(currPurchases?.total ?? "0", prevPurchases?.total ?? "0"),
+        },
+        expenses: {
+          curr: currExpenses?.total ?? "0",
+          prev: prevExpenses?.total ?? "0",
+          pctChange: pctChange(currExpenses?.total ?? "0", prevExpenses?.total ?? "0"),
+        },
+      };
+    }),
 });

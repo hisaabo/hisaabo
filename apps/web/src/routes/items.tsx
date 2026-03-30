@@ -16,6 +16,7 @@ import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Listbox } from "@/components/ui/Listbox";
+import { Combobox } from "@/components/ui/Combobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
@@ -79,8 +80,11 @@ function getCompatibleAltUnits(baseUnit: string) {
   // Packaging is always compatible (a "5kg bag" or "250ml bottle" makes sense)
   for (const u of UNIT_CATEGORIES.packaging) compatible.add(u);
 
-  // If base is packaging/counting, also allow other packaging/counting
+  // If base is packaging/counting, also allow weight, volume, and counting
+  // (e.g., a "box" of strawberries can also be sold by kg)
   if (baseCategory === "packaging" || baseCategory === "counting") {
+    for (const u of UNIT_CATEGORIES.weight) compatible.add(u);
+    for (const u of UNIT_CATEGORIES.volume) compatible.add(u);
     for (const u of UNIT_CATEGORIES.counting) compatible.add(u);
   }
 
@@ -378,11 +382,6 @@ function ItemsPage() {
                         {item.itemMode === "variants" && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400 shrink-0">
                             VAR
-                          </span>
-                        )}
-                        {item.itemMode === "alt_units" && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-400 shrink-0">
-                            ALT
                           </span>
                         )}
                         <div>
@@ -830,12 +829,12 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
                   const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
                   return (
                     <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                      <Listbox
+                      <Combobox
                         label={i === 0 ? "Unit" : ""}
                         value={v.unit}
                         onChange={(val) => updateUnitVariant(i, "unit", val)}
                         options={availableUnits}
-                        placeholder="Select unit"
+                        placeholder="Search unit"
                       />
                       <InputField
                         label={i === 0 ? `Per ${unit}` : ""}
@@ -1141,6 +1140,8 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  const renameUnitMut = trpc.item.renameUnit.useMutation();
+
   const updateMutation = trpc.item.update.useMutation({
     onSuccess: () => {
       utils.item.list.invalidate();
@@ -1186,7 +1187,35 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     onError: (err) => toast.error(err.message),
   });
 
-  function handleSave() {
+  async function handleSave() {
+    if (item) {
+      // Cascade unit renames to invoices before updating the item
+      const renames: Array<{ oldUnit: string; newUnit: string }> = [];
+
+      // Base unit rename
+      if (unit !== item.unit) {
+        renames.push({ oldUnit: item.unit, newUnit: unit });
+      }
+
+      // Alt unit renames (match by position — user can only change the unit name, not reorder)
+      const oldVariants = (item.unitVariants as Array<{ unit: string }>) || [];
+      for (let i = 0; i < Math.min(oldVariants.length, unitVariants.length); i++) {
+        if (unitVariants[i].unit && oldVariants[i].unit !== unitVariants[i].unit) {
+          renames.push({ oldUnit: oldVariants[i].unit, newUnit: unitVariants[i].unit });
+        }
+      }
+
+      for (const r of renames) {
+        try {
+          await renameUnitMut.mutateAsync({ id: item.id, oldUnit: r.oldUnit, newUnit: r.newUnit });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Failed to rename unit";
+          toast.error("Unit rename failed", message);
+          return;
+        }
+      }
+    }
+
     const validVariants = unitVariants.filter((v) => v.unit && v.salePrice);
     updateMutation.mutate({
       id: itemId,
@@ -1298,14 +1327,21 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
           </div>
         </div>
 
-        {/* Unit — read-only in edit mode (use Switch Base Unit for changes) */}
+        {/* Unit — editable; rename cascades to invoices on save */}
         {itemMode !== "variants" && (
           <div>
-            <label className="label">Unit</label>
-            <div className="input flex items-center text-text-secondary cursor-not-allowed opacity-75">
-              {UNIT_OPTIONS.find((o) => o.value === unit)?.label || unit}
-            </div>
-            <p className="text-[10px] text-text-tertiary mt-1">Use "Switch Base Unit" from the item detail panel to change units.</p>
+            <label className="label">Base Unit</label>
+            <Combobox
+              value={unit}
+              onChange={(val) => setUnit(val)}
+              options={UNIT_OPTIONS}
+              placeholder="Select unit"
+            />
+            {item && unit !== item.unit && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                Saving will rename {item.unit.toUpperCase()} → {unit.toUpperCase()} on all existing invoices.
+              </p>
+            )}
           </div>
         )}
 
@@ -1398,12 +1434,12 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                   const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
                   return (
                     <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                      <Listbox
+                      <Combobox
                         label={i === 0 ? "Unit" : ""}
                         value={v.unit}
                         onChange={(val) => updateUnitVariant(i, "unit", val)}
                         options={availableUnits}
-                        placeholder="Select unit"
+                        placeholder="Search unit"
                       />
                       <InputField
                         label={i === 0 ? `Per ${unit}` : ""}
@@ -2058,17 +2094,11 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
         {tab === "overview" && (
           <div className="space-y-4">
             {/* Sales metrics row */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
                 <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Total Sales</p>
                 <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
                   {salesStats ? formatCurrency(salesStats.totalSaleAmount) : "—"}
-                </p>
-              </div>
-              <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Avg Sale Price</p>
-                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
-                  {salesStats ? formatCurrency(salesStats.avgSalePrice) : "—"}
                 </p>
               </div>
               <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
@@ -2077,6 +2107,22 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
                   {salesStats ? parseFloat(salesStats.totalSaleQty).toLocaleString() : "—"}
                 </p>
                 {salesStats && <p className="text-[11px] text-text-tertiary">{item.unit}</p>}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Avg List Price</p>
+                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
+                  {salesStats ? formatCurrency(salesStats.avgGrossPrice) : "—"}
+                </p>
+                <p className="text-[11px] text-text-tertiary">per {item.unit}, before discount</p>
+              </div>
+              <div className="rounded-xl bg-surface-1 border border-border-light px-4 py-3">
+                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wider">Avg Realized Price</p>
+                <p className="text-lg font-bold tabular-nums text-text-primary mt-1">
+                  {salesStats ? formatCurrency(salesStats.avgNetPrice) : "—"}
+                </p>
+                <p className="text-[11px] text-text-tertiary">per {item.unit}, after discount, excl. tax</p>
               </div>
             </div>
 
@@ -2251,9 +2297,11 @@ function SwitchUnitModal({
   unitVariants: Array<{ unit: string; conversionFactor: number; salePrice: string }>;
   onClose: () => void;
 }) {
-  const [newUnit, setNewUnit] = useState("");
-  const [conversionFactor, setConversionFactor] = useState("");
-  const [isCustom, setIsCustom] = useState(false);
+  // Default to the first alt unit if one exists
+  const defaultVariant = unitVariants.length > 0 ? unitVariants[0] : null;
+  const [newUnit, setNewUnit] = useState(defaultVariant?.unit || "");
+  const [conversionFactor, setConversionFactor] = useState(defaultVariant ? String(defaultVariant.conversionFactor) : "");
+  const [isCustom, setIsCustom] = useState(!defaultVariant);
   const utils = trpc.useUtils();
 
   const switchMutation = trpc.item.switchBaseUnit.useMutation({
@@ -2403,7 +2451,7 @@ function MergeItemModal({
 }) {
   const [targetId, setTargetId] = useState("");
   const [conversionFactor, setConversionFactor] = useState("1");
-  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 500 });
+  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 100 });
   const utils = trpc.useUtils();
 
   const targetItem = itemsData?.data.find((i) => i.id === targetId);

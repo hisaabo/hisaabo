@@ -51,8 +51,17 @@ export default function AppLayout() {
     enabled: !!businessId,
   });
 
-  // Not logged in
-  if (!token) return <Redirect href="/(auth)/login" />;
+  // Not logged in — the root layout's auth gate handles the login redirect.
+  // We show a loading state here rather than redirecting, which prevents a
+  // flash of the login screen when re-mounting after lock screen unlock.
+  if (!token) {
+    if (__DEV__) console.log("[AppLayout] No token — showing loading spinner (NOT redirecting to login)");
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="small" color={colors.brand} />
+      </View>
+    );
+  }
 
   // Wait until business is ready before rendering any screens
   // This prevents child screens from firing queries without x-business-id

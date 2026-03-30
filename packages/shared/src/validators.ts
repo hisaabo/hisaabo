@@ -186,6 +186,8 @@ export const updateItemSchema = createItemBaseSchema.partial();
 
 export const invoiceTypes = ["sale", "purchase"] as const;
 export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+export const deliveryMethods = ["self_pickup", "hand_delivery", "courier", "bus", "transport", "post"] as const;
+export type DeliveryMethod = (typeof deliveryMethods)[number];
 
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),
@@ -219,6 +221,13 @@ export const createInvoiceSchema = z.object({
   roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   referenceDocumentId: z.string().uuid().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1),
+  /**
+   * When true, skip stock adjustment on create. Used when converting a
+   * delivery_challan → invoice to avoid double-decrementing stock (the
+   * challan already decremented it).
+   */
+  skipStockAdjustment: z.boolean().optional(),
+  deliveryMethod: z.enum(deliveryMethods).default("self_pickup"),
 });
 
 export const updateInvoiceStatusSchema = z.object({
@@ -307,6 +316,67 @@ export const bankTransferSchema = z.object({
 export const convertDocumentSchema = z.object({
   sourceDocumentId: z.string().uuid(),
   targetDocumentType: z.enum(documentTypes),
+});
+
+// ── Reports ────────────────────────────────────────────────────
+
+export const daybookInputSchema = z.object({
+  fromDate: z.string().date(),
+  toDate: z.string().date(),
+  typeFilter: z.enum(["all", "invoices", "payments", "expenses"]).default("all"),
+});
+
+export const outstandingInputSchema = z.object({
+  type: z.enum(["receivable", "payable", "both"]).default("receivable"),
+  asOfDate: z.string().datetime().optional(),
+});
+
+export const registerInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  partyId: z.string().uuid().optional(),
+});
+
+export const taxSummaryInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  type: z.enum(["sales", "purchases", "both"]).default("both"),
+});
+
+export const cashFlowForecastInputSchema = z.object({
+  businessId: z.string().uuid().optional(),
+});
+
+export const collectionEfficiencyInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+});
+
+export const itemSalesInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  category: z.string().optional(),
+  itemType: z.enum(["product", "service"]).optional(),
+  sortBy: z.enum(["revenue", "quantity", "invoices", "margin"]).default("revenue"),
+  compareToPrevious: z.boolean().default(false),
+});
+
+export const stockSummaryInputSchema = z.object({
+  category: z.string().optional(),
+  showZeroStock: z.boolean().default(false),
+});
+
+export const partyStatementInputSchema = z.object({
+  partyId: z.string().uuid(),
+  fromDate: z.string().datetime().optional(),
+  toDate: z.string().datetime().optional(),
+});
+
+export const paymentSummaryInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  type: z.enum(["received", "made", "both"]).default("both"),
+  bankAccountId: z.string().uuid().optional(),
 });
 
 // ── Dashboard ──────────────────────────────────────────────────

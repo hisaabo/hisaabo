@@ -320,8 +320,9 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
 
           // Stock effects (adjusted for unit conversion)
-          // Group by itemId and sum quantities to avoid redundant per-row updates
-          if (config.stockEffect !== "none") {
+          // Group by itemId and sum quantities to avoid redundant per-row updates.
+          // skipStockAdjustment lets callers (e.g. challan→invoice conversion) opt out.
+          if (config.stockEffect !== "none" && !input.skipStockAdjustment) {
             const stockMap = new Map<string, number>();
             for (const li of input.lineItems) {
               if (li.itemId) {

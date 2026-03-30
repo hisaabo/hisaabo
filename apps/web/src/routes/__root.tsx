@@ -78,12 +78,14 @@ const navSections = [
       { to: "/payments", label: "Payments", icon: PaymentIcon },
       { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
       { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
+      { to: "/shipments", label: "Shipments", icon: ShipmentsIcon },
     ],
   },
   {
     label: "COMPLIANCE",
     items: [
       { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
+      { to: "/reports", label: "Reports", icon: ReportsIcon },
     ],
   },
 ] as const;
@@ -206,7 +208,8 @@ function RootLayout() {
     { key: "m", alt: true, shift: true, handler: () => navigate({ to: "/payments" }), description: "Payments", scope: "navigation" },
     { key: "b", alt: true, shift: true, handler: () => navigate({ to: "/cash-and-bank" }), description: "Cash & Bank", scope: "navigation" },
     { key: "e", alt: true, shift: true, handler: () => navigate({ to: "/expenses" }), description: "Expenses", scope: "navigation" },
-    { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Reports", scope: "navigation" },
+    { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Returns", scope: "navigation" },
+    { key: "r", alt: true, shift: true, handler: () => navigate({ to: "/reports" }), description: "Business Reports", scope: "navigation" },
     { key: "s", alt: true, shift: true, handler: () => navigate({ to: "/settings" }), description: "Settings", scope: "navigation" },
   ]);
 
@@ -409,7 +412,10 @@ function RootLayout() {
             const visibleItems = section.items.map((item) => {
               // Rename reports label based on GST status (always visible)
               if (item.to === "/gst") {
-                return { ...item, label: (isGstRegistered ? "GST Reports" : "Reports") as typeof item.label };
+                return { ...item, label: (isGstRegistered ? "GST Returns" : "Tax Reports") as typeof item.label };
+              }
+              if (item.to === "/reports") {
+                return { ...item, label: "Business Reports" as typeof item.label };
               }
               return item;
             });
@@ -761,6 +767,27 @@ function ExpenseIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="1.5" width="10" height="13" rx="1" />
       <path d="M6 5h4M6 8h4M6 11h2" />
+    </svg>
+  );
+}
+
+function ShipmentsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 5.5h8v7H1z" />
+      <path d="M9 7h3.5l2 2.5V12.5H9V7z" />
+      <circle cx="3.5" cy="13" r="1.2" />
+      <circle cx="11.5" cy="13" r="1.2" />
+      <path d="M3.5 5.5V3a1 1 0 011-1h3a1 1 0 011 1v2.5" />
+    </svg>
+  );
+}
+
+function ReportsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12.5V4l3 3 3-3.5L11 6l3-3" />
+      <path d="M2 14.5h12" />
     </svg>
   );
 }

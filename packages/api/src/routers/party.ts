@@ -55,12 +55,52 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
+      // Computed balance: openingBalance + totalInvoiced - totalPaid (via correlated subquery)
+      const balanceExpr = sql<string>`(
+        ${parties.openingBalance}::numeric + COALESCE((
+          SELECT SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+          FROM ${invoices}
+          WHERE ${invoices.partyId} = ${parties.id}
+            AND ${invoices.businessId} = ${parties.businessId}
+            AND ${invoices.status} NOT IN ('cancelled')
+            AND ${invoices.deletedAt} IS NULL
+        ), 0)
+      )::text`;
+
       const sortCol = input.sortBy === "balance"
-        ? (input.sortDir === "asc" ? sql`${parties.openingBalance}::numeric ASC` : sql`${parties.openingBalance}::numeric DESC`)
+        ? (input.sortDir === "asc" ? sql`${balanceExpr}::numeric ASC` : sql`${balanceExpr}::numeric DESC`)
         : (input.sortDir === "desc" ? desc(parties.name) : asc(parties.name));
 
       const [data, [{ count }]] = await Promise.all([
-        ctx.db.select().from(parties)
+        ctx.db.select({
+          id: parties.id,
+          businessId: parties.businessId,
+          name: parties.name,
+          type: parties.type,
+          phone: parties.phone,
+          email: parties.email,
+          gstin: parties.gstin,
+          pan: parties.pan,
+          openingBalance: parties.openingBalance,
+          billingAddress: parties.billingAddress,
+          shippingAddress: parties.shippingAddress,
+          city: parties.city,
+          state: parties.state,
+          stateCode: parties.stateCode,
+          pincode: parties.pincode,
+          category: parties.category,
+          creditPeriodDays: parties.creditPeriodDays,
+          creditLimit: parties.creditLimit,
+          contactPersonName: parties.contactPersonName,
+          contactPersonDob: parties.contactPersonDob,
+          bankAccountNumber: parties.bankAccountNumber,
+          bankIfsc: parties.bankIfsc,
+          bankName: parties.bankName,
+          source: parties.source,
+          createdAt: parties.createdAt,
+          updatedAt: parties.updatedAt,
+          balance: balanceExpr,
+        }).from(parties)
           .where(and(...conditions))
           .orderBy(sortCol)
           .limit(input.limit)

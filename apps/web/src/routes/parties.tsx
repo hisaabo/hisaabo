@@ -99,7 +99,7 @@ function PartiesPage() {
         p.phone || "",
         p.email || "",
         p.gstin || "",
-        p.openingBalance || "0",
+        p.balance || "0",
       ]);
 
       downloadCSV(`parties_${partyFilter}`, headers, rows);
@@ -255,8 +255,8 @@ function PartiesPage() {
                     {party.gstin || "—"}
                   </td>
                   <td className="text-right tabular-nums font-medium">
-                    {party.openingBalance && party.openingBalance !== "0"
-                      ? formatCurrency(party.openingBalance)
+                    {party.balance && party.balance !== "0"
+                      ? formatCurrency(party.balance)
                       : "—"}
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>

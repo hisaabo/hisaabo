@@ -72,9 +72,10 @@ function isSameOrigin(c: Context): boolean {
 }
 
 // Rate limits per minute:
-// Same-origin authenticated: 120 (normal app usage)
+// Same-origin authenticated: 300 (normal app usage — higher to accommodate
+//   post-import cache invalidation bursts and dashboard queries)
 // Same-origin unauthenticated: 60 (login attempts, public pages)
-// External authenticated: 60 (API consumers with valid session)
+// External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   const ip = getClientIp(c);
@@ -84,9 +85,9 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
 
   let limit: number;
   let tier: string;
-  if (sameOrigin && hasSession) { limit = 120; tier = "same-auth"; }
+  if (sameOrigin && hasSession) { limit = 300; tier = "same-auth"; }
   else if (sameOrigin) { limit = 60; tier = "same-anon"; }
-  else if (hasSession) { limit = 60; tier = "ext-auth"; }
+  else if (hasSession) { limit = 120; tier = "ext-auth"; }
   else { limit = 10; tier = "ext-anon"; }
 
   const key = `${tier}:${ip}`;
@@ -215,12 +216,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
 
-  // Fetch HSN codes for linked items
+  // Fetch HSN codes and base units for linked items
   const itemIds = lineItems.map(li => li.itemId).filter(Boolean) as string[];
-  const itemHsns = itemIds.length > 0
-    ? await db.select({ id: items.id, hsn: items.hsn }).from(items).where(inArray(items.id, itemIds))
+  const itemMeta = itemIds.length > 0
+    ? await db.select({ id: items.id, hsn: items.hsn, unit: items.unit }).from(items).where(inArray(items.id, itemIds))
     : [];
-  const hsnMap = new Map(itemHsns.map(i => [i.id, i.hsn || ""]));
+  const hsnMap = new Map(itemMeta.map(i => [i.id, i.hsn || ""]));
+  const itemUnitMap = new Map(itemMeta.map(i => [i.id, i.unit]));
 
   // Fetch bank accounts for payment info on invoice
   const bizBankAccounts = await db.select().from(bankAccounts)
@@ -268,6 +270,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     lineItems: lineItems.map((li) => ({
       description: li.description,
       quantity: li.quantity,
+      unit: li.selectedUnit || (li.itemId ? itemUnitMap.get(li.itemId) : undefined) || undefined,
       unitPrice: li.unitPrice,
       taxPercent: li.taxPercent,
       taxAmount: li.taxAmount,
@@ -1233,6 +1236,53 @@ function brandedHtml(title: string, heading: string, message: string, status: nu
 </body>
 </html>`;
 }
+
+// ── Shipping carrier webhooks ──────────────────────────────────
+// Carriers POST status updates here. The URL includes the business ID for routing.
+// Each carrier has a different payload format — the handler normalises them into shipment events.
+// For now: accept, log, and store the raw payload. Actual carrier-specific parsing comes later.
+app.post("/webhooks/shipping/:businessId", async (c) => {
+  const businessId = c.req.param("businessId");
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+
+  // Resolve tenant from business ID and get DB connection
+  const { shipments: shipmentsTable, shipmentEvents } = await import("@hisaabo/db");
+  // In single-tenant mode, use "single"; in multi-tenant, look up from business → tenant mapping
+  const db = await getTenantDb("single");
+
+  // Extract tracking number — carriers typically send it as `awb`, `tracking_id`, or `waybill`
+  const trackingNumber = body.awb || body.tracking_id || body.waybill || body.trackingNumber || null;
+  if (!trackingNumber) {
+    return c.json({ error: "No tracking number found in payload" }, 400);
+  }
+
+  // Find the shipment by tracking number + business
+  const [shipment] = await db.select({ id: shipmentsTable.id })
+    .from(shipmentsTable)
+    .where(and(
+      eq(shipmentsTable.businessId, businessId),
+      eq(shipmentsTable.trackingNumber, trackingNumber),
+    ))
+    .limit(1);
+
+  if (!shipment) {
+    return c.json({ error: "Shipment not found", trackingNumber }, 404);
+  }
+
+  // Store the raw event — carrier-specific parsing will be added per carrier
+  await db.insert(shipmentEvents).values({
+    shipmentId: shipment.id,
+    status: body.status || body.current_status || "unknown",
+    statusDetail: body.status_description || body.remarks || body.message || null,
+    location: body.location || body.scan_location || body.city || null,
+    source: "webhook",
+    carrierStatus: body.status_code || body.status || null,
+    eventTime: body.timestamp ? new Date(body.timestamp) : new Date(),
+  });
+
+  return c.json({ ok: true, shipmentId: shipment.id });
+});
 
 // Base page — shows when someone visits the API root
 app.get("/", (c) => {

@@ -12,6 +12,7 @@ import {
   RefreshControl,
   Share,
   TextInput,
+  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -24,6 +25,13 @@ import { Card, QueryError, DatePickerField } from "../../../src/components/ui";
 
 type LedgerTab = "ledger" | "topItems";
 
+interface MergeTargetParty {
+  id: string;
+  name: string;
+  type: string;
+  phone?: string | null;
+}
+
 export default function PartyDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -32,6 +40,12 @@ export default function PartyDetailScreen() {
   const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
   const [ledgerTo, setLedgerTo] = useState<Date | null>(null);
   const [showDateFilter, setShowDateFilter] = useState(false);
+
+  // Merge modal state
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSearch, setMergeSearch] = useState("");
+  const [mergeTarget, setMergeTarget] = useState<MergeTargetParty | null>(null);
+  const [mergeStep, setMergeStep] = useState<"search" | "confirm">("search");
 
   const { data: party, isLoading: partyLoading, refetch: refetchParty, isRefetching: isRefetchingParty } =
     trpc.party.getById.useQuery({ id: id ?? "" }, { enabled: !!id });
@@ -72,6 +86,49 @@ export default function PartyDetailScreen() {
       Alert.alert("Error", err.message || "Failed to delete party");
     },
   });
+
+  const { data: mergeSearchResults } = trpc.party.list.useQuery(
+    { search: mergeSearch, limit: 20, page: 1 },
+    { enabled: showMergeModal && mergeSearch.length >= 1 }
+  );
+
+  const mergeMutation = trpc.party.merge.useMutation({
+    onSuccess: () => {
+      utils.party.list.invalidate();
+      setShowMergeModal(false);
+      setMergeTarget(null);
+      setMergeSearch("");
+      setMergeStep("search");
+      router.replace("/(app)/(parties)");
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message || "Failed to merge parties.");
+    },
+  });
+
+  const handleOpenMerge = () => {
+    setMergeSearch("");
+    setMergeTarget(null);
+    setMergeStep("search");
+    setShowMergeModal(true);
+  };
+
+  const handleCloseMerge = () => {
+    setShowMergeModal(false);
+    setMergeTarget(null);
+    setMergeSearch("");
+    setMergeStep("search");
+  };
+
+  const handleSelectMergeTarget = (target: MergeTargetParty) => {
+    setMergeTarget(target);
+    setMergeStep("confirm");
+  };
+
+  const handleConfirmMerge = () => {
+    if (!party || !mergeTarget) return;
+    mergeMutation.mutate({ sourceId: party.id, targetId: mergeTarget.id });
+  };
 
   const handleDelete = () => {
     if (!party) return;
@@ -162,6 +219,13 @@ export default function PartyDetailScreen() {
             activeOpacity={0.7}
           >
             <Ionicons name="create-outline" size={22} color={colors.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.mergeButton}
+            onPress={handleOpenMerge}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="git-merge-outline" size={20} color={colors.info} />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.deleteButton}
@@ -494,6 +558,158 @@ export default function PartyDetailScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Merge Modal */}
+      <Modal
+        visible={showMergeModal}
+        transparent
+        animationType="slide"
+        onRequestClose={handleCloseMerge}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {mergeStep === "search" ? "Merge Into Party" : "Confirm Merge"}
+              </Text>
+              <TouchableOpacity onPress={handleCloseMerge} style={styles.modalClose}>
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            {mergeStep === "search" ? (
+              <>
+                <View style={styles.mergeSourceRow}>
+                  <Ionicons name="person-circle-outline" size={18} color={colors.textMuted} />
+                  <Text style={styles.mergeSourceLabel}>
+                    Merging: <Text style={styles.mergeSourceName}>{party?.name}</Text>
+                  </Text>
+                </View>
+                <Text style={styles.mergeHint}>
+                  Search for the party to merge INTO. All invoices, payments, and history
+                  from <Text style={{ fontWeight: "700" }}>{party?.name}</Text> will be
+                  transferred to the selected party.
+                </Text>
+
+                <TextInput
+                  style={styles.mergeSearchInput}
+                  value={mergeSearch}
+                  onChangeText={setMergeSearch}
+                  placeholder="Search party name..."
+                  placeholderTextColor={colors.textMuted}
+                  autoFocus
+                  returnKeyType="search"
+                />
+
+                <FlatList
+                  data={(mergeSearchResults?.data ?? []).filter((p) => p.id !== id)}
+                  keyExtractor={(item) => item.id}
+                  style={styles.mergeResultsList}
+                  keyboardShouldPersistTaps="handled"
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.mergeResultRow}
+                      onPress={() => handleSelectMergeTarget(item)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.mergeResultAvatar}>
+                        <Text style={styles.mergeResultAvatarText}>
+                          {item.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.mergeResultInfo}>
+                        <Text style={styles.mergeResultName}>{item.name}</Text>
+                        <Text style={styles.mergeResultType}>
+                          {item.type === "customer" ? "Customer" : "Supplier"}
+                          {item.phone ? ` · ${item.phone}` : ""}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    mergeSearch.length >= 1 ? (
+                      <Text style={styles.mergeEmptyText}>No parties found</Text>
+                    ) : (
+                      <Text style={styles.mergeEmptyText}>
+                        Type at least 1 character to search
+                      </Text>
+                    )
+                  }
+                />
+              </>
+            ) : (
+              <>
+                <View style={styles.mergeDiagram}>
+                  <View style={styles.mergeDiagramParty}>
+                    <View style={[styles.mergeDiagramAvatar, { backgroundColor: colors.dangerBg }]}>
+                      <Text style={[styles.mergeDiagramAvatarText, { color: colors.danger }]}>
+                        {party?.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={styles.mergeDiagramName} numberOfLines={1}>
+                      {party?.name}
+                    </Text>
+                    <Text style={styles.mergeDiagramRole}>Source (will be deleted)</Text>
+                  </View>
+
+                  <View style={styles.mergeDiagramArrow}>
+                    <Ionicons name="arrow-forward" size={20} color={colors.textMuted} />
+                  </View>
+
+                  <View style={styles.mergeDiagramParty}>
+                    <View style={[styles.mergeDiagramAvatar, { backgroundColor: colors.brandLight }]}>
+                      <Text style={[styles.mergeDiagramAvatarText, { color: colors.brand }]}>
+                        {mergeTarget?.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={styles.mergeDiagramName} numberOfLines={1}>
+                      {mergeTarget?.name}
+                    </Text>
+                    <Text style={styles.mergeDiagramRole}>Target (kept)</Text>
+                  </View>
+                </View>
+
+                <View style={styles.mergeWarningBanner}>
+                  <Ionicons name="warning-outline" size={16} color={colors.warning} />
+                  <Text style={styles.mergeWarningText}>
+                    All invoices, payments, and history from{" "}
+                    <Text style={{ fontWeight: "700", color: colors.textPrimary }}>{party?.name}</Text>{" "}
+                    will be transferred to{" "}
+                    <Text style={{ fontWeight: "700", color: colors.textPrimary }}>{mergeTarget?.name}</Text>.
+                    {"\n"}
+                    <Text style={{ fontWeight: "700" }}>{party?.name}</Text> will then be permanently deleted.
+                    This cannot be undone.
+                  </Text>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.mergeBackBtn}
+                    onPress={() => setMergeStep("search")}
+                    disabled={mergeMutation.isPending}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.mergeBackBtnText}>Back</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.mergeConfirmBtn, mergeMutation.isPending && { opacity: 0.6 }]}
+                    onPress={handleConfirmMerge}
+                    disabled={mergeMutation.isPending}
+                    activeOpacity={0.8}
+                  >
+                    {mergeMutation.isPending ? (
+                      <ActivityIndicator color={colors.textPrimary} size="small" />
+                    ) : (
+                      <Text style={styles.mergeConfirmBtnText}>Merge Parties</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -540,6 +756,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.brandLight,
+  },
+  mergeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.infoBg,
   },
   deleteButton: {
     width: 40,
@@ -913,5 +1137,198 @@ const styles = StyleSheet.create({
   emptyTabText: {
     fontSize: 15,
     color: colors.textMuted,
+  },
+
+  // Merge modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "flex-end",
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 40,
+    maxHeight: "85%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  modalClose: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mergeSourceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  mergeSourceLabel: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  mergeSourceName: {
+    color: colors.textPrimary,
+    fontWeight: "700",
+  },
+  mergeHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    lineHeight: 17,
+    marginBottom: 14,
+  },
+  mergeSearchInput: {
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: colors.textPrimary,
+    fontSize: 14,
+    marginBottom: 10,
+  },
+  mergeResultsList: {
+    maxHeight: 280,
+  },
+  mergeResultRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  mergeResultAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.brandLight,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mergeResultAvatarText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.brand,
+  },
+  mergeResultInfo: { flex: 1 },
+  mergeResultName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  mergeResultType: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  mergeEmptyText: {
+    textAlign: "center",
+    color: colors.textMuted,
+    fontSize: 13,
+    paddingVertical: 24,
+  },
+
+  // Merge confirmation step
+  mergeDiagram: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    marginBottom: 16,
+    paddingVertical: 8,
+  },
+  mergeDiagramParty: {
+    flex: 1,
+    alignItems: "center",
+    gap: 6,
+  },
+  mergeDiagramAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mergeDiagramAvatarText: {
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  mergeDiagramName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    textAlign: "center",
+  },
+  mergeDiagramRole: {
+    fontSize: 11,
+    color: colors.textMuted,
+    textAlign: "center",
+  },
+  mergeDiagramArrow: {
+    width: 32,
+    alignItems: "center",
+  },
+  mergeWarningBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    backgroundColor: colors.warningBg,
+    borderWidth: 1,
+    borderColor: colors.warning + "40",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 20,
+  },
+  mergeWarningText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 19,
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  mergeBackBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  mergeBackBtnText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  mergeConfirmBtn: {
+    flex: 2,
+    backgroundColor: colors.danger,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  mergeConfirmBtnText: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
   },
 });

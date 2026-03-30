@@ -57,10 +57,10 @@ export function InvoiceCreator({ type, onClose }: Props) {
 
   const { data: partiesData } = trpc.party.list.useQuery({
     type: type === "sale" ? "customer" : "supplier",
-    page: 1, limit: 200,
+    page: 1, limit: 100,
   });
 
-  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 200 });
+  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 100 });
 
   const utils = trpc.useUtils();
   const createMutation = trpc.invoice.create.useMutation({

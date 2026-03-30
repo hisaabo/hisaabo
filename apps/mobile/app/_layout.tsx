@@ -9,7 +9,7 @@ import {
   AppState,
   Alert,
 } from "react-native";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { TRPCProvider } from "../src/providers/TRPCProvider";
@@ -514,25 +514,33 @@ export default function RootLayout() {
     if (authGate !== "loading") return;
 
     if (!token) {
+      if (__DEV__) console.log("[AuthGate] No token -> login");
       setAuthGate("login");
     } else if (biometricEnabled || pinEnabled) {
       // User has a token AND local auth is enabled -- show lock screen FIRST.
       // No app content will render until the user authenticates locally AND
       // the server session is verified.
+      if (__DEV__) console.log("[AuthGate] Token present, biometric/pin enabled -> locked");
       setAuthGate("locked");
     } else {
       // No local auth -- verify token silently then show app.
       // The (app)/_layout.tsx already calls auth.me, so we can go straight
       // to ready. If the token is expired, (app)/_layout.tsx will redirect
       // to login.
+      if (__DEV__) console.log("[AuthGate] Token present, no local auth -> verifying");
       verifyTokenAndProceed();
     }
   }, [isHydrated, biometricHydrated]);
 
   // --- Token verification helper -----------------------------------------
   const verifyTokenAndProceed = useCallback(async () => {
+    if (__DEV__) {
+      const { getTokenSync } = require("../src/lib/auth");
+      console.log("[AuthGate] verifyTokenAndProceed: tokenSync =", getTokenSync() ? "set" : "null");
+    }
     try {
       const result = await vanillaTRPC.auth.me.query();
+      if (__DEV__) console.log("[AuthGate] verifyTokenAndProceed: result.user =", result.user ? result.user.email : "null");
       if (result.user) {
         unlockApp();
         setAuthGate("ready");
@@ -545,7 +553,8 @@ export default function RootLayout() {
           "Your session has expired. Please sign in again."
         );
       }
-    } catch {
+    } catch (err) {
+      if (__DEV__) console.log("[AuthGate] verifyTokenAndProceed: network error, allowing access", err);
       // Network error -- for a financial app we could require network,
       // but to avoid blocking users on bad connections, allow access.
       // The app layout's auth.me query will handle it gracefully.
@@ -560,13 +569,20 @@ export default function RootLayout() {
    * Verifies the server session before allowing access to app content.
    */
   const handleLockScreenUnlock = useCallback(async () => {
+    if (__DEV__) {
+      const { getTokenSync } = require("../src/lib/auth");
+      const syncToken = getTokenSync();
+      console.log("[AuthGate] handleLockScreenUnlock: tokenSync =", syncToken ? "set" : "null", "storeToken =", token ? "set" : "null");
+    }
     try {
       const result = await vanillaTRPC.auth.me.query();
+      if (__DEV__) console.log("[AuthGate] handleLockScreenUnlock: result.user =", result.user ? result.user.email : "null");
       if (result.user) {
         unlockApp();
         setAuthGate("ready");
       } else {
         // Token expired while the app was locked
+        if (__DEV__) console.log("[AuthGate] handleLockScreenUnlock: session expired, logging out");
         await logout();
         setAuthGate("login");
         Alert.alert(
@@ -574,12 +590,13 @@ export default function RootLayout() {
           "Your session has expired. Please sign in again."
         );
       }
-    } catch {
+    } catch (err) {
+      if (__DEV__) console.log("[AuthGate] handleLockScreenUnlock: network error, allowing access", err);
       // Network error -- allow access, the app will handle it gracefully
       unlockApp();
       setAuthGate("ready");
     }
-  }, [logout, unlockApp]);
+  }, [logout, unlockApp, token]);
 
   /**
    * Called when the user taps "Sign out" on the lock screen.
@@ -598,11 +615,13 @@ export default function RootLayout() {
       }
       if (state === "active") {
         const elapsed = Date.now() - lastBackground.current;
+        if (__DEV__) console.log(`[AuthGate] AppState active: elapsed=${elapsed}ms, biometric=${biometricEnabled}, pin=${pinEnabled}, gate=${authGate}`);
         if (
           elapsed > RELOCK_THRESHOLD &&
           (biometricEnabled || pinEnabled) &&
           authGate === "ready"
         ) {
+          if (__DEV__) console.log("[AuthGate] Re-locking app");
           lockApp();
           setAuthGate("locked");
         }
@@ -614,6 +633,7 @@ export default function RootLayout() {
   // --- When the user logs out from within the app, reset gate state ------
   useEffect(() => {
     if (isHydrated && !token && authGate === "ready") {
+      if (__DEV__) console.log("[AuthGate] Token cleared while ready -> login");
       setAuthGate("login");
     }
   }, [token, isHydrated, authGate]);
@@ -648,10 +668,53 @@ export default function RootLayout() {
   return (
     <TRPCProvider>
       <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+      <AuthGateRouter authGate={authGate} token={token} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
       </Stack>
     </TRPCProvider>
   );
+}
+
+/**
+ * Handles navigation redirects based on auth gate state.
+ *
+ * When the Stack remounts after a lock screen unlock, Expo Router may default
+ * to the (auth) group (since it's listed first). This component ensures the
+ * correct group is shown by issuing a `router.replace` when a mismatch is
+ * detected between the current segment and the desired gate state.
+ */
+function AuthGateRouter({
+  authGate,
+  token,
+}: {
+  authGate: AuthGateState;
+  token: string | null;
+}) {
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    // Only act when the gate has settled to "ready" or "login"
+    if (authGate !== "ready" && authGate !== "login") return;
+
+    const inAuthGroup = segments[0] === "(auth)";
+    const inAppGroup = segments[0] === "(app)";
+
+    if (__DEV__) console.log(`[AuthGateRouter] gate=${authGate}, segments=${segments.join("/")}, token=${token ? "set" : "null"}`);
+
+    if (authGate === "ready" && token && !inAppGroup) {
+      // User is authenticated but Expo Router defaulted to (auth) or
+      // hasn't navigated yet — push to the app group.
+      if (__DEV__) console.log("[AuthGateRouter] Redirecting to /(app)");
+      router.replace("/(app)");
+    } else if (authGate === "login" && !token && !inAuthGroup) {
+      // User is not authenticated but showing app — push to login.
+      if (__DEV__) console.log("[AuthGateRouter] Redirecting to /(auth)/login");
+      router.replace("/(auth)/login");
+    }
+  }, [authGate, segments, token, router]);
+
+  return null;
 }

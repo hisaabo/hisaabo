@@ -23,9 +23,12 @@ export interface DocumentCreatorProps {
   documentType: DocumentType;
   invoiceType: "sale" | "purchase";
   onClose: () => void;
-  onSuccess?: () => void;
+  /** Called after successful creation/update. Receives the partyId used. */
+  onSuccess?: (partyId?: string) => void;
   // Edit mode: pass existing invoice ID to pre-fill
   editInvoiceId?: string;
+  // Pre-select a party on mount (e.g. "Create another" for same customer)
+  initialPartyId?: string;
 }
 
 interface UnitOption {
@@ -98,8 +101,9 @@ export function DocumentCreator({
   onClose,
   onSuccess,
   editInvoiceId,
+  initialPartyId,
 }: DocumentCreatorProps) {
-  const [partyId, setPartyId] = useState("");
+  const [partyId, setPartyId] = useState(initialPartyId ?? "");
   const [invoiceDate, setInvoiceDate] = useState(
     new Date().toISOString().split("T")[0]
   );
@@ -211,14 +215,14 @@ export function DocumentCreator({
   function handleSuccess() {
     invalidateLists();
     toast.success(isEditing ? `${documentTypeLabels[documentType]} updated` : `${documentTypeLabels[documentType]} created`);
-    onSuccess?.();
+    onSuccess?.(partyId || undefined);
     onClose();
   }
 
   function handleInvoiceCreateSuccess(data: { invoiceNumber: string }) {
     invalidateLists();
     toast.success(`Invoice ${data.invoiceNumber} created`);
-    onSuccess?.();
+    onSuccess?.(partyId || undefined);
     onClose();
   }
 

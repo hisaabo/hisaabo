@@ -9,7 +9,7 @@ export type Resource =
   | "Invoice" | "Payment" | "Party" | "Item" | "Expense"
   | "BankAccount" | "BankTransaction"
   | "Business" | "Team" | "Import" | "Report" | "GstReport"
-  | "Store"
+  | "Store" | "SalesTarget"
   | "all";
 
 export type AppAbility = PureAbility<[Action, Resource]>;
@@ -60,6 +60,9 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("create", "Store");
       can("read", "Store");
       can("update", "Store");
+      // Sales targets: read own targets + manage targets for their team
+      can("read", "SalesTarget");
+      can("manage", "SalesTarget");
       break;
 
     case "seller":
@@ -80,6 +83,8 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("read", "Business");
       // Store: read only (view orders)
       can("read", "Store");
+      // Sales targets: read (myTargets is self-scoped, list filtered by admin)
+      can("read", "SalesTarget");
       break;
 
     case "accountant":

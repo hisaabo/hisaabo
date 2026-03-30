@@ -4,6 +4,11 @@ import { partyEndpoints } from "./party";
 import { itemEndpoints } from "./item";
 import { invoiceEndpoints } from "./invoice";
 import { paymentEndpoints } from "./payment";
+import { expenseEndpoints } from "./expense";
+import { dashboardEndpoints } from "./dashboard";
+import { targetEndpoints } from "./target";
+import { reportsEndpoints } from "./reports";
+import { shipmentEndpoints } from "./shipment";
 import type { EndpointGroup } from "./types";
 
 export const allEndpointGroups: EndpointGroup[] = [
@@ -13,10 +18,27 @@ export const allEndpointGroups: EndpointGroup[] = [
   itemEndpoints,
   invoiceEndpoints,
   paymentEndpoints,
+  expenseEndpoints,
+  dashboardEndpoints,
+  targetEndpoints,
+  reportsEndpoints,
+  shipmentEndpoints,
 ];
 
 export * from "./types";
-export { authEndpoints, businessEndpoints, partyEndpoints, itemEndpoints, invoiceEndpoints, paymentEndpoints };
+export {
+  authEndpoints,
+  businessEndpoints,
+  partyEndpoints,
+  itemEndpoints,
+  invoiceEndpoints,
+  paymentEndpoints,
+  expenseEndpoints,
+  dashboardEndpoints,
+  targetEndpoints,
+  reportsEndpoints,
+  shipmentEndpoints,
+};
 
 // Flat map of all endpoints by ID for quick lookup
 export const endpointById = new Map(

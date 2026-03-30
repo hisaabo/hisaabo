@@ -117,7 +117,7 @@ export default function DeliveryChallansScreen() {
   );
 
   const renderItem = ({ item }: { item: typeof docs[0] }) => (
-    <PressableRow style={styles.docRow} onPress={() => {}}>
+    <PressableRow style={styles.docRow} onPress={() => router.push(`/(more)/delivery-challans/${item.id}` as never)}>
       <View style={styles.docLeft}>
         <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
         <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>

@@ -22,9 +22,11 @@ const ALL_ITEMS: MenuItem[] = [
   { label: "Quotations", icon: "document-text-outline", route: "/(more)/quotations" },
   { label: "Credit Notes", icon: "return-down-back-outline", route: "/(more)/credit-notes" },
   { label: "Delivery Challans", icon: "car-outline", route: "/(more)/delivery-challans" },
+  { label: "Proforma Invoices", icon: "document-text-outline", route: "/(more)/proforma-invoices" },
+  { label: "Sales Returns", icon: "return-down-back-outline", route: "/(more)/sales-returns" },
   { label: "Store Orders", icon: "storefront-outline", route: "/(more)/store-orders" },
-  { label: "GST Reports", icon: "pie-chart-outline", route: "/(more)/gst" },
-  { label: "Reports", icon: "bar-chart-outline", route: "/(more)/reports" },
+  { label: "GST Returns", icon: "pie-chart-outline", route: "/(more)/gst" },
+  { label: "Business Reports", icon: "bar-chart-outline", route: "/(more)/reports" },
   { label: "Settings", icon: "settings-outline", route: "/(more)/settings" },
 ];
 

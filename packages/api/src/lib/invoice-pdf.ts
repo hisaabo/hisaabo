@@ -40,6 +40,7 @@ export interface InvoicePDFData {
   lineItems: Array<{
     description: string;
     quantity: string;
+    unit?: string; // base unit or selected alt unit (e.g. "kg", "box")
     unitPrice: string;
     taxPercent: string;
     taxAmount: string;
@@ -467,7 +468,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", COL_HSN, rowY, { width: 44 });
     }
     doc.fontSize(8).text(item.description, COL_DESC, rowY, { width: DESCW });
-    doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), COL_QTY, rowY, { width: 36, align: "right" });
+    const qtyText = item.unit
+      ? `${parseFloat(item.quantity).toLocaleString("en-IN")} ${item.unit}`
+      : parseFloat(item.quantity).toLocaleString("en-IN");
+    doc.text(qtyText, COL_QTY, rowY, { width: 36, align: "right" });
     doc.text(fmt(item.unitPrice), COL_RATE, rowY, { width: 62, align: "right" });
     doc.text(`${item.taxPercent}%`, COL_TAXPCT, rowY, { width: 28, align: "right" });
     doc.text(fmt(item.taxAmount), COL_TAXAMT, rowY, { width: 54, align: "right" });
@@ -923,7 +927,10 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", C_HSN, rowY, { width: 40 });
     }
     doc.fontSize(8).text(item.description, C_DESC, rowY, { width: C_DESCW });
-    doc.text(parseFloat(item.quantity).toLocaleString("en-IN"), C_QTY, rowY, { width: 34, align: "right" });
+    const qtyTextA5 = item.unit
+      ? `${parseFloat(item.quantity).toLocaleString("en-IN")} ${item.unit}`
+      : parseFloat(item.quantity).toLocaleString("en-IN");
+    doc.text(qtyTextA5, C_QTY, rowY, { width: 34, align: "right" });
     doc.text(fmt(item.unitPrice), C_RATE, rowY, { width: 62, align: "right" });
     doc.text(`${item.taxPercent}%`, C_TAX, rowY, { width: 34, align: "right" });
     doc.font("NotoSans-Bold").text(fmt(item.totalAmount), C_AMT, rowY, { width: 60, align: "right" });
@@ -1213,8 +1220,11 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
       .text(item.description, margin, y, { width: nameW });
     const nameH = doc.heightOfString(item.description, { width: nameW });
 
+    const qtyTextThermal = item.unit
+      ? `${parseFloat(item.quantity).toString()} ${item.unit}`
+      : parseFloat(item.quantity).toString();
     doc.fontSize(6).font("NotoSans")
-      .text(parseFloat(item.quantity).toString(), margin + contentW * 0.5, y, { width: 30, align: "right" });
+      .text(qtyTextThermal, margin + contentW * 0.5, y, { width: 30, align: "right" });
     doc.fontSize(6).font("NotoSans")
       .text(fmt(item.totalAmount), margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
 

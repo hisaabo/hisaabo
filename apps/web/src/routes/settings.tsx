@@ -6,6 +6,7 @@ import { SettingsNav } from "@/components/settings/SettingsNav";
 import { BusinessTab, BusinessForm } from "@/components/settings/BusinessTab";
 import { DocumentsTab } from "@/components/settings/DocumentsTab";
 import { TeamTab } from "@/components/settings/TeamTab";
+import { SalesTargetsTab } from "@/components/settings/SalesTargetsTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { DataTab } from "@/components/settings/DataTab";
 import { AccountTab } from "@/components/settings/AccountTab";
@@ -80,6 +81,7 @@ function SettingsPage() {
           {tab === "business" && <BusinessTab biz={biz} />}
           {tab === "documents" && <DocumentsTab biz={biz} />}
           {tab === "team" && <TeamTab />}
+          {tab === "targets" && <SalesTargetsTab />}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "data" && <DataTab />}
           {tab === "account" && <AccountTab />}

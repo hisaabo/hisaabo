@@ -13,7 +13,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  TextInputProps,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -30,6 +29,12 @@ type InvoiceType = "sale" | "purchase";
 
 interface LineItem {
   itemId?: string;
+  // G-08: variant/alt-unit selection
+  variantId?: string;
+  selectedUnit?: string;
+  conversionFactor?: string;
+  // item mode cached from the selected item so sub-selectors can render
+  itemMode?: "simple" | "alt_units" | "variants";
   description: string;
   quantity: string;
   unitPrice: string;
@@ -98,6 +103,13 @@ type PickerRow =
   | { kind: "party"; id: string; name: string; phone?: string | null }
   | { kind: "contact"; contact: PhoneContact };
 
+// OPT-03: Inline party creation form state
+interface InlinePartyFormState {
+  name: string;
+  phone: string;
+  type: "customer" | "supplier";
+}
+
 function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -105,6 +117,10 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
 
   const { contacts, permission, requestAccess } = useContacts();
   const [creatingFromContact, setCreatingFromContact] = useState(false);
+
+  // OPT-03: inline create form
+  const [showInlineCreate, setShowInlineCreate] = useState(false);
+  const [inlineForm, setInlineForm] = useState<InlinePartyFormState>({ name: "", phone: "", type: partyType });
 
   const { data, isLoading } = trpc.party.list.useQuery(
     { type: partyType, search: debouncedSearch || undefined, page: 1, limit: 50 },
@@ -207,6 +223,35 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
 
   const isEmpty = !isLoading && sections.length === 0;
 
+  // OPT-03: submit inline party creation
+  const handleInlineCreate = useCallback(async () => {
+    if (!inlineForm.name.trim()) {
+      Alert.alert("Validation", "Name is required.");
+      return;
+    }
+    if (!inlineForm.phone.trim()) {
+      Alert.alert("Validation", "Phone is required.");
+      return;
+    }
+    setCreatingFromContact(true);
+    try {
+      const newParty = await createPartyMutation.mutateAsync({
+        type: inlineForm.type,
+        name: inlineForm.name.trim(),
+        phone: inlineForm.phone.trim(),
+      });
+      haptic.success();
+      onSelect({ id: newParty.id, name: newParty.name, phone: newParty.phone });
+      setShowInlineCreate(false);
+      onClose();
+    } catch (err: any) {
+      haptic.error();
+      Alert.alert("Error", err?.message ?? "Failed to create party");
+    } finally {
+      setCreatingFromContact(false);
+    }
+  }, [inlineForm, createPartyMutation, onSelect, onClose]);
+
   return (
     <Modal visible={visible} animationType="slide" transparent presentationStyle="overFullScreen">
       <View style={modalStyles.overlay}>
@@ -227,12 +272,16 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
               placeholder="Search parties & contacts..."
               placeholderTextColor={colors.textMuted}
               value={search}
-              onChangeText={setSearch}
+              onChangeText={(v) => {
+                setSearch(v);
+                // Reset inline form if search changes
+                if (showInlineCreate) setShowInlineCreate(false);
+              }}
               autoFocus
               returnKeyType="search"
             />
             {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")}>
+              <TouchableOpacity onPress={() => { setSearch(""); setShowInlineCreate(false); }}>
                 <Ionicons name="close-circle" size={16} color={colors.textMuted} />
               </TouchableOpacity>
             )}
@@ -267,7 +316,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
             </View>
           )}
 
-          {/* Loading overlay for party creation from contact */}
+          {/* Loading overlay for party creation from contact or inline create */}
           {creatingFromContact && (
             <View style={pickerStyles.creatingOverlay}>
               <ActivityIndicator color={colors.brand} size="small" />
@@ -275,12 +324,89 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
             </View>
           )}
 
+          {/* OPT-03: Inline create form */}
+          {showInlineCreate && (
+            <View style={inlineCreateStyles.container}>
+              <View style={inlineCreateStyles.header}>
+                <Ionicons name="person-add-outline" size={16} color={colors.brand} />
+                <Text style={inlineCreateStyles.title}>New {type === "sale" ? "Customer" : "Supplier"}</Text>
+              </View>
+              <TextInput
+                style={inlineCreateStyles.input}
+                value={inlineForm.name}
+                onChangeText={(v) => setInlineForm((f) => ({ ...f, name: v }))}
+                placeholder="Name *"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="words"
+              />
+              <TextInput
+                style={inlineCreateStyles.input}
+                value={inlineForm.phone}
+                onChangeText={(v) => setInlineForm((f) => ({ ...f, phone: v }))}
+                placeholder="Phone *"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="phone-pad"
+              />
+              <View style={inlineCreateStyles.typeRow}>
+                {(["customer", "supplier"] as const).map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[inlineCreateStyles.typePill, inlineForm.type === t && inlineCreateStyles.typePillActive]}
+                    onPress={() => setInlineForm((f) => ({ ...f, type: t }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[inlineCreateStyles.typePillText, inlineForm.type === t && inlineCreateStyles.typePillTextActive]}>
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={inlineCreateStyles.actions}>
+                <TouchableOpacity
+                  style={inlineCreateStyles.cancelBtn}
+                  onPress={() => setShowInlineCreate(false)}
+                >
+                  <Text style={inlineCreateStyles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[inlineCreateStyles.createBtn, creatingFromContact && inlineCreateStyles.createBtnDisabled]}
+                  onPress={handleInlineCreate}
+                  disabled={creatingFromContact}
+                >
+                  {creatingFromContact ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={inlineCreateStyles.createBtnText}>Create & Select</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           {isLoading ? (
             <ActivityIndicator style={{ marginTop: 32 }} color={colors.brand} />
           ) : isEmpty ? (
-            <Text style={modalStyles.emptyText}>
-              {debouncedSearch ? "No parties or contacts found" : "No parties yet"}
-            </Text>
+            <View>
+              <Text style={modalStyles.emptyText}>
+                {debouncedSearch ? `No parties found for "${debouncedSearch}"` : "No parties yet"}
+              </Text>
+              {/* OPT-03: create button when search returns empty */}
+              {!showInlineCreate && (
+                <TouchableOpacity
+                  style={inlineCreateStyles.createFromSearchBtn}
+                  onPress={() => {
+                    setInlineForm({ name: debouncedSearch || "", phone: "", type: partyType });
+                    setShowInlineCreate(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="person-add-outline" size={16} color={colors.brand} />
+                  <Text style={inlineCreateStyles.createFromSearchBtnText}>
+                    {debouncedSearch ? `Create "${debouncedSearch}" as new ${type === "sale" ? "customer" : "supplier"}` : `Create new ${type === "sale" ? "customer" : "supplier"}`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ) : (
             <SectionList
               sections={sections}
@@ -292,6 +418,23 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
               renderSectionHeader={({ section }) => (
                 <Text style={pickerStyles.sectionHeader}>{section.title}</Text>
               )}
+              ListFooterComponent={
+                debouncedSearch && !showInlineCreate ? (
+                  <TouchableOpacity
+                    style={inlineCreateStyles.createFromSearchBtn}
+                    onPress={() => {
+                      setInlineForm({ name: debouncedSearch, phone: "", type: partyType });
+                      setShowInlineCreate(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="person-add-outline" size={16} color={colors.brand} />
+                    <Text style={inlineCreateStyles.createFromSearchBtnText}>
+                      Create "{debouncedSearch}" as new {type === "sale" ? "customer" : "supplier"}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null
+              }
               renderItem={({ item }) => {
                 if (item.kind === "party") {
                   return (
@@ -443,7 +586,131 @@ const pickerStyles = StyleSheet.create({
   },
 });
 
+// ── OPT-03: Inline party create styles ────────────────────────
+
+const inlineCreateStyles = StyleSheet.create({
+  container: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: colors.bg,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.brand + "40",
+    padding: 14,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 12,
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  input: {
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: colors.textPrimary,
+    marginBottom: 8,
+  },
+  typeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  typePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  typePillActive: {
+    backgroundColor: colors.brand,
+    borderColor: colors.brand,
+  },
+  typePillText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textSecondary,
+  },
+  typePillTextActive: {
+    color: "#fff",
+  },
+  actions: {
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "flex-end",
+  },
+  cancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textSecondary,
+  },
+  createBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: colors.brand,
+    minWidth: 110,
+    alignItems: "center",
+  },
+  createBtnDisabled: {
+    opacity: 0.6,
+  },
+  createBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  createFromSearchBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.brand + "60",
+    backgroundColor: colors.brand + "08",
+  },
+  createFromSearchBtnText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.brand,
+  },
+});
+
 // ── Item Picker Modal ──────────────────────────────────────────
+
+// Shape of a unit variant entry from the DB JSON column
+interface UnitVariant {
+  unit: string;
+  conversionFactor: number;
+  salePrice: string;
+  purchasePrice?: string | null;
+}
 
 interface ItemPickerProps {
   visible: boolean;
@@ -454,6 +721,8 @@ interface ItemPickerProps {
     salePrice?: string | null;
     purchasePrice?: string | null;
     taxPercent: string;
+    itemMode?: string | null;
+    unitVariants?: UnitVariant[] | null;
   }) => void;
   onClose: () => void;
 }
@@ -510,11 +779,21 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
                   invoiceType === "purchase"
                     ? item.purchasePrice ?? item.salePrice
                     : item.salePrice;
+                const hasVariants = item.itemMode === "variants";
+                const hasAltUnits = item.itemMode === "alt_units";
                 return (
                   <TouchableOpacity
                     style={modalStyles.listItem}
                     onPress={() => {
-                      onSelect(item);
+                      onSelect({
+                        id: item.id,
+                        name: item.name,
+                        salePrice: item.salePrice,
+                        purchasePrice: item.purchasePrice,
+                        taxPercent: item.taxPercent,
+                        itemMode: item.itemMode,
+                        unitVariants: (item.unitVariants as UnitVariant[] | null) ?? null,
+                      });
                       onClose();
                     }}
                     activeOpacity={0.7}
@@ -523,7 +802,19 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
                       <Ionicons name="cube-outline" size={16} color={colors.brand} />
                     </View>
                     <View style={modalStyles.listItemContent}>
-                      <Text style={modalStyles.listItemName}>{item.name}</Text>
+                      <View style={itemPickerStyles.itemNameRow}>
+                        <Text style={modalStyles.listItemName}>{item.name}</Text>
+                        {hasVariants && (
+                          <View style={itemPickerStyles.modeBadge}>
+                            <Text style={itemPickerStyles.modeBadgeText}>VARIANTS</Text>
+                          </View>
+                        )}
+                        {hasAltUnits && (
+                          <View style={[itemPickerStyles.modeBadge, itemPickerStyles.modeBadgeAlt]}>
+                            <Text style={itemPickerStyles.modeBadgeText}>UNITS</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={modalStyles.listItemSub}>
                         {price ? formatCurrency(price) : "No price"} · GST {item.taxPercent}%
                       </Text>
@@ -542,6 +833,118 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
   );
 }
 
+// ── Item picker badge styles ──────────────────────────────────
+
+const itemPickerStyles = StyleSheet.create({
+  itemNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  modeBadge: {
+    backgroundColor: colors.brand + "20",
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  modeBadgeAlt: {
+    backgroundColor: colors.info + "20",
+  },
+  modeBadgeText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.brand,
+    letterSpacing: 0.3,
+  },
+});
+
+// ── G-08: Sub-selector styles ─────────────────────────────────
+
+const subSelectorStyles = StyleSheet.create({
+  container: {
+    marginBottom: 10,
+  },
+  label: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  pillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    alignSelf: "flex-start",
+    minWidth: 140,
+  },
+  pillBtnSelected: {
+    borderColor: colors.brand + "60",
+    backgroundColor: colors.brand + "12",
+  },
+  pillText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  pillTextSelected: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.brand,
+  },
+  warningText: {
+    fontSize: 11,
+    color: colors.warning,
+    marginTop: 4,
+  },
+  listItemSelected: {
+    backgroundColor: colors.brand + "10",
+  },
+  pillScroll: {
+    flexGrow: 0,
+  },
+  unitPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    marginRight: 8,
+    alignItems: "center",
+    minWidth: 64,
+  },
+  unitPillSelected: {
+    borderColor: colors.brand,
+    backgroundColor: colors.brand + "15",
+  },
+  unitPillText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textSecondary,
+  },
+  unitPillTextSelected: {
+    color: colors.brand,
+  },
+  unitPillPrice: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  unitPillPriceSelected: {
+    color: colors.brand + "cc",
+  },
+});
+
 // ── Line Item Row ──────────────────────────────────────────────
 // Stacked 2-row layout per line item:
 //   Row 1: Item name (full width)
@@ -555,9 +958,13 @@ interface LineItemRowProps {
   onChange: (index: number, field: keyof LineItem, value: string) => void;
   onRemove: (index: number) => void;
   onPickItem: (index: number) => void;
+  // G-08
+  onSelectVariant: (index: number, variant: { id: string; attributeValues: Record<string, string>; salePrice: string | null; purchasePrice: string | null }) => void;
+  onSelectUnit: (index: number, unitKey: string) => void;
+  allItems: Array<{ id: string; name: string; salePrice?: string | null; purchasePrice?: string | null; taxPercent: string; itemMode?: string | null; unitVariants?: UnitVariant[] | null }>;
 }
 
-function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRowProps) {
+function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem, onSelectVariant, onSelectUnit, allItems }: LineItemRowProps) {
   const qtyRef = useRef<TextInput>(null);
   const rateRef = useRef<TextInput>(null);
   const gstRef = useRef<TextInput>(null);
@@ -573,6 +980,15 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
     const taxAmt = afterDiscount * (tax / 100);
     return afterDiscount + taxAmt;
   }, [item]);
+
+  // Find the full item record from the list to get unitVariants etc.
+  const selectedItemRecord = item.itemId
+    ? allItems.find((i) => i.id === item.itemId)
+    : null;
+
+  const isVariantItem = item.itemMode === "variants";
+  const isAltUnitItem = item.itemMode === "alt_units";
+  const unitVariants = (selectedItemRecord?.unitVariants as UnitVariant[] | null | undefined) ?? [];
 
   return (
     <View style={styles.lineItemCard}>
@@ -610,6 +1026,27 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
           onSubmitEditing={() => qtyRef.current?.focus()}
         />
       ) : null}
+
+      {/* G-08: Variant sub-selector */}
+      {isVariantItem && item.itemId && (
+        <VariantSubSelector
+          itemId={item.itemId}
+          selectedVariantId={item.variantId}
+          invoiceType={invoiceType}
+          onSelect={(variant) => onSelectVariant(index, variant)}
+        />
+      )}
+
+      {/* G-08: Alt-unit pill selector */}
+      {isAltUnitItem && unitVariants.length > 0 && selectedItemRecord && (
+        <AltUnitSelector
+          baseUnit={selectedItemRecord.salePrice ? { unit: "base", salePrice: selectedItemRecord.salePrice, purchasePrice: selectedItemRecord.purchasePrice } : null}
+          unitVariants={unitVariants}
+          selectedUnit={item.selectedUnit}
+          invoiceType={invoiceType}
+          onSelect={(unitKey) => onSelectUnit(index, unitKey)}
+        />
+      )}
 
       {/* Row 2a: Qty + Rate */}
       <View style={styles.lineItemFieldsRow}>
@@ -683,6 +1120,164 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
   );
 }
 
+// ── G-08: Variant Sub-Selector ────────────────────────────────
+
+interface VariantSubSelectorProps {
+  itemId: string;
+  selectedVariantId?: string;
+  invoiceType: InvoiceType;
+  onSelect: (variant: { id: string; attributeValues: Record<string, string>; salePrice: string | null; purchasePrice: string | null }) => void;
+}
+
+function VariantSubSelector({ itemId, selectedVariantId, onSelect }: VariantSubSelectorProps) {
+  const [modalVisible, setModalVisible] = useState(false);
+  const { data: variants, isLoading } = trpc.item.listVariants.useQuery(
+    { itemId },
+    { enabled: true }
+  );
+
+  const selectedVariant = variants?.find((v) => v.id === selectedVariantId);
+  const selectedLabel = selectedVariant
+    ? Object.values(selectedVariant.attributeValues as Record<string, string>).join(" / ")
+    : null;
+
+  return (
+    <View style={subSelectorStyles.container}>
+      <Text style={subSelectorStyles.label}>Variant</Text>
+      <TouchableOpacity
+        style={[subSelectorStyles.pillBtn, selectedVariantId ? subSelectorStyles.pillBtnSelected : {}]}
+        onPress={() => setModalVisible(true)}
+        activeOpacity={0.7}
+      >
+        {isLoading ? (
+          <ActivityIndicator size="small" color={colors.brand} />
+        ) : (
+          <>
+            <Text style={selectedVariantId ? subSelectorStyles.pillTextSelected : subSelectorStyles.pillText}>
+              {selectedLabel ?? "Select variant..."}
+            </Text>
+            <Ionicons name="chevron-down" size={12} color={selectedVariantId ? colors.brand : colors.textMuted} />
+          </>
+        )}
+      </TouchableOpacity>
+      {!selectedVariantId && !isLoading && (
+        <Text style={subSelectorStyles.warningText}>Please select a variant</Text>
+      )}
+
+      <Modal visible={modalVisible} animationType="slide" transparent presentationStyle="overFullScreen">
+        <View style={modalStyles.overlay}>
+          <View style={modalStyles.sheet}>
+            <View style={modalStyles.header}>
+              <Text style={modalStyles.title}>Select Variant</Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)} style={modalStyles.closeBtn}>
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {isLoading ? (
+              <ActivityIndicator style={{ marginTop: 32 }} color={colors.brand} />
+            ) : !variants || variants.length === 0 ? (
+              <Text style={modalStyles.emptyText}>No variants defined for this item</Text>
+            ) : (
+              <FlatList
+                data={variants}
+                keyExtractor={(v) => v.id}
+                contentContainerStyle={modalStyles.listContent}
+                renderItem={({ item: v }) => {
+                  const label = Object.values(v.attributeValues as Record<string, string>).join(" / ");
+                  const isSelected = v.id === selectedVariantId;
+                  return (
+                    <TouchableOpacity
+                      style={[modalStyles.listItem, isSelected && subSelectorStyles.listItemSelected]}
+                      onPress={() => {
+                        onSelect({ id: v.id, attributeValues: v.attributeValues as Record<string, string>, salePrice: v.salePrice, purchasePrice: v.purchasePrice });
+                        setModalVisible(false);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={modalStyles.listItemIcon}>
+                        <Ionicons name="options-outline" size={16} color={colors.brand} />
+                      </View>
+                      <View style={modalStyles.listItemContent}>
+                        <Text style={[modalStyles.listItemName, isSelected && { color: colors.brand }]}>{label}</Text>
+                        {v.salePrice && (
+                          <Text style={modalStyles.listItemSub}>{formatCurrency(v.salePrice)}</Text>
+                        )}
+                      </View>
+                      {isSelected && (
+                        <Ionicons name="checkmark-circle" size={20} color={colors.brand} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+// ── G-08: Alt-Unit Pill Selector ──────────────────────────────
+
+interface AltUnitSelectorProps {
+  baseUnit: { unit: string; salePrice: string | null | undefined; purchasePrice?: string | null } | null;
+  unitVariants: UnitVariant[];
+  selectedUnit?: string;
+  invoiceType: InvoiceType;
+  onSelect: (unitKey: string) => void;
+}
+
+function AltUnitSelector({ baseUnit, unitVariants, selectedUnit, invoiceType, onSelect }: AltUnitSelectorProps) {
+  return (
+    <View style={subSelectorStyles.container}>
+      <Text style={subSelectorStyles.label}>Unit</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={subSelectorStyles.pillScroll}>
+        {/* Base unit pill */}
+        {baseUnit && (
+          <TouchableOpacity
+            style={[subSelectorStyles.unitPill, !selectedUnit && subSelectorStyles.unitPillSelected]}
+            onPress={() => onSelect("__base__")}
+            activeOpacity={0.7}
+          >
+            <Text style={[subSelectorStyles.unitPillText, !selectedUnit && subSelectorStyles.unitPillTextSelected]}>
+              {baseUnit.unit === "base"
+                ? `Base`
+                : baseUnit.unit}
+            </Text>
+            {baseUnit.salePrice && (
+              <Text style={[subSelectorStyles.unitPillPrice, !selectedUnit && subSelectorStyles.unitPillPriceSelected]}>
+                {formatCurrency(invoiceType === "purchase" && baseUnit.purchasePrice ? baseUnit.purchasePrice : baseUnit.salePrice)}
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
+
+        {/* Alt-unit pills */}
+        {unitVariants.map((uv) => {
+          const isSelected = selectedUnit === uv.unit;
+          const price = invoiceType === "purchase" && uv.purchasePrice ? uv.purchasePrice : uv.salePrice;
+          return (
+            <TouchableOpacity
+              key={uv.unit}
+              style={[subSelectorStyles.unitPill, isSelected && subSelectorStyles.unitPillSelected]}
+              onPress={() => onSelect(uv.unit)}
+              activeOpacity={0.7}
+            >
+              <Text style={[subSelectorStyles.unitPillText, isSelected && subSelectorStyles.unitPillTextSelected]}>
+                {uv.unit}
+              </Text>
+              <Text style={[subSelectorStyles.unitPillPrice, isSelected && subSelectorStyles.unitPillPriceSelected]}>
+                {formatCurrency(price)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
 // ── Main Create Screen ────────────────────────────────────────
 
 export default function InvoiceCreateScreen() {
@@ -703,6 +1298,17 @@ export default function InvoiceCreateScreen() {
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
+
+  // G-08: fetch full item list so LineItemRow can read unitVariants
+  const { data: allItemsData } = trpc.item.list.useQuery({ page: 1, limit: 200 });
+  const allItems = allItemsData?.data ?? [];
+
+  // OPT-04: fetch party details when a party is selected (for creditPeriodDays)
+  const partyType = invoiceType === "sale" ? "customer" : "supplier";
+  const { data: partiesData } = trpc.party.list.useQuery(
+    { type: partyType, page: 1, limit: 200 },
+    { enabled: showPartyPicker || selectedParty !== null }
+  );
 
   const createMutation = trpc.invoice.create.useMutation({
     onSuccess: (data) => {
@@ -766,6 +1372,8 @@ export default function InvoiceCreateScreen() {
       salePrice?: string | null;
       purchasePrice?: string | null;
       taxPercent: string;
+      itemMode?: string | null;
+      unitVariants?: UnitVariant[] | null;
     }) => {
       const price =
         invoiceType === "purchase"
@@ -779,6 +1387,11 @@ export default function InvoiceCreateScreen() {
           description: item.name,
           unitPrice: price,
           taxPercent: item.taxPercent,
+          // G-08: store item mode so sub-selectors can render; clear prior selections
+          itemMode: (item.itemMode as LineItem["itemMode"]) ?? "simple",
+          variantId: undefined,
+          selectedUnit: undefined,
+          conversionFactor: undefined,
         };
         return next;
       });
@@ -789,6 +1402,85 @@ export default function InvoiceCreateScreen() {
   const handleAddLine = useCallback(() => {
     setLineItems((prev) => [newLineItem(), ...prev]); // prepend — new item at top
   }, []);
+
+  // G-08: variant selection handler
+  const handleSelectVariant = useCallback(
+    (index: number, variant: { id: string; attributeValues: Record<string, string>; salePrice: string | null; purchasePrice: string | null }) => {
+      setLineItems((prev) => {
+        const next = [...prev];
+        const li = next[index];
+        const parentItem = allItems.find((i) => i.id === li.itemId);
+        const label = Object.values(variant.attributeValues).join(" / ");
+        const variantPrice = invoiceType === "purchase"
+          ? (variant.purchasePrice ?? variant.salePrice ?? (parentItem?.purchasePrice ?? parentItem?.salePrice ?? "0"))
+          : (variant.salePrice ?? (parentItem?.salePrice ?? "0"));
+        next[index] = {
+          ...li,
+          variantId: variant.id,
+          description: parentItem ? `${parentItem.name} - ${label}` : label,
+          unitPrice: variantPrice ?? "0",
+        };
+        return next;
+      });
+    },
+    [invoiceType, allItems]
+  );
+
+  // G-08: alt-unit selection handler
+  const handleSelectUnit = useCallback(
+    (index: number, unitKey: string) => {
+      setLineItems((prev) => {
+        const next = [...prev];
+        const li = next[index];
+        const parentItem = allItems.find((i) => i.id === li.itemId);
+        if (!parentItem) return prev;
+
+        if (unitKey === "__base__") {
+          const basePrice = invoiceType === "purchase"
+            ? (parentItem.purchasePrice ?? parentItem.salePrice ?? "0")
+            : (parentItem.salePrice ?? "0");
+          next[index] = {
+            ...li,
+            selectedUnit: undefined,
+            conversionFactor: undefined,
+            unitPrice: basePrice,
+            description: parentItem.name,
+          };
+          return next;
+        }
+
+        const uv = (parentItem.unitVariants as UnitVariant[] | null | undefined)?.find((v) => v.unit === unitKey);
+        if (!uv) return prev;
+
+        const unitPrice = invoiceType === "purchase"
+          ? (uv.purchasePrice ?? uv.salePrice)
+          : uv.salePrice;
+        next[index] = {
+          ...li,
+          selectedUnit: uv.unit,
+          conversionFactor: String(uv.conversionFactor),
+          unitPrice: unitPrice ?? "0",
+          description: `${parentItem.name} (${uv.unit})`,
+        };
+        return next;
+      });
+    },
+    [invoiceType, allItems]
+  );
+
+  // OPT-04: set due date based on party's creditPeriodDays
+  const handlePartySelect = useCallback(
+    (party: { id: string; name: string; phone?: string | null }) => {
+      setSelectedParty({ id: party.id, name: party.name });
+      const fullParty = partiesData?.data.find((p) => p.id === party.id);
+      if (fullParty?.creditPeriodDays && fullParty.creditPeriodDays > 0) {
+        const due = new Date(invoiceDate);
+        due.setDate(due.getDate() + fullParty.creditPeriodDays);
+        setDueDate(due);
+      }
+    },
+    [partiesData, invoiceDate]
+  );
 
   const doCreate = useCallback(() => {
     if (!selectedParty) {
@@ -831,6 +1523,10 @@ export default function InvoiceCreateScreen() {
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",
         discountPercent: li.discountPercent || "0",
+        // G-08: variant / alt-unit fields
+        variantId: li.variantId || undefined,
+        selectedUnit: li.selectedUnit || undefined,
+        conversionFactor: li.conversionFactor || undefined,
       })),
     });
   }, [selectedParty, lineItems, invoiceType, invoiceDate, dueDate, notes, createMutation]);
@@ -961,6 +1657,9 @@ export default function InvoiceCreateScreen() {
               onChange={handleLineChange}
               onRemove={handleRemoveLine}
               onPickItem={handlePickItemForLine}
+              onSelectVariant={handleSelectVariant}
+              onSelectUnit={handleSelectUnit}
+              allItems={allItems}
             />
           ))}
 
@@ -1034,7 +1733,7 @@ export default function InvoiceCreateScreen() {
       <PartyPickerModal
         visible={showPartyPicker}
         type={invoiceType}
-        onSelect={setSelectedParty}
+        onSelect={handlePartySelect}
         onClose={() => setShowPartyPicker(false)}
       />
 

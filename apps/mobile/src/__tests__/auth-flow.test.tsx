@@ -277,8 +277,8 @@ describe("authentication flow — login → lock screen → app", () => {
     mockAuthenticate.mockResolvedValue({ success: true });
     useBiometricStore.setState({ biometricEnabled: true, isLocked: true });
 
-    const success = await useBiometricStore.getState().authenticate();
-    expect(success).toBe(true);
+    const result = await useBiometricStore.getState().authenticate();
+    expect(result.success).toBe(true);
 
     useBiometricStore.getState().unlock();
     expect(useBiometricStore.getState().isLocked).toBe(false);

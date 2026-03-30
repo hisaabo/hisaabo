@@ -66,7 +66,7 @@ function SmartAssignBanner({ onAssigned }: { onAssigned: () => void }) {
 
   const { data: untrackedData, isSuccess: untrackedReady } =
     trpc.payment.untrackedPayments.useQuery(
-      { page: 1, limit: 200 },
+      { page: 1, limit: 100 },
       { enabled: !alreadyShown && bannerState.status === "idle" }
     );
 
