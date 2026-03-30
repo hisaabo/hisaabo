@@ -1,16 +1,15 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/dev/tooling/cli/schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hisaabo",
   "version": "0.1.0",
   "identifier": "in.hisaabo.app",
   "build": {
-    "frontendDist": "../web/dist",
+    "frontendDist": "../../web/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm --filter @hisaabo/web dev",
     "beforeBuildCommand": "pnpm --filter @hisaabo/web build"
   },
   "app": {
-    "title": "Hisaabo",
     "windows": [
       {
         "title": "Hisaabo",
@@ -23,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:3000 https://*.pages.dev; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:3000 https://*.hisaabo.in https://*.pages.dev; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
     }
   },
   "bundle": {

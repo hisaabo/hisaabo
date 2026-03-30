@@ -11,6 +11,19 @@ packages/db/drizzle/
 # Tauri
 apps/desktop/src-tauri/target/
 
+# Mobile
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/build/
+*.apk
+*.aab
+*.ipa
+
+# Build artifacts
+*.tsbuildinfo
+.astro/
+.expo/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -20,6 +33,7 @@ Thumbs.db
 .idea/
 *.swp
 
+# Internal docs (not open source)
 .claude
 CLAUDE.md
 SAAS.md
@@ -33,5 +47,3 @@ screens/
 backups/
 
 feature-parity.yaml
-.expo/
-.astro/

@@ -453,7 +453,7 @@ export default function ItemDetailScreen() {
                 </View>
                 <View style={styles.statCard}>
                   <Text style={styles.statCardValue}>
-                    {formatCurrency(parseFloat(salesStats.avgSalePrice))}
+                    {formatCurrency(parseFloat(salesStats.avgNetPrice))}
                   </Text>
                   <Text style={styles.statCardLabel}>Avg Price</Text>
                 </View>

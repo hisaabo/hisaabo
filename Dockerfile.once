@@ -1,5 +1,5 @@
 # ── Hisaabo — ONCE-compatible all-in-one image ─────────────────
-# Single container: PostgreSQL 16 + Node API on port 80
+# Single container: PostgreSQL 16 + Node API on port 3000
 # Managed by s6-overlay for process supervision
 #
 # ONCE zero-downtime deploy safety:
@@ -198,7 +198,7 @@ DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
 cd /app
 
 # Start API — connects to PG via Unix socket
-echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
+echo "[api] Starting Hisaabo API on port ${PORT:-3000}..."
 exec env DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
   node packages/api/dist/server.js
 APIRUN
@@ -251,11 +251,11 @@ RUN chmod +x /hooks/post-restore
 # ── Environment ──────────────────────────────────────────────
 
 ENV NODE_ENV=production
-ENV PORT=80
+ENV PORT=3000
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
 # Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, TURNSTILE_SECRET_KEY
 
-EXPOSE 80
+EXPOSE 3000
 
 ENTRYPOINT ["/init"]

@@ -26,12 +26,12 @@ export default function DeliveryChallanDetailScreen() {
     { enabled: !!id }
   );
 
-  const updateMutation = trpc.deliveryChallan.update.useMutation({
+  const updateMutation = trpc.deliveryChallan.updateStatus.useMutation({
     onSuccess: () => {
       utils.deliveryChallan.list.invalidate();
       utils.deliveryChallan.getById.invalidate({ id: id! });
     },
-    onError: (err) => Alert.alert("Error", err.message),
+    onError: (err: { message: string }) => Alert.alert("Error", err.message),
   });
 
   const convertMutation = trpc.document.convert.useMutation({
@@ -149,7 +149,7 @@ export default function DeliveryChallanDetailScreen() {
             </View>
             <StatusBadge status={challan.status} />
           </View>
-          <Text style={styles.partyName}>{challan.partyName}</Text>
+          <Text style={styles.partyName}>{challan.party?.name}</Text>
           <Text style={styles.docDate}>{formatDate(challan.invoiceDate)}</Text>
         </View>
 
@@ -166,10 +166,10 @@ export default function DeliveryChallanDetailScreen() {
             <Text style={styles.totalLabel}>Subtotal</Text>
             <Text style={styles.totalValue}>{formatCurrency(challan.subtotal)}</Text>
           </View>
-          {parseFloat(challan.taxTotal ?? "0") > 0 && (
+          {parseFloat(challan.totalAmount) - parseFloat(challan.subtotal) > 0 && (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Tax</Text>
-              <Text style={styles.totalValue}>{formatCurrency(challan.taxTotal ?? "0")}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(parseFloat(challan.totalAmount) - parseFloat(challan.subtotal))}</Text>
             </View>
           )}
           <View style={styles.totalDivider} />
