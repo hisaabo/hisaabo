@@ -37,49 +37,30 @@ hisaabo --version
 
 ## Authentication
 
-### Login
+### Login with API key (recommended)
+
+Generate an API key in the Hisaabo web app under **Settings → API Keys** (available on paid plans), then:
 
 ```bash
-hisaabo login
+hisaabo login --token hisaabo_key_xxxxxxxxxxxxxxxxxx
 ```
 
-The CLI launches an interactive prompt (powered by Ink) asking for your Hisaabo instance URL, email, and password. On success, it stores your session in `~/.config/hisaabo/config.json`.
+The CLI validates the key, resolves your user and business context, and stores it in `~/.config/hisaabo/config.json`. API keys do not expire unless you set an expiry date during creation.
+
+To specify a self-hosted instance:
 
 ```bash
-# Non-interactive (for CI/scripts)
-hisaabo login --api-url https://your-hisaabo-instance.com \
-              --email owner@yourshop.in \
-              --password yourpassword
+hisaabo login --token hisaabo_key_xxx --api-url https://your-instance.com
 ```
 
-Session tokens last 30 days. Run `hisaabo login` again when they expire.
+### Environment variables (recommended for automation)
 
-### Logout
+For cron jobs and CI/CD pipelines, set credentials as environment variables instead of logging in:
 
 ```bash
-hisaabo logout
-```
-
-Clears the stored session from `~/.config/hisaabo/config.json`.
-
-### Check current context
-
-```bash
-hisaabo whoami
-```
-
-```
-Logged in as:  owner@yourbusiness.com
-API URL:       https://your-hisaabo-instance.com
-Tenant:        tenant-uuid-here
-Business:      Sharma Traders (business-uuid-here)
-```
-
-For scripting:
-
-```bash
-hisaabo whoami --json
-# { "email": "...", "token": "sess_...", "tenantId": "...", "businessId": "...", "businessName": "..." }
+export HISAABO_API_URL=https://your-hisaabo-instance.com
+export HISAABO_TOKEN=hisaabo_key_xxxxxxxxxxxxxxxxxx
+export HISAABO_BUSINESS_ID=your-business-uuid
 ```
 
 ### Switch business
@@ -95,17 +76,6 @@ Or non-interactively:
 
 ```bash
 hisaabo switch <business-id>
-```
-
-### Environment variables
-
-For cron jobs and CI/CD pipelines, environment variables override the config file:
-
-```bash
-export HISAABO_API_URL=https://your-hisaabo-instance.com
-export HISAABO_TOKEN=sess_VbK2mQ9xP4nR7wA1...
-export HISAABO_TENANT_ID=tenant-uuid-here
-export HISAABO_BUSINESS_ID=business-uuid-here
 ```
 
 ---
@@ -894,8 +864,7 @@ export const hisaaboCLI = {
 ```bash
 # /etc/cron.d/hisaabo
 HISAABO_API_URL=https://your-hisaabo-instance.com
-HISAABO_TOKEN=sess_VbK2mQ9xP4nR7wA1...
-HISAABO_TENANT_ID=tenant-uuid-here
+HISAABO_TOKEN=hisaabo_key_xxxxxxxxxxxxxxxxxx
 HISAABO_BUSINESS_ID=business-uuid-here
 
 # Daily summary at 8:00 AM
@@ -925,7 +894,7 @@ The CLI reads from `~/.config/hisaabo/config.json`, created automatically on fir
 ```json
 {
   "apiUrl": "https://your-hisaabo-instance.com",
-  "token": "sess_VbK2mQ9xP4nR7wA1...",
+  "token": "hisaabo_key_xxxxxxxxxxxxxxxxxx",
   "tenantId": "tenant-uuid-here",
   "businessId": "business-uuid-here",
   "output": {
