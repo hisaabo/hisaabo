@@ -140,7 +140,7 @@ export default function SettingsScreen() {
         </View>
 
         {/* Footer */}
-        <Text style={styles.footer}>Hisaabo v0.1.0 — Self-hosted invoicing</Text>
+        <Text style={styles.footer}>Hisaabo v0.1.0 — Open-source business management</Text>
       </ScrollView>
     </SafeAreaView>
   );

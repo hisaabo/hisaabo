@@ -12,6 +12,9 @@
  *   items://inventory           — All inventory items with current stock
  *   invoices://recent           — Last 10 invoices (quick status overview)
  *   dashboard://summary         — Current FY financial summary
+ *   bank://accounts             — Bank account list with current balances
+ *   shipments://recent          — Last 10 shipments
+ *   targets://active            — Active sales targets with progress
  *
  * Cache guidance:
  *   - business://current: long cache — changes rarely
@@ -19,6 +22,9 @@
  *   - items://inventory: short cache — stock changes with every invoice
  *   - invoices://recent: short cache — changes with every new invoice
  *   - dashboard://summary: no-cache — changes with every transaction
+ *   - bank://accounts: short cache — balance changes with every payment
+ *   - shipments://recent: short cache — changes with every new shipment
+ *   - targets://active: medium cache — progress changes with every sale
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -144,6 +150,59 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
         contents: [{
           uri: "dashboard://summary",
           text: JSON.stringify(summary, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    }
+  );
+
+  // ── bank://accounts ──────────────────────────────────────────────────────
+  // All bank and cash accounts with current balances. Load this to see the
+  // business's financial position across all accounts.
+  server.resource(
+    "bank_accounts",
+    "bank://accounts",
+    async (_uri) => {
+      const accounts = await client.bankAccount.list();
+      return {
+        contents: [{
+          uri: "bank://accounts",
+          text: JSON.stringify(accounts, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    }
+  );
+
+  // ── shipments://recent ───────────────────────────────────────────────────
+  // The 10 most recent shipments. Load this for a quick logistics overview.
+  server.resource(
+    "shipments_recent",
+    "shipments://recent",
+    async (_uri) => {
+      const result = await client.shipment.list({ page: 1, limit: 10 });
+      return {
+        contents: [{
+          uri: "shipments://recent",
+          text: JSON.stringify(result.data, null, 2),
+          mimeType: "application/json",
+        }],
+      };
+    }
+  );
+
+  // ── targets://active ────────────────────────────────────────────────────
+  // Active sales targets (whose period includes today) with real-time progress.
+  // Load this to understand team sales goals and performance at a glance.
+  server.resource(
+    "targets_active",
+    "targets://active",
+    async (_uri) => {
+      const targets = await client.target.list({ active: true, withProgress: true });
+      return {
+        contents: [{
+          uri: "targets://active",
+          text: JSON.stringify(targets, null, 2),
           mimeType: "application/json",
         }],
       };

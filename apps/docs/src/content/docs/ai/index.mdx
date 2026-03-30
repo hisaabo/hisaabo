@@ -1,6 +1,6 @@
 ---
 title: AI & Automation
-description: The only Indian invoicing platform with native AI agent support. Connect Claude, build automations, and let AI handle your bookkeeping while you run your business.
+description: The only Indian invoicing platform with native AI agent support. ~50 MCP tools covering every business operation. Connect Claude, build automations, and let AI handle your bookkeeping while you run your business.
 sidebar:
   order: 1
 ---
@@ -24,8 +24,8 @@ The problem with most accounting software is that it was designed for humans cli
 Hisaabo is different. The entire product is API-first. The web dashboard, mobile app, and desktop app are all thin clients over the same tRPC API. That means:
 
 - Any AI agent that can make HTTP requests can do anything a human can do in the dashboard
-- The [MCP server](/ai/mcp-server/) gives AI assistants like Claude structured, typed access without writing API code
-- The [CLI tool](/ai/cli/) lets you pipe business data into shell scripts and automation workflows
+- The [MCP server](/ai/mcp-server/) gives AI assistants like Claude structured, typed access without writing API code — ~50 tools covering invoicing, parties, inventory, payments, expenses, GST, shipping, banking, reports, store, targets, and bulk import
+- The [CLI tool](/ai/cli/) is built with Ink 5 (React for the terminal) and lets you pipe business data into shell scripts and automation workflows
 - Responses are paginated and bounded, keeping AI context windows from being flooded with data
 
 The goal is to let you spend your time on decisions — pricing strategy, customer relationships, business growth — while AI handles the routine bookkeeping work.
@@ -43,7 +43,7 @@ You could build an invoicing API from scratch, wire up a GST calculation engine,
 | **GST compliance** | Study CGST/SGST/IGST rules, HSN codes, filing formats | Built in — GSTR-1, GSTR-3B, state-wise tax splits, HSN summaries |
 | **Multi-tenant isolation** | Design and implement from scratch | Every request is business-scoped via `x-business-id` |
 | **Type safety** | Manual schema maintenance | End-to-end TypeScript types from `AppRouter` — no codegen |
-| **MCP integration** | Build your own MCP server | Zero-config MCP server, works with Claude Desktop today |
+| **MCP integration** | Build your own MCP server | Zero-config MCP server with ~50 tools, works with Claude Desktop today |
 | **Indian business context** | Learn the rules (April FY, UPI, HSN, GSTIN) | All of it works out of the box |
 | **Audit trail** | Design and implement | Every API call logged, every MCP tool call recorded |
 | **Time to first AI agent** | 3–6 months | 5 minutes |
@@ -120,9 +120,9 @@ AI Agent: "Q3 FY 2025-26 GST summary:
 See the [MCP Server setup guide](/ai/mcp-server/) for full installation and configuration instructions. The short version:
 
 ```bash
-# 1. Get your credentials
+# 1. Install CLI and authenticate
 npm install -g @hisaabo/cli
-hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo login
 hisaabo whoami --json   # copy token, tenantId, businessId from output
 ```
 
@@ -145,26 +145,25 @@ Then add this to your Claude Desktop `claude_desktop_config.json`:
 }
 ```
 
-### Available tools
+### Available tools (~50 total)
 
-The MCP server exposes tools across all major Hisaabo modules. A representative sample:
+The MCP server exposes tools across all Hisaabo business domains:
 
-| Tool | What it does |
+| Domain | Tools |
 |---|---|
-| `invoice_list` | List invoices with filters (status, party, date range) |
-| `invoice_create` | Create a sale or purchase invoice |
-| `invoice_get` | Get a single invoice with all line items |
-| `invoice_update_status` | Advance invoice lifecycle (draft → sent → paid) |
-| `invoice_pdf_url` | Get a URL to download the invoice PDF |
-| `party_list` | List parties — use `filter='outstanding'` for unpaid balances |
-| `party_get` | Get a party's profile and outstanding balance |
-| `party_ledger` | Get a party's full transaction ledger |
-| `item_list` | List items — use `lowStock=true` for reorder alerts |
-| `item_adjust_stock` | Manually adjust stock quantity |
-| `payment_create` | Record a payment (Cash, UPI, Bank, Cheque) |
-| `dashboard_summary` | Get key business metrics for a time period |
-| `gst_report` | Get GSTR-1 or GSTR-3B data for a month |
-| `expense_create` | Record a business expense |
+| **Invoicing** | `invoice_list`, `invoice_create`, `invoice_get`, `invoice_update_status`, `invoice_pdf_url`, `invoice_delete` |
+| **Parties** | `party_list`, `party_create`, `party_get`, `party_update`, `party_delete`, `party_ledger` |
+| **Items** | `item_list`, `item_create`, `item_get`, `item_update`, `item_delete`, `item_adjust_stock`, `item_categories` |
+| **Payments** | `payment_list`, `payment_create`, `payment_get`, `payment_update`, `payment_delete` |
+| **Expenses** | `expense_list`, `expense_create`, `expense_update`, `expense_delete`, `expense_categories` |
+| **GST** | `gst_report`, `gst_report_csv` |
+| **Dashboard** | `dashboard_summary` |
+| **Shipments** | `shipment_list`, `shipment_get`, `shipment_create`, `shipment_update`, `shipment_delete` |
+| **Banking** | `bank_account_list`, `bank_account_get`, `bank_account_create`, `bank_account_transfer`, `bank_account_transactions`, `bank_account_summary` |
+| **Reports** | `report_daybook`, `report_outstanding`, `report_tax_summary`, `report_item_sales`, `report_stock_summary`, `report_party_statement`, `report_payment_summary` |
+| **Store** | `store_settings`, `store_update_settings`, `store_orders`, `store_order_get`, `store_order_update` |
+| **Targets** | `target_list`, `target_create`, `target_progress`, `target_my` |
+| **Import** | `import_parties`, `import_items`, `import_invoices`, `import_payments` |
 
 Full schema documentation is in the [MCP Server reference](/ai/mcp-server/).
 
@@ -172,18 +171,18 @@ Full schema documentation is in the [MCP Server reference](/ai/mcp-server/).
 
 ## CLI Tool
 
-The Hisaabo CLI brings your business data to the terminal. It is designed for three audiences: developers who want to script business operations, system administrators setting up automation, and AI agents that run shell commands as part of a broader workflow.
+The Hisaabo CLI (`hisaabo`) is built with [Ink 5](https://github.com/vadimdemedes/ink) (React for the terminal) and Commander.js. It renders rich interactive tables, colored status badges, and INR-formatted numbers directly in your shell. It is designed for three audiences: developers who want to script business operations, system administrators setting up automation, and AI agents that run shell commands as part of a broader workflow.
 
 ### Quick start
 
 ```bash
 npm install -g @hisaabo/cli
 
-# Authenticate against your Hisaabo instance
-hisaabo login --api-url https://your-hisaabo-instance.com
+# Authenticate (interactive prompt for URL, email, password)
+hisaabo login
 
-# Set your active business
-hisaabo business use <business-id>
+# Check current context
+hisaabo whoami
 ```
 
 ### Daily operations
@@ -204,12 +203,12 @@ hisaabo payment create --party "Sharma Traders" --amount 15000 --mode upi
 
 ### Automation patterns
 
-The CLI outputs clean JSON by default, which pipes directly into `jq` and other Unix tools:
+Pass `--json` for clean JSON output, then pipe into `jq` and other Unix tools:
 
 ```bash
 # Daily morning report sent to Slack
 hisaabo dashboard --period today --json | \
-  jq '{revenue: .totalRevenue, outstanding: .totalOutstanding, invoices: .invoiceCount}' | \
+  jq '{revenue: .totalSales, outstanding: .receivable}' | \
   curl -X POST -H 'Content-type: application/json' \
     -d @- https://hooks.slack.com/your-webhook
 
@@ -217,26 +216,8 @@ hisaabo dashboard --period today --json | \
 hisaabo item list --low-stock --json | \
   jq '.[] | "\(.name): \(.stockQuantity) \(.unit) remaining"'
 
-# Auto-generate weekly GST summary
-hisaabo gst summary --period this-week --format csv > gst-$(date +%Y-W%V).csv
-```
-
-### Cron job examples
-
-```bash
-# /etc/cron.d/hisaabo-automation
-
-# Daily overdue invoice check at 9 AM
-0 9 * * * hisaabo invoice list --status overdue --json | \
-  hisaabo notify send --template payment-reminder
-
-# Weekly low-stock report every Monday at 8 AM
-0 8 * * 1 hisaabo item list --low-stock --json | \
-  hisaabo report email --subject "Weekly Stock Alert" --to owner@yourbusiness.com
-
-# Monthly GST export on the 1st at 6 AM
-0 6 1 * * hisaabo gst export --period last-month --format json \
-  > /backups/gst/$(date +%Y-%m).json
+# Export GSTR-1 CSV for CA
+hisaabo gst r1 --month 3 --year 2026 --csv --output /var/gst-reports/
 ```
 
 Full command reference is in the [CLI documentation](/ai/cli/).
@@ -260,7 +241,7 @@ x-tenant-id: <your-tenant-uuid>
 Get your session token by logging in via the CLI:
 
 ```bash
-hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo login
 hisaabo whoami --json   # prints token, tenantId, businessId
 ```
 
@@ -474,18 +455,15 @@ REPORT_DATE=$(date +%Y-%m-%d)
 OUTPUT="/var/reports/hisaabo/week-$REPORT_DATE.json"
 
 # Collect data
-hisaabo dashboard --period this-week --json > "$OUTPUT"
-hisaabo invoice list --status overdue --json >> "$OUTPUT"
-hisaabo gst summary --period this-week --json >> "$OUTPUT"
+DASHBOARD=$(hisaabo dashboard --period this-week --json)
+OVERDUE=$(hisaabo invoice list --status overdue --json)
 
 # Email the report
-cat "$OUTPUT" | jq '{
-  period: "this-week",
-  revenue: .dashboard.totalRevenue,
-  overdueCount: (.overdue | length),
-  overdueAmount: [.overdue[].totalAmount] | add,
-  gstLiability: .gst.netLiability
-}' | mail -s "Weekly Business Report — $REPORT_DATE" owner@yourbusiness.com
+jq -n \
+  --argjson d "$DASHBOARD" \
+  --argjson o "$OVERDUE" \
+  '{period: "this-week", revenue: $d.totalSales, overdueCount: ($o | length)}' | \
+  mail -s "Weekly Business Report — $REPORT_DATE" owner@yourbusiness.com
 ```
 
 ### Customer asks about order status (OpenClaw agent + MCP)

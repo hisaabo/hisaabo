@@ -6,6 +6,9 @@
  *   item_create        — create a new product or service item
  *   item_get           — get full item details including variants and stock
  *   item_adjust_stock  — record a stock-in or stock-out adjustment
+ *   item_update        — update an existing item's details or pricing
+ *   item_delete        — permanently delete an item
+ *   item_categories    — list all distinct item categories
  */
 
 import { z } from "zod";
@@ -129,6 +132,98 @@ export function registerItemTools(server: McpServer, client: HisaaboClient) {
         content: [{
           type: "text" as const,
           text: JSON.stringify(item, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "item_update",
+    [
+      "Update an existing inventory item's details, pricing, or stock settings.",
+      "Only provide fields you want to change — all other fields remain unchanged.",
+      "Changing sale_price or purchase_price updates the default price for future invoices but does not retroactively change past invoice line items.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid()
+        .describe("Item UUID to update."),
+      name: z.string().min(1).max(200).optional()
+        .describe("Updated item name."),
+      sale_price: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated selling price per unit as decimal string."),
+      purchase_price: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated purchase/cost price per unit as decimal string."),
+      tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated GST/tax rate percentage, e.g. '18.00'."),
+      low_stock_alert: z.string().regex(/^\d+(\.\d{1,3})?$/).optional()
+        .describe("Updated low-stock alert threshold."),
+      hsn: z.string().max(20).optional()
+        .describe("Updated HSN code."),
+      sku: z.string().max(50).optional()
+        .describe("Updated SKU."),
+      description: z.string().max(1000).optional()
+        .describe("Updated internal description."),
+      category: z.string().max(100).optional()
+        .describe("Updated category."),
+    },
+    wrapTool(async (input) => {
+      const { item_id, ...fields } = input;
+      const item = await client.item.update(item_id, {
+        name: fields.name,
+        salePrice: fields.sale_price,
+        purchasePrice: fields.purchase_price,
+        taxPercent: fields.tax_percent,
+        lowStockAlert: fields.low_stock_alert,
+        hsn: fields.hsn,
+        sku: fields.sku,
+        description: fields.description,
+        category: fields.category,
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(item, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "item_delete",
+    [
+      "Permanently delete an inventory item. Requires admin role.",
+      "Warning: this is a hard delete — it removes the item record and its variants.",
+      "Existing invoice line items that reference this item are not deleted (they retain the data at time of invoicing).",
+      "Only delete if the item was created in error. For discontinued items, consider just setting them inactive.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid()
+        .describe("Item UUID to delete."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.item.delete(input.item_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "item_categories",
+    [
+      "Get a list of all distinct item categories used in the business.",
+      "Use this to discover valid category names before filtering item_list by category or creating items.",
+    ].join(" "),
+    {},
+    wrapTool(async (_input) => {
+      const categories = await client.item.categories();
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(categories, null, 2),
         }],
       };
     })

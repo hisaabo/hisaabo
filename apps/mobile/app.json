@@ -8,6 +8,7 @@
     "scheme": "hisaabo",
     "userInterfaceStyle": "automatic",
     "splash": {
+      "image": "./assets/splash.png",
       "backgroundColor": "#0f0f1a"
     },
     "ios": {
@@ -24,6 +25,7 @@
       "expo-router",
       "expo-secure-store",
       "expo-font",
+      "expo-system-ui",
       "expo-local-authentication",
       [
         "expo-contacts",

@@ -241,8 +241,8 @@ async function syncInvoicesToSheets() {
 | Invoices | `hisaabo invoice list --json` | Daily |
 | Payments | `hisaabo payment list --json` | Daily |
 | Outstanding | `hisaabo party list --outstanding --json` | Daily |
-| GST summary | `hisaabo gst summary --period this-month --json` | Weekly |
-| P&L | `hisaabo report pnl --period this-month --json` | Weekly |
+| GST summary | `hisaabo gst r3b --month 3 --year 2026 --json` | Monthly |
+| Outstanding aging | `hisaabo report outstanding --json` | Weekly |
 | Stock levels | `hisaabo item list --json` | Daily |
 
 ---
@@ -291,11 +291,12 @@ export async function onInvoiceConfirmed(invoiceId: string) {
     weight: 1.5, // kg
   });
 
-  // Record tracking number back in Hisaabo via CLI
+  // Create a shipment record in Hisaabo via CLI
   await execAsync(
-    `hisaabo invoice update ${invoiceId} \
-      --note "Shiprocket AWB: ${shipment.awb_code}" \
-      --tracking-id "${shipment.awb_code}"`
+    `hisaabo shipment create \
+      --invoice ${invoiceId} \
+      --mode "Shiprocket" \
+      --tracking "${shipment.awb_code}"`
   );
 
   console.log(`Shipment created: AWB ${shipment.awb_code} for ${invoice.invoiceNumber}`);

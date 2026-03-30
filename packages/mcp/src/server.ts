@@ -14,6 +14,12 @@ import { registerPaymentTools } from "./tools/payment.js";
 import { registerExpenseTools } from "./tools/expense.js";
 import { registerDashboardTools } from "./tools/dashboard.js";
 import { registerGstTools } from "./tools/gst.js";
+import { registerShipmentTools } from "./tools/shipment.js";
+import { registerBankAccountTools } from "./tools/bankAccount.js";
+import { registerReportTools } from "./tools/reports.js";
+import { registerStoreTools } from "./tools/store.js";
+import { registerTargetTools } from "./tools/target.js";
+import { registerImportTools } from "./tools/import.js";
 import { registerResources } from "./resources/index.js";
 
 export function registerTools(server: McpServer, client: HisaaboClient): void {
@@ -27,6 +33,22 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
   // Analytics and reporting
   registerDashboardTools(server, client);
   registerGstTools(server, client);
+  registerReportTools(server, client);
+
+  // Logistics
+  registerShipmentTools(server, client);
+
+  // Financial accounts
+  registerBankAccountTools(server, client);
+
+  // Online store
+  registerStoreTools(server, client);
+
+  // Sales targets
+  registerTargetTools(server, client);
+
+  // Data import
+  registerImportTools(server, client);
 
   // Read-only context resources
   registerResources(server, client);

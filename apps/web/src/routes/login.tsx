@@ -351,8 +351,8 @@ function BrandPanel() {
           <div style={{ display: "flex", gap: 20 }}>
             {[
               { n: "GST Ready", icon: "✓" },
-              { n: "PDF Invoices", icon: "✓" },
-              { n: "Self-hosted", icon: "✓" },
+              { n: "100% Free", icon: "✓" },
+              { n: "Open Source", icon: "✓" },
             ].map(({ n, icon }) => (
               <div
                 key={n}

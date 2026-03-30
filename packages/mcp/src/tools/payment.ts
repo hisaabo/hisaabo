@@ -4,6 +4,9 @@
  * Tools registered:
  *   payment_create  — record a payment received from a customer or made to a supplier
  *   payment_list    — list payments with filtering
+ *   payment_get     — get full payment details including linked invoices
+ *   payment_update  — update an existing payment record
+ *   payment_delete  — soft-delete a payment
  */
 
 import { z } from "zod";
@@ -72,6 +75,106 @@ export function registerPaymentTools(server: McpServer, client: HisaaboClient) {
         content: [{
           type: "text" as const,
           text: JSON.stringify(payment, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_get",
+    [
+      "Get full details of a single payment, including the invoices it was applied to.",
+      "The 'linkedInvoices' field shows which invoices received allocations from this payment.",
+    ].join(" "),
+    {
+      payment_id: z.string().uuid()
+        .describe("Payment UUID from payment_list."),
+    },
+    wrapTool(async (input) => {
+      const payment = await client.payment.getById(input.payment_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(payment, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_update",
+    [
+      "Update an existing payment record. This reverses the old allocation and re-applies the new one.",
+      "The linked invoice's amountPaid and status are recalculated automatically.",
+      "Only provide fields you want to change.",
+      "Warning: updating a payment recalculates invoice statuses — ensure the new amount/allocation is correct.",
+    ].join(" "),
+    {
+      payment_id: z.string().uuid()
+        .describe("Payment UUID to update."),
+      amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("New payment amount as decimal string."),
+      mode: z.enum(PAYMENT_MODES).optional()
+        .describe("Updated payment mode."),
+      discount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated discount/write-off amount."),
+      reference_number: z.string().max(100).optional().nullable()
+        .describe("Updated transaction reference number."),
+      payment_date: z.string().datetime().optional()
+        .describe("Updated payment date (ISO 8601)."),
+      notes: z.string().max(500).optional().nullable()
+        .describe("Updated internal notes."),
+      bank_account_id: z.string().uuid().optional().nullable()
+        .describe("Updated bank account UUID. Null to unlink from any account."),
+      allocations: z.array(z.object({
+        invoice_id: z.string().uuid()
+          .describe("Invoice UUID to allocate part of this payment to."),
+        amount: z.string().regex(/^\d+(\.\d{1,2})?$/)
+          .describe("Amount to allocate."),
+      })).optional()
+        .describe("Updated invoice allocations. Replaces all existing allocations."),
+    },
+    wrapTool(async (input) => {
+      const payment = await client.payment.update({
+        id: input.payment_id,
+        amount: input.amount,
+        mode: input.mode,
+        discount: input.discount,
+        referenceNumber: input.reference_number,
+        paymentDate: input.payment_date,
+        notes: input.notes,
+        bankAccountId: input.bank_account_id,
+        allocations: input.allocations?.map((a) => ({
+          invoiceId: a.invoice_id,
+          amount: a.amount,
+        })),
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(payment, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_delete",
+    [
+      "Soft-delete a payment record. Requires admin role.",
+      "Deleting a payment reverses the invoice allocation: the linked invoice's amountPaid is reduced and its status is recalculated.",
+      "The bank account balance is also reversed if the payment was recorded against an account.",
+    ].join(" "),
+    {
+      payment_id: z.string().uuid()
+        .describe("Payment UUID to delete."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.payment.delete(input.payment_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     })

@@ -2,7 +2,8 @@
  * GST reporting tools.
  *
  * Tools registered:
- *   gst_report — generate GSTR1 or GSTR3B summary data for a given month/year
+ *   gst_report     — generate GSTR1 or GSTR3B summary data for a given month/year
+ *   gst_report_csv — get GSTR-1 data in CSV format ready for portal upload
  *
  * Note: PDF generation is intentionally excluded. AI agents cannot consume
  * binary content in tool responses. The JSON report is designed to let agents
@@ -17,6 +18,31 @@ import { wrapTool } from "../lib/errors.js";
 const CURRENT_YEAR = new Date().getFullYear();
 
 export function registerGstTools(server: McpServer, client: HisaaboClient) {
+
+  server.tool(
+    "gst_report_csv",
+    [
+      "Get GSTR-1 data as a CSV string ready for upload to the GST portal.",
+      "Returns the CSV content and a suggested filename (e.g. 'GSTR1_March_2024.csv').",
+      "Save the CSV content to a file and upload it at https://www.gst.gov.in/.",
+      "Month is 1–12 (1 = January, 3 = March, etc.).",
+    ].join(" "),
+    {
+      month: z.number().int().min(1).max(12)
+        .describe("Month number (1 = January, 12 = December)."),
+      year: z.number().int().min(2020).max(CURRENT_YEAR + 1)
+        .describe(`Year, e.g. ${CURRENT_YEAR}.`),
+    },
+    wrapTool(async (input) => {
+      const result = await client.gst.gstr1CSV({ month: input.month, year: input.year });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
 
   server.tool(
     "gst_report",
