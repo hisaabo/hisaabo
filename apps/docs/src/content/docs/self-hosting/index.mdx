@@ -1,0 +1,189 @@
+---
+title: Self-Hosting Reference
+description: Reference guide for self-hosting Hisaabo in production — Docker setup, environment variables, backup strategy, updates, multi-tenancy, and troubleshooting.
+sidebar:
+  order: 1
+---
+
+This page is a reference for ongoing self-hosting operations. For initial installation, see [Self-Hosting Setup](/getting-started/self-hosting).
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  Your server                                     │
+│                                                  │
+│  ┌──────────┐      ┌──────────────────────────┐  │
+│  │  Caddy   │─────▶│  Hisaabo API (port 3000) │  │
+│  │  (HTTPS) │      │  Node.js / Hono          │  │
+│  └──────────┘      └──────────┬───────────────┘  │
+│                               │                  │
+│                    ┌──────────▼───────────────┐  │
+│                    │  PostgreSQL 16           │  │
+│                    │  (pgdata volume)         │  │
+│                    └──────────────────────────┘  │
+└─────────────────────────────────────────────────┘
+```
+
+The API serves the backend tRPC endpoints. The web frontend is deployed separately (hosted on a CDN, Vercel, or any static hosting) and is the primary interface for self-hosted users — accessible from any browser, including on phones and tablets.
+
+The native mobile app (Android/iOS) and desktop app (macOS/Windows/Linux) are **Hisaabo Cloud** features and connect to Hisaabo Cloud by default. Self-hosted users have full access to every feature through the web app.
+
+## Environment variable reference
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `PORT` | Yes | `3000` | API server port |
+| `CORS_ORIGINS` | Yes | — | Comma-separated allowed origins |
+| `NODE_ENV` | Yes | — | `production` or `development` |
+| `APP_URL` | Yes | — | Public URL of the app (used in magic link emails) |
+| `RESEND_API_KEY` | No | — | Resend API key for transactional email |
+| `EMAIL_FROM` | No | — | Sender name and address for emails |
+| `MULTI_TENANT` | No | `false` | Set `true` for cloud SaaS mode |
+| `CONTROL_DATABASE_URL` | No | — | Required only when `MULTI_TENANT=true` |
+| `TURNSTILE_SECRET_KEY` | No | — | Cloudflare Turnstile secret key for bot protection |
+| `VITE_TURNSTILE_SITE_KEY` | No | — | Cloudflare Turnstile site key (frontend) |
+
+## Database migrations
+
+Migrations run automatically on every container start via `docker-entrypoint.sh`. The migration system uses **Drizzle ORM**. Migration files are stored in `packages/db/drizzle/`.
+
+If a migration fails, the container exits with a non-zero code. Check the logs:
+
+```bash
+docker compose logs api
+```
+
+To run migrations manually (for debugging):
+
+```bash
+docker compose exec api sh -c "cd /app && pnpm --filter @hisaabo/db db:migrate"
+```
+
+## Backup strategy
+
+### Automated backup (recommended)
+
+Create a cron job to run daily backups:
+
+```bash
+# /etc/cron.d/hisaabo-backup
+0 2 * * * root docker compose -f /opt/hisaabo/docker-compose.yml exec -T postgres \
+  pg_dump -U hisaabo hisaabo | gzip > /opt/hisaabo/backups/backup-$(date +\%Y\%m\%d).sql.gz
+```
+
+Keep at least 30 days of backups and copy them off-server (to S3, Backblaze B2, or a separate machine).
+
+### Restoring from backup
+
+```bash
+# Stop the API to prevent writes during restore
+docker compose stop api
+
+# Restore the database
+gunzip -c /path/to/backup.sql.gz | \
+  docker compose exec -T postgres psql -U hisaabo hisaabo
+
+# Start the API again
+docker compose start api
+```
+
+## Updating
+
+```bash
+# Pull the latest image
+docker compose pull
+
+# Restart the containers (migrations run automatically)
+docker compose up -d
+```
+
+Check the container logs after update to confirm migrations succeeded.
+
+## Multi-tenancy (cloud SaaS mode)
+
+When `MULTI_TENANT=true`, Hisaabo creates a separate PostgreSQL schema per tenant (organisation). A separate **control database** stores users, tenants, sessions, and tenant members.
+
+Required when `MULTI_TENANT=true`:
+- `CONTROL_DATABASE_URL` — connection string to the control database
+
+In single-tenant mode (the default), all data is stored in one schema in one database. Multi-tenancy requires more complex database setup and is intended for SaaS deployments, not personal use.
+
+## ONCE deployment
+
+Hisaabo supports deployment via [Basecamp ONCE](https://once.com/) for easy self-hosting with zero-downtime deploys. The ONCE image (`Dockerfile.once`) bundles PostgreSQL 16 and the Node API into a single container managed by s6-overlay.
+
+Key features of the ONCE deployment:
+- **Single container**: PostgreSQL and the API run together, managed by s6-overlay process supervision
+- **Zero-downtime deploys**: Uses kernel-level `flock()` to coordinate PostgreSQL ownership during rolling container replacements
+- **Automatic backups**: Pre-backup hook creates a `pg_dump` before ONCE archives `/storage`
+- **Automatic restore**: Post-restore hook restores from the dump after ONCE unpacks `/storage`
+- **Port 80**: The ONCE image serves on port 80 (not 3000)
+
+Persistent data is stored in `/storage/pgdata` (database), `/storage/run` (sockets), and `/storage/backups`.
+
+## Rate limiting
+
+The API applies rate limiting at 120 requests per minute per IP address. If you are running Hisaabo behind a reverse proxy, ensure the `X-Forwarded-For` header is set correctly so the rate limiter sees the real client IP rather than the proxy IP.
+
+Example Nginx configuration:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+## Health check
+
+The API exposes a health endpoint at `GET /health`. It returns HTTP 200 when the server is running:
+
+```json
+{ "status": "ok", "timestamp": "2025-04-01T10:00:00.000Z" }
+```
+
+This endpoint is used by Docker's built-in health check and can be used by uptime monitoring services.
+
+## Logs
+
+View container logs:
+
+```bash
+docker compose logs -f api      # Stream API logs
+docker compose logs -f postgres # Stream database logs
+```
+
+The API logs all requests in a compact format. Sensitive fields (passwords, tokens) are not logged.
+
+## Troubleshooting
+
+### Container keeps restarting
+
+Check logs: `docker compose logs api`
+
+Common causes:
+- `DATABASE_URL` is wrong or the database is not reachable
+- A migration failed
+- Port 3000 is already in use on the host
+
+### "CORS error" in the browser
+
+Ensure `CORS_ORIGINS` includes the exact origin (scheme + domain + port) that your browser is connecting from. For example, if your site is `https://hisaabo.example.com`, set `CORS_ORIGINS=https://hisaabo.example.com`. Wildcards are not supported.
+
+### Magic links are not being sent
+
+If `RESEND_API_KEY` is not set, magic links are logged to the console. Check `docker compose logs api | grep "magic"` to find the link.
+
+### Database is running out of disk space
+
+PostgreSQL stores data in the `pgdata` Docker volume. Check available space:
+
+```bash
+docker system df
+df -h $(docker volume inspect hisaabo_pgdata --format '{{ .Mountpoint }}')
+```
+
+If you are low on space, the first priority is to move old backups off the server. You can also run `VACUUM FULL` inside PostgreSQL to reclaim space from deleted rows:
+
+```bash
+docker compose exec postgres psql -U hisaabo hisaabo -c "VACUUM FULL;"
+```

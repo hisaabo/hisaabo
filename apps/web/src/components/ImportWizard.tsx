@@ -1050,6 +1050,16 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const [gstReportFile, setGstReportFile] = useState<ParsedFile | null>(null);
   const [gstReportNames, setGstReportNames] = useState<string[]>([]);
 
+  // Unit conflict resolution: items sold in multiple units need conversion factors
+  // Key = item name (lowercase), value = { units: { unit → count }, resolvedConversions }
+  interface UnitConflict {
+    itemName: string;               // original case
+    baseUnit: string;               // most frequent unit (auto-detected)
+    altUnits: { unit: string; count: number; conversionFactor: string }[];
+    totalLines: number;
+  }
+  const [unitConflicts, setUnitConflicts] = useState<UnitConflict[]>([]);
+
   const [importStatuses, setImportStatuses] = useState<
     Partial<Record<EntityKey, "pending" | "running" | "done" | "skipped">>
   >({});
@@ -1062,6 +1072,8 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const importTransfersMut = trpc.import.importTransfers.useMutation();
   const reconcileDirectMut = trpc.import.reconcileDirectPayments.useMutation();
   const createExpenseMut = trpc.expense.create.useMutation();
+  const updateItemMut = trpc.item.update.useMutation();
+  const trpcUtils = trpc.useUtils();
 
   const BATCH_SIZE = 50;
 
@@ -1078,6 +1090,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     });
     setGstReportFile(null);
     setGstReportNames([]);
+    setUnitConflicts([]);
     setImportStatuses({});
     setImportDone(false);
   }
@@ -1085,6 +1098,67 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   function handleClose() {
     reset();
     onClose();
+  }
+
+  /**
+   * Scan the GST report to detect items sold in multiple units.
+   * For each such item, determine the most common unit (→ base) and list
+   * alternative units with their line counts. The user will be prompted to
+   * enter conversion factors before the import proceeds.
+   */
+  function detectUnitConflicts() {
+    if (!gstReportFile) { setUnitConflicts([]); return; }
+
+    // itemName → { displayName, units: Map<normalizedUnit → count> }
+    const itemUnits = new Map<string, { displayName: string; units: Map<string, number> }>();
+
+    for (const row of gstReportFile.rows) {
+      const itemName = (row["Item Name"] || "").trim();
+      if (!itemName) continue;
+      const parsed = parseStockQuantityWithUnit(row["Quantity"] || "");
+      const unit = parsed.unit;
+      if (!unit || unit === "other") continue;
+
+      const key = itemName.toLowerCase();
+      if (!itemUnits.has(key)) {
+        itemUnits.set(key, { displayName: itemName, units: new Map() });
+      }
+      const entry = itemUnits.get(key)!;
+      entry.units.set(unit, (entry.units.get(unit) || 0) + 1);
+    }
+
+    // Filter to items with 2+ distinct units
+    const conflicts: UnitConflict[] = [];
+    for (const [, entry] of itemUnits) {
+      if (entry.units.size < 2) continue;
+
+      // Most frequent unit = base
+      let baseUnit = "";
+      let maxCount = 0;
+      for (const [u, c] of entry.units) {
+        if (c > maxCount) { baseUnit = u; maxCount = c; }
+      }
+
+      const altUnits: UnitConflict["altUnits"] = [];
+      let totalLines = 0;
+      for (const [u, c] of entry.units) {
+        totalLines += c;
+        if (u !== baseUnit) {
+          altUnits.push({ unit: u, count: c, conversionFactor: "" });
+        }
+      }
+
+      conflicts.push({
+        itemName: entry.displayName,
+        baseUnit,
+        altUnits,
+        totalLines,
+      });
+    }
+
+    // Sort by total lines descending (most impactful first)
+    conflicts.sort((a, b) => b.totalLines - a.totalLines);
+    setUnitConflicts(conflicts);
   }
 
   // When source changes, re-run auto-mapping for any already-uploaded files
@@ -1504,6 +1578,52 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
       }
     }
 
+    // ── Step 2b: Configure alt units on items with resolved unit conflicts ──
+    const resolvedConflicts = unitConflicts.filter((c) =>
+      c.altUnits.some((a) => parseFloat(a.conversionFactor) > 0)
+    );
+    if (resolvedConflicts.length > 0) {
+      try {
+        // Fetch current items to get IDs by name (page through all)
+        const firstPage = await trpcUtils.item.list.fetch({ page: 1, limit: 100 });
+        const allItems = [...firstPage.data];
+        const totalPages = Math.ceil(firstPage.total / 200);
+        for (let p = 2; p <= totalPages; p++) {
+          const page = await trpcUtils.item.list.fetch({ page: p, limit: 100 });
+          allItems.push(...page.data);
+        }
+        const itemsByName = new Map(
+          allItems.map((i) => [i.name.toLowerCase(), i])
+        );
+
+        for (const conflict of resolvedConflicts) {
+          const item = itemsByName.get(conflict.itemName.toLowerCase());
+          if (!item) continue;
+
+          const resolvedAlts = conflict.altUnits
+            .filter((a) => parseFloat(a.conversionFactor) > 0)
+            .map((a) => ({
+              unit: a.unit,
+              conversionFactor: parseFloat(a.conversionFactor),
+              salePrice: item.salePrice || "0",
+            }));
+
+          if (resolvedAlts.length > 0) {
+            await updateItemMut.mutateAsync({
+              id: item.id,
+              data: {
+                itemMode: "alt_units" as const,
+                unitVariants: resolvedAlts,
+              },
+            });
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        toast.error("Failed to set up alt units", message);
+      }
+    }
+
     // ── Step 3: Import invoices with auto-payment creation ─────────────────
     if (invoicesFile) {
       setImportStatuses((s) => ({ ...s, invoices: "running" }));
@@ -1516,10 +1636,26 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           itemName: string;
           description: string;
           quantity: string;
+          unit?: string;
+          conversionFactor?: string;
           unitPrice: string;
           taxPercent: string;
           discountPercent: string;
         }>>();
+
+        // Build conversion lookup from resolved unit conflicts:
+        // key = "itemname|unit" → conversionFactor string
+        const conversionLookup = new Map<string, string>();
+        for (const conflict of unitConflicts) {
+          for (const alt of conflict.altUnits) {
+            if (alt.conversionFactor && parseFloat(alt.conversionFactor) > 0) {
+              conversionLookup.set(
+                `${conflict.itemName.toLowerCase()}|${alt.unit}`,
+                alt.conversionFactor
+              );
+            }
+          }
+        }
 
         if (gstReportFile) {
           for (const row of gstReportFile.rows) {
@@ -1530,7 +1666,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             const qtyRaw = row["Quantity"] || "1";
             const qtyParsed = parseStockQuantityWithUnit(qtyRaw);
             const qty = qtyParsed.quantity.replace(/^-/, ""); // strip negative
-            const _lineUnit = qtyParsed.unit; // normalized unit from the quantity column
+            const lineUnit = qtyParsed.unit; // normalized unit from the quantity column
 
             const unitPrice = cleanMoney(row["Price/Unit"] || "0");
 
@@ -1545,6 +1681,9 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             const itemName = (row["Item Name"] || "").trim();
             if (!itemName) continue;
 
+            // Look up conversion factor if this line uses an alt unit
+            const cf = conversionLookup.get(`${itemName.toLowerCase()}|${lineUnit}`) || undefined;
+
             if (!lineItemsByInvoice.has(invoiceNo)) {
               lineItemsByInvoice.set(invoiceNo, []);
             }
@@ -1552,6 +1691,8 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
               itemName,
               description: itemName,
               quantity: qty || "1",
+              unit: lineUnit,
+              conversionFactor: cf,
               unitPrice,
               taxPercent,
               discountPercent: "0",
@@ -2449,6 +2590,73 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
               )}
             </div>
           )}
+          {/* ── Unit Conflict Resolution ─────────────────────────────── */}
+          {unitConflicts.length > 0 && (
+            <div className="rounded-xl border border-amber-300 dark:border-amber-700 overflow-hidden bg-amber-50/50 dark:bg-amber-950/20">
+              <div className="px-4 py-3 bg-amber-100/60 dark:bg-amber-900/30 border-b border-amber-200 dark:border-amber-800">
+                <div className="flex items-center gap-2">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-amber-600 shrink-0">
+                    <path d="M8 1l7 13H1L8 1z" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                    <path d="M8 6v3M8 11.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                  <span className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                    {unitConflicts.length} item{unitConflicts.length > 1 ? "s" : ""} sold in multiple units — conversion factors needed
+                  </span>
+                </div>
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 ml-6">
+                  These items appear in invoices with different units. Enter how many base units equal 1 of each alternative unit
+                  so that stock and totals are calculated correctly. Alt units will be created on these items automatically.
+                </p>
+              </div>
+              <div className="divide-y divide-amber-200 dark:divide-amber-800">
+                {unitConflicts.map((conflict, ci) => (
+                  <div key={conflict.itemName} className="px-4 py-3">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-sm font-medium text-text-primary">{conflict.itemName}</span>
+                      <span className="text-xs text-text-tertiary tabular-nums">{conflict.totalLines} invoices</span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs px-2 py-0.5 rounded bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300 font-medium">
+                        Base: {conflict.baseUnit.toUpperCase()}
+                      </span>
+                      <span className="text-[11px] text-text-tertiary">
+                        ({(unitConflicts[ci].totalLines - conflict.altUnits.reduce((s, a) => s + a.count, 0)).toLocaleString()} lines)
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {conflict.altUnits.map((alt, ai) => (
+                        <div key={alt.unit} className="flex items-center gap-2">
+                          <span className="text-xs text-text-secondary w-20 shrink-0">
+                            1 {alt.unit.toUpperCase()}
+                            <span className="text-text-tertiary ml-1">({alt.count})</span>
+                          </span>
+                          <span className="text-xs text-text-tertiary">=</span>
+                          <input
+                            type="number"
+                            min="0.001"
+                            step="any"
+                            placeholder="?"
+                            className="input w-20 text-center text-sm tabular-nums"
+                            value={alt.conversionFactor}
+                            onChange={(e) => {
+                              setUnitConflicts((prev) => {
+                                const next = [...prev];
+                                const c = { ...next[ci], altUnits: [...next[ci].altUnits] };
+                                c.altUnits[ai] = { ...c.altUnits[ai], conversionFactor: e.target.value };
+                                next[ci] = c;
+                                return next;
+                              });
+                            }}
+                          />
+                          <span className="text-xs text-text-secondary">{conflict.baseUnit.toUpperCase()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {cashBankFile && cashBankFile.rows.length > 0 && (
             <div className="rounded-xl border border-border-light overflow-hidden">
               <div className="px-4 py-2.5 flex items-center justify-between bg-surface-1 border-b border-border-light">
@@ -2682,12 +2890,15 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
           className={cn("btn-primary flex-1", step === 4 ? "bg-brand-600" : "")}
           disabled={
             (step === 2 && !canProceedFromUpload()) ||
-            (step === 3 && !canProceedFromMapping())
+            (step === 3 && !canProceedFromMapping()) ||
+            (step === 4 && unitConflicts.some((c) => c.altUnits.some((a) => !a.conversionFactor || parseFloat(a.conversionFactor) <= 0)))
           }
           onClick={() => {
             if (step === 4) {
               runImport();
             } else {
+              // Detect unit conflicts when entering the preview step
+              if (step === 3) detectUnitConflicts();
               setState((s) => ({ ...s, currentStep: s.currentStep + 1 }));
             }
           }}

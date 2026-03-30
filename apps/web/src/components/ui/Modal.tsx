@@ -11,7 +11,7 @@ interface ModalProps {
   className?: string;
 }
 
-export function Modal({ open, onClose, title, children, className }: ModalProps) {
+export function Modal({ open, onClose, title, children, className }: ModalProps): React.JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(dialogRef, open);
@@ -41,21 +41,16 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
       <div
         ref={dialogRef}
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-xl animate-scale-in shadow-modal",
+          "relative z-10 w-full max-w-lg rounded-xl animate-scale-in shadow-modal bg-surface-0",
           className
         )}
-        style={{ background: "var(--surface-0)" }}
         onClick={(e) => e.stopPropagation()}
       >
         {title && (
-          <div
-            className="flex items-center justify-between px-6 py-4"
-            style={{ borderBottom: "1px solid var(--border-light)" }}
-          >
+          <div className="flex items-center justify-between px-6 py-4 border-b border-border-light">
             <h2
               id="modal-title"
-              className="text-base font-semibold"
-              style={{ color: "var(--text-primary)" }}
+              className="text-base font-semibold text-text-primary"
             >
               {title}
             </h2>

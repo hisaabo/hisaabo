@@ -1,0 +1,93 @@
+---
+title: Payments
+description: Record customer receipts and supplier payments in Hisaabo. Link payments to invoices, split a single payment across multiple invoices, and track by payment mode.
+sidebar:
+  order: 1
+---
+
+Payments in Hisaabo record money moving between you and a party — either money you receive from a customer or money you pay to a supplier.
+
+## Recording a payment
+
+There are two ways to record a payment:
+
+### From an invoice
+
+Open an invoice and click **Record Payment**. The amount field is pre-filled with the outstanding balance. This is the fastest method for recording payment against a single invoice.
+
+### From the Payments section
+
+Go to **Payments** in the left navigation and click **New Payment**. This lets you record a payment and optionally allocate it across multiple invoices.
+
+## Payment fields
+
+| Field | Required | Notes |
+|---|---|---|
+| **Party** | Yes | The customer or supplier you are receiving from / paying to |
+| **Amount** | Yes | Total amount of this payment in INR |
+| **Mode** | Yes | How the money moved: Cash, Bank Transfer, UPI, Cheque, or Other |
+| **Payment Date** | Yes | When the payment was received/made. Defaults to today. |
+| **Bank Account** | No | Which of your bank accounts this payment relates to. Automatically creates a transaction in that account's balance. |
+| **Reference Number** | No | UTR for bank transfer, UPI reference ID, cheque number, etc. |
+| **Discount** | No | Any discount given at the time of payment (for example, settling for a round figure). Reduces the invoice outstanding without recording it as income. |
+| **Notes** | No | Free-text note |
+
+## Payment modes
+
+| Mode | Use for |
+|---|---|
+| `cash` | Physical cash payment at counter |
+| `bank` | NEFT, RTGS, IMPS bank transfer |
+| `upi` | UPI payment (GPay, PhonePe, Paytm, etc.) |
+| `cheque` | Cheque payment. Enter the cheque number in Reference Number. |
+| `other` | Any other mode not covered above |
+
+## Allocating a payment to multiple invoices
+
+A single payment can be split across multiple outstanding invoices. This is useful when a customer pays a round-sum amount that clears several bills at once.
+
+1. In the **New Payment** form, select the party.
+2. After entering the amount, an **Allocate to Invoices** section appears showing all unpaid/partially-paid invoices for that party.
+3. Enter how much of the payment applies to each invoice. The total allocation must equal the payment amount.
+
+If you do not allocate the payment to specific invoices, it is recorded as an unallocated payment against the party.
+
+## How payments update invoice status
+
+When a payment is recorded:
+
+- The invoice's `amountPaid` field is updated.
+- If `amountPaid >= totalAmount`, the invoice status is set to `paid`.
+- If `amountPaid > 0` but less than `totalAmount`, the invoice status is set to `partial`.
+
+## Payment number
+
+Each payment gets a sequential number formatted as `PAY-00001`, `PAY-00002`, etc. The prefix and starting number can be configured in Settings → Business Profile.
+
+## Deleting a payment
+
+To delete a payment, open it from the Payments list and click **Delete**. Deleting a payment:
+- Removes the bank account transaction (if a bank account was linked)
+- Reverses the `amountPaid` reduction on linked invoices
+- Reverts the invoice status if it was previously marked as `paid`
+
+:::caution[Deletion requires Admin role]
+Only Superadmin and Admin users can delete payments. Seller Manager, Seller, and Accountant roles cannot.
+:::
+
+## Frequently asked questions
+
+**A customer paid in advance before I raised an invoice. How do I record this?**
+Record the payment without allocating it to an invoice. It will appear as an unallocated payment in the party's ledger (shown as a credit balance). When you create the invoice later, allocate the pre-existing payment to it.
+
+**How do I record a partial payment?**
+Enter the partial amount in the Amount field. Allocate it to the relevant invoice. The invoice status will change to `partial`, and you can record another payment later when the balance is settled.
+
+**My customer paid via NEFT. What should I enter as the reference number?**
+Enter the UTR (Unique Transaction Reference) number. This appears on your bank statement as a 22-character alphanumeric code.
+
+**Can I record a payment in a foreign currency?**
+Hisaabo currently only supports INR. All payment amounts must be in INR.
+
+**The invoice shows "Partial" but I know it is fully paid. What is wrong?**
+Check that the payment amount equals the exact invoice total. If you recorded ₹10,000 against an invoice for ₹10,001 (due to a round-off difference), the invoice will remain in partial status. Record a second small payment (or use the Discount field to write off the ₹1 difference).

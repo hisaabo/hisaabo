@@ -30,21 +30,21 @@ const variantStyles = {
   success: {
     icon: <SuccessIcon />,
     iconClass: "text-emerald-600",
-    iconBg: "bg-emerald-50",
+    iconBg: "bg-emerald-50 dark:bg-emerald-950",
   },
   error: {
     icon: <ErrorIcon />,
     iconClass: "text-red-600",
-    iconBg: "bg-red-50",
+    iconBg: "bg-red-50 dark:bg-red-950",
   },
   info: {
     icon: <InfoIcon />,
     iconClass: "text-blue-600",
-    iconBg: "bg-blue-50",
+    iconBg: "bg-blue-50 dark:bg-blue-950",
   },
 };
 
-export function ToastContainer() {
+export function ToastContainer(): React.JSX.Element {
   const { toasts, dismiss } = useToastListener();
 
   return createPortal(
@@ -60,11 +60,11 @@ export function ToastContainer() {
               {v.icon}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+              <p className="text-sm font-medium text-text-primary">
                 {t.title}
               </p>
               {t.description && (
-                <p className="text-xs mt-0.5" style={{ color: "var(--text-tertiary)" }}>
+                <p className="text-xs mt-0.5 text-text-tertiary">
                   {t.description}
                 </p>
               )}

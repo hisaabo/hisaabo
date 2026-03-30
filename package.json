@@ -2,7 +2,9 @@
   "name": "hisaabo",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --filter=!@hisaabo/mobile --filter=!@hisaabo/mcp",
+    "dev:mobile": "pnpm --filter @hisaabo/mobile dev",
+    "dev:mobile:android": "pnpm --filter @hisaabo/mobile dev:android",
     "build": "turbo build",
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
@@ -10,7 +12,11 @@
     "db:reset": "pnpm --filter @hisaabo/db db:reset",
     "db:studio": "pnpm --filter @hisaabo/db studio",
     "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
-    "typecheck": "turbo typecheck"
+    "typecheck": "turbo typecheck",
+    "test": "turbo test --concurrency 1",
+    "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
+    "test:web": "pnpm --filter @hisaabo/web test",
+    "test:mobile": "pnpm --filter @hisaabo/mobile test"
   },
   "devDependencies": {
     "oxlint": "^1.56.0",
@@ -20,5 +26,11 @@
   "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.2.0",
+      "react-dom": "19.2.0"
+    }
   }
 }

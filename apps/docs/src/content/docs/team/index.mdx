@@ -1,0 +1,87 @@
+---
+title: Team & Roles
+description: Invite team members to your Hisaabo business and assign them roles. Understand what each role (Superadmin, Admin, Seller Manager, Seller, Accountant) can do.
+sidebar:
+  order: 1
+---
+
+Hisaabo supports multiple users per business with role-based access control. You can invite staff members and assign them roles that match their job responsibilities.
+
+## Roles
+
+| Role | Who it is for |
+|---|---|
+| **Superadmin** | Full access including user management and business deletion |
+| **Admin** | Full access to all business data; can invite/remove members but cannot delete the business |
+| **Seller Manager** | Can create and manage invoices, parties, items, and payments; limited delete permissions; can view reports and manage store |
+| **Seller** | Can create invoices and record payments; can create parties; read-only access to items; cannot delete, view reports, or manage expenses |
+| **Accountant** | Full financial access — can manage payments, expenses, and bank accounts; can view reports and GST; read-only on invoices, parties, and items |
+
+## Permissions by role
+
+| Action | Superadmin | Admin | Seller Manager | Seller | Accountant |
+|---|---|---|---|---|---|
+| View invoices | Yes | Yes | Yes | Yes | Yes |
+| Create invoice | Yes | Yes | Yes | Yes | No |
+| Edit invoice | Yes | Yes | Yes | Limited** | No |
+| Delete invoice | Yes | Yes | Limited* | No | No |
+| Record payment | Yes | Yes | Yes | Yes | Yes |
+| Edit payment | Yes | Yes | Limited** | Limited** | Yes |
+| Delete payment | Yes | Yes | No | No | No |
+| View reports & GST | Yes | Yes | Yes | No | Yes |
+| Manage items | Yes | Yes | Yes | No | No |
+| Create parties | Yes | Yes | Yes | Yes | No |
+| Edit parties | Yes | Yes | Yes | No | No |
+| Manage expenses | Yes | Yes | No | No | Yes |
+| Manage bank accounts | Yes | Yes | No | No | Yes |
+| Manage store | Yes | Yes | Yes | No | No |
+| Import data | Yes | Yes | No | No | No |
+| Invite members | Yes | Yes | No | No | No |
+| Business settings | Yes | Yes | No | No | No |
+
+*Seller Managers can delete **unpaid** invoices created within the **last 2 hours** only.
+
+**Sellers and Seller Managers can only edit their own invoices/payments within the first 2 hours of creation.
+
+## Inviting a team member
+
+1. Go to **Settings → Team** (or the Team section in the navigation).
+2. Click **Invite Member**.
+3. Enter the team member's email address and select their role.
+4. Click **Send Invitation**.
+
+The invitee receives an email with a link to accept the invitation. Once accepted, they can sign in and access your business with the assigned role.
+
+:::note[Invitations expire]
+Invitation links expire after 7 days. If a team member did not accept in time, delete the invitation and send a new one.
+:::
+
+## Changing a member's role
+
+Open the Team settings, click the three-dot menu next to the member, and select **Change Role**. Role changes take effect immediately — the member does not need to sign out and sign back in.
+
+## Removing a member
+
+Click the three-dot menu next to the member and select **Remove**. The user's access to your business is revoked immediately. Their account is not deleted — they can still access other businesses they are members of.
+
+## The owner
+
+The user who created the business is the owner. They have Superadmin-level access and cannot be removed from the business by other members. Only the owner can delete the business.
+
+## Multi-business access
+
+A single Hisaabo account can be a member of multiple businesses. After signing in, the user selects which business to work in from the business switcher. They see only the businesses they have been invited to (or created themselves).
+
+## Frequently asked questions
+
+**Can a member have different roles in different businesses?**
+Yes. A person can be an Admin in one business and an Accountant in another. Roles are per-business.
+
+**What happens to invoices created by a removed member?**
+Nothing. Invoices and payments created by the removed member remain intact. The creator's name is denormalised on each invoice (`createdByName` field), so historical records show the correct attribution even after removal.
+
+**Can the Seller role see prices?**
+Sellers can see invoice totals and line item prices when viewing invoices they access. They cannot access the Reports or GST sections.
+
+**How do I temporarily restrict a member without removing them?**
+Change their role to Accountant. This limits them to financial operations (payments, expenses, bank accounts) and read-only access to invoices, parties, and items. They will not be able to create or edit invoices. When they need full access again, change the role back.

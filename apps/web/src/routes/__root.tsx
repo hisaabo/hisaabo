@@ -78,12 +78,14 @@ const navSections = [
       { to: "/payments", label: "Payments", icon: PaymentIcon },
       { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
       { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
+      { to: "/shipments", label: "Shipments", icon: ShipmentsIcon },
     ],
   },
   {
     label: "COMPLIANCE",
     items: [
       { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
+      { to: "/reports", label: "Reports", icon: ReportsIcon },
     ],
   },
 ] as const;
@@ -166,6 +168,7 @@ function RootLayout() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showTenantPicker, setShowTenantPicker] = useState(false);
   const [currentBusinessId, setCurrentBusinessId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const selectTenantMutation = trpc.tenant.select.useMutation({
     onSuccess: () => {
@@ -205,7 +208,8 @@ function RootLayout() {
     { key: "m", alt: true, shift: true, handler: () => navigate({ to: "/payments" }), description: "Payments", scope: "navigation" },
     { key: "b", alt: true, shift: true, handler: () => navigate({ to: "/cash-and-bank" }), description: "Cash & Bank", scope: "navigation" },
     { key: "e", alt: true, shift: true, handler: () => navigate({ to: "/expenses" }), description: "Expenses", scope: "navigation" },
-    { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Reports", scope: "navigation" },
+    { key: "g", alt: true, shift: true, handler: () => navigate({ to: "/gst" }), description: "GST Returns", scope: "navigation" },
+    { key: "r", alt: true, shift: true, handler: () => navigate({ to: "/reports" }), description: "Business Reports", scope: "navigation" },
     { key: "s", alt: true, shift: true, handler: () => navigate({ to: "/settings" }), description: "Settings", scope: "navigation" },
   ]);
 
@@ -342,8 +346,24 @@ function RootLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-56 shrink-0 border-r border-border-light flex flex-col bg-surface-0 overflow-hidden">
+      <aside
+        className={cn(
+          "w-56 shrink-0 border-r border-border-light flex flex-col bg-surface-0 overflow-hidden",
+          // On mobile: fixed drawer that slides in/out
+          "fixed inset-y-0 left-0 z-50 transition-transform duration-200 md:relative md:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
         {/* Logo */}
         <div className="px-4 py-4 flex items-center gap-2.5 shrink-0">
           <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
@@ -387,12 +407,15 @@ function RootLayout() {
         )}
 
         {/* Nav sections */}
-        <nav className="flex-1 overflow-y-auto pb-2">
+        <nav className="flex-1 overflow-y-auto pb-2" onClick={() => setSidebarOpen(false)}>
           {navSections.map((section) => {
             const visibleItems = section.items.map((item) => {
               // Rename reports label based on GST status (always visible)
               if (item.to === "/gst") {
-                return { ...item, label: (isGstRegistered ? "GST Reports" : "Reports") as typeof item.label };
+                return { ...item, label: (isGstRegistered ? "GST Returns" : "Tax Reports") as typeof item.label };
+              }
+              if (item.to === "/reports") {
+                return { ...item, label: "Business Reports" as typeof item.label };
               }
               return item;
             });
@@ -462,9 +485,21 @@ function RootLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col overflow-hidden bg-surface-1">
+      <main className="flex-1 flex flex-col overflow-hidden bg-surface-1 md:ml-0">
         {/* Top bar */}
-        <div className="h-14 border-b border-border-light flex items-center justify-end px-6 shrink-0 bg-surface-0">
+        <div className="h-14 border-b border-border-light flex items-center justify-between px-4 md:px-6 shrink-0 bg-surface-0">
+          {/* Hamburger — mobile only */}
+          <button
+            type="button"
+            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation menu"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 4.5h14M2 9h14M2 13.5h14" />
+            </svg>
+          </button>
+          <div className="md:hidden" /> {/* spacer on mobile so flex justify-between works */}
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <button
@@ -732,6 +767,27 @@ function ExpenseIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="1.5" width="10" height="13" rx="1" />
       <path d="M6 5h4M6 8h4M6 11h2" />
+    </svg>
+  );
+}
+
+function ShipmentsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 5.5h8v7H1z" />
+      <path d="M9 7h3.5l2 2.5V12.5H9V7z" />
+      <circle cx="3.5" cy="13" r="1.2" />
+      <circle cx="11.5" cy="13" r="1.2" />
+      <path d="M3.5 5.5V3a1 1 0 011-1h3a1 1 0 011 1v2.5" />
+    </svg>
+  );
+}
+
+function ReportsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12.5V4l3 3 3-3.5L11 6l3-3" />
+      <path d="M2 14.5h12" />
     </svg>
   );
 }

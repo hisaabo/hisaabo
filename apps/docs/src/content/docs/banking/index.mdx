@@ -1,0 +1,97 @@
+---
+title: Banking
+description: Track bank accounts, UPI accounts, and cash balances in Hisaabo. Payments automatically create bank transactions to keep balances accurate.
+sidebar:
+  order: 1
+---
+
+The Banking section lets you track the balances in your business bank accounts, UPI accounts, and cash. When you link a payment to a bank account, Hisaabo automatically records the corresponding deposit or withdrawal.
+
+## Account types
+
+| Type | Use for |
+|---|---|
+| `savings` | Standard savings bank account |
+| `current` | Current account (business banking) |
+| `cash` | Physical cash — petty cash box, counter cash, etc. |
+| `upi` | UPI-linked account (Google Pay, PhonePe, Paytm business accounts) |
+| `credit_card` | Business credit card |
+
+## Adding a bank account
+
+Go to **Banking** in the left navigation and click **Add Account**.
+
+| Field | Required | Notes |
+|---|---|---|
+| **Account Name** | Yes | A label for this account, for example "SBI Current Account" or "GPay UPI" |
+| **Account Type** | Yes | Savings, Current, Cash, UPI, or Credit Card |
+| **Bank Name** | No | Name of the bank |
+| **Account Number** | No | Full account number. Displayed on invoice PDFs for payment. |
+| **IFSC** | No | IFSC code. Displayed on invoice PDFs for NEFT/RTGS transfers. |
+| **Opening Balance** | No | Your account balance on the day you start using Hisaabo. Defaults to 0. |
+| **Set as Default** | No | If enabled, this account is pre-selected when recording payments and expenses. |
+
+## Default account
+
+Set one account as your default. The default account is pre-selected whenever you record a payment or expense, saving time. Change the default in the account settings.
+
+## How balances are tracked
+
+The `currentBalance` field on each account is maintained automatically by the system:
+
+- **Payment received** (customer pays you): `currentBalance += payment amount`
+- **Payment made** (you pay a supplier): `currentBalance -= payment amount`
+- **Bank transfer in**: `currentBalance += transfer amount`
+- **Bank transfer out**: `currentBalance -= transfer amount`
+
+Each adjustment creates a record in the `bank_transactions` table, giving you a full ledger of what moved through each account.
+
+:::note
+Expenses are not directly linked to bank accounts. To track an expense paid from a specific account, record a manual withdrawal transaction for the same amount.
+:::
+
+## Viewing transactions
+
+Click an account to open its transaction history. Each row shows:
+
+| Column | Meaning |
+|---|---|
+| Date | Transaction date |
+| Description | Auto-generated description (for example, "Payment from Raj Traders") |
+| Type | Deposit, Withdrawal, or Transfer |
+| Amount | Transaction amount in INR |
+| Reference | Links to the source payment, expense, or transfer |
+
+## Bank transfers
+
+You can transfer money between accounts using the **Transfer** feature. This creates:
+- A withdrawal transaction in the source account
+- A deposit transaction in the destination account
+
+Both transactions reference each other for traceability. The transfer happens atomically, so both account balances are always consistent.
+
+## Reconciling your balance
+
+The `currentBalance` in Hisaabo reflects transactions recorded through the app. If you have bank transactions that were not entered in Hisaabo (for example, bank charges auto-debited, or an interest credit), you can manually add adjustment transactions to keep the balance accurate.
+
+:::tip
+At the end of each month, compare your Hisaabo account balance with your bank statement. The difference equals the total of transactions that happened outside Hisaabo (bank charges, auto-debits, etc.). Enter these as manual adjustments to reconcile.
+:::
+
+## UPI details on invoices
+
+If you store a **UPI ID** on a bank account and set it as the default, the UPI ID is used to generate a QR code on invoice PDFs. This makes it easy for customers to pay by scanning the QR code with any UPI app.
+
+## Frequently asked questions
+
+**Can I track multiple bank accounts?**
+Yes. Add as many accounts as you need. Each has its own transaction history and balance.
+
+**I entered the wrong opening balance. Can I correct it?**
+Yes. Edit the bank account and update the opening balance. This also updates the current balance accordingly.
+
+**Can I record inter-bank transfers (moving money from one account to another)?**
+Yes. Use the **Transfer** feature in the Banking section. Select the source account, the destination account, and the amount. Hisaabo creates a withdrawal in the source account and a deposit in the destination account in a single transaction, keeping both balances accurate.
+
+**Does Hisaabo connect to my bank to import transactions automatically?**
+No. Hisaabo does not connect to bank APIs. All transactions must be entered manually (or via payment and expense records).

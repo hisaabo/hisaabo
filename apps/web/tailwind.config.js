@@ -81,6 +81,14 @@ export default {
           "75%": { opacity: "1", transform: "translateX(-50%) translateY(0) scale(1)" },
           "100%": { opacity: "0", transform: "translateX(-50%) translateY(-4px) scale(0.98)" },
         },
+        "milestone-enter": {
+          from: { opacity: "0", transform: "translateY(-6px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "check-draw": {
+          from: { strokeDashoffset: "20", opacity: "0" },
+          to: { strokeDashoffset: "0", opacity: "1" },
+        },
       },
       animation: {
         "slide-in": "slide-in-right 0.3s ease-out",
@@ -88,6 +96,8 @@ export default {
         "scale-in": "scale-in 0.2s ease-out",
         "toast-in": "toast-in 0.3s ease-out",
         "shortcut-flash": "shortcut-flash 1.2s ease-out forwards",
+        "milestone-enter": "milestone-enter 0.35s ease-out both",
+        "check-draw": "check-draw 0.4s ease-out both",
       },
     },
   },

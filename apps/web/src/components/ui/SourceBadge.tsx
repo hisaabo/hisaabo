@@ -9,7 +9,7 @@ const sourceLabels: Record<string, string> = {
 const sourceColors: Record<string, string> = {
   mybillbook: "bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-400",
   tally: "bg-cyan-50 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-400",
-  generic: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+  generic: "bg-surface-2 text-text-secondary",
 };
 
 export function SourceBadge({ source, className }: { source: string | null; className?: string }) {

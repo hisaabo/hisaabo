@@ -16,7 +16,7 @@ export interface CommandPaletteProps {
   onClose: () => void;
 }
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose }: CommandPaletteProps): React.JSX.Element | null {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -124,8 +124,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       >
         {/* Search field */}
         <div
-          className="flex items-center gap-3 px-4 bg-surface-0"
-          style={{ borderBottom: "1px solid var(--border-light)" }}
+          className="flex items-center gap-3 px-4 bg-surface-0 border-b border-border-light"
         >
           <SearchIcon className="w-4 h-4 shrink-0 text-text-tertiary" />
           <input
@@ -232,11 +231,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         {/* Footer hint */}
         <div
-          className="px-4 py-2.5 flex items-center gap-4 text-[11px] text-text-tertiary"
-          style={{
-            borderTop: "1px solid var(--border-light)",
-            background: "var(--surface-1)",
-          }}
+          className="px-4 py-2.5 flex items-center gap-4 text-[11px] text-text-tertiary border-t border-border-light bg-surface-1"
         >
           <span className="flex items-center gap-1.5">
             <KbdShortcut keys={["↑"]} />

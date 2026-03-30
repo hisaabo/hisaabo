@@ -27,11 +27,37 @@ export interface StoreItem {
   inStock: boolean;
   lowStock?: boolean;
   sortOrder: number;
+  taxPercent?: string;
+  taxInclusive?: boolean;
+  itemMode: "simple" | "alt_units" | "variants";
+  unitVariants?: Array<{
+    unit: string;
+    conversionFactor: number;
+    price: string;
+  }>;
+  variantAttributes?: string[];
+  variants?: Array<{
+    id: string;
+    attributes: Record<string, string>;
+    price: string;
+    inStock: boolean;
+  }>;
 }
 
 export interface CartItem {
   item: StoreItem;
   quantity: number;
+  selectedUnit?: string;
+  conversionFactor?: number;
+  selectedVariantId?: string;
+  effectivePrice: string;
+}
+
+/** Unique key for a cart entry — same item with different variant/unit = different entry */
+export function cartItemKey(entry: CartItem): string {
+  if (entry.selectedVariantId) return `${entry.item.id}::v::${entry.selectedVariantId}`;
+  if (entry.selectedUnit) return `${entry.item.id}::u::${entry.selectedUnit}`;
+  return entry.item.id;
 }
 
 export interface OrderResult {

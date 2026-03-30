@@ -94,38 +94,62 @@ export const paymentRouter = router({
 
   // Return the default/most-recently-used bank account for this business
   defaultAccount: viewerProcedure
-    .query(async ({ ctx }) => {
+    .input(z.object({ partyId: z.string().uuid().optional() }).optional())
+    .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "BankAccount");
-      // Look at the last 5 payments that have a bankAccountId
-      const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
-        .from(payments)
-        .where(
-          and(
-            eq(payments.businessId, ctx.businessId),
-            sql`${payments.bankAccountId} IS NOT NULL`,
-          )
-        )
-        .orderBy(desc(payments.paymentDate))
-        .limit(5);
-
-      // Find most common bankAccountId
-      const freq: Record<string, number> = {};
-      for (const p of recentPayments) {
-        if (p.bankAccountId) {
-          freq[p.bankAccountId] = (freq[p.bankAccountId] ?? 0) + 1;
-        }
-      }
 
       let defaultAccountId: string | null = null;
-      let maxFreq = 0;
-      for (const [id, count] of Object.entries(freq)) {
-        if (count > maxFreq) {
-          maxFreq = count;
-          defaultAccountId = id;
+
+      // Priority 1: If partyId provided, check how this party has been paying
+      if (input?.partyId) {
+        const partyPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
+          .from(payments)
+          .where(
+            and(
+              eq(payments.businessId, ctx.businessId),
+              eq(payments.partyId, input.partyId),
+              sql`${payments.bankAccountId} IS NOT NULL`,
+            )
+          )
+          .orderBy(desc(payments.paymentDate))
+          .limit(3);
+
+        if (partyPayments.length > 0 && partyPayments[0].bankAccountId) {
+          // Use the most recent payment method for this party
+          defaultAccountId = partyPayments[0].bankAccountId;
         }
       }
 
-      // Fall back to the isDefault account
+      // Priority 2: Business-wide most common recent payment method
+      if (!defaultAccountId) {
+        const recentPayments = await ctx.db.select({ bankAccountId: payments.bankAccountId })
+          .from(payments)
+          .where(
+            and(
+              eq(payments.businessId, ctx.businessId),
+              sql`${payments.bankAccountId} IS NOT NULL`,
+            )
+          )
+          .orderBy(desc(payments.paymentDate))
+          .limit(5);
+
+        const freq: Record<string, number> = {};
+        for (const p of recentPayments) {
+          if (p.bankAccountId) {
+            freq[p.bankAccountId] = (freq[p.bankAccountId] ?? 0) + 1;
+          }
+        }
+
+        let maxFreq = 0;
+        for (const [id, count] of Object.entries(freq)) {
+          if (count > maxFreq) {
+            maxFreq = count;
+            defaultAccountId = id;
+          }
+        }
+      }
+
+      // Priority 3: Fall back to the isDefault account
       if (!defaultAccountId) {
         const [defAccount] = await ctx.db.select({ id: bankAccounts.id })
           .from(bankAccounts)
@@ -141,6 +165,8 @@ export const paymentRouter = router({
 
       if (!defaultAccountId) return null;
 
+      // Security: always scope the final fetch by businessId to prevent
+      // returning a bank account that belongs to a different business (defence-in-depth).
       const [account] = await ctx.db.select({
         id: bankAccounts.id,
         accountName: bankAccounts.accountName,
@@ -149,7 +175,10 @@ export const paymentRouter = router({
         isDefault: bankAccounts.isDefault,
       })
         .from(bankAccounts)
-        .where(eq(bankAccounts.id, defaultAccountId))
+        .where(and(
+          eq(bankAccounts.id, defaultAccountId),
+          eq(bankAccounts.businessId, ctx.businessId),
+        ))
         .limit(1);
 
       return account ?? null;
@@ -159,6 +188,15 @@ export const paymentRouter = router({
     requireCan(ctx.ability, "create", "Payment");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const payment = await ctx.db.transaction(async (tx) => {
+      // Security: validate that partyId belongs to the current business.
+      const [partyCheck] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!partyCheck) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,

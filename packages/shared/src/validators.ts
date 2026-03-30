@@ -127,6 +127,9 @@ export const updatePartySchema = createPartySchema.partial().omit({ type: true }
 export const units = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
 export type Unit = (typeof units)[number];
 
+export const itemModes = ["simple", "alt_units", "variants"] as const;
+export type ItemMode = (typeof itemModes)[number];
+
 export const unitVariantSchema = z.object({
   unit: z.string().min(1).max(50),
   conversionFactor: z.number().positive(),
@@ -136,11 +139,26 @@ export const unitVariantSchema = z.object({
 
 export type UnitVariant = z.infer<typeof unitVariantSchema>;
 
-export const createItemSchema = z.object({
+export const decimalStr = z.string().regex(/^\d+(\.\d{1,2})?$/);
+export const decimalStr3 = z.string().regex(/^-?\d+(\.\d{1,3})?$/);
+
+export const itemVariantSchema = z.object({
+  attributeValues: z.record(z.string().min(1), z.string().min(1)),
+  sku: z.string().max(50).optional(),
+  salePrice: decimalStr.optional(),
+  purchasePrice: decimalStr.optional(),
+  stockQuantity: decimalStr3.default("0"),
+  lowStockAlert: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
+});
+
+export type ItemVariant = z.infer<typeof itemVariantSchema>;
+
+const createItemBaseSchema = z.object({
   name: z.string().min(1).max(200),
   hsn: z.string().max(20).optional(),
   sku: z.string().max(50).optional(),
   unit: z.enum(units).default("pcs"),
+  itemMode: z.enum(itemModes).default("simple"),
   salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
@@ -151,14 +169,25 @@ export const createItemSchema = z.object({
   category: z.string().max(100).optional(),
   taxInclusive: z.boolean().default(false),
   unitVariants: z.array(unitVariantSchema).optional(),
+  variantAttributes: z.array(z.string().min(1).max(50)).max(5).optional(),
+  variants: z.array(itemVariantSchema).optional(),
 });
 
-export const updateItemSchema = createItemSchema.partial();
+export const createItemSchema = createItemBaseSchema.refine((d) => {
+  if (d.itemMode === "variants" && d.unitVariants && d.unitVariants.length > 0) return false;
+  if (d.itemMode === "alt_units" && d.variantAttributes && d.variantAttributes.length > 0) return false;
+  if (d.itemMode === "alt_units" && d.variants && d.variants.length > 0) return false;
+  return true;
+}, { message: "An item cannot have both unit variants and product variants" });
+
+export const updateItemSchema = createItemBaseSchema.partial();
 
 // ── Invoice ────────────────────────────────────────────────────
 
 export const invoiceTypes = ["sale", "purchase"] as const;
 export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+export const deliveryMethods = ["self_pickup", "hand_delivery", "courier", "bus", "transport", "post"] as const;
+export type DeliveryMethod = (typeof deliveryMethods)[number];
 
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),
@@ -174,6 +203,7 @@ export const invoiceLineItemSchema = z.object({
   discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
   selectedUnit: z.string().nullish(),
   conversionFactor: z.string().nullish(), // stored as string like all numerics
+  variantId: z.string().uuid().nullish(),
 });
 
 export const createInvoiceSchema = z.object({
@@ -191,6 +221,13 @@ export const createInvoiceSchema = z.object({
   roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
   referenceDocumentId: z.string().uuid().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1),
+  /**
+   * When true, skip stock adjustment on create. Used when converting a
+   * delivery_challan → invoice to avoid double-decrementing stock (the
+   * challan already decremented it).
+   */
+  skipStockAdjustment: z.boolean().optional(),
+  deliveryMethod: z.enum(deliveryMethods).default("self_pickup"),
 });
 
 export const updateInvoiceStatusSchema = z.object({
@@ -279,6 +316,67 @@ export const bankTransferSchema = z.object({
 export const convertDocumentSchema = z.object({
   sourceDocumentId: z.string().uuid(),
   targetDocumentType: z.enum(documentTypes),
+});
+
+// ── Reports ────────────────────────────────────────────────────
+
+export const daybookInputSchema = z.object({
+  fromDate: z.string().date(),
+  toDate: z.string().date(),
+  typeFilter: z.enum(["all", "invoices", "payments", "expenses"]).default("all"),
+});
+
+export const outstandingInputSchema = z.object({
+  type: z.enum(["receivable", "payable", "both"]).default("receivable"),
+  asOfDate: z.string().datetime().optional(),
+});
+
+export const registerInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  partyId: z.string().uuid().optional(),
+});
+
+export const taxSummaryInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  type: z.enum(["sales", "purchases", "both"]).default("both"),
+});
+
+export const cashFlowForecastInputSchema = z.object({
+  businessId: z.string().uuid().optional(),
+});
+
+export const collectionEfficiencyInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+});
+
+export const itemSalesInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  category: z.string().optional(),
+  itemType: z.enum(["product", "service"]).optional(),
+  sortBy: z.enum(["revenue", "quantity", "invoices", "margin"]).default("revenue"),
+  compareToPrevious: z.boolean().default(false),
+});
+
+export const stockSummaryInputSchema = z.object({
+  category: z.string().optional(),
+  showZeroStock: z.boolean().default(false),
+});
+
+export const partyStatementInputSchema = z.object({
+  partyId: z.string().uuid(),
+  fromDate: z.string().datetime().optional(),
+  toDate: z.string().datetime().optional(),
+});
+
+export const paymentSummaryInputSchema = z.object({
+  fromDate: z.string().datetime(),
+  toDate: z.string().datetime(),
+  type: z.enum(["received", "made", "both"]).default("both"),
+  bankAccountId: z.string().uuid().optional(),
 });
 
 // ── Dashboard ──────────────────────────────────────────────────

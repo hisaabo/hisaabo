@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, businesses, parties } from "@hisaabo/db";
+import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -30,7 +30,13 @@ export const invoiceRouter = router({
         isNull(invoices.deletedAt),
       ];
       if (input.type) conditions.push(eq(invoices.type, input.type));
-      if (input.status) conditions.push(eq(invoices.status, input.status));
+      if (input.status === "overdue") {
+        // Overdue is computed: due date has passed AND invoice is not paid/cancelled/draft
+        conditions.push(sql`${invoices.dueDate} < NOW()`);
+        conditions.push(sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`);
+      } else if (input.status) {
+        conditions.push(eq(invoices.status, input.status));
+      }
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
       if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
@@ -109,13 +115,58 @@ export const invoiceRouter = router({
           .where(eq(parties.id, invoice.partyId)).limit(1),
       ]);
 
-      return { ...invoice, lineItems, party: party ?? null };
+      // Fetch the base unit for each linked item so the UI can display a unit
+      // even when selectedUnit is null (i.e. the item's base unit was used)
+      const linkedItemIds = lineItems.map(li => li.itemId).filter((id): id is string => Boolean(id));
+      const itemUnitMap = new Map<string, string>();
+      if (linkedItemIds.length > 0) {
+        const itemUnits = await ctx.db
+          .select({ id: items.id, unit: items.unit })
+          .from(items)
+          .where(inArray(items.id, linkedItemIds));
+        for (const row of itemUnits) {
+          itemUnitMap.set(row.id, row.unit);
+        }
+      }
+
+      const lineItemsWithUnit = lineItems.map(li => ({
+        ...li,
+        itemUnit: li.itemId ? (itemUnitMap.get(li.itemId) ?? null) : null,
+      }));
+
+      return { ...invoice, lineItems: lineItemsWithUnit, party: party ?? null };
     }),
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
     const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const invoice = await ctx.db.transaction(async (tx) => {
+      // Security: validate that the partyId belongs to the current business before
+      // creating the invoice. Without this check an attacker could associate an
+      // invoice with a party from a different business within the same tenant.
+      const [partyCheck] = await tx.select({ id: parties.id })
+        .from(parties)
+        .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+        .limit(1);
+      if (!partyCheck) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
+      // Security: validate that every itemId in line items belongs to the current business.
+      // Without this an attacker could reference items from another business — which would
+      // allow stock manipulation on entities they do not own.
+      const lineItemIds = input.lineItems
+        .map((li) => li.itemId)
+        .filter((id): id is string => Boolean(id));
+      if (lineItemIds.length > 0) {
+        const ownedItems = await tx.select({ id: items.id })
+          .from(items)
+          .where(and(inArray(items.id, lineItemIds), eq(items.businessId, ctx.businessId)));
+        if (ownedItems.length !== new Set(lineItemIds).size) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
+        }
+      }
+
       // Get and increment invoice number atomically
       const [biz] = await tx.select({
         prefix: businesses.invoicePrefix,
@@ -149,7 +200,8 @@ export const invoiceRouter = router({
           totalAmount: calc.total,
           sortOrder: idx,
           selectedUnit: li.selectedUnit || null,
-          conversionFactor: li.conversionFactor || "1",
+          conversionFactor: li.variantId ? "1" : (li.conversionFactor || "1"),
+          variantId: li.variantId || null,
         };
       });
 
@@ -189,6 +241,7 @@ export const invoiceRouter = router({
         notes: input.notes,
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
+        deliveryMethod: input.deliveryMethod || "self_pickup",
         createdByUserId: ctx.user!.id,
         createdByName: ctx.user!.name,
       }).returning();
@@ -199,16 +252,24 @@ export const invoiceRouter = router({
         );
       }
 
-      // Update stock quantities for sale/purchase invoices (adjusted for unit conversion)
-      // Group by itemId and sum quantities to avoid redundant per-row updates
-      const stockMap = new Map<string, number>();
-      for (const li of input.lineItems) {
-        if (li.itemId) {
+      // Update stock quantities for sale/purchase invoices.
+      // Skip when skipStockAdjustment is set — used when converting from
+      // delivery_challan (which already decremented stock) to avoid double-counting.
+      // Separate tracking for items (with conversion factor) and variants (no conversion)
+      const itemStockMap = new Map<string, number>();
+      const variantStockMap = new Map<string, number>();
+      if (!input.skipStockAdjustment) for (const li of input.lineItems) {
+        if (li.variantId) {
+          // Variant: stock lives on the variant, no conversion factor
+          const qty = parseFloat(li.quantity);
+          variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+        } else if (li.itemId) {
+          // Simple/alt_units: stock lives on the item, apply conversion factor
           const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-          stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
+          itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
         }
       }
-      for (const [itemId, totalQty] of stockMap) {
+      for (const [itemId, totalQty] of itemStockMap) {
         const qtyStr = totalQty.toFixed(3);
         await tx.update(items).set({
           stockQuantity: input.type === "sale"
@@ -216,6 +277,35 @@ export const invoiceRouter = router({
             : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
           updatedAt: new Date(),
         }).where(eq(items.id, itemId));
+      }
+      for (const [variantId, totalQty] of variantStockMap) {
+        const qtyStr = totalQty.toFixed(3);
+        await tx.update(itemVariants).set({
+          stockQuantity: input.type === "sale"
+            ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
+            : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(itemVariants.id, variantId));
+      }
+
+      // Auto-create a shipment entry only when a shipping charge is present on a
+      // sale invoice. Kept inside the transaction so a failed shipment insert
+      // rolls back the whole invoice rather than leaving a charged invoice with
+      // no corresponding shipment record.
+      if (input.type === "sale") {
+        const shippingCharge = (input.charges ?? []).find((c) =>
+          /shipping|delivery|freight|transport/i.test(c.label)
+        );
+        if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
+          await tx.insert(shipments).values({
+            businessId: ctx.businessId,
+            invoiceId: invoice.id,
+            partyId: input.partyId,
+            mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
+            cost: shippingCharge.amount,
+            status: "pending",
+          });
+        }
       }
 
       return invoice;
@@ -233,6 +323,23 @@ export const invoiceRouter = router({
 
     return invoice;
   }),
+
+  // Get the delivery method used on the most recent sale invoice for a party
+  lastDeliveryMethod: viewerProcedure
+    .input(z.object({ partyId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const [row] = await ctx.db.select({ deliveryMethod: invoices.deliveryMethod })
+        .from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          eq(invoices.partyId, input.partyId),
+          eq(invoices.type, "sale"),
+          eq(invoices.documentType, "invoice"),
+        ))
+        .orderBy(desc(invoices.invoiceDate))
+        .limit(1);
+      return row?.deliveryMethod || "self_pickup";
+    }),
 
   updateStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
@@ -272,6 +379,32 @@ export const invoiceRouter = router({
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
         if (existing.status === "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit a paid invoice. Remove payments first." });
 
+        // Security: validate partyId belongs to this business before applying the update.
+        if (input.partyId) {
+          const [partyCheck] = await tx.select({ id: parties.id })
+            .from(parties)
+            .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
+            .limit(1);
+          if (!partyCheck) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+          }
+        }
+
+        // Security: validate itemIds in line items belong to this business.
+        if (input.lineItems) {
+          const updateLineItemIds = input.lineItems
+            .map((li) => li.itemId)
+            .filter((id): id is string => Boolean(id));
+          if (updateLineItemIds.length > 0) {
+            const ownedItems = await tx.select({ id: items.id })
+              .from(items)
+              .where(and(inArray(items.id, updateLineItemIds), eq(items.businessId, ctx.businessId)));
+            if (ownedItems.length !== new Set(updateLineItemIds).size) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
+            }
+          }
+        }
+
         // 2. Build update payload
         const updates: Record<string, any> = { updatedAt: new Date() };
 
@@ -295,24 +428,38 @@ export const invoiceRouter = router({
             itemId: invoiceItems.itemId,
             quantity: invoiceItems.quantity,
             conversionFactor: invoiceItems.conversionFactor,
+            variantId: invoiceItems.variantId,
           }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Step 2: Reverse old stock adjustments (grouped by itemId)
-          const oldStockMap = new Map<string, number>();
+          // Step 2: Reverse old stock adjustments (separate item vs variant)
+          const oldItemStockMap = new Map<string, number>();
+          const oldVariantStockMap = new Map<string, number>();
           for (const li of oldLineItems) {
-            if (li.itemId) {
+            if (li.variantId) {
+              const qty = parseFloat(li.quantity);
+              oldVariantStockMap.set(li.variantId, (oldVariantStockMap.get(li.variantId) || 0) + qty);
+            } else if (li.itemId) {
               const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              oldStockMap.set(li.itemId, (oldStockMap.get(li.itemId) || 0) + qty);
+              oldItemStockMap.set(li.itemId, (oldItemStockMap.get(li.itemId) || 0) + qty);
             }
           }
-          for (const [itemId, totalQty] of oldStockMap) {
+          for (const [itemId, totalQty] of oldItemStockMap) {
             const qtyStr = totalQty.toFixed(3);
             await tx.update(items).set({
               stockQuantity: existing.type === "sale"
-                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`  // reverse: add back
-                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`, // reverse: subtract back
+                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`
+                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`,
               updatedAt: new Date(),
             }).where(eq(items.id, itemId));
+          }
+          for (const [variantId, totalQty] of oldVariantStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(itemVariants).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`
+                : sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(itemVariants.id, variantId));
           }
 
           // Step 3: Delete existing line items
@@ -338,7 +485,8 @@ export const invoiceRouter = router({
               totalAmount: calc.total,
               sortOrder: idx,
               selectedUnit: li.selectedUnit || null,
-              conversionFactor: li.conversionFactor || "1",
+              conversionFactor: li.variantId ? "1" : (li.conversionFactor || "1"),
+              variantId: li.variantId || null,
             };
           });
 
@@ -346,15 +494,19 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
-          // Step 5: Apply new stock adjustments (grouped by itemId)
-          const newStockMap = new Map<string, number>();
+          // Step 5: Apply new stock adjustments (separate item vs variant)
+          const newItemStockMap = new Map<string, number>();
+          const newVariantStockMap = new Map<string, number>();
           for (const li of input.lineItems) {
-            if (li.itemId) {
+            if (li.variantId) {
+              const qty = parseFloat(li.quantity);
+              newVariantStockMap.set(li.variantId, (newVariantStockMap.get(li.variantId) || 0) + qty);
+            } else if (li.itemId) {
               const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              newStockMap.set(li.itemId, (newStockMap.get(li.itemId) || 0) + qty);
+              newItemStockMap.set(li.itemId, (newItemStockMap.get(li.itemId) || 0) + qty);
             }
           }
-          for (const [itemId, totalQty] of newStockMap) {
+          for (const [itemId, totalQty] of newItemStockMap) {
             const qtyStr = totalQty.toFixed(3);
             await tx.update(items).set({
               stockQuantity: existing.type === "sale"
@@ -362,6 +514,15 @@ export const invoiceRouter = router({
                 : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
               updatedAt: new Date(),
             }).where(eq(items.id, itemId));
+          }
+          for (const [variantId, totalQty] of newVariantStockMap) {
+            const qtyStr = totalQty.toFixed(3);
+            await tx.update(itemVariants).set({
+              stockQuantity: existing.type === "sale"
+                ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
+                : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
+              updatedAt: new Date(),
+            }).where(eq(itemVariants.id, variantId));
           }
 
           // Recalculate totals using fixed-point arithmetic

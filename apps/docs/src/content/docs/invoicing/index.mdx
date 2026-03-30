@@ -1,0 +1,124 @@
+---
+title: Invoicing Overview
+description: Overview of Hisaabo's invoicing features — sale and purchase invoices, document types, automatic numbering, stock updates, and payment linking.
+sidebar:
+  order: 1
+---
+
+Invoicing is the core of Hisaabo. Every sale or purchase you make flows through an invoice. This page gives you a map of the invoicing system so you know which feature to reach for in each situation.
+
+## Invoice types
+
+Hisaabo has two **invoice types**:
+
+- **Sale invoice** — you are selling goods or services to a customer. Stock decreases when a sale invoice is created.
+- **Purchase invoice** — you are buying goods or services from a supplier. Stock increases when a purchase invoice is created.
+
+## Document types
+
+Within sale and purchase, Hisaabo supports multiple **document types**. Each has its own sequential number series:
+
+| Document Type | Use for | Number prefix (default) |
+|---|---|---|
+| Invoice | Standard tax invoice | INV |
+| Quotation | Price quote before the order is confirmed | QTN |
+| Proforma Invoice | Pre-delivery invoice for advance payment | PI |
+| Delivery Challan | Proof of goods dispatched, no tax invoice yet | DC |
+| Credit Note | Reducing the amount owed by the customer (sales return, price correction) | CN |
+| Debit Note | Increasing the amount owed by the customer (additional charges) | CN (shares credit note prefix and counter) |
+| Sales Return | Customer returning goods | CN (shares credit note prefix and counter) |
+| Purchase Return | Returning goods to supplier | CN (shares credit note prefix and counter) |
+
+:::tip
+Change the default prefixes for each document type in Settings → Business Profile. You can also configure the starting number if you are migrating from another app.
+:::
+
+### Stock effects by document type
+
+Not all document types affect stock. Here is how each type interacts with inventory:
+
+| Document Type | Stock effect |
+|---|---|
+| Invoice (sale) | Decrements stock |
+| Invoice (purchase) | Increments stock |
+| Delivery Challan | Decrements stock |
+| Credit Note | Increments stock (returned items go back into inventory) |
+| Sales Return | Increments stock (returned items go back into inventory) |
+| Purchase Return | Decrements stock (items sent back to supplier) |
+| Quotation | No stock effect |
+| Proforma Invoice | No stock effect |
+| Debit Note | No stock effect |
+
+## How invoice numbers are assigned
+
+Invoice numbers are assigned inside a PostgreSQL transaction using a `SELECT FOR UPDATE` lock on the business row. This guarantees that:
+
+- No two invoices get the same number, even if two users create invoices at the same time
+- Numbers are always sequential with no gaps (as long as you do not delete invoices)
+
+The format is `PREFIX-NNNNN`, for example `INV-00001`. The counter pads to 5 digits by default.
+
+## How stock is updated
+
+When you create a sale invoice, stock is **decremented** for every line item that references an item in your catalogue. When you create a purchase invoice, stock is **incremented**. This happens inside the same database transaction as the invoice creation, so stock and invoice totals are always consistent.
+
+If you have an item with **alternate units**, the quantity is converted to the base unit before the stock update. For example, if you sell 2 boxes of 12 pcs, and the conversion factor is 12, the stock is decremented by 24 pcs.
+
+If you have an item with **variants** (for example, a t-shirt in size M and colour Red), the variant's stock is decremented rather than the parent item's stock.
+
+Editing an invoice's line items reverses the original stock adjustment and applies the new one.
+
+## Invoice statuses
+
+An invoice moves through the following statuses during its lifecycle:
+
+| Status | Meaning |
+|---|---|
+| `draft` | Created but not yet sent or confirmed. Can be freely edited. |
+| `unfulfilled` | Goods have not yet been dispatched. |
+| `sent` | Invoice has been sent to the party. |
+| `paid` | Fully paid. |
+| `partial` | Partially paid. |
+| `overdue` | Past the due date with an unpaid balance. |
+| `cancelled` | Cancelled or soft-deleted. |
+
+You can manually change the status of an invoice at any time. Statuses are also updated automatically when payments are recorded.
+
+:::note
+Other document types have a subset of these statuses. Quotations, proformas, and delivery challans support `draft`, `sent`, and `cancelled`. Credit notes and debit notes support `draft`, `sent`, `paid`, and `cancelled`.
+:::
+
+See [Invoice Statuses](/invoicing/invoice-statuses) for the full status workflow.
+
+## GST on invoices
+
+Hisaabo automatically calculates CGST/SGST (intra-state) or IGST (inter-state) based on the 2-digit state codes stored on your business and the customer/supplier. You set the GST rate on each item (0%, 5%, 12%, 18%, or 28%) and Hisaabo applies the correct split on each invoice.
+
+See [GST on Invoices](/invoicing/gst-on-invoices) for full details.
+
+## PDF generation
+
+Every invoice can be downloaded as a PDF in three formats: A4 portrait, A5 landscape, and 80mm thermal roll. The PDF includes your business logo, GSTIN, party details, line items with HSN codes, tax breakdown, and optionally your bank account details and a UPI QR code for easy payment.
+
+See [Invoice PDF](/invoicing/invoice-pdf) for full details.
+
+## Document conversion
+
+You can convert a document from one type to another — for example, converting a quotation to an invoice, or a proforma invoice to a tax invoice. The conversion creates a new document of the target type, copying all line items and party details from the original. The new document is linked to the source document via the Reference Document field.
+
+## Linked documents
+
+You can link documents to each other using the **Reference Document** field. For example:
+
+- A **credit note** references the original invoice it corrects
+- A **delivery challan** references the sale order it fulfils
+- A **purchase return** references the original purchase invoice
+
+This linkage appears in the invoice detail view and in GSTR-1 reports (credit and debit notes show the original invoice number).
+
+## Next steps
+
+- [Create an Invoice](/invoicing/create-invoice) — step-by-step walkthrough
+- [GST on Invoices](/invoicing/gst-on-invoices) — understanding CGST, SGST, and IGST
+- [Invoice PDF](/invoicing/invoice-pdf) — downloading and sharing PDFs
+- [Invoice Statuses](/invoicing/invoice-statuses) — the full status lifecycle

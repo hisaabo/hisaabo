@@ -1,0 +1,351 @@
+@import "tailwindcss";
+
+/* ============================
+   Custom theme — placed in the base layer so
+   Tailwind utilities can still override them.
+   ============================ */
+@layer base {
+  :root {
+    --bg-base: #0f0f1a;
+    --bg-sidebar: #0a0a14;
+    --bg-center: #12121f;
+    --bg-code: #0d0d18;
+    --bg-card: #1a1a2e;
+    --bg-hover: #1e1e32;
+    --bg-hover-strong: #252540;
+    --border: #1f1f35;
+    --border-mid: #2a2a42;
+    --border-light: #3d3d5c;
+    --brand: #6366f1;
+    --brand-light: #818cf8;
+    --brand-dim: rgba(99, 102, 241, 0.12);
+    --brand-dim-strong: rgba(99, 102, 241, 0.2);
+    --text-primary: #f0f0f5;
+    --text-secondary: #9ca3af;
+    --text-tertiary: #6b7280;
+    --text-muted: #4b5563;
+    --text-code: #e2e8f0;
+    --green: #10b981;
+    --green-dim: rgba(16, 185, 129, 0.12);
+    --yellow: #f59e0b;
+    --yellow-dim: rgba(245, 158, 11, 0.1);
+    --red: #ef4444;
+    --red-dim: rgba(239, 68, 68, 0.1);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59, 130, 246, 0.12);
+    --purple: #a855f7;
+    --cyan: #06b6d4;
+    --orange: #f97316;
+    --orange-dim: rgba(249, 115, 22, 0.12);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-mid);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-light);
+  }
+}
+
+/* ============================
+   Prism syntax theme — in components layer
+   so it does not override utilities
+   ============================ */
+@layer components {
+  .token.comment,
+  .token.prolog,
+  .token.doctype,
+  .token.cdata {
+    color: #4b5563;
+    font-style: italic;
+  }
+
+  .token.punctuation {
+    color: #6b7280;
+  }
+
+  .token.namespace {
+    opacity: 0.7;
+  }
+
+  .token.property,
+  .token.tag,
+  .token.boolean,
+  .token.number,
+  .token.constant,
+  .token.symbol,
+  .token.deleted {
+    color: #f87171;
+  }
+
+  .token.selector,
+  .token.attr-name,
+  .token.string,
+  .token.char,
+  .token.builtin,
+  .token.inserted {
+    color: #86efac;
+  }
+
+  .token.operator,
+  .token.entity,
+  .token.url,
+  .language-css .token.string,
+  .style .token.string {
+    color: #fbbf24;
+  }
+
+  .token.atrule,
+  .token.attr-value,
+  .token.keyword {
+    color: #818cf8;
+  }
+
+  .token.function,
+  .token.class-name {
+    color: #67e8f9;
+  }
+
+  .token.regex,
+  .token.important,
+  .token.variable {
+    color: #fb923c;
+  }
+
+  /* ============================
+     Method + Auth badges
+     ============================ */
+  .badge-query {
+    background: var(--green-dim);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+  }
+
+  .badge-mutation {
+    background: var(--orange-dim);
+    color: #f97316;
+    border: 1px solid rgba(249, 115, 22, 0.25);
+  }
+
+  .badge-public {
+    background: rgba(107, 114, 128, 0.1);
+    color: #9ca3af;
+    border: 1px solid rgba(107, 114, 128, 0.2);
+  }
+
+  .badge-protected {
+    background: var(--yellow-dim);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.25);
+  }
+
+  .badge-business {
+    background: var(--brand-dim);
+    color: var(--brand-light);
+    border: 1px solid var(--brand-dim-strong);
+  }
+
+  /* ============================
+     Sidebar transitions
+     ============================ */
+  .sidebar-item {
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+
+  /* Active sidebar item — left accent bar */
+  .sidebar-item-active {
+    position: relative;
+    color: var(--brand-light);
+    background: var(--brand-dim);
+  }
+
+  .sidebar-item-active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 3px;
+    bottom: 3px;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: var(--brand);
+  }
+
+  /* ============================
+     Endpoint section
+     ============================ */
+  .endpoint-section {
+    scroll-margin-top: 24px;
+  }
+
+  /* Divider between endpoint sections */
+  .endpoint-section + .endpoint-section {
+    border-top: 1px solid var(--border);
+    padding-top: 3rem;
+  }
+
+  /* ============================
+     Parameter table
+     ============================ */
+  .param-table th {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    border-bottom: 1px solid var(--border-mid);
+    padding: 8px 14px;
+    white-space: nowrap;
+  }
+
+  .param-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(31, 31, 53, 0.8);
+    vertical-align: top;
+  }
+
+  .param-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .param-table tbody tr {
+    transition: background-color 0.1s ease;
+  }
+
+  .param-table tbody tr:hover {
+    background: rgba(30, 30, 50, 0.6) !important;
+  }
+
+  /* ============================
+     Copy button
+     ============================ */
+  .copy-btn {
+    transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+  }
+
+  .copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+  }
+
+  /* ============================
+     Code panel tab bar
+     ============================ */
+  .code-tab {
+    transition: color 0.12s ease, border-color 0.12s ease;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+
+  .code-tab-active {
+    color: var(--brand-light);
+    border-bottom-color: var(--brand);
+  }
+
+  /* ============================
+     Collapsible response section
+     ============================ */
+  .response-panel {
+    transition: max-height 0.2s ease, opacity 0.15s ease;
+    overflow: hidden;
+  }
+
+  /* ============================
+     Endpoint group cards (overview)
+     ============================ */
+  .group-card {
+    transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .group-card:hover {
+    border-color: var(--brand) !important;
+    background: var(--bg-hover) !important;
+  }
+
+  /* ============================
+     Section heading divider
+     ============================ */
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+  }
+
+  /* ============================
+     Inline code in prose
+     ============================ */
+  .prose-code {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.82em;
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #c4b5fd;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  /* ============================
+     Related endpoints list
+     ============================ */
+  .related-endpoint-link {
+    transition: color 0.12s ease, padding-left 0.12s ease;
+  }
+
+  .related-endpoint-link:hover {
+    color: var(--brand-light);
+    padding-left: 4px;
+  }
+
+  /* ============================
+     Gotchas block
+     ============================ */
+  .gotchas-block {
+    background: var(--yellow-dim);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    border-radius: 8px;
+  }
+
+  /* ============================
+     Keyboard focus ring
+     ============================ */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* ============================
+     Selection highlight
+     ============================ */
+  ::selection {
+    background: rgba(99, 102, 241, 0.3);
+    color: var(--text-primary);
+  }
+}

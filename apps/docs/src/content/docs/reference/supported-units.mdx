@@ -1,0 +1,66 @@
+---
+title: Supported Units
+description: Complete list of unit codes supported in Hisaabo for items and invoice line items.
+sidebar:
+  order: 2
+---
+
+Hisaabo supports the following units of measurement for items and invoice line items. These are the values stored in the database — the UI shows the full unit name.
+
+## Unit codes
+
+| Code | Full name | Use for |
+|---|---|---|
+| `pcs` | Pieces | Generic countable items — electronics, clothing, stationery |
+| `kg` | Kilograms | Bulk goods sold by weight — grains, metals, chemicals |
+| `g` | Grams | Small-quantity weight items — spices, medicines, gems |
+| `l` | Litres | Liquids — oil, fuel, chemicals |
+| `ml` | Millilitres | Small liquid quantities — medicines, flavourings |
+| `m` | Metres | Length — fabric, cable, piping |
+| `cm` | Centimetres | Small length items |
+| `ft` | Feet | Construction materials — tiles, flooring, wire |
+| `in` | Inches | Small measurements |
+| `box` | Box | Boxed goods — packaged products, spare parts |
+| `dozen` | Dozen | Items sold in groups of 12 — eggs, cutlery |
+| `pair` | Pair | Footwear, gloves, earrings |
+| `set` | Set | Grouped items sold together — tools, furniture |
+| `pkt` | Packet | Packaged goods — seeds, biscuits, snacks |
+| `bun` | Bundle | Bundled items — newspapers, rods |
+| `pouch` | Pouch | Pouch-packed goods — spices, detergent |
+| `jar` | Jar | Jar-packed goods — pickles, jams, creams |
+| `btl` | Bottle | Bottled goods — beverages, oils, medicines |
+| `bag` | Bag | Bag-packed goods — cement, rice, flour |
+| `ton` | Tonne | Heavy bulk goods — coal, construction materials |
+| `pack` | Pack | Generic pack — batteries, playing cards |
+| `pet` | Pet bottle | PET-bottled goods (common in FMCG) |
+| `person` | Person | Service billing by person — event catering, tours |
+| `other` | Other | Anything not covered by the above |
+
+## Choosing the right unit
+
+For most retail products, use `pcs` (pieces). Use specific units when:
+
+- **Stock quantity matters in non-unit measures**: If you buy 50 kg of flour and sell it in 1 kg bags, track in `kg` and use [Alternate Units](/items/units-and-conversions) for the `bag` selling unit.
+- **GST/HSN compliance**: Some HSN codes require specific units for GSTR-1 reporting. Use the unit specified in the HSN code's description.
+- **Supplier invoices**: Match the unit your supplier uses so purchase invoices are comparable to sale invoices.
+
+## GST-mandated units
+
+The GST HSN system uses specific unit codes for quantitative reporting. While Hisaabo does not validate HSN-unit combinations, here are the common CBIC-mandated units:
+
+| CBIC Code | Hisaabo code | Description |
+|---|---|---|
+| KGS | `kg` | Kilograms |
+| GMS | `g` | Grams |
+| LTR | `l` | Litres |
+| MTR | `m` | Metres |
+| NOS | `pcs` | Numbers (pieces) |
+| BOX | `box` | Box |
+| PKT | `pkt` | Packet |
+| SET | `set` | Set |
+| BAG | `bag` | Bag |
+| PRS | `pair` | Pairs |
+| TON | `ton` | Tonnes |
+| BTL | `btl` | Bottle |
+
+If your HSN code requires a unit not in this list, use `other` and note the correct CBIC unit code in the item description.

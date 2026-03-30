@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Hisaabo",
+    "slug": "hisaabo",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "hisaabo",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "backgroundColor": "#0f0f1a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.hisaabo.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f0f1a"
+      },
+      "package": "in.hisaabo.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      "expo-local-authentication",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Hisaabo needs access to your contacts to help you create invoices faster."
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ]
+  }
+}

@@ -22,6 +22,22 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// Safe IP extraction from a raw Request — mirrors the logic in server.ts getClientIp().
+// Prefers cf-connecting-ip (Cloudflare, strips spoofed values at CDN edge).
+// Falls back to the LAST entry of x-forwarded-for (set by the closest trusted proxy).
+function getClientIpFromRequest(req: Request): string | null {
+  const cfIp = req.headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+
+  return null;
+}
+
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 async function getOrCreateDefaultTenant(userId: string): Promise<string> {
@@ -61,7 +77,7 @@ async function getOrCreateDefaultTenant(userId: string): Promise<string> {
 async function createSessionForUser(
   userId: string,
   ctx: { req: Request; resHeaders: Headers },
-): Promise<void> {
+): Promise<string> {
   const memberships = await controlDb
     .select({ tenantId: tenantMembers.tenantId })
     .from(tenantMembers)
@@ -75,11 +91,22 @@ async function createSessionForUser(
     userId,
     tenantId: resolvedTenantId,
     expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
-    ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+    ipAddress: getClientIpFromRequest(ctx.req),
     userAgent: ctx.req.headers.get("user-agent") || null,
   });
 
   setSessionCookie(ctx.resHeaders, sessionId);
+  return sessionId;
+}
+
+// ── Shared helper: extract session ID from cookie or Bearer header ──
+function getSessionIdFromContext(ctx: { req: Request }): string | null {
+  const cookies = ctx.req.headers.get("cookie") || "";
+  const cookieMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (cookieMatch) return decodeURIComponent(cookieMatch[1]);
+  const authHeader = ctx.req.headers.get("authorization");
+  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  return null;
 }
 
 // ── Shared helper: auto-create tenant for a new user ───────────
@@ -118,16 +145,41 @@ export const authRouter = router({
       parallelism: 4,
     });
 
-    const [user] = await controlDb.insert(users).values({
-      email: input.email,
-      name: input.name,
-      passwordHash,
-    }).returning({ id: users.id, email: users.email, name: users.name });
+    // Insert user, assign tenant (has its own inner tx), and create session in
+    // one outer transaction. This prevents a crash between user-insert and
+    // session-insert from leaving a registered-but-unloggable account.
+    // Note: assignTenantToNewUser uses controlDb.transaction internally which
+    // Drizzle composes via savepoints in this nested context.
+    const { user, sessionToken } = await controlDb.transaction(async (tx) => {
+      const [user] = await tx.insert(users).values({
+        email: input.email,
+        name: input.name,
+        passwordHash,
+      }).returning({ id: users.id, email: users.email, name: users.name });
 
-    await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
-    await createSessionForUser(user.id, ctx);
+      await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
 
-    return { user: { id: user.id, email: user.email, name: user.name } };
+      const sessionId = nanoid(64);
+      const memberships = await tx
+        .select({ tenantId: tenantMembers.tenantId })
+        .from(tenantMembers)
+        .where(eq(tenantMembers.userId, user.id));
+      const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await tx.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        tenantId: resolvedTenantId,
+        expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+        ipAddress: getClientIpFromRequest(ctx.req),
+        userAgent: ctx.req.headers.get("user-agent") || null,
+      });
+
+      setSessionCookie(ctx.resHeaders, sessionId);
+      return { user, sessionToken: sessionId };
+    });
+
+    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
 
   // ── Password login ───────────────────────────────────────────
@@ -160,9 +212,9 @@ export const authRouter = router({
       throw new TRPCError({ code: "FORBIDDEN", message: "Account has no organization membership" });
     }
 
-    await createSessionForUser(user.id, ctx);
+    const sessionToken = await createSessionForUser(user.id, ctx);
 
-    return { user: { id: user.id, email: user.email, name: user.name } };
+    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
 
   // ── Magic link: request ──────────────────────────────────────
@@ -190,7 +242,7 @@ export const authRouter = router({
       email,
       tokenHash: tokenH,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+      ipAddress: getClientIpFromRequest(ctx.req),
     });
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
@@ -224,35 +276,59 @@ export const authRouter = router({
 
     const email = tokenRow.email;
 
-    // Look up or create user
-    let [user] = await controlDb
-      .select({ id: users.id, email: users.email, name: users.name })
-      .from(users)
-      .where(eq(users.email, email))
-      .limit(1);
-
+    // Wrap user upsert + session creation in a transaction so a crash between
+    // them never leaves a created user without a usable session.
+    // assignTenantToNewUser uses its own controlDb.transaction internally;
+    // Drizzle composes these via savepoints when called inside an outer tx.
     let isNewUser = false;
 
-    if (!user) {
-      isNewUser = true;
-      const [newUser] = await controlDb.insert(users).values({
-        email,
-        emailVerified: true,
-      }).returning({ id: users.id, email: users.email, name: users.name });
-      user = newUser;
+    const { user, sessionToken } = await controlDb.transaction(async (tx) => {
+      // Look up or create user
+      let [user] = await tx
+        .select({ id: users.id, email: users.email, name: users.name })
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
 
-      await assignTenantToNewUser(user.id, email.split("@")[0]);
-    } else {
-      // Mark email as verified for existing users
-      await controlDb.update(users)
-        .set({ emailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, user.id));
-    }
+      if (!user) {
+        isNewUser = true;
+        const [newUser] = await tx.insert(users).values({
+          email,
+          emailVerified: true,
+        }).returning({ id: users.id, email: users.email, name: users.name });
+        user = newUser;
 
-    await createSessionForUser(user.id, ctx);
+        await assignTenantToNewUser(user.id, email.split("@")[0]);
+      } else {
+        // Mark email as verified for existing users
+        await tx.update(users)
+          .set({ emailVerified: true, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      }
+
+      const sessionId = nanoid(64);
+      const memberships = await tx
+        .select({ tenantId: tenantMembers.tenantId })
+        .from(tenantMembers)
+        .where(eq(tenantMembers.userId, user.id));
+      const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await tx.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        tenantId: resolvedTenantId,
+        expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+        ipAddress: getClientIpFromRequest(ctx.req),
+        userAgent: ctx.req.headers.get("user-agent") || null,
+      });
+
+      setSessionCookie(ctx.resHeaders, sessionId);
+      return { user, sessionToken: sessionId };
+    });
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
+      sessionToken,
       isNewUser,
       needsProfile: !user.name,
     };
@@ -266,9 +342,7 @@ export const authRouter = router({
 
     // Invalidate ALL session cache entries for this user so `me` returns fresh data
     // (the cache stores by sessionId, so we need to find and clear the right entry)
-    const cookies = ctx.req.headers.get("cookie") || "";
-    const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+    const sessionId = getSessionIdFromContext(ctx);
     if (sessionId) invalidateSessionCache(sessionId);
 
     return { success: true };
@@ -283,9 +357,7 @@ export const authRouter = router({
         .where(eq(users.id, ctx.user!.id));
 
       // Invalidate session cache so `me` returns fresh data
-      const cookies = ctx.req.headers.get("cookie") || "";
-      const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-      const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+      const sessionId = getSessionIdFromContext(ctx);
       if (sessionId) invalidateSessionCache(sessionId);
 
       return { success: true };
@@ -311,13 +383,15 @@ export const authRouter = router({
       await controlDb.insert(magicLinkTokens).values({
         email: email, // Store the NEW email
         tokenHash,
+        // Store the requesting user's ID so confirmEmailChange doesn't trust client-supplied userId
+        userId: ctx.user!.id,
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-        ipAddress: ctx.req.headers.get("x-forwarded-for") || null,
+        ipAddress: getClientIpFromRequest(ctx.req),
       });
 
-      // Send verification to new email
+      // Send verification to new email — no userId in URL; it is bound to the token server-side
       const baseUrl = process.env.APP_URL || "http://localhost:5173";
-      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}&userId=${ctx.user!.id}`;
+      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}`;
 
       await emailService.sendMagicLink(email, verifyUrl);
 
@@ -325,8 +399,10 @@ export const authRouter = router({
     }),
 
   // ── Confirm email change ─────────────────────────────────────
+  // userId is intentionally NOT accepted from client input — it is read from the
+  // server-side token record to prevent account takeover via token substitution.
   confirmEmailChange: publicProcedure
-    .input(z.object({ token: z.string(), userId: z.string().uuid() }))
+    .input(z.object({ token: z.string() }))
     .mutation(async ({ input }) => {
       const tokenH = hashToken(input.token);
 
@@ -344,19 +420,22 @@ export const authRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
       }
 
-      // Update the user's email
+      // Require that this token was issued for an email-change request (has a bound userId)
+      if (!tokenRow.userId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
+      }
+
+      // Update the user's email using the userId stored in the token — never from client input
       await controlDb.update(users)
         .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, input.userId));
+        .where(eq(users.id, tokenRow.userId));
 
       return { success: true, newEmail: tokenRow.email };
     }),
 
   // ── Logout ───────────────────────────────────────────────────
   logout: protectedProcedure.mutation(async ({ ctx }) => {
-    const cookies = ctx.req.headers.get("cookie") || "";
-    const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : null;
+    const sessionId = getSessionIdFromContext(ctx);
 
     if (sessionId) {
       await controlDb.delete(sessions).where(eq(sessions.id, sessionId));
@@ -369,7 +448,18 @@ export const authRouter = router({
 
   // ── Logout all sessions ──────────────────────────────────────
   logoutAll: protectedProcedure.mutation(async ({ ctx }) => {
+    // Fetch all session IDs before deleting so we can evict them from the in-memory cache
+    const userSessions = await controlDb
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, ctx.user!.id));
+
     await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
+
+    for (const s of userSessions) {
+      invalidateSessionCache(s.id);
+    }
+
     clearSessionCookie(ctx.resHeaders);
     return { success: true };
   }),

@@ -25,7 +25,13 @@ function GSTReportsPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [activeTab, setActiveTab] = useState<ReportTab>("gstr1");
+  const [activeTab, setActiveTabRaw] = useState<ReportTab>(
+    () => (localStorage.getItem("hisaabo_gst_tab") as ReportTab) || "gstr1"
+  );
+  const setActiveTab = (tab: ReportTab) => {
+    setActiveTabRaw(tab);
+    localStorage.setItem("hisaabo_gst_tab", tab);
+  };
 
   const { data: businesses } = trpc.business.list.useQuery();
   const biz = businesses?.[0];
@@ -35,7 +41,7 @@ function GSTReportsPage() {
   const isGstRegistered = biz?.gstRegistrationType !== "unregistered" || !!biz?.gstin;
 
   // Report labels adapt based on GST status
-  const reportTitle = isGstRegistered ? "GST Reports" : "Financial Reports";
+  const reportTitle = isGstRegistered ? "GST Returns" : "Tax Reports";
   const reportDesc = isGstRegistered
     ? "Generate GSTR-1, GSTR-3B, P&L, aging report, party ledger and Tally export"
     : "Sales summary, tax reports, P&L, aging report, party ledger and Tally export";
@@ -132,8 +138,8 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
 
   if (isLoading) return <ReportSkeleton />;
   if (error) return (
-    <div className="card px-5 py-4 border-red-200 bg-red-50">
-      <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
+    <div className="card px-5 py-4 border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+      <p className="text-sm text-red-700 dark:text-red-400">Failed to load report: {error.message}</p>
     </div>
   );
   if (!data) return (
@@ -266,8 +272,8 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
 
   if (isLoading) return <ReportSkeleton />;
   if (error) return (
-    <div className="card px-5 py-4 border-red-200 bg-red-50">
-      <p className="text-sm text-red-700">Failed to load report: {error.message}</p>
+    <div className="card px-5 py-4 border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+      <p className="text-sm text-red-700 dark:text-red-400">Failed to load report: {error.message}</p>
     </div>
   );
   if (!data) return (
@@ -687,7 +693,7 @@ function PartyLedgerView() {
   const { preset, setPreset, fromDate, toDate, customFrom, customTo, setCustomRange } =
     useDateRange("ledger-report", "this-fy");
 
-  const { data: partiesData } = trpc.party.list.useQuery({ limit: 200, page: 1 });
+  const { data: partiesData } = trpc.party.list.useQuery({ limit: 100, page: 1 });
   const partyOptions = (partiesData?.data ?? []).map((p) => ({
     value: p.id,
     label: p.name,

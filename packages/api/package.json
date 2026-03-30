@@ -9,7 +9,9 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts --format esm --dts",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@casl/ability": "^6.8.0",
@@ -32,6 +34,7 @@
     "@types/qrcode": "^1.5.6",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
   }
 }

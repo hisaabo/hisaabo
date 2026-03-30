@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import type { StoreConfig, CartItem, StoreItem, OrderResult } from "./types";
+import type { StoreConfig, CartItem, OrderResult } from "./types";
+import { cartItemKey } from "./types";
 import { fetchCatalog } from "./api";
 import { Header } from "./components/Header";
 import { ItemGrid } from "./components/ItemGrid";
@@ -62,14 +63,9 @@ function lightenHex(hex: string, amount: number): string {
 type View = "browse" | "cart" | "phone-verify" | "checkout" | "confirmed";
 
 export function App() {
-  // Extract slug from URL: /store/<slug>/... or just /<slug>
+  // Extract slug from URL: /<slug> (store runs on its own subdomain)
   const [slug] = useState<string>(() => {
-    // Support both /store/<slug> (production) and dev via /<slug>
-    const path = window.location.pathname;
-    const storeMatch = path.match(/^\/store\/([^/]+)/);
-    if (storeMatch) return storeMatch[1];
-    // Fallback: first path segment
-    const parts = path.split("/").filter(Boolean);
+    const parts = window.location.pathname.split("/").filter(Boolean);
     return parts[0] || "";
   });
 
@@ -85,6 +81,7 @@ export function App() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [isNewCustomer, setIsNewCustomer] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
 
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
@@ -113,33 +110,34 @@ export function App() {
       .finally(() => setLoading(false));
   }, [slug]);
 
-  const addToCart = useCallback((item: StoreItem) => {
+  const addToCart = useCallback((entry: Omit<CartItem, "quantity">) => {
     setCart((prev) => {
-      const existing = prev.find((c) => c.item.id === item.id);
-      if (existing) {
-        return prev.map((c) =>
-          c.item.id === item.id ? { ...c, quantity: c.quantity + 1 } : c
+      const key = cartItemKey({ ...entry, quantity: 1 });
+      const existingIdx = prev.findIndex((c) => cartItemKey(c) === key);
+      if (existingIdx >= 0) {
+        return prev.map((c, i) =>
+          i === existingIdx ? { ...c, quantity: c.quantity + 1 } : c
         );
       }
-      return [...prev, { item, quantity: 1 }];
+      return [...prev, { ...entry, quantity: 1 }];
     });
   }, []);
 
-  const removeFromCart = useCallback((itemId: string) => {
+  const removeFromCart = useCallback((key: string) => {
     setCart((prev) => {
-      const existing = prev.find((c) => c.item.id === itemId);
+      const existing = prev.find((c) => cartItemKey(c) === key);
       if (!existing) return prev;
       if (existing.quantity <= 1) {
-        return prev.filter((c) => c.item.id !== itemId);
+        return prev.filter((c) => cartItemKey(c) !== key);
       }
       return prev.map((c) =>
-        c.item.id === itemId ? { ...c, quantity: c.quantity - 1 } : c
+        cartItemKey(c) === key ? { ...c, quantity: c.quantity - 1 } : c
       );
     });
   }, []);
 
-  const clearItem = useCallback((itemId: string) => {
-    setCart((prev) => prev.filter((c) => c.item.id !== itemId));
+  const clearItem = useCallback((key: string) => {
+    setCart((prev) => prev.filter((c) => cartItemKey(c) !== key));
   }, []);
 
   const handleOrderSuccess = useCallback((result: OrderResult) => {
@@ -277,10 +275,11 @@ export function App() {
           slug={slug}
           accentColor={catalog.business.accentColor || "var(--store-accent)"}
           onBack={() => setView("cart")}
-          onVerified={(phone, name, isNew) => {
+          onVerified={(phone, name, isNew, token) => {
             setCustomerPhone(phone);
             setCustomerName(name);
             setIsNewCustomer(isNew);
+            setTurnstileToken(token);
             setView("checkout");
           }}
         />
@@ -300,6 +299,7 @@ export function App() {
           customerPhone={customerPhone}
           customerName={customerName}
           isNewCustomer={isNewCustomer}
+          turnstileToken={turnstileToken}
           onBack={() => setView("phone-verify")}
           onSuccess={handleOrderSuccess}
         />
@@ -331,8 +331,8 @@ export function App() {
             <ItemGrid
               items={catalog.items}
               cart={cart}
-              onAdd={addToCart}
-              onRemove={removeFromCart}
+              onAddToCart={addToCart}
+              onRemoveFromCart={removeFromCart}
               currency={catalog.business.currency}
               accentColor={catalog.business.accentColor}
               search={search}
@@ -398,8 +398,8 @@ export function App() {
             <Cart
               cart={cart}
               config={catalog}
-              onAdd={addToCart}
-              onRemove={removeFromCart}
+              onAddToCart={addToCart}
+              onRemoveFromCart={removeFromCart}
               onClearItem={clearItem}
               onClose={() => {}}
               onCheckout={() => setView("phone-verify")}
@@ -415,11 +415,11 @@ export function App() {
           <Cart
             cart={cart}
             config={catalog}
-            onAdd={addToCart}
-            onRemove={removeFromCart}
+            onAddToCart={addToCart}
+            onRemoveFromCart={removeFromCart}
             onClearItem={clearItem}
             onClose={() => setView("browse")}
-            onCheckout={() => setView("checkout")}
+            onCheckout={() => setView("phone-verify")}
           />
         </div>
       )}
@@ -453,7 +453,7 @@ export function App() {
                   : catalog.business.currency}
                 {cart
                   .reduce(
-                    (s, c) => s + parseFloat(c.item.price) * c.quantity,
+                    (s, c) => s + parseFloat(c.effectivePrice) * c.quantity,
                     0
                   )
                   .toFixed(0)}

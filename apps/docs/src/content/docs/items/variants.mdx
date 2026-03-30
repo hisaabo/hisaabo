@@ -1,0 +1,103 @@
+---
+title: Item Variants
+description: Set up items with multiple variants (size, colour, style) in Hisaabo. Each variant has its own stock, price, and SKU.
+sidebar:
+  order: 2
+---
+
+Item variants let you sell the same product in multiple configurations — for example, a t-shirt in sizes Small, Medium, and Large with colours Red, Blue, and Green. Each combination is a separate variant with its own stock level and price.
+
+## When to use variants
+
+Use variants when:
+- The item has attributes that affect stock tracking independently (size, colour, weight, flavour)
+- You want to show different prices for different configurations
+- Customers or suppliers specify the configuration when placing an order
+
+Do **not** use variants when:
+- You just want different units (for example, single vs. box of 12) — use [Alternate Units](/items/units-and-conversions) for that
+- The configurations are entirely separate products with different HSN codes
+
+## Setting up a variant item
+
+### Step 1: Create the item with mode "Variants"
+
+When creating a new item, select **Variants** as the Item Mode. You cannot change the mode later.
+
+Fill in all the standard item fields (name, unit, HSN, tax rate). The base-level `salePrice`, `purchasePrice`, and `stockQuantity` are not used for variant items — each variant has its own.
+
+### Step 2: Define variant attributes
+
+Variant attributes are the dimensions of variation — for example `["Size", "Color"]` or `["Storage", "Colour"]`.
+
+Enter the attribute names. You can have up to five attributes. Examples:
+- Single attribute: `["Size"]` produces variants like Small, Medium, Large
+- Two attributes: `["Size", "Color"]` produces combinations like Small/Red, Small/Blue, Medium/Red, etc.
+- Three or more: `["Size", "Color", "Material"]` produces deeper combinations like Small/Red/Cotton, etc.
+
+### Step 3: Create each variant
+
+For each combination, create a variant record with:
+
+| Field | Required | Notes |
+|---|---|---|
+| Attribute values | Yes | For example, `{"Size": "M", "Color": "Red"}` |
+| SKU | No | Unique SKU for this specific variant |
+| Sale Price | No | Overrides the parent item's sale price for this variant |
+| Purchase Price | No | Overrides the parent item's purchase price |
+| Stock Quantity | No | Opening stock for this variant. Default: 0 |
+| Low Stock Alert | No | Alert threshold specific to this variant |
+
+### Example: T-shirt setup
+
+Parent item:
+- Name: Classic T-Shirt
+- Item Type: Product
+- Item Mode: Variants
+- Unit: pcs
+- Tax %: 5%
+- HSN: 61091000
+- Variant Attributes: ["Size", "Color"]
+
+Variants:
+
+| Size | Color | SKU | Sale Price | Stock |
+|---|---|---|---|---|
+| S | Red | TSH-S-RED | ₹350 | 50 |
+| S | Blue | TSH-S-BLU | ₹350 | 30 |
+| M | Red | TSH-M-RED | ₹380 | 45 |
+| M | Blue | TSH-M-BLU | ₹380 | 40 |
+| L | Red | TSH-L-RED | ₹400 | 20 |
+| L | Blue | TSH-L-BLU | ₹400 | 25 |
+
+## Using variants on invoices
+
+When you type the item name on an invoice line item and select the parent item, a **Variant** dropdown appears. Select the specific variant. The variant's sale price fills in automatically.
+
+Stock is decremented from the selected variant, not the parent item.
+
+## Viewing variant stock
+
+On the item list, variant items show:
+- **Variant count**: how many variants are defined
+- **Total stock**: sum of all variants' stock quantities
+
+Click into the item to see a breakdown by variant, including each variant's stock and low-stock status.
+
+## Variants in the online store
+
+Each variant can be enabled or disabled for your [Online Store](/online-store) independently. Set a separate store price per variant if your online pricing differs from your regular sale price.
+
+## Frequently asked questions
+
+**Can I add a new variant after the item is already in use on invoices?**
+Yes. Add new variants at any time from the item detail page. Existing invoices are not affected.
+
+**Can I delete a variant?**
+Only if the variant has no invoice line items linked to it. If the variant has been used on an invoice, you cannot delete it (the database enforces this). You can hide it from the store but it will still appear in the variant selector on new invoices.
+
+**What is the maximum number of variants per item?**
+There is no hard limit in the database, but the interface is designed for a reasonable number of combinations (typically under 100 variants per item). Very large variant sets (hundreds of combinations) are better handled with separate item records.
+
+**I have a variant item with only one attribute. Do I need two?**
+No. One attribute is fine. For example, `["Storage"]` with variants 128GB, 256GB, 512GB is a valid single-attribute variant item.

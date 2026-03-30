@@ -6,10 +6,12 @@ import { SettingsNav } from "@/components/settings/SettingsNav";
 import { BusinessTab, BusinessForm } from "@/components/settings/BusinessTab";
 import { DocumentsTab } from "@/components/settings/DocumentsTab";
 import { TeamTab } from "@/components/settings/TeamTab";
+import { SalesTargetsTab } from "@/components/settings/SalesTargetsTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { DataTab } from "@/components/settings/DataTab";
 import { AccountTab } from "@/components/settings/AccountTab";
 import { StoreTab } from "@/components/settings/StoreTab";
+import { ShippingTab } from "@/components/settings/ShippingTab";
 import { WhatsNextModal } from "@/components/settings/WhatsNextModal";
 import { ImportWizard } from "@/components/ImportWizard";
 
@@ -79,7 +81,9 @@ function SettingsPage() {
         <div className="flex-1 min-w-0">
           {tab === "business" && <BusinessTab biz={biz} />}
           {tab === "documents" && <DocumentsTab biz={biz} />}
+          {tab === "shipping" && biz && <ShippingTab biz={biz} />}
           {tab === "team" && <TeamTab />}
+          {tab === "targets" && <SalesTargetsTab />}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "data" && <DataTab />}
           {tab === "account" && <AccountTab />}

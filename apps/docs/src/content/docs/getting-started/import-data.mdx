@@ -1,0 +1,170 @@
+---
+title: Import Data
+description: Import your existing parties, items, invoices, and payments into Hisaabo from MyBillBook or a CSV file. Covers the import process, field mapping, and what to expect.
+sidebar:
+  order: 3
+---
+
+If you are migrating from MyBillBook or another app, you can import your existing data into Hisaabo rather than starting from scratch. The import system supports parties (customers and suppliers), items, invoices, and payments.
+
+:::note
+Import requires the Superadmin or Admin role. Seller Manager, Seller, and Accountant roles cannot run imports.
+:::
+
+## What can be imported
+
+| Data type | Source supported | Notes |
+|---|---|---|
+| Parties (customers & suppliers) | CSV / MyBillBook | Duplicates (same name) are skipped automatically |
+| Items | CSV / MyBillBook | Duplicates (same name) are skipped automatically |
+| Invoices | CSV / MyBillBook | Imports with full line items and calculates totals |
+| Payments | CSV / MyBillBook | Linked to invoices by invoice number |
+
+## Importing parties
+
+### From a CSV file
+
+Your CSV must have at least a `name` column. Additional columns are optional:
+
+```csv
+name,type,phone,email,gstin,pan,openingBalance,billingAddress,city,state,pincode
+Raj Traders,customer,9876543210,raj@example.com,27AABCT1234A1Z5,,5000,Shop 12 Market,Mumbai,Maharashtra,400001
+Gupta Suppliers,supplier,9123456789,,,,12000,,,Rajasthan,
+```
+
+**Column reference:**
+
+| Column | Required | Values |
+|---|---|---|
+| `name` | Yes | Party name |
+| `type` | No | `customer` or `supplier` (default: `customer`) |
+| `phone` | No | Mobile number |
+| `email` | No | Email address |
+| `gstin` | No | 15-character GSTIN |
+| `pan` | No | 10-character PAN |
+| `openingBalance` | No | Amount in INR. Positive means the party owes you; negative means you owe them. Default: `0` |
+| `billingAddress` | No | Full billing address |
+| `shippingAddress` | No | Full shipping address |
+| `city` | No | City name |
+| `state` | No | State name |
+| `pincode` | No | PIN code |
+
+### Behaviour on duplicates
+
+If a party with the **same name** (case-insensitive) already exists in your business, the import skips it. The import response tells you how many records were created and how many were skipped:
+
+```json
+{ "created": 47, "skipped": 3, "total": 50 }
+```
+
+## Importing items
+
+### From a CSV file
+
+```csv
+name,itemType,salePrice,purchasePrice,taxPercent,hsn,unit,stockQuantity,sku,category
+Samsung 65 inch TV,product,55000,48000,18,85287200,pcs,5,SAM-65,Electronics
+AC Installation,service,2500,,18,998719,pcs,0,,Services
+Basmati Rice 5kg,product,450,380,5,10063020,bag,200,RICE-5KG,Groceries
+```
+
+**Column reference:**
+
+| Column | Required | Values |
+|---|---|---|
+| `name` | Yes | Item name |
+| `itemType` | No | `product` or `service` (default: `product`) |
+| `salePrice` | No | Sale price in INR |
+| `purchasePrice` | No | Purchase price in INR |
+| `taxPercent` | No | GST rate: `0`, `5`, `12`, `18`, or `28` (default: `0`) |
+| `hsn` | No | HSN code for products, SAC code for services |
+| `unit` | No | Unit of measure (see [Supported Units](/reference/supported-units)). Default: `pcs` |
+| `stockQuantity` | No | Opening stock quantity. Default: `0` |
+| `sku` | No | Your internal SKU or barcode |
+| `category` | No | Category name for grouping |
+
+## Importing invoices
+
+Invoice import is the most complex operation. Each row in the CSV represents one **line item** on an invoice. Rows sharing the same `invoiceNumber` are grouped into a single invoice.
+
+### CSV format
+
+```csv
+invoiceNumber,invoiceDate,partyName,partyGstin,type,itemName,quantity,unit,unitPrice,taxPercent,discountPercent,notes
+INV-00001,2025-04-01,Raj Traders,27AABCT1234A1Z5,sale,Samsung 65 inch TV,2,pcs,55000,18,0,
+INV-00001,2025-04-01,Raj Traders,27AABCT1234A1Z5,sale,HDMI Cable,2,pcs,500,18,10,
+INV-00002,2025-04-02,Gupta Suppliers,,purchase,Basmati Rice 5kg,100,bag,380,5,0,Stock replenishment
+```
+
+**Column reference:**
+
+| Column | Required | Notes |
+|---|---|---|
+| `invoiceNumber` | Yes | Groups rows into one invoice. Use your existing numbering. |
+| `invoiceDate` | Yes | Format: `YYYY-MM-DD` |
+| `partyName` | Yes | Must match an existing party name exactly (case-insensitive) |
+| `partyGstin` | No | Party's GSTIN — used to update the party record if not already set |
+| `type` | Yes | `sale` or `purchase` |
+| `itemName` | Yes | Item description (does not need to match an existing item) |
+| `quantity` | Yes | Numeric quantity |
+| `unit` | No | Unit of measure (default: `pcs`) |
+| `unitPrice` | Yes | Price per unit in INR (excluding tax if tax-exclusive) |
+| `taxPercent` | No | GST rate percentage (default: `0`) |
+| `discountPercent` | No | Line-level discount percentage (default: `0`) |
+| `notes` | No | Invoice-level notes (applied to the first row for each invoice number) |
+
+:::caution[Parties must exist before importing invoices]
+The invoice import looks up parties by name. If a party does not exist yet, the row is skipped with an error. Always import parties first, then items, then invoices.
+:::
+
+### What the import calculates
+
+For each invoice, the system:
+1. Groups all rows by `invoiceNumber`
+2. Calculates line item totals (`quantity × unitPrice`, then applies discount and tax)
+3. Sums up subtotal, tax amount, discount amount, and total amount
+4. Sets the invoice status to `paid` if all amount is accounted for, otherwise `sent`
+5. Updates stock quantities (sales reduce stock; purchases increase stock)
+
+## Importing payments
+
+```csv
+invoiceNumber,partyName,amount,mode,paymentDate,referenceNumber,notes
+INV-00001,Raj Traders,126780,bank,2025-04-05,TXN123456,NEFT transfer
+INV-00002,Gupta Suppliers,39900,upi,2025-04-03,UPI789,,
+```
+
+**Column reference:**
+
+| Column | Required | Values |
+|---|---|---|
+| `invoiceNumber` | Yes | Links this payment to an existing invoice |
+| `partyName` | Yes | Must match an existing party |
+| `amount` | Yes | Amount paid in INR |
+| `mode` | Yes | `cash`, `bank`, `upi`, `cheque`, or `other` |
+| `paymentDate` | Yes | Format: `YYYY-MM-DD` |
+| `referenceNumber` | No | UTR, cheque number, UPI reference, etc. |
+| `notes` | No | Free-text note |
+
+## Recommended import order
+
+Follow this sequence to avoid dependency errors:
+
+1. **Parties** — customers and suppliers must exist first
+2. **Items** — products and services (optional, invoices can import without matching items)
+3. **Invoices** — requires parties to exist
+4. **Payments** — requires invoices and parties to exist
+
+## Frequently asked questions
+
+**What happens if I import the same CSV twice?**
+Duplicate detection is name-based for parties and items. Re-importing the same file creates no duplicate parties or items. For invoices, if an invoice number already exists in your business, the import skips it.
+
+**My party names in the CSV have slightly different spelling from what I have in Hisaabo. What do I do?**
+The import matches by exact name (case-insensitive). "Raj Traders" and "RAJ TRADERS" are treated as the same party, but "Raj Trader" (missing the s) would create a new record. Normalise your CSV before importing.
+
+**Can I import opening balances for parties?**
+Yes. Set the `openingBalance` column in your parties CSV. A positive value means the party owes you money (a receivable). A negative value means you owe them money (a payable).
+
+**What format should dates be in?**
+Use `YYYY-MM-DD` format (for example, `2025-04-01` for 1st April 2025). Other formats are not guaranteed to parse correctly.

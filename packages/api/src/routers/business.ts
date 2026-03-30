@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { businesses, bankAccounts, controlDb, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "../lib/permissions.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -21,12 +22,18 @@ async function requireTenantAdmin(userId: string, tenantId: string) {
 
 export const businessRouter = router({
   list: tenantProcedure.query(async ({ ctx }) => {
+    // Security: ctx.db is already scoped to the caller's tenant DB, so this
+    // returns only businesses within the caller's tenant — no cross-tenant
+    // access is possible. All businesses within a tenant are visible to every
+    // tenant member so that they can switch between businesses.
     return ctx.db.select().from(businesses);
   }),
 
   getById: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      // Security: ctx.db is scoped to the caller's tenant. The WHERE on
+      // businesses.id is sufficient because the DB itself is tenant-isolated.
       const [biz] = await ctx.db
         .select()
         .from(businesses)
@@ -37,22 +44,26 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
-    const [biz] = await ctx.db.insert(businesses).values({
-      ...input,
-      createdByUserId: ctx.user.id,
-    }).returning();
+    return ctx.db.transaction(async (tx) => {
+      const [biz] = await tx.insert(businesses).values({
+        ...input,
+        createdByUserId: ctx.user.id,
+      }).returning();
 
-    // Auto-create a Cash account for every new business
-    await ctx.db.insert(bankAccounts).values({
-      businessId: biz.id,
-      accountName: "Cash",
-      accountType: "cash",
-      openingBalance: "0",
-      currentBalance: "0",
-      isDefault: false,
+      // Auto-create a Cash account for every new business — must be atomic with
+      // business creation so a failed account insert never leaves a business
+      // without its default Cash account.
+      await tx.insert(bankAccounts).values({
+        businessId: biz.id,
+        accountName: "Cash",
+        accountType: "cash",
+        openingBalance: "0",
+        currentBalance: "0",
+        isDefault: false,
+      });
+
+      return biz;
     });
-
-    return biz;
   }),
 
   update: tenantProcedure
@@ -117,6 +128,7 @@ export const businessRouter = router({
       limit: z.number().int().min(1).max(100).default(50),
     }))
     .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
       const offset = (input.page - 1) * input.limit;
       const data = await ctx.db.select()
         .from(auditLog)
@@ -128,6 +140,7 @@ export const businessRouter = router({
     }),
 
   exportData: adminProcedure.mutation(async ({ ctx }) => {
+    requireCan(ctx.ability, "manage", "Business");
     const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
       ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
       ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useShortcutFlash } from "@/hooks/useHotkeys";
 
-export function ShortcutIndicator() {
+export function ShortcutIndicator(): React.JSX.Element | null {
   const { flash, dismiss } = useShortcutFlash();
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 

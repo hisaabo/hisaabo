@@ -1,0 +1,631 @@
+---
+title: MCP Server
+description: Connect Hisaabo to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 5-minute setup, zero config, 130+ API endpoints available through natural conversation.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Hisaabo MCP server implements the [Model Context Protocol](https://modelcontextprotocol.io/) — an open standard for connecting AI assistants to external tools and data sources. Once configured, any MCP-compatible AI agent can create invoices, query party ledgers, generate GST reports, and manage inventory through natural conversation.
+
+Works with **Claude Desktop** · Works with **OpenClaw** · Works with **any MCP client**
+
+---
+
+## 5-Minute Quickstart
+
+This is the fastest path from zero to a working AI agent that understands your business.
+
+**Step 1: Get your credentials**
+
+Log in to your Hisaabo dashboard and run the CLI `whoami` command to get all the values you need at once:
+
+```bash
+# Install the CLI first (one-time)
+npm install -g @hisaabo/cli
+
+# Authenticate
+hisaabo login --api-url https://your-hisaabo-instance.com
+
+# Print all credential values in JSON — copy these for Step 3
+hisaabo whoami --json
+```
+
+Expected output:
+```json
+{
+  "email": "owner@yourshop.in",
+  "apiUrl": "https://your-hisaabo-instance.com",
+  "token": "sess_VbK2mQ9xP4nR7wA1...",
+  "tenantId": "tenant-uuid-here",
+  "businessId": "business-uuid-here",
+  "businessName": "Sharma Traders"
+}
+```
+
+**Step 2: Add to Claude Desktop**
+
+Open your Claude Desktop config file:
+
+<Tabs>
+  <TabItem label="macOS">
+    ```
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```
+    %APPDATA%\Claude\claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```
+    ~/.config/claude/claude_desktop_config.json
+    ```
+  </TabItem>
+</Tabs>
+
+Add the `hisaabo` entry using the values from `hisaabo whoami --json`:
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "npx",
+      "args": ["@hisaabo/mcp"],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_TOKEN": "sess_VbK2mQ9xP4nR7wA1...",
+        "HISAABO_TENANT_ID": "tenant-uuid-here",
+        "HISAABO_BUSINESS_ID": "business-uuid-here"
+      }
+    }
+  }
+}
+```
+
+**Step 3: Restart Claude Desktop and test**
+
+Restart Claude Desktop — you will see "hisaabo" appear in the tools list. Then try:
+
+```
+"What is my business's total outstanding receivables?"
+```
+
+Claude calls `dashboard_summary` and returns your live business data. That's it. You now have an AI that knows your business.
+
+---
+
+## The WOW Moment
+
+Here is what the experience actually looks like once connected. These are real conversation flows using the tools described in this document.
+
+**Checking what a party owes you:**
+
+```
+You: "How much does Montu Arora owe me?"
+
+Claude: [calls party_get tool with name search "Montu Arora"]
+
+Claude: "Montu Arora has ₹12,450 outstanding across 3 invoices.
+         The oldest is INV-12890 from 15 days ago (₹5,000).
+         The other two are INV-12901 (₹4,200, 8 days ago) and
+         INV-12934 (₹3,250, 2 days ago).
+
+         Should I draft a payment reminder for the older invoices,
+         or would you like to see the full ledger first?"
+```
+
+**Creating an invoice in seconds:**
+
+```
+You: "Bill Gupta Enterprises for 20 bags of Basmati Rice at ₹1,250 each,
+      due in 15 days"
+
+Claude: [calls item_list to resolve "Basmati Rice" to item ID]
+        [calls party_list to resolve "Gupta Enterprises" to party ID]
+        [calls invoice_create with all resolved IDs and calculated amounts]
+
+Claude: "Done. Invoice BB-14821 created:
+         Gupta Enterprises — ₹25,000 + GST
+         20 × Basmati Rice 25kg @ ₹1,250 = ₹25,000
+         GST (5% — HSN 1006): ₹1,250
+         Total: ₹26,250
+         Due: April 12, 2026
+
+         PDF is ready. Want me to note any delivery instructions?"
+```
+
+**Morning business briefing:**
+
+```
+You: "Give me this morning's numbers"
+
+Claude: [calls dashboard_summary with period: "this-month"]
+        [calls invoice_list with status: "overdue"]
+        [calls item_list with lowStock: true]
+
+Claude: "Good morning. Here's where things stand:
+
+         This month: ₹4,82,500 revenue · ₹1,23,400 expenses
+         Receivable: ₹2,34,000 across 18 open invoices
+         Critical: Vinod & Sons — ₹45,000 overdue for 63 days
+
+         3 items need restocking:
+         — Mustard Oil 15L: 2 cans left (min: 10)
+         — Basmati Rice 25kg: 4 bags left (min: 15)
+         — Refined Sugar 50kg: 1 bag left (min: 5)
+
+         GSTR-3B is due in 4 days. Should I pull the GST summary?"
+```
+
+**GST filing prep — done in one message:**
+
+```
+You: "Prepare my GSTR-1 data for March"
+
+Claude: [calls gst_report with report_type: "gstr1", month: 3, year: 2026]
+        [calls gst_report with report_type: "gstr3b", month: 3, year: 2026]
+
+Claude: "March 2026 GSTR-1 summary:
+
+         B2B invoices: 47 (₹8,42,500 taxable)
+         B2C invoices: 183 (₹3,21,000 taxable)
+         HSN summary: 6 HSN codes, full detail attached
+
+         Net GST liability: ₹90,024
+         (CGST: ₹37,912 | SGST: ₹37,912 | IGST: ₹14,200)
+
+         The full GSTR-1 JSON is ready to forward to your CA.
+         Filing deadline: April 11, 2026 — 14 days away."
+```
+
+---
+
+## What You Can Build
+
+The MCP server is not just for answering questions. It gives AI agents the ability to take action. Here is what becomes possible:
+
+**WhatsApp invoice bot** — A customer sends a voice note on WhatsApp. A bot transcribes it, passes the text to Claude via MCP, and Claude creates the invoice. The customer gets a PDF link in under 30 seconds. No app, no form, no manual entry.
+
+**Automated payment follow-up** — An OpenClaw agent runs daily, identifies overdue invoices, drafts personalized reminders in Hindi or English based on party preference, and queues them for one-click sending. Your accountant reviews and approves the batch in two minutes.
+
+**CA reconciliation assistant** — Your CA connects their Claude Desktop to your Hisaabo instance (read-only mode). They can ask questions, pull GSTR data, and cross-reference ledgers without you exporting a single file or being on a call.
+
+**Multi-business dashboard agent** — An agent that spans all three of your businesses, pulling `dashboard_summary` for each, and generating a consolidated morning report comparing performance across businesses.
+
+**Stock reorder agent** — An agent that checks `item_list --lowStock` every morning, identifies items below threshold, checks your supplier's catalog, and creates draft purchase orders for your review.
+
+See [Integrations](/ai/integrations/) for detailed implementation guides for each of these patterns.
+
+---
+
+## Prerequisites
+
+- A running Hisaabo instance ([self-hosting guide](/getting-started/self-hosting/))
+- Node.js 20+ on the machine where the MCP client (Claude Desktop) runs
+- The Hisaabo CLI installed (`npm install -g @hisaabo/cli`) for getting credentials
+
+---
+
+## Configuration
+
+The MCP server is configured entirely through environment variables passed in the MCP client config. There are no command-line flags — the server runs over stdio, which is managed by your MCP client (Claude Desktop, OpenClaw, etc.).
+
+### Required environment variables
+
+| Variable | Where to find it | Description |
+|---|---|---|
+| `HISAABO_API_URL` | Your deployment URL | Base URL of your Hisaabo API, e.g. `https://your-hisaabo-instance.com` |
+| `HISAABO_TOKEN` | `hisaabo whoami --json` → `token` | Session token (same as Bearer token used by the mobile app) |
+| `HISAABO_TENANT_ID` | `hisaabo whoami --json` → `tenantId` | Your organization/tenant UUID |
+| `HISAABO_BUSINESS_ID` | `hisaabo whoami --json` → `businessId` | The business to operate on |
+
+The fastest way to get all four values at once:
+
+```bash
+hisaabo whoami --json
+```
+
+If the `token` field is missing or expired, log in again:
+
+```bash
+hisaabo login --api-url https://your-hisaabo-instance.com
+```
+
+---
+
+## Connecting to Claude Desktop
+
+1. Run `hisaabo whoami --json` to get your credentials (see [Configuration](#configuration) above).
+
+2. Open your Claude Desktop configuration file:
+
+<Tabs>
+  <TabItem label="macOS">
+    ```
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```
+    %APPDATA%\Claude\claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```
+    ~/.config/claude/claude_desktop_config.json
+    ```
+  </TabItem>
+</Tabs>
+
+3. Add the Hisaabo MCP server to the `mcpServers` section:
+
+```json
+{
+  "mcpServers": {
+    "hisaabo": {
+      "command": "npx",
+      "args": ["@hisaabo/mcp"],
+      "env": {
+        "HISAABO_API_URL": "https://your-hisaabo-instance.com",
+        "HISAABO_TOKEN": "sess_VbK2mQ9xP4nR7wA1...",
+        "HISAABO_TENANT_ID": "tenant-uuid-here",
+        "HISAABO_BUSINESS_ID": "business-uuid-here"
+      }
+    }
+  }
+}
+```
+
+The MCP server runs as a child process of Claude Desktop over stdio — Claude Desktop starts and stops it automatically. You do not need to keep a separate server process running.
+
+4. Restart Claude Desktop. You will see "hisaabo" appear in the tools list in Claude's interface.
+
+5. Test the connection:
+
+```
+"What is my business's total outstanding receivables?"
+```
+
+Claude will call the `dashboard_summary` tool and return a structured response with your current data.
+
+**If Claude reports it cannot connect:** Check that the `HISAABO_TOKEN` is not expired (`hisaabo login` to refresh it) and that `HISAABO_API_URL` is reachable from the machine running Claude Desktop.
+
+---
+
+## Connecting to OpenClaw
+
+OpenClaw agents connect to stdio-based MCP servers by launching them as a subprocess. Configure the Hisaabo MCP server in your OpenClaw agent definition with the same environment variables used for Claude Desktop:
+
+```yaml
+# openclaw-agent.yaml
+mcp_servers:
+  - name: hisaabo
+    command: npx
+    args: ["@hisaabo/mcp"]
+    env:
+      HISAABO_API_URL: "https://your-hisaabo-instance.com"
+      HISAABO_TOKEN: "sess_VbK2mQ9xP4nR7wA1..."
+      HISAABO_TENANT_ID: "tenant-uuid-here"
+      HISAABO_BUSINESS_ID: "business-uuid-here"
+    description: "Hisaabo business management — invoices, parties, inventory, GST"
+```
+
+OpenClaw starts and stops the MCP server process as needed. No separate server daemon is required.
+
+For long-running OpenClaw deployments, store credentials in your secrets manager and inject them as environment variables rather than hardcoding them in the agent definition file.
+
+---
+
+## Available Tools
+
+### Invoicing
+
+#### `invoice_create`
+
+Create a sale or purchase invoice.
+
+**Input:**
+```typescript
+{
+  type: "sale" | "purchase";
+  partyId: string;
+  date: string; // ISO 8601, e.g. "2026-03-26"
+  items: Array<{
+    itemId: string;
+    quantity: number; // string for NUMERIC precision in JS
+    unit: string;
+    pricePerUnit: string; // e.g. "65.00"
+    discountPercent?: string;
+  }>;
+  notes?: string;
+  dueDate?: string;
+}
+```
+
+**Output:**
+```typescript
+{
+  id: string;
+  invoiceNumber: string; // e.g. "BB-12948"
+  totalAmount: string;
+  taxAmount: string;
+  status: "draft" | "sent" | "paid" | "overdue";
+  pdfUrl: string;
+}
+```
+
+#### `invoice_list`
+
+List invoices with optional filters. Results are paginated (max 100 per call).
+
+**Input:**
+```typescript
+{
+  type?: "sale" | "purchase";
+  status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+  partyId?: string;
+  fromDate?: string;
+  toDate?: string;
+  limit?: number; // default 50, max 100
+  cursor?: string;
+}
+```
+
+#### `invoice_get`
+
+Get a single invoice with all line items and payment history.
+
+**Input:** `{ id: string }`
+
+#### `invoice_pdf_url`
+
+Get a URL to download or view the invoice PDF.
+
+**Input:** `{ id: string; format?: "a4" | "thermal" }`
+
+---
+
+### Parties
+
+#### `party_list`
+
+List customers and suppliers. Includes outstanding balance for each party.
+
+**Input:**
+```typescript
+{
+  type?: "customer" | "supplier" | "both";
+  search?: string;
+  hasOutstanding?: boolean; // filter to parties with unpaid balance
+  limit?: number;
+  cursor?: string;
+}
+```
+
+#### `party_get`
+
+Get a party's full profile and running ledger.
+
+**Input:**
+```typescript
+{
+  id: string;
+  includeLedger?: boolean; // default false — ledger adds response size
+  fromDate?: string;
+  toDate?: string;
+}
+```
+
+#### Outstanding balances
+
+Use `party_list` with `filter: "outstanding"` to get all parties with unpaid balances, or `filter: "overdue"` for parties with overdue invoices. The `balance` field on each party result is positive when they owe you (receivable) and negative when you owe them (payable).
+
+---
+
+### Items & Inventory
+
+#### `item_list`
+
+List items in your catalog with current stock levels.
+
+**Input:**
+```typescript
+{
+  search?: string;
+  lowStock?: boolean; // filter to items below low-stock threshold
+  category?: string;
+  limit?: number;
+  cursor?: string;
+}
+```
+
+#### `item_get`
+
+Get a single item with full pricing and stock history.
+
+**Input:** `{ id: string }`
+
+#### `item_adjust_stock`
+
+Manually adjust stock for an item (for corrections, write-offs, physical counts, etc.).
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  adjustment: string; // signed decimal string: "+50", "-3.500", "10"
+  reason?: string;    // recorded in audit log
+}
+```
+
+---
+
+### Payments
+
+#### `payment_create`
+
+Record a payment from a customer or to a supplier.
+
+**Input:**
+```typescript
+{
+  party_id: string;
+  amount: string;
+  mode: "cash" | "bank" | "upi" | "cheque" | "other";
+  payment_date?: string;  // ISO 8601, defaults to today
+  invoice_id?: string;    // allocate to a specific invoice
+  reference_number?: string;
+  notes?: string;
+}
+```
+
+#### `payment_list`
+
+List payments with optional filters.
+
+**Input:**
+```typescript
+{
+  party_id?: string;
+  invoice_id?: string;
+  from_date?: string;
+  to_date?: string;
+  page?: number;
+}
+```
+
+---
+
+### Expenses
+
+#### `expense_create`
+
+Record a business expense.
+
+**Input:**
+```typescript
+{
+  amount: string;
+  category: string;
+  date: string;
+  description: string;
+  bankAccountId?: string;
+  attachmentUrl?: string;
+}
+```
+
+#### `expense_list`
+
+List expenses with filters.
+
+**Input:**
+```typescript
+{
+  category?: string;
+  fromDate?: string;
+  toDate?: string;
+  limit?: number;
+  cursor?: string;
+}
+```
+
+---
+
+### GST
+
+#### `gst_report`
+
+Generate a GST report for a specific month. Returns JSON data — use this to answer GST liability questions, check ITC, or prepare data for your CA.
+
+**Input:**
+```typescript
+{
+  report_type: "gstr1" | "gstr3b";
+  month: number; // 1–12 (1 = January)
+  year: number;  // e.g. 2026
+}
+```
+
+- `gstr1` — outward supplies (sales) report: B2B invoices, B2C invoices, HSN summary
+- `gstr3b` — monthly return summary: sales + purchases + ITC
+
+**Example:**
+```
+"Prepare my GSTR-1 data for March 2026"
+→ gst_report({ report_type: "gstr1", month: 3, year: 2026 })
+```
+
+Note: The tool returns structured JSON for agents to summarize. The PDF version is available through the web dashboard.
+
+---
+
+### Dashboard
+
+#### `dashboard_summary`
+
+Get the business's financial summary: total sales, purchases, expenses, receivables, payables, and cash position.
+
+**Input:**
+```typescript
+{
+  period?: "this-fy" | "this-month" | "last-month" | "this-quarter" | "this-year" | "custom";
+  // "this-fy" = current Indian financial year (April–March) — this is the default
+  from_date?: string; // ISO 8601, required when period = "custom"
+  to_date?: string;
+}
+```
+
+**Output:**
+```typescript
+{
+  totalSales: string;       // revenue from sale invoices
+  totalPurchases: string;   // cost from purchase invoices
+  totalExpenses: string;    // non-invoice business expenses
+  receivable: string;       // what customers owe you
+  payable: string;          // what you owe suppliers
+  cashInHand: string;       // balance across cash/bank accounts
+  recentInvoices: Array<{ invoiceNumber: string; partyName: string; totalAmount: string; status: string }>;
+}
+```
+
+---
+
+## Available Resources
+
+MCP resources are read-only data snapshots that AI agents can load into their context window without making a tool call. Hisaabo exposes the following resources:
+
+| Resource URI | Description |
+|---|---|
+| `business://current` | Active business profile: name, GSTIN, GST registration type, currency, financial year start |
+| `parties://customers` | Top 50 customers sorted by name (includes id, name, phone, outstanding balance) |
+| `parties://suppliers` | Top 50 suppliers sorted by name |
+| `items://inventory` | Up to 100 inventory items with current stock levels, prices, and HSN codes |
+| `invoices://recent` | Last 10 sale invoices (quick status overview) |
+| `dashboard://summary` | Current financial year summary: total sales, receivables, payables, cash position |
+
+**Tip for AI agent developers:** Load `parties://customers` and `items://inventory` at the start of a conversation to seed the agent's context. This lets Claude resolve "Gupta Enterprises" to the correct party UUID and "Basmati Rice 25kg" to the correct item UUID before calling `invoice_create` — without an extra round-trip tool call.
+
+---
+
+## Security Considerations
+
+**Use a limited-privilege account** — Create a dedicated Hisaabo user account for MCP access with the lowest role needed (e.g. `accountant` for read-only reporting, `seller` for invoice creation). The MCP server inherits the permissions of the authenticated user.
+
+**Token rotation** — The `HISAABO_TOKEN` is a session token with a 30-day expiry. Set a calendar reminder to refresh it before it expires: `hisaabo login --api-url ... && hisaabo whoami --json` to get a new token.
+
+**Do not share tokens** — Each Claude Desktop instance or OpenClaw agent should use its own session token tied to a purpose-specific user account. This makes it possible to revoke one agent's access without affecting others.
+
+**Audit log** — All tool calls made through the MCP server are recorded in Hisaabo's audit log under `x-client-type: mcp`. You can review them under **Settings > Audit Log**.
+
+---
+
+## Related Documentation
+
+- [AI & Automation overview](/ai/)
+- [CLI Tool](/ai/cli/)
+- [Integrations](/ai/integrations/) — WhatsApp, Slack, Google Sheets, Shiprocket, and more
+- [API Reference](https://api-docs.hisaabo.in)
+- [Settings > API Keys](/settings/) — generating and managing API keys

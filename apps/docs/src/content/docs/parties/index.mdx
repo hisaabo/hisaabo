@@ -1,0 +1,103 @@
+---
+title: Parties — Customers & Suppliers
+description: Manage customers and suppliers in Hisaabo. Add parties, track GSTIN, set credit limits, and view running balance statements.
+sidebar:
+  order: 1
+---
+
+A **party** in Hisaabo is any person or company you do business with — either a customer (you sell to them) or a supplier (you buy from them). All invoices and payments are linked to a party.
+
+## Adding a party
+
+Go to **Parties** in the left navigation and click **New Party**.
+
+### Required fields
+
+| Field | Notes |
+|---|---|
+| **Name** | Trading name. Must be unique within your business (case-insensitive). |
+| **Type** | `Customer` or `Supplier` |
+
+### Optional fields
+
+| Field | Notes |
+|---|---|
+| Phone | Mobile or landline |
+| Email | Used for sending invoices |
+| GSTIN | 15-character GST Identification Number. Set this to enable B2B reporting in GSTR-1. |
+| PAN | 10-character Permanent Account Number |
+| State | State name for GST state detection |
+| State Code | 2-digit GST state code. Takes priority over state name for intra/inter-state determination. |
+| Billing Address | Invoice billing address |
+| Shipping Address | Delivery address (if different from billing) |
+| City, Pincode | Address details |
+| Opening Balance | Amount the party owes you (positive) or you owe them (negative) as of the day you start using Hisaabo |
+| Credit Period (days) | Number of days before invoices become overdue. Used to auto-set due dates. |
+| Credit Limit | Maximum outstanding amount allowed. Shown as a warning (not a hard block). |
+| Category | Free-text category for grouping parties |
+| Contact Person Name | Name of your key contact at the party |
+| Contact Person DOB | Date of birth of the contact person (useful for sending birthday greetings) |
+| Bank Account Number / IFSC / Bank Name | Supplier's bank details, useful for making payments |
+
+## Party types
+
+A party is either a **customer** or a **supplier**, but the same entity can be both. For example, if you sell goods to a company and also buy raw materials from them, create two separate party records — one as a customer and one as a supplier. This keeps the ledgers clean.
+
+## Opening balance
+
+The opening balance represents the amount outstanding before you started using Hisaabo.
+
+- **Positive opening balance**: The party owes you money (receivable). For example, if a customer had an unpaid invoice of ₹5,000 when you migrated to Hisaabo, enter `5000`.
+- **Negative opening balance**: You owe the party money (payable). For example, if you had an outstanding bill to a supplier of ₹12,000, enter `-12000`.
+
+The opening balance is included in the party's running balance calculation.
+
+## Viewing a party's ledger
+
+Open a party and click the **Ledger** tab. The ledger shows every transaction affecting the party's balance in chronological order:
+
+| Column | Meaning |
+|---|---|
+| Date | Transaction date |
+| Document | Invoice number or payment number |
+| Type | Invoice (Dr/Cr) or Payment |
+| Debit | Amount the party owes you |
+| Credit | Amount you paid or received |
+| Balance | Running balance after this transaction |
+
+The ledger starts with the opening balance entry, then lists invoices and payments. The final row shows the current outstanding balance.
+
+:::tip[Positive vs negative balance]
+A positive running balance means the party owes you money. A negative running balance means you owe them money. For suppliers, a negative balance (you owe them) is normal.
+:::
+
+## Filtering the party list
+
+From the Parties page you can filter by:
+- **Type**: Show only customers or only suppliers
+- **Search**: Filter by name (partial match)
+- **Category**: Filter by party category
+
+## Editing a party
+
+Open the party and click **Edit**. All fields can be updated. Note:
+- Changing the state code takes effect on future invoices only; existing invoices are not recalculated.
+- You cannot change a party's type (customer vs supplier) after it has invoices. Create a new party instead.
+
+## Deleting a party
+
+A party cannot be deleted if it has any invoices or payments linked to it (the database enforces this with a `RESTRICT` foreign key). To remove a party, first delete or cancel all associated invoices and payments.
+
+## Frequently asked questions
+
+**I need to track the same company as both a customer and a supplier. How?**
+Create two separate party records — one with type "Customer" and one with type "Supplier". Name them slightly differently to distinguish them (for example, "ABC Ltd - Customer" and "ABC Ltd - Supplier").
+
+**Can I bulk import parties from a spreadsheet?**
+Yes. See [Import Data](/getting-started/import-data) for CSV import instructions. Duplicate names (case-insensitive) are skipped automatically.
+
+**Does Hisaabo validate GSTIN format?**
+Yes. Hisaabo validates the 15-character GSTIN format using a regex pattern (2-digit state code, PAN structure, entity code, and check character position). However, it does not validate the checksum digit. Enter the GSTIN exactly as it appears on the party's registration certificate.
+
+**What is the difference between billing address and shipping address?**
+The billing address is the legal registered address printed on the invoice. The shipping address is where goods are physically delivered. If both are the same, you only need to fill in the billing address.

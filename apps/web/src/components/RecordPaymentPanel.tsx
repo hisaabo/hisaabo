@@ -90,7 +90,7 @@ export function RecordPaymentPanel({
   );
 
   const { data: defaultAccountData } = trpc.payment.defaultAccount.useQuery(
-    undefined,
+    partyId ? { partyId } : undefined,
     { enabled: open && !isEditMode }
   );
 
@@ -410,7 +410,41 @@ export function RecordPaymentPanel({
         {/* ── Unpaid Invoices ─────────────────────────────────────────────── */}
         {partyId && (
           <div>
-            <p className="label mb-2">Unpaid Invoices</p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="label">Unpaid Invoices</p>
+              {unpaidInvoices && unpaidInvoices.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allSelected =
+                      unpaidInvoices.length > 0 &&
+                      unpaidInvoices.every((inv) => checkedInvoices.has(inv.id));
+                    if (allSelected) {
+                      // Clear all
+                      setCheckedInvoices(new Set());
+                      setAllocations({});
+                      setAmountOverridden(false);
+                    } else {
+                      // Select all — allocate each invoice's full balance
+                      const nextChecked = new Set<string>();
+                      const nextAllocations: Record<string, string> = {};
+                      for (const inv of unpaidInvoices) {
+                        nextChecked.add(inv.id);
+                        nextAllocations[inv.id] = inv.balance;
+                      }
+                      setCheckedInvoices(nextChecked);
+                      setAllocations(nextAllocations);
+                      setAmountOverridden(false);
+                    }
+                  }}
+                  className="text-[11px] font-medium text-brand-600 hover:text-brand-700 dark:hover:text-brand-400 transition-colors"
+                >
+                  {unpaidInvoices.every((inv) => checkedInvoices.has(inv.id))
+                    ? "Clear All"
+                    : "Select All"}
+                </button>
+              )}
+            </div>
             <div className="rounded-xl border border-border-light overflow-hidden bg-surface-0">
               {loadingInvoices ? (
                 <div className="p-4 space-y-3 animate-pulse">

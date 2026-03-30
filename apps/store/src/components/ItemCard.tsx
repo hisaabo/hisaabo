@@ -1,10 +1,12 @@
+import { useState, useMemo } from "react";
 import type { StoreItem, CartItem } from "../types";
+import { cartItemKey } from "../types";
 
 interface ItemCardProps {
   item: StoreItem;
   cart: CartItem[];
-  onAdd: (item: StoreItem) => void;
-  onRemove: (itemId: string) => void;
+  onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
+  onRemoveFromCart: (key: string) => void;
   currency: string;
   accentColor?: string;
 }
@@ -12,22 +14,123 @@ interface ItemCardProps {
 export function ItemCard({
   item,
   cart,
-  onAdd,
-  onRemove,
+  onAddToCart,
+  onRemoveFromCart,
   currency,
   accentColor,
 }: ItemCardProps) {
-  const cartEntry = cart.find((c) => c.item.id === item.id);
-  const qty = cartEntry?.quantity ?? 0;
   const symbol = currency === "INR" ? "\u20B9" : currency;
   const accent = accentColor || "var(--store-accent)";
-  const outOfStock = !item.inStock && !item.lowStock;
-  const lowStock = item.lowStock === true;
+  const mode = item.itemMode || "simple";
+
+  // --- Alt units state ---
+  const [selectedUnitIndex, setSelectedUnitIndex] = useState(-1); // -1 = base unit
+
+  // --- Variant state ---
+  const [selectedAttrs, setSelectedAttrs] = useState<Record<string, string>>({});
+
+  // Derive effective price + stock for the current selection
+  const { displayPrice, displayUnit, isOutOfStock, isLowStock, selectedVariant, cartEntry } =
+    useMemo(() => {
+      let displayPrice = item.price;
+      let displayUnit = item.unit;
+      let isOutOfStock = !item.inStock && !item.lowStock;
+      let isLowStock = item.lowStock === true;
+      let selectedVariant: NonNullable<StoreItem["variants"]>[number] | null = null;
+
+      if (mode === "alt_units" && selectedUnitIndex >= 0 && item.unitVariants?.[selectedUnitIndex]) {
+        const uv = item.unitVariants[selectedUnitIndex];
+        displayPrice = uv.price;
+        displayUnit = uv.unit;
+      }
+
+      if (mode === "variants" && item.variantAttributes && item.variants) {
+        const allSelected = item.variantAttributes.every((a) => selectedAttrs[a]);
+        if (allSelected) {
+          const match = item.variants.find((v) =>
+            item.variantAttributes!.every((a) => v.attributes[a] === selectedAttrs[a])
+          );
+          if (match) {
+            selectedVariant = match;
+            displayPrice = match.price;
+            isOutOfStock = !match.inStock;
+            isLowStock = false;
+          } else {
+            // No matching variant for this combination
+            isOutOfStock = true;
+            isLowStock = false;
+          }
+        }
+      }
+
+      // Find matching cart entry
+      let cartEntry: CartItem | undefined;
+      if (mode === "simple") {
+        cartEntry = cart.find((c) => cartItemKey(c) === item.id);
+      } else if (mode === "alt_units") {
+        const unitKey =
+          selectedUnitIndex >= 0 && item.unitVariants?.[selectedUnitIndex]
+            ? `${item.id}::u::${item.unitVariants[selectedUnitIndex].unit}`
+            : item.id;
+        cartEntry = cart.find((c) => cartItemKey(c) === unitKey);
+      } else if (mode === "variants" && selectedVariant) {
+        const variantKey = `${item.id}::v::${selectedVariant.id}`;
+        cartEntry = cart.find((c) => cartItemKey(c) === variantKey);
+      }
+
+      return { displayPrice, displayUnit, isOutOfStock, isLowStock, selectedVariant, cartEntry };
+    }, [item, cart, mode, selectedUnitIndex, selectedAttrs]);
+
+  const qty = cartEntry?.quantity ?? 0;
+
+  // Can the user add to cart?
+  const canAdd =
+    mode === "simple" ||
+    mode === "alt_units" ||
+    (mode === "variants" && selectedVariant !== null);
+
+  function handleAdd() {
+    if (!canAdd || isOutOfStock) return;
+
+    if (mode === "alt_units" && selectedUnitIndex >= 0 && item.unitVariants?.[selectedUnitIndex]) {
+      const uv = item.unitVariants[selectedUnitIndex];
+      onAddToCart({
+        item,
+        selectedUnit: uv.unit,
+        conversionFactor: uv.conversionFactor,
+        effectivePrice: uv.price,
+      });
+    } else if (mode === "variants" && selectedVariant) {
+      onAddToCart({
+        item,
+        selectedVariantId: selectedVariant.id,
+        effectivePrice: selectedVariant.price,
+      });
+    } else {
+      // Simple or alt_units with base unit selected
+      onAddToCart({
+        item,
+        effectivePrice: item.price,
+      });
+    }
+  }
+
+  function handleRemove() {
+    if (cartEntry) {
+      onRemoveFromCart(cartItemKey(cartEntry));
+    }
+  }
+
+  // Determine if variant selection is incomplete
+  const variantSelectionIncomplete =
+    mode === "variants" &&
+    item.variantAttributes &&
+    !item.variantAttributes.every((a) => selectedAttrs[a]);
 
   return (
     <div
       className="product-card"
-      style={{ opacity: outOfStock ? 0.55 : 1 }}
+      style={{ opacity: isOutOfStock && !variantSelectionIncomplete ? 0.55 : 1 }}
     >
       <div className="flex flex-col p-3.5 flex-1">
         {/* Category tag */}
@@ -58,6 +161,114 @@ export function ItemCard({
           </p>
         )}
 
+        {/* Alt-unit selector pills */}
+        {mode === "alt_units" && item.unitVariants && item.unitVariants.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2.5">
+            <button
+              onClick={() => setSelectedUnitIndex(-1)}
+              className="unit-pill"
+              style={
+                selectedUnitIndex === -1
+                  ? { background: accent, color: "white", borderColor: accent }
+                  : {
+                      background: "var(--store-bg)",
+                      color: "var(--store-text-secondary)",
+                      borderColor: "var(--store-border)",
+                    }
+              }
+            >
+              <span className="text-[10px] font-semibold">{item.unit}</span>
+              <span className="text-[10px] font-bold">{symbol}{formatPrice(item.price)}</span>
+            </button>
+            {item.unitVariants.map((uv, i) => (
+              <button
+                key={uv.unit}
+                onClick={() => setSelectedUnitIndex(i)}
+                className="unit-pill"
+                style={
+                  selectedUnitIndex === i
+                    ? { background: accent, color: "white", borderColor: accent }
+                    : {
+                        background: "var(--store-bg)",
+                        color: "var(--store-text-secondary)",
+                        borderColor: "var(--store-border)",
+                      }
+                }
+              >
+                <span className="text-[10px] font-semibold">{uv.unit}</span>
+                <span className="text-[10px] font-bold">{symbol}{formatPrice(uv.price)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Variant attribute selectors */}
+        {mode === "variants" && item.variantAttributes && item.variants && (
+          <div className="mt-2.5 space-y-2">
+            {item.variantAttributes.map((attr) => {
+              // Get unique values for this attribute
+              const values = Array.from(
+                new Set(item.variants!.map((v) => v.attributes[attr]).filter(Boolean))
+              );
+              return (
+                <div key={attr}>
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-wider block mb-1"
+                    style={{ color: "var(--store-muted)" }}
+                  >
+                    {attr}
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {values.map((val) => {
+                      const isSelected = selectedAttrs[attr] === val;
+                      // Check if this value is available with current other selections
+                      const isAvailable = isValueAvailable(
+                        item.variants!,
+                        item.variantAttributes!,
+                        selectedAttrs,
+                        attr,
+                        val
+                      );
+                      return (
+                        <button
+                          key={val}
+                          onClick={() => {
+                            setSelectedAttrs((prev) => ({
+                              ...prev,
+                              [attr]: prev[attr] === val ? "" : val,
+                            }));
+                          }}
+                          className="variant-pill"
+                          disabled={!isAvailable}
+                          style={
+                            isSelected
+                              ? { background: accent, color: "white", borderColor: accent }
+                              : !isAvailable
+                                ? {
+                                    background: "var(--store-bg-secondary)",
+                                    color: "var(--store-muted)",
+                                    borderColor: "var(--store-border-light)",
+                                    opacity: 0.5,
+                                    cursor: "not-allowed",
+                                  }
+                                : {
+                                    background: "var(--store-bg)",
+                                    color: "var(--store-text-secondary)",
+                                    borderColor: "var(--store-border)",
+                                  }
+                          }
+                        >
+                          {val}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Spacer pushes price + action to bottom */}
         <div className="flex-1 min-h-3" />
 
@@ -68,25 +279,32 @@ export function ItemCard({
               className="text-[15px] font-bold tracking-tight leading-tight"
               style={{ color: "var(--store-text)" }}
             >
-              {symbol}{formatPrice(item.price)}
+              {symbol}{formatPrice(displayPrice)}
             </p>
             <p
               className="text-[10px] mt-0.5"
               style={{ color: "var(--store-muted)" }}
             >
-              per {item.unit}
+              per {displayUnit}
             </p>
           </div>
 
           {/* Action */}
-          {outOfStock ? (
+          {isOutOfStock && !variantSelectionIncomplete ? (
             <span className="badge badge-sold-out">Sold out</span>
-          ) : lowStock ? (
+          ) : variantSelectionIncomplete ? (
+            <span
+              className="text-[10px] font-medium"
+              style={{ color: "var(--store-muted)" }}
+            >
+              Select options
+            </span>
+          ) : isLowStock ? (
             <div className="flex flex-col items-end gap-1">
               <span className="badge badge-low-stock">Low stock</span>
               {qty === 0 ? (
                 <button
-                  onClick={() => onAdd(item)}
+                  onClick={handleAdd}
                   className="add-btn"
                   style={{ borderColor: accent, color: accent }}
                   aria-label={`Add ${item.name}`}
@@ -97,14 +315,14 @@ export function ItemCard({
                 <QuantityStepper
                   qty={qty}
                   accent={accent}
-                  onAdd={() => onAdd(item)}
-                  onRemove={() => onRemove(item.id)}
+                  onAdd={handleAdd}
+                  onRemove={handleRemove}
                 />
               )}
             </div>
           ) : qty === 0 ? (
             <button
-              onClick={() => onAdd(item)}
+              onClick={handleAdd}
               className="add-btn"
               style={{ borderColor: accent, color: accent }}
               aria-label={`Add ${item.name}`}
@@ -115,14 +333,35 @@ export function ItemCard({
             <QuantityStepper
               qty={qty}
               accent={accent}
-              onAdd={() => onAdd(item)}
-              onRemove={() => onRemove(item.id)}
+              onAdd={handleAdd}
+              onRemove={handleRemove}
             />
           )}
         </div>
       </div>
     </div>
   );
+}
+
+/** Check if a variant attribute value is available given current selections on other attributes */
+function isValueAvailable(
+  variants: NonNullable<StoreItem["variants"]>,
+  allAttributes: string[],
+  selectedAttrs: Record<string, string>,
+  currentAttr: string,
+  value: string
+): boolean {
+  // A value is available if there exists at least one in-stock variant
+  // that matches the current selections for OTHER attributes AND has this value
+  return variants.some((v) => {
+    if (v.attributes[currentAttr] !== value) return false;
+    if (!v.inStock) return false;
+    for (const attr of allAttributes) {
+      if (attr === currentAttr) continue;
+      if (selectedAttrs[attr] && v.attributes[attr] !== selectedAttrs[attr]) return false;
+    }
+    return true;
+  });
 }
 
 function QuantityStepper({

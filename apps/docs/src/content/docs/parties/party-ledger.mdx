@@ -1,0 +1,82 @@
+---
+title: Party Ledger
+description: View a running balance statement for any customer or supplier. Understand debits, credits, and outstanding balance calculation.
+sidebar:
+  order: 2
+---
+
+The party ledger is a chronological statement of all transactions with a specific customer or supplier. It gives you the full picture of what is owed and by whom.
+
+## Opening the ledger
+
+1. Go to **Parties** in the left navigation.
+2. Click on a party name to open their profile.
+3. Click the **Ledger** tab.
+
+## Reading the ledger
+
+Each row in the ledger represents one transaction. The columns are:
+
+| Column | Meaning |
+|---|---|
+| Date | The date of the transaction (invoice date or payment date) |
+| Document | Invoice number or payment number, clickable to open the full record |
+| Type | `Opening Balance`, `Invoice`, or `Payment` |
+| Debit | Money the party owes you (increases outstanding balance) |
+| Credit | Money received or paid (decreases outstanding balance) |
+| Balance | Running balance after this transaction |
+
+### Opening balance entry
+
+The first row is always the **Opening Balance** entry. This is the balance you entered when creating the party — the amount outstanding before you started using Hisaabo.
+
+### Invoice rows
+
+Each invoice appears as a debit entry (for sale invoices — you are owed money) or a credit entry (for purchase invoices — you owe money to the supplier).
+
+### Payment rows
+
+Each payment appears as a credit entry against the party (you received money, so it reduces the receivable). For supplier payments, it appears as a debit (you paid out, reducing the payable).
+
+## Outstanding balance
+
+The final balance in the ledger is the current outstanding amount:
+
+- **Positive**: The party owes you money. For a customer, this means they have unpaid invoices.
+- **Negative**: You owe the party money. For a supplier, this means you have unpaid bills.
+- **Zero**: All invoices are fully paid — no outstanding balance.
+
+## Filtering the ledger
+
+You can filter the ledger by date range to see transactions within a specific period. The opening balance is always shown at the top regardless of the date filter.
+
+## Exporting the ledger
+
+Click **Export** on the ledger view to download the statement as a CSV file. The CSV contains all visible rows including the opening balance entry.
+
+## How the balance is calculated
+
+The running balance is computed as:
+
+```
+balance = openingBalance
+         + sum(sale invoice totals)
+         - sum(purchase invoice totals)
+         - sum(payments received from party)
+         + sum(payments made to supplier)
+```
+
+Payment allocations (when a single payment covers multiple invoices) are handled at the invoice level — each invoice's `amountPaid` field tracks how much of its total has been paid.
+
+## Frequently asked questions
+
+**My ledger shows a large outstanding balance, but I know the customer has paid everything. What is wrong?**
+This usually means the payments were not recorded against the correct party, or the opening balance was entered incorrectly. Check:
+1. Are all payments linked to this party? Open the Payments section and filter by party.
+2. Is the opening balance correct? If the customer had no balance when you started using Hisaabo, it should be `0`.
+
+**The ledger shows a negative balance for a customer. Is that possible?**
+Yes. It means you have received more money from the customer than the total of their invoices — an overpayment or advance. You may want to apply the excess as a credit against their next invoice.
+
+**How do I print or share the ledger statement with a party?**
+Export the ledger as CSV and format it in a spreadsheet tool (Excel or Google Sheets) before sharing. PDF export of the ledger statement is not currently supported in the app.

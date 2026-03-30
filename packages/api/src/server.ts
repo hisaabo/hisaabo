@@ -13,7 +13,7 @@ import { appRouter } from "./router.js";
 import { createContext } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 const app = new Hono();
@@ -27,25 +27,76 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").spl
 app.use("*", cors({
   origin: allowedOrigins,
   credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id"],
+  allowHeaders: ["Content-Type", "x-business-id", "Authorization"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
 }));
 
-// ── Rate limiting (in-memory, per IP) ─────────────────────────
-// Authenticated users get 600 req/min (imports can burst).
-// Unauthenticated users get 60 req/min (brute force protection).
+// ── Safe IP extraction ─────────────────────────────────────────
+// x-forwarded-for is client-controlled when not behind a trusted proxy.
+// Trusting it directly allows anyone to spoof their IP and bypass rate limits.
+// Cloudflare's cf-connecting-ip is stripped of spoofed values by the CDN layer.
+// When behind a reverse proxy we take the LAST entry in x-forwarded-for
+// (appended by the proxy itself), not the first (which the client can forge).
+function getClientIp(c: Context): string {
+  // Cloudflare provides the real client IP — trust it unconditionally
+  const cfIp = c.req.header("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  // Behind a reverse proxy take the LAST entry — the proxy's own addition
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+
+  return "unknown";
+}
+
+// ── Rate limiting (in-memory, per IP, origin-aware) ───────────
+// Same-origin (.hisaabo.in) requests get higher limits (own apps).
+// External/third-party origins get strict limits.
+// Unauthenticated external requests get the lowest tier.
 const rateMap = new Map<string, { count: number; reset: number }>();
+
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
+
+function isSameOrigin(c: Context): boolean {
+  const origin = c.req.header("origin") || "";
+  // Same-origin: no Origin header (server-side calls), or matches configured CORS origins
+  if (!origin) return true;
+  if (CORS_ORIGINS.some((allowed) => origin === allowed)) return true;
+  // Match *.hisaabo.in subdomains
+  if (/^https?:\/\/([a-z0-9-]+\.)?hisaabo\.in$/i.test(origin)) return true;
+  return false;
+}
+
+// Rate limits per minute:
+// Same-origin authenticated: 300 (normal app usage — higher to accommodate
+//   post-import cache invalidation bursts and dashboard queries)
+// Same-origin unauthenticated: 60 (login attempts, public pages)
+// External authenticated: 120 (API consumers with valid session)
+// External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
-  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
-  const hasSession = c.req.header("cookie")?.includes("session_id=");
-  const limit = hasSession ? 600 : 60;
-  const key = hasSession ? `auth:${ip}` : `anon:${ip}`;
+  const ip = getClientIp(c);
+  const hasSession = c.req.header("cookie")?.includes("session_id=")
+    || c.req.header("authorization")?.startsWith("Bearer ");
+  const sameOrigin = isSameOrigin(c);
+
+  let limit: number;
+  let tier: string;
+  if (sameOrigin && hasSession) { limit = 300; tier = "same-auth"; }
+  else if (sameOrigin) { limit = 60; tier = "same-anon"; }
+  else if (hasSession) { limit = 120; tier = "ext-auth"; }
+  else { limit = 10; tier = "ext-anon"; }
+
+  const key = `${tier}:${ip}`;
   const now = Date.now();
   const entry = rateMap.get(key);
   if (!entry || now > entry.reset) {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
   } else if (entry.count >= limit) {
+    c.header("Retry-After", "60");
     return c.json({ error: "Too many requests" }, 429);
   } else {
     entry.count++;
@@ -63,30 +114,70 @@ setInterval(() => {
 
 // ── Health check ───────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+// ONCE health check — lenient during PG handover (rolling deploy)
+app.get("/up", async (c) => {
+  try {
+    await controlDb.execute(sql`SELECT 1`);
+    return c.text("OK", 200);
+  } catch {
+    // During rolling deploy, PG may be transitioning between containers.
+    // Allow 30s grace period for the handover to complete.
+    if (process.uptime() < 30) {
+      return c.text("WARMING", 200);
+    }
+    return c.text("PG_DOWN", 503);
+  }
+});
 
-async function generatePDFInWorker(data: any, format: "a5-landscape" | "a4" | "thermal"): Promise<Buffer> {
-  const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "lib/pdf-worker.js");
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(workerPath, { workerData: { data, format } });
-    worker.on("message", resolve);
-    worker.on("error", reject);
-    worker.on("exit", (code) => {
-      if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): Promise<Buffer> {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const jsPath = path.resolve(dir, "lib/pdf-worker.js");
+  const fs = await import("node:fs");
+
+  if (fs.existsSync(jsPath)) {
+    // Production: built .js worker exists, run in a worker thread
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(jsPath, { workerData: { data, format } });
+      worker.on("message", resolve);
+      worker.on("error", reject);
+      worker.on("exit", (code) => {
+        if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+      });
     });
+  }
+
+  // Dev: no built worker, run in-process (tsx doesn't support worker threads well)
+  const { generateInvoicePDF } = await import("./lib/invoice-pdf.js");
+  return new Promise((resolve, reject) => {
+    const doc = generateInvoicePDF(data, format);
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    doc.end();
   });
+}
+
+// ── Shared auth helper for non-tRPC endpoints ─────────────────
+function getSessionIdFromRequest(req: Request): string | null {
+  const cookies = req.headers.get("cookie") || "";
+  const match = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+  if (match) return decodeURIComponent(match[1]);
+  const auth = req.headers.get("authorization");
+  if (auth?.startsWith("Bearer ")) return auth.slice(7);
+  return null;
 }
 
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
   const invoiceId = c.req.param("id");
-  const format = (c.req.query("format") || "a5-landscape") as "a5-landscape" | "a4" | "thermal";
+  const rawFormat = c.req.query("format") || "a5";
+  // Accept legacy "a5-landscape" param from older clients and remap to "a5"
+  const format = (rawFormat === "a5-landscape" ? "a5" : rawFormat) as "a5" | "a4" | "thermal";
 
   // Auth check — look up session in control DB
-  const cookies = c.req.header("cookie") || "";
-  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
-
-  const sessionId = decodeURIComponent(sessionMatch[1]);
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
 
   const [sessionRow] = await controlDb
     .select({ userId: sessions.userId, tenantId: sessions.tenantId })
@@ -98,7 +189,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
 
   // Verify tenant is active
-  const [tenant] = await controlDb.select({ status: tenants.status })
+  const [tenant] = await controlDb.select({ status: tenants.status, plan: tenants.plan })
     .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
   if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
 
@@ -107,6 +198,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
 
   // Get tenant DB for invoice data
   const db = await getTenantDb(sessionRow.tenantId);
+
+  // Verify the business exists in this tenant (prevents cross-tenant access)
+  const [bizCheck] = await db.select({ id: businesses.id })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  if (!bizCheck) return c.json({ error: "Business not found" }, 403);
 
   // Fetch invoice with party and business
   const [invoice] = await db.select().from(invoices)
@@ -118,12 +216,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
 
-  // Fetch HSN codes for linked items
+  // Fetch HSN codes and base units for linked items
   const itemIds = lineItems.map(li => li.itemId).filter(Boolean) as string[];
-  const itemHsns = itemIds.length > 0
-    ? await db.select({ id: items.id, hsn: items.hsn }).from(items).where(inArray(items.id, itemIds))
+  const itemMeta = itemIds.length > 0
+    ? await db.select({ id: items.id, hsn: items.hsn, unit: items.unit }).from(items).where(inArray(items.id, itemIds))
     : [];
-  const hsnMap = new Map(itemHsns.map(i => [i.id, i.hsn || ""]));
+  const hsnMap = new Map(itemMeta.map(i => [i.id, i.hsn || ""]));
+  const itemUnitMap = new Map(itemMeta.map(i => [i.id, i.unit]));
 
   // Fetch bank accounts for payment info on invoice
   const bizBankAccounts = await db.select().from(bankAccounts)
@@ -171,6 +270,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     lineItems: lineItems.map((li) => ({
       description: li.description,
       quantity: li.quantity,
+      unit: li.selectedUnit || (li.itemId ? itemUnitMap.get(li.itemId) : undefined) || undefined,
       unitPrice: li.unitPrice,
       taxPercent: li.taxPercent,
       taxAmount: li.taxAmount,
@@ -194,13 +294,15 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     businessStateCode: biz.stateCode || undefined,
     partyStateCode: party.stateCode || undefined,
     lineItemHsn: lineItems.map(li => li.itemId ? (hsnMap.get(li.itemId) || "") : ""),
+    isPaidPlan: tenant.plan !== "free",
+    status: invoice.status,
   };
 
   const pdfBuffer = await generatePDFInWorker(pdfData, format);
   return new Response(new Uint8Array(pdfBuffer), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+      "Content-Disposition": `attachment; filename="${invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf"`,
     },
   });
 });
@@ -211,11 +313,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   const partyId = c.req.param("id");
 
   // Auth check — same pattern as invoice PDF
-  const cookies = c.req.header("cookie") || "";
-  const sessionMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (!sessionMatch) return c.json({ error: "Unauthorized" }, 401);
-
-  const sessionId = decodeURIComponent(sessionMatch[1]);
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
 
   const [sessionRow] = await controlDb
     .select({ userId: sessions.userId, tenantId: sessions.tenantId })
@@ -234,6 +333,13 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   if (!businessId) return c.json({ error: "No business selected" }, 400);
 
   const db = await getTenantDb(sessionRow.tenantId);
+
+  // Verify the business exists in this tenant (prevents cross-tenant access)
+  const [bizOwnerCheck] = await db.select({ id: businesses.id })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  if (!bizOwnerCheck) return c.json({ error: "Business not found" }, 403);
 
   // Validate party belongs to this business
   const [party] = await db.select().from(parties)
@@ -346,7 +452,13 @@ const slugCache = new Map<string, { tenantId: string; businessId: string; expire
 // ── Cloudflare Turnstile verification ────────────────────────
 async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
   const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) return true; // Skip in dev if not configured
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[turnstile] CRITICAL: TURNSTILE_SECRET_KEY not set in production!");
+      return false;
+    }
+    return true; // Allow in dev
+  }
 
   const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
     method: "POST",
@@ -489,6 +601,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
       inStock: sql<boolean>`(${items.stockQuantity})::numeric > 0`,
       stockQty: items.stockQuantity,
       sortOrder: items.storeSortOrder,
+      itemMode: items.itemMode,
+      unitVariants: items.unitVariants,
+      variantAttributes: items.variantAttributes,
     }).from(items)
       .where(and(...conditions))
       .orderBy(items.storeSortOrder, items.name)
@@ -498,17 +613,95 @@ app.get("/store/:slug/catalog.json", async (c) => {
       .where(and(...conditions)),
   ]);
 
+  // Fetch store-enabled variants for any variant-mode items in this page
+  const variantItemIds = catalog
+    .filter((i) => i.itemMode === "variants")
+    .map((i) => i.id);
+
+  const variantRows = variantItemIds.length > 0
+    ? await db.select({
+        id: itemVariants.id,
+        itemId: itemVariants.itemId,
+        attributeValues: itemVariants.attributeValues,
+        salePrice: itemVariants.salePrice,
+        storePrice: itemVariants.storePrice,
+        stockQuantity: itemVariants.stockQuantity,
+        storeEnabled: itemVariants.storeEnabled,
+      }).from(itemVariants)
+        .where(and(
+          inArray(itemVariants.itemId, variantItemIds),
+          eq(itemVariants.storeEnabled, true),
+        ))
+    : [];
+
+  // Group variants by parent item
+  const variantsByItem = new Map<string, typeof variantRows>();
+  for (const v of variantRows) {
+    const arr = variantsByItem.get(v.itemId) || [];
+    arr.push(v);
+    variantsByItem.set(v.itemId, arr);
+  }
+
   const categories = [...new Set(
     catalog.map((i) => i.category).filter(Boolean) as string[]
   )];
 
   // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
   const allowNeg = biz.storeAllowNegativeStock;
-  const transformedItems = catalog.map(({ stockQty, ...rest }) => ({
-    ...rest,
-    inStock: rest.inStock || allowNeg,
-    lowStock: allowNeg && !rest.inStock,
-  }));
+  const transformedItems = catalog
+    .filter((item) => {
+      // Variant items must have at least one store-enabled variant to appear
+      if (item.itemMode === "variants") {
+        const variants = variantsByItem.get(item.id);
+        return variants && variants.length > 0;
+      }
+      return true;
+    })
+    .map(({ stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
+      const base = {
+        ...rest,
+        inStock: rest.inStock || allowNeg,
+        lowStock: allowNeg && !rest.inStock,
+      };
+
+      if (rest.itemMode === "alt_units" && rawUnitVariants) {
+        // Expose unit variants with store-safe prices only
+        return {
+          ...base,
+          unitVariants: rawUnitVariants.map((uv) => ({
+            unit: uv.unit,
+            conversionFactor: uv.conversionFactor,
+            price: uv.salePrice,
+          })),
+        };
+      }
+
+      if (rest.itemMode === "variants") {
+        const variants = variantsByItem.get(rest.id) || [];
+        const variantData = variants.map((v) => ({
+          id: v.id,
+          attributes: v.attributeValues,
+          price: v.storePrice ?? v.salePrice ?? "0",
+          inStock: parseFloat(v.stockQuantity) > 0 || allowNeg,
+        }));
+        // Price = lowest variant price (for display/sorting)
+        const prices = variantData.map((v) => parseFloat(v.price));
+        const lowestPrice = prices.length > 0 ? Math.min(...prices).toFixed(2) : base.price;
+        // inStock = true if ANY variant is in stock
+        const anyInStock = variantData.some((v) => v.inStock);
+
+        return {
+          ...base,
+          price: lowestPrice,
+          inStock: anyInStock,
+          lowStock: allowNeg && !anyInStock,
+          variantAttributes: rawVarAttrs || [],
+          variants: variantData,
+        };
+      }
+
+      return base;
+    });
 
   return c.json(
     {
@@ -559,7 +752,7 @@ app.post("/store/:slug/identify", async (c) => {
   }
 
   // Validate Turnstile
-  const ip = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const ip = getClientIp(c) || null;
   const valid = await verifyTurnstile(turnstileToken, ip);
   if (!valid) return c.json({ error: "Verification failed" }, 403);
 
@@ -618,7 +811,7 @@ app.post("/store/:slug/order", async (c) => {
   } = body as Record<string, unknown>;
 
   // Validate Turnstile for order submission
-  const orderIp = c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || null;
+  const orderIp = getClientIp(c) || null;
   const turnstileValid = await verifyTurnstile(
     typeof orderTurnstileToken === "string" ? orderTurnstileToken : "",
     orderIp,
@@ -641,6 +834,12 @@ app.post("/store/:slug/order", async (c) => {
     if (typeof item.itemId !== "string") return c.json({ error: "Each item must have an itemId" }, 400);
     const qty = Number(item.quantity);
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: "Each item must have a positive quantity" }, 400);
+    // Optional variant/unit fields
+    if (item.variantId !== undefined && typeof item.variantId !== "string") return c.json({ error: "variantId must be a string" }, 400);
+    if (item.selectedUnit !== undefined && typeof item.selectedUnit !== "string") return c.json({ error: "selectedUnit must be a string" }, 400);
+    if (item.conversionFactor !== undefined && (!Number.isFinite(Number(item.conversionFactor)) || Number(item.conversionFactor) <= 0)) {
+      return c.json({ error: "conversionFactor must be a positive number" }, 400);
+    }
   }
 
   // Rate limit: 5 orders per phone per minute
@@ -678,7 +877,8 @@ app.post("/store/:slug/order", async (c) => {
   if (!biz) return c.json({ error: "Store not found" }, 404);
 
   // Validate items exist and are store-enabled
-  const itemIds = (orderItems as Array<{ itemId: string; quantity: number }>).map((i) => i.itemId);
+  type OrderItemInput = { itemId: string; quantity: number; variantId?: string; selectedUnit?: string; conversionFactor?: number };
+  const itemIds = (orderItems as OrderItemInput[]).map((i) => i.itemId);
   const foundItems = await db.select({
     id: items.id,
     name: items.name,
@@ -689,6 +889,8 @@ app.post("/store/:slug/order", async (c) => {
     taxInclusive: items.taxInclusive,
     stockQuantity: items.stockQuantity,
     unit: items.unit,
+    itemMode: items.itemMode,
+    unitVariants: items.unitVariants,
   }).from(items)
     .where(and(
       inArray(items.id, itemIds),
@@ -696,27 +898,86 @@ app.post("/store/:slug/order", async (c) => {
       eq(items.storeEnabled, true),
     ));
 
-  if (foundItems.length !== itemIds.length) {
+  if (foundItems.length !== [...new Set(itemIds)].length) {
     return c.json({ error: "One or more items are not available in this store" }, 400);
   }
 
   const itemMap = new Map(foundItems.map((i) => [i.id, i]));
 
-  // Build line items for calculation
-  const lineItemInputs = (orderItems as Array<{ itemId: string; quantity: number }>).map((oi) => {
+  // Pre-fetch all referenced variants for variant-mode items
+  const requestedVariantIds = (orderItems as OrderItemInput[])
+    .filter((oi) => oi.variantId)
+    .map((oi) => oi.variantId!);
+
+  const foundVariants = requestedVariantIds.length > 0
+    ? await db.select({
+        id: itemVariants.id,
+        itemId: itemVariants.itemId,
+        salePrice: itemVariants.salePrice,
+        storePrice: itemVariants.storePrice,
+        stockQuantity: itemVariants.stockQuantity,
+        storeEnabled: itemVariants.storeEnabled,
+        attributeValues: itemVariants.attributeValues,
+      }).from(itemVariants)
+        .where(and(
+          inArray(itemVariants.id, requestedVariantIds),
+          eq(itemVariants.storeEnabled, true),
+        ))
+    : [];
+
+  const variantMap = new Map(foundVariants.map((v) => [v.id, v]));
+
+  // Build line items for calculation — validate variants and alt units
+  const lineItemInputs: Array<{
+    itemId: string; quantity: string; unitPrice: string; taxPercent: string;
+    discountPercent: string; taxInclusive: boolean; name: string; unit: string;
+    selectedUnit?: string; conversionFactor?: string; variantId?: string;
+  }> = [];
+
+  for (const oi of orderItems as OrderItemInput[]) {
     const item = itemMap.get(oi.itemId)!;
-    const price = item.storePrice ?? item.salePrice ?? "0";
-    return {
+    let price = item.storePrice ?? item.salePrice ?? "0";
+    let description = item.name;
+    let selectedUnit: string | undefined;
+    let conversionFactor: string | undefined;
+    let variantId: string | undefined;
+
+    if (item.itemMode === "variants" && oi.variantId) {
+      // Validate variant exists and belongs to this item
+      const variant = variantMap.get(oi.variantId);
+      if (!variant || variant.itemId !== oi.itemId) {
+        return c.json({ error: `Variant is not available for item "${item.name}"` }, 400);
+      }
+      price = variant.storePrice ?? variant.salePrice ?? price;
+      variantId = oi.variantId;
+      // Build variant label: "Item Name - Size: M, Color: Red"
+      const attrLabel = Object.entries(variant.attributeValues).map(([k, v]) => `${k}: ${v}`).join(", ");
+      description = `${item.name} - ${attrLabel}`;
+    } else if (item.itemMode === "alt_units" && oi.selectedUnit) {
+      // Validate unit exists in item's unitVariants
+      const uv = item.unitVariants?.find((u) => u.unit === oi.selectedUnit);
+      if (!uv) {
+        return c.json({ error: `Unit "${oi.selectedUnit}" is not available for item "${item.name}"` }, 400);
+      }
+      price = uv.salePrice;
+      selectedUnit = oi.selectedUnit;
+      conversionFactor = String(uv.conversionFactor);
+    }
+
+    lineItemInputs.push({
       itemId: oi.itemId,
       quantity: String(oi.quantity),
       unitPrice: price,
       taxPercent: item.taxPercent || "0",
       discountPercent: "0",
       taxInclusive: item.taxInclusive,
-      name: item.name,
+      name: description,
       unit: item.unit,
-    };
-  });
+      selectedUnit,
+      conversionFactor,
+      variantId,
+    });
+  }
 
   // Calculate totals using shared library
   const totals = calcInvoiceTotals({
@@ -826,11 +1087,54 @@ app.post("/store/:slug/order", async (c) => {
           discountPercent: "0",
           totalAmount: calc.total,
           sortOrder: idx,
-          conversionFactor: "1",
+          conversionFactor: li.conversionFactor ?? "1",
+          selectedUnit: li.selectedUnit ?? null,
+          variantId: li.variantId ?? null,
         };
       });
 
       await tx.insert(invoiceItems).values(processedLineItems);
+
+      // Stock adjustment: separate items vs variants
+      const itemStockMap = new Map<string, number>();
+      const variantStockMap = new Map<string, number>();
+      for (const li of lineItemInputs) {
+        if (li.variantId) {
+          variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + parseFloat(li.quantity));
+        } else {
+          const factor = li.conversionFactor ? parseFloat(li.conversionFactor) : 1;
+          itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + parseFloat(li.quantity) * factor);
+        }
+      }
+
+      // Acquire row-level locks before writing stock to prevent concurrent order races.
+      const itemIdsToLock = [...itemStockMap.keys()];
+      if (itemIdsToLock.length > 0) {
+        await tx.select({ id: items.id, stockQuantity: items.stockQuantity })
+          .from(items)
+          .where(inArray(items.id, itemIdsToLock))
+          .for("update");
+      }
+      const variantIdsToLock = [...variantStockMap.keys()];
+      if (variantIdsToLock.length > 0) {
+        await tx.select({ id: itemVariants.id, stockQuantity: itemVariants.stockQuantity })
+          .from(itemVariants)
+          .where(inArray(itemVariants.id, variantIdsToLock))
+          .for("update");
+      }
+
+      for (const [itemId, totalQty] of itemStockMap) {
+        await tx.update(items).set({
+          stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(items.id, itemId));
+      }
+      for (const [variantId, totalQty] of variantStockMap) {
+        await tx.update(itemVariants).set({
+          stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(itemVariants.id, variantId));
+      }
 
       // Create the store order record
       const [order] = await tx.insert(storeOrders).values({
@@ -933,6 +1237,53 @@ function brandedHtml(title: string, heading: string, message: string, status: nu
 </html>`;
 }
 
+// ── Shipping carrier webhooks ──────────────────────────────────
+// Carriers POST status updates here. The URL includes the business ID for routing.
+// Each carrier has a different payload format — the handler normalises them into shipment events.
+// For now: accept, log, and store the raw payload. Actual carrier-specific parsing comes later.
+app.post("/webhooks/shipping/:businessId", async (c) => {
+  const businessId = c.req.param("businessId");
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+
+  // Resolve tenant from business ID and get DB connection
+  const { shipments: shipmentsTable, shipmentEvents } = await import("@hisaabo/db");
+  // In single-tenant mode, use "single"; in multi-tenant, look up from business → tenant mapping
+  const db = await getTenantDb("single");
+
+  // Extract tracking number — carriers typically send it as `awb`, `tracking_id`, or `waybill`
+  const trackingNumber = body.awb || body.tracking_id || body.waybill || body.trackingNumber || null;
+  if (!trackingNumber) {
+    return c.json({ error: "No tracking number found in payload" }, 400);
+  }
+
+  // Find the shipment by tracking number + business
+  const [shipment] = await db.select({ id: shipmentsTable.id })
+    .from(shipmentsTable)
+    .where(and(
+      eq(shipmentsTable.businessId, businessId),
+      eq(shipmentsTable.trackingNumber, trackingNumber),
+    ))
+    .limit(1);
+
+  if (!shipment) {
+    return c.json({ error: "Shipment not found", trackingNumber }, 404);
+  }
+
+  // Store the raw event — carrier-specific parsing will be added per carrier
+  await db.insert(shipmentEvents).values({
+    shipmentId: shipment.id,
+    status: body.status || body.current_status || "unknown",
+    statusDetail: body.status_description || body.remarks || body.message || null,
+    location: body.location || body.scan_location || body.city || null,
+    source: "webhook",
+    carrierStatus: body.status_code || body.status || null,
+    eventTime: body.timestamp ? new Date(body.timestamp) : new Date(),
+  });
+
+  return c.json({ ok: true, shipmentId: shipment.id });
+});
+
 // Base page — shows when someone visits the API root
 app.get("/", (c) => {
   return c.html(brandedHtml(
@@ -947,7 +1298,7 @@ app.get("/", (c) => {
 app.notFound((c) => {
   // Return JSON for API-like paths
   if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
-    return c.json({ error: "Not found", path: c.req.path }, 404);
+    return c.json({ error: "Not found" }, 404);
   }
   return c.html(brandedHtml(
     "Not Found",

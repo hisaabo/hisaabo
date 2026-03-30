@@ -1,0 +1,86 @@
+---
+title: Expenses
+description: Record and categorise business expenses in Hisaabo. Track cash, bank, UPI, and cheque expenses with optional reference numbers.
+sidebar:
+  order: 1
+---
+
+The Expenses section lets you record all business outgoings that are not purchase invoices — for example, rent, utilities, salaries, office supplies, travel, and advertising.
+
+## Adding an expense
+
+Go to **Expenses** in the left navigation and click **New Expense**.
+
+## Expense fields
+
+| Field | Required | Notes |
+|---|---|---|
+| **Category** | Yes | A label that groups this expense for reporting. Type any text — categories are free-form. |
+| **Amount** | Yes | Amount in INR |
+| **Mode** | Yes | How it was paid: Cash, Bank Transfer, UPI, Cheque, or Other |
+| **Expense Date** | Yes | When the expense was incurred. Defaults to today. |
+| **Description** | No | Free-text description or details |
+| **Reference Number** | No | Bill number, invoice number from vendor, cheque number, etc. |
+
+## Expense categories
+
+Categories are free-text labels you create as you go. Common categories used by Indian small businesses:
+
+- Rent
+- Electricity
+- Internet
+- Salaries & Wages
+- Petty Cash
+- Transportation
+- Office Supplies
+- Marketing & Advertising
+- Professional Fees (CA, lawyer, etc.)
+- Repairs & Maintenance
+- Insurance
+- Bank Charges
+- GST Paid (for non-deductible GST)
+- Miscellaneous
+
+:::tip
+Use consistent category names to get clean summaries in reports. Avoid variations like "Rent", "Office Rent", and "rent" — pick one and stick to it.
+:::
+
+## Expenses in the dashboard
+
+Your total expenses for the current financial year appear on the dashboard under the **Expenses** card. The dashboard also shows a month-by-month comparison of income vs. expenses.
+
+## Expenses and bank accounts
+
+Expenses are not directly linked to bank accounts. They record business outgoings with a payment mode (cash, bank, UPI, cheque, or other) for categorisation purposes. To keep your bank account balances accurate, record a manual withdrawal transaction in the [Banking](/banking) section when you pay an expense from a tracked account.
+
+## Deleting an expense
+
+Open the expense and click **Delete**. Deleting an expense reverses the bank account transaction if one was linked.
+
+:::note
+Deleted expenses use soft deletion (`deleted_at` field). They are removed from all reports and totals but the database record remains. There is no way to view deleted expenses from the UI.
+:::
+
+## Expenses vs purchase invoices
+
+| Use Expense for | Use Purchase Invoice for |
+|---|---|
+| Rent, utilities, salaries | Buying goods to resell |
+| One-off vendor bills not related to inventory | Purchases that need GST input tax credit |
+| Small petty cash spends | Purchases from GST-registered suppliers |
+
+In brief: if you need to track ITC (Input Tax Credit) on a purchase, use a **Purchase Invoice** linked to the supplier party. If it is a running cost of the business, use **Expense**.
+
+## Frequently asked questions
+
+**Can I attach receipts or photos to expenses?**
+File attachments are not supported in the current version. As a workaround, enter the bill number in the Reference Number field.
+
+**How do I view a breakdown of expenses by category?**
+Go to **Reports** and open the Expense Report. It shows total expenses per category for a date range you choose.
+
+**Can I import historical expenses from a spreadsheet?**
+CSV import for expenses is not supported in the current version. Expenses must be entered manually.
+
+**Is GST on expenses tracked for ITC purposes?**
+No. Expenses are not linked to suppliers and do not generate ITC. If you are a GST-registered business and need ITC, use a **Purchase Invoice** for those expenses (link them to the supplier and enter the GST rate on the line item).

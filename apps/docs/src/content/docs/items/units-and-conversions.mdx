@@ -1,0 +1,84 @@
+---
+title: Units & Conversions
+description: Set up items that can be sold in multiple units — for example, cloth sold by metre but tracked in rolls, or rice sold in 1kg bags but purchased in 50kg sacks.
+sidebar:
+  order: 3
+---
+
+**Alternate units** let you sell or purchase the same item in different units of measurement, with automatic conversion to the base tracking unit for stock.
+
+## When to use alternate units
+
+Use alternate units when:
+- You track stock in one unit but sell in another (for example, track in pcs but sell in dozens)
+- You buy in bulk and sell retail (for example, buy in 50kg sacks but sell in 1kg bags)
+- Your supplier invoices in one unit but you sell in another (for example, fabric in metres vs. rolls)
+
+Do **not** use alternate units when:
+- The "different units" are actually different products (a 5L can vs. a 15L drum of paint)
+- You need size/colour combinations — use [Variants](/items/variants) for that
+
+## Setting up an alternate-unit item
+
+### Step 1: Create the item with mode "Alt Units"
+
+When creating a new item, select **Alt Units** as the Item Mode. You cannot change the mode later.
+
+Fill in the item with its **base unit** — the unit you track stock in. For example, if you track cloth in metres, the base unit is `m` (metres).
+
+### Step 2: Define alternate units
+
+In the **Unit Variants** section, add one or more alternate units. For each alternate unit, specify:
+
+| Field | Required | Notes |
+|---|---|---|
+| Unit | Yes | The alternate unit (for example, `roll`) |
+| Conversion Factor | Yes | How many base units equal one alternate unit. For example, if 1 roll = 50 metres, the conversion factor is `50`. |
+| Sale Price | Yes | Price per unit in this alternate unit |
+| Purchase Price | No | Purchase price per unit in this alternate unit |
+
+### Example: Cloth
+
+- Base unit: `m` (metre)
+- Base sale price: ₹80 per metre
+- Alternate unit 1: `roll`, conversion factor 50, sale price ₹3,800 per roll (50m at ₹76/m)
+
+When you sell 2 rolls of cloth on an invoice:
+- The invoice shows: "Cloth — 2 rolls @ ₹3,800 = ₹7,600"
+- Stock is decremented by: 2 rolls × 50 m/roll = 100 metres
+
+### Example: Eggs
+
+- Base unit: `pcs`
+- Base sale price: ₹7 per egg
+- Alternate unit 1: `dozen`, conversion factor 12, sale price ₹78 per dozen
+- Alternate unit 2: `box`, conversion factor 30, sale price ₹195 per box (tray of 30)
+
+## Using alternate units on invoices
+
+When you select an alternate-unit item on an invoice line item, a **Unit** dropdown appears alongside the standard unit. Choose the unit you are selling or purchasing in:
+
+- The unit price fills in from the selected unit's configured sale/purchase price
+- Stock is converted to the base unit automatically (using the conversion factor)
+
+## Stock display
+
+Stock for alternate-unit items is always displayed in the **base unit**. For the cloth example above, you will see "1,250 m" in the stock column, not rolls.
+
+## Supported units
+
+See [Supported Units](/reference/supported-units) for the full list of unit codes you can use.
+
+## Frequently asked questions
+
+**Can I have more than two alternate units?**
+Yes. Add as many alternate units as needed in the `unitVariants` array on the item.
+
+**What happens to the conversion factor when I edit an invoice?**
+The conversion factor at the time of invoice creation is stored on the invoice line item. If you later change the item's conversion factor, existing invoices are not affected — they use the stored value.
+
+**My conversion factor has decimals. Is that supported?**
+Yes. Conversion factors support up to 4 decimal places (stored as `NUMERIC(10,4)`). For example, if 1 yard = 0.9144 metres, you would set the conversion factor to `0.9144`.
+
+**I accidentally set up an item as "Simple" but it should have alternate units. Can I convert it?**
+No — the item mode is fixed at creation. The easiest workaround is to create a new item with the correct mode, migrate any invoices that reference the old item (by editing them), then delete the old item once it has no linked invoices.

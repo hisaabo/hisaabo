@@ -1,9 +1,10 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useId } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency } from "@/lib/utils";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
 import { toast } from "@/hooks/useToast";
+import { useDebounce } from "@/hooks/useDebounce";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -22,9 +23,12 @@ export interface DocumentCreatorProps {
   documentType: DocumentType;
   invoiceType: "sale" | "purchase";
   onClose: () => void;
-  onSuccess?: () => void;
+  /** Called after successful creation/update. Receives the partyId used. */
+  onSuccess?: (partyId?: string) => void;
   // Edit mode: pass existing invoice ID to pre-fill
   editInvoiceId?: string;
+  // Pre-select a party on mount (e.g. "Create another" for same customer)
+  initialPartyId?: string;
 }
 
 interface UnitOption {
@@ -97,8 +101,9 @@ export function DocumentCreator({
   onClose,
   onSuccess,
   editInvoiceId,
+  initialPartyId,
 }: DocumentCreatorProps) {
-  const [partyId, setPartyId] = useState("");
+  const [partyId, setPartyId] = useState(initialPartyId ?? "");
   const [invoiceDate, setInvoiceDate] = useState(
     new Date().toISOString().split("T")[0]
   );
@@ -116,13 +121,26 @@ export function DocumentCreator({
   const [invoiceDiscountType, setInvoiceDiscountType] = useState<"amount" | "percent">("amount");
   const [roundOff, setRoundOff] = useState("0");
 
-  const { data: partiesData } = trpc.party.list.useQuery({
+  // Server-side search for party picker
+  const [partySearch, setPartySearch] = useState("");
+  const debouncedPartySearch = useDebounce(partySearch, 300);
+
+  const { data: partiesData, isFetching: partiesFetching } = trpc.party.list.useQuery({
     type: invoiceType === "sale" ? "customer" : "supplier",
+    search: debouncedPartySearch || undefined,
     page: 1,
-    limit: 100,
+    limit: 50,
   });
 
-  const { data: itemsData } = trpc.item.list.useQuery({ page: 1, limit: 100 });
+  // Server-side search for item picker (per line item)
+  const [itemSearch, setItemSearch] = useState("");
+  const debouncedItemSearch = useDebounce(itemSearch, 300);
+
+  const { data: itemsData, isFetching: itemsFetching } = trpc.item.list.useQuery({
+    search: debouncedItemSearch || undefined,
+    page: 1,
+    limit: 50,
+  });
 
   const isEditing = !!editInvoiceId;
 
@@ -177,7 +195,7 @@ export function DocumentCreator({
     }
   }, [editData]);
 
-  function handleSuccess() {
+  function invalidateLists() {
     utils.invoice.list.invalidate();
     utils.quotation.list.invalidate();
     utils.creditNote.list.invalidate();
@@ -192,8 +210,19 @@ export function DocumentCreator({
     if (editInvoiceId) {
       utils.invoice.getById.invalidate({ id: editInvoiceId });
     }
+  }
+
+  function handleSuccess() {
+    invalidateLists();
     toast.success(isEditing ? `${documentTypeLabels[documentType]} updated` : `${documentTypeLabels[documentType]} created`);
-    onSuccess?.();
+    onSuccess?.(partyId || undefined);
+    onClose();
+  }
+
+  function handleInvoiceCreateSuccess(data: { invoiceNumber: string }) {
+    invalidateLists();
+    toast.success(`Invoice ${data.invoiceNumber} created`);
+    onSuccess?.(partyId || undefined);
     onClose();
   }
 
@@ -203,7 +232,7 @@ export function DocumentCreator({
 
   // All mutation hooks called unconditionally (React rules)
   const invoiceMutation = trpc.invoice.create.useMutation({
-    onSuccess: handleSuccess,
+    onSuccess: isEditing ? handleSuccess : handleInvoiceCreateSuccess,
     onError: handleError,
   });
   const quotationMutation = trpc.quotation.create.useMutation({
@@ -286,7 +315,19 @@ export function DocumentCreator({
   }
 
   function selectProduct(lineId: string, productId: string) {
+    // Look in current search results; fall back gracefully if not found
     const product = itemsData?.data.find((p) => p.id === productId);
+    if (!productId) {
+      // Cleared selection
+      setItems((prev) =>
+        prev.map((li) =>
+          li.id === lineId
+            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined }
+            : li
+        )
+      );
+      return;
+    }
     if (!product) return;
 
     const basePrice = (invoiceType === "sale" ? product.salePrice : product.purchasePrice) || "";
@@ -393,6 +434,16 @@ export function DocumentCreator({
       description: p.type === "customer" ? "Customer" : "Supplier",
     })) ?? [];
 
+  const itemOptions =
+    itemsData?.data.map((p) => ({
+      value: p.id,
+      label: p.name,
+      description: p.unit ? p.unit : undefined,
+    })) ?? [];
+
+  // Stable prefix for accessible line item IDs
+  const lineItemIdPrefix = useId();
+
   return (
     <SlideOver
       open={true}
@@ -428,6 +479,8 @@ export function DocumentCreator({
             options={partyOptions}
             placeholder={`Search ${partyLabel.toLowerCase()}...`}
             emptyMessage={`No ${partyLabel.toLowerCase()}s found`}
+            onQueryChange={setPartySearch}
+            isLoading={partiesFetching && !!debouncedPartySearch}
           />
           <div>
             <label className="label">Date</label>
@@ -457,23 +510,23 @@ export function DocumentCreator({
             const calc = calcLine(li);
             return (
               <div key={li.id} className="rounded-xl border border-border-light bg-surface-1/50 px-4 py-3 space-y-2">
-                {/* Row 1: Product + unit selector + delete */}
+                {/* Row 1: Product (searchable combobox) + unit selector + delete */}
                 <div className="flex items-start gap-2">
                   <div className="flex-1 min-w-0">
-                    <select
+                    <Combobox
                       value={li.itemId || ""}
-                      onChange={(e) => selectProduct(li.id, e.target.value)}
-                      className="input py-1.5 text-sm"
-                    >
-                      <option value="">Select product or custom item</option>
-                      {itemsData?.data.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
+                      onChange={(productId) => selectProduct(li.id, productId)}
+                      options={itemOptions}
+                      placeholder="Select product or custom item"
+                      emptyMessage="No products found"
+                      onQueryChange={setItemSearch}
+                      isLoading={itemsFetching && !!debouncedItemSearch}
+                    />
                     {/* Unit variant selector - only if item has variants */}
                     {li.availableUnits && li.availableUnits.length > 1 && (
                       <select
                         value={li.selectedUnit || ""}
+                        aria-label="Unit"
                         onChange={(e) => {
                           const selected = li.availableUnits?.find((u) => u.unit === e.target.value);
                           if (selected) {
@@ -497,7 +550,7 @@ export function DocumentCreator({
                     type="button"
                     onClick={() => removeLine(li.id)}
                     disabled={items.length <= 1}
-                    className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 disabled:opacity-20 disabled:cursor-not-allowed transition-colors shrink-0"
+                    className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 disabled:opacity-20 disabled:cursor-not-allowed transition-colors shrink-0 mt-0.5"
                     aria-label="Remove line"
                   >
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -508,10 +561,12 @@ export function DocumentCreator({
 
                 {/* Row 2: Description */}
                 <input
+                  id={`${lineItemIdPrefix}-${li.id}-desc`}
                   value={li.description}
                   onChange={(e) => updateItem(li.id, "description", e.target.value)}
                   placeholder="Description *"
                   required
+                  aria-label="Item description"
                   className="input py-1.5 text-sm"
                 />
 
@@ -519,50 +574,78 @@ export function DocumentCreator({
                 <div className="flex items-end gap-2">
                   <div className="grid grid-cols-4 gap-2 flex-1">
                     <div>
-                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Qty</label>
+                      <label
+                        htmlFor={`${lineItemIdPrefix}-${li.id}-qty`}
+                        className="text-[10px] font-medium text-text-tertiary block mb-0.5"
+                      >
+                        Qty
+                      </label>
                       <input
+                        id={`${lineItemIdPrefix}-${li.id}-qty`}
                         type="number"
                         value={li.quantity}
                         onChange={(e) => updateItem(li.id, "quantity", e.target.value)}
                         min="0.001"
                         step="any"
+                        aria-label="Quantity"
                         className="input py-1.5 text-sm tabular-nums"
                         placeholder="1"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Price</label>
+                      <label
+                        htmlFor={`${lineItemIdPrefix}-${li.id}-price`}
+                        className="text-[10px] font-medium text-text-tertiary block mb-0.5"
+                      >
+                        Price
+                      </label>
                       <input
+                        id={`${lineItemIdPrefix}-${li.id}-price`}
                         type="number"
                         value={li.unitPrice}
                         onChange={(e) => updateItem(li.id, "unitPrice", e.target.value)}
                         min="0"
                         step="0.01"
+                        aria-label="Unit price"
                         className="input py-1.5 text-sm tabular-nums"
                         placeholder="0.00"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Tax %</label>
+                      <label
+                        htmlFor={`${lineItemIdPrefix}-${li.id}-tax`}
+                        className="text-[10px] font-medium text-text-tertiary block mb-0.5"
+                      >
+                        Tax %
+                      </label>
                       <input
+                        id={`${lineItemIdPrefix}-${li.id}-tax`}
                         type="number"
                         value={li.taxPercent}
                         onChange={(e) => updateItem(li.id, "taxPercent", e.target.value)}
                         min="0"
                         step="0.01"
+                        aria-label="Tax percent"
                         className="input py-1.5 text-sm tabular-nums"
                         placeholder="0"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-medium text-text-tertiary block mb-0.5">Disc %</label>
+                      <label
+                        htmlFor={`${lineItemIdPrefix}-${li.id}-disc`}
+                        className="text-[10px] font-medium text-text-tertiary block mb-0.5"
+                      >
+                        Disc %
+                      </label>
                       <input
+                        id={`${lineItemIdPrefix}-${li.id}-disc`}
                         type="number"
                         value={li.discountPercent}
                         onChange={(e) => updateItem(li.id, "discountPercent", e.target.value)}
                         min="0"
                         max="100"
                         step="0.01"
+                        aria-label="Discount percent"
                         className="input py-1.5 text-sm tabular-nums"
                         placeholder="0"
                       />

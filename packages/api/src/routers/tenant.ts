@@ -3,7 +3,12 @@ import { TRPCError } from "@trpc/server";
 import { controlDb, tenants, tenantMembers, invitations, users, sessions } from "@hisaabo/db";
 import { eq, and, gt } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { createHash } from "node:crypto";
 import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
+
+function hashInvitationToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 export const tenantRouter = router({
   // List user's tenant memberships
@@ -117,29 +122,32 @@ export const tenantRouter = router({
         }
       }
 
-      const token = nanoid(32);
+      const rawToken = nanoid(32);
+      const tokenHash = hashInvitationToken(rawToken);
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-      const [invitation] = await controlDb.insert(invitations).values({
+      await controlDb.insert(invitations).values({
         tenantId: ctx.tenantId,
         email: input.email,
         role: input.role,
-        token,
+        token: tokenHash, // Store hash, never the raw token
         invitedBy: ctx.user.id,
         expiresAt,
-      }).returning();
+      });
 
-      return { token: invitation.token, expiresAt };
+      // Return the raw token — this is what gets sent via email
+      return { token: rawToken, expiresAt };
     }),
 
   // Accept an invitation
   acceptInvitation: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      const tokenHash = hashInvitationToken(input.token);
       const [invitation] = await controlDb.select()
         .from(invitations)
         .where(and(
-          eq(invitations.token, input.token),
+          eq(invitations.token, tokenHash),
           gt(invitations.expiresAt, new Date()),
         ))
         .limit(1);
@@ -173,19 +181,22 @@ export const tenantRouter = router({
         return { tenantId: invitation.tenantId };
       }
 
-      // Create membership
-      await controlDb.insert(tenantMembers).values({
-        tenantId: invitation.tenantId,
-        userId: ctx.user.id,
-        role: invitation.role,
-        invitedBy: invitation.invitedBy ?? undefined,
-        acceptedAt: new Date(),
-      });
+      // Create membership and mark invitation accepted atomically so a crash
+      // between the two writes cannot leave the user as a member with a
+      // re-usable invitation link.
+      await controlDb.transaction(async (tx) => {
+        await tx.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
 
-      // Mark invitation as accepted
-      await controlDb.update(invitations)
-        .set({ acceptedAt: new Date() })
-        .where(eq(invitations.id, invitation.id));
+        await tx.update(invitations)
+          .set({ acceptedAt: new Date() })
+          .where(eq(invitations.id, invitation.id));
+      });
 
       return { tenantId: invitation.tenantId };
     }),

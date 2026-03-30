@@ -31,3 +31,6 @@ screens/
 
 # Backups
 backups/
+
+feature-parity.yaml
+.expo/

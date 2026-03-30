@@ -1,0 +1,116 @@
+---
+title: Create Your Business
+description: Set up your first business in Hisaabo. Configure your GST registration type, GSTIN, state code, invoice prefix, and financial year start.
+sidebar:
+  order: 2
+---
+
+When you sign in to Hisaabo for the first time, you are prompted to create a business. This page explains each setting so you configure it correctly from the start. Getting the GST state code right is especially important — it drives automatic CGST/SGST versus IGST calculation on every invoice.
+
+## Step 1: Basic details
+
+| Field | Required | What to enter |
+|---|---|---|
+| Business Name | Yes | Your trading name, for example "Sharma Electronics" |
+| Legal Name | No | Your full registered legal name if different from the trading name |
+| PAN | Yes | Your 10-character Permanent Account Number |
+| Phone | Yes | Your primary business phone number |
+| Email | No | Your business email address |
+| Address | Yes | Your full business address |
+
+## Step 2: State and state code
+
+Beyond the address (entered above), the state and state code fields deserve special attention.
+
+**State**: Enter your full state name, for example "Maharashtra" or "Tamil Nadu".
+
+**State Code**: Enter the 2-digit GST state code for your state. This is the most critical configuration value in Hisaabo. The system uses this code to determine whether a supply to a party is intra-state (same state code → CGST + SGST) or inter-state (different state code → IGST).
+
+Common GST state codes:
+
+| State | Code | State | Code |
+|---|---|---|---|
+| Jammu & Kashmir | 01 | Himachal Pradesh | 02 |
+| Punjab | 03 | Chandigarh | 04 |
+| Uttarakhand | 05 | Haryana | 06 |
+| Delhi | 07 | Rajasthan | 08 |
+| Uttar Pradesh | 09 | Bihar | 10 |
+| Sikkim | 11 | Arunachal Pradesh | 12 |
+| Nagaland | 13 | Manipur | 14 |
+| Mizoram | 15 | Tripura | 16 |
+| Meghalaya | 17 | Assam | 18 |
+| West Bengal | 19 | Jharkhand | 20 |
+| Odisha | 21 | Chhattisgarh | 22 |
+| Madhya Pradesh | 23 | Gujarat | 24 |
+| Maharashtra | 27 | Karnataka | 29 |
+| Goa | 30 | Kerala | 32 |
+| Tamil Nadu | 33 | Telangana | 36 |
+| Andhra Pradesh | 37 |
+
+:::tip
+Your state code is printed on your GSTIN — it is the first two digits. For example, if your GSTIN is `27AABCU9603R1ZX`, your state code is `27` (Maharashtra).
+:::
+
+## Step 3: GST registration
+
+Choose your registration type:
+
+| Type | When to choose |
+|---|---|
+| **Regular** | Your business is GST registered with a GSTIN. You collect and file GST. |
+| **Composition** | You are enrolled in the GST Composition Scheme (small taxpayer, simpler filing). |
+| **Unregistered** | Your business is below the GST threshold and not registered. |
+
+If you select Regular or Composition, enter your **GSTIN** (15-character GST Identification Number). Your **PAN** (10-character) is already required in the basic details above and is used for all registration types.
+
+:::note
+Non-GST businesses (Unregistered) can still use all invoicing features. The GST columns simply show zero tax, and GSTR-1/GSTR-3B reports show generic totals rather than GST-specific breakdowns.
+:::
+
+## Step 4: Invoice numbering
+
+Configure how invoice numbers are generated for each document type:
+
+| Setting | Default | Example |
+|---|---|---|
+| Invoice prefix | `INV` | INV-00001 |
+| Payment prefix | `PAY` | PAY-00001 |
+| Quotation prefix | `QTN` | QTN-00001 |
+| Credit note prefix | `CN` | CN-00001 |
+| Delivery challan prefix | `DC` | DC-00001 |
+| Proforma prefix | `PI` | PI-00001 |
+
+Invoice numbers are assigned sequentially and atomically — the counter increments inside a database transaction so you never get a duplicate number even under concurrent load.
+
+:::tip
+If you are migrating from another app and want invoice numbers to continue from where they left off, set **Next invoice number** to your last used number plus one. For example, if your last invoice was INV-00847, set the next number to 848.
+:::
+
+## Step 5: Financial year
+
+**Financial year start month** defaults to April (month 4), which is the standard for Indian businesses. The dashboard "this financial year" summaries count from the 1st of this month in the current or previous calendar year.
+
+If your business uses a calendar year (January to December), set this to 1. January.
+
+## After creating your business
+
+Once you save, you will land on the dashboard. Your next steps are:
+
+1. **Add your parties** — import from MyBillBook or add customers and suppliers manually. See [Parties](/parties).
+2. **Add your items** — create the products and services you sell or buy. See [Items & Inventory](/items).
+3. **Create your first invoice** — See [Create an Invoice](/invoicing/create-invoice).
+
+## Managing multiple businesses
+
+You can create additional businesses from the business switcher in the navigation bar. Each business has completely separate data — parties, items, invoices, and settings are not shared between businesses.
+
+## Frequently asked questions
+
+**I entered the wrong state code. How do I fix it?**
+Go to Settings and edit your business profile. Update the state code and save. The change takes effect immediately on all future invoices. Existing invoices are not affected.
+
+**Can I change my invoice prefix after I have already created invoices?**
+Yes, but the counter continues from where it left off. Changing the prefix does not reset the counter. For example, if you have 50 invoices with prefix `INV`, changing to `BILL` will produce `BILL-00051` as the next invoice.
+
+**What if my party is in a Union Territory?**
+Union Territories have their own GST codes (for example, Delhi is 07, Puducherry is 34, Dadra & Nagar Haveli and Daman & Diu is 26). Enter the correct 2-digit code for the territory. The CGST/UGST (Union Territory GST) split works the same as CGST/SGST for Hisaabo's calculation purposes.

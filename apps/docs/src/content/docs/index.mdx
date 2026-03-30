@@ -1,0 +1,50 @@
+---
+title: What is Hisaabo?
+description: Self-hosted invoicing and business management for Indian businesses. GST-compliant billing, party ledgers, payment tracking, banking, and an online store — all in one.
+template: splash
+hero:
+  tagline: Professional invoicing and business management — self-hosted, GST-compliant, built for Indian businesses.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: API Reference
+      link: https://api-docs.hisaabo.in
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why Hisaabo?
+
+Hisaabo (from Hindi: हिसाब — accounts) is a complete invoicing and business management platform purpose-built for Indian businesses. Self-hosted or cloud, it gives you full control over your financial data.
+
+<CardGrid stagger>
+  <Card title="GST-Compliant Invoicing" icon="document">
+    Create professional sale and purchase invoices with automatic CGST/SGST/IGST calculation based on state codes. Generate GSTR-1 and GSTR-3B reports.
+  </Card>
+  <Card title="Party Ledgers" icon="list-format">
+    Track outstanding balances, view running ledger statements, and manage receivables and payables across all your customers and suppliers.
+  </Card>
+  <Card title="Multi-Business Support" icon="seti:folder">
+    Manage multiple businesses from a single account. Each business has its own invoices, parties, items, and reports — completely isolated.
+  </Card>
+  <Card title="Online Store" icon="laptop">
+    Launch a branded online storefront for your business. Customers can browse your catalog and place orders directly.
+  </Card>
+  <Card title="Self-Hosted" icon="setting">
+    Your data stays on your server. Deploy with Docker in minutes. No vendor lock-in, no monthly fees, no data sharing.
+  </Card>
+  <Card title="Multi-Platform" icon="phone">
+    Self-hosted gives you a fully-featured, responsive web app accessible from any browser on any device. Hisaabo Cloud adds native Android/iOS apps and a desktop app (macOS/Windows/Linux).
+  </Card>
+</CardGrid>
+
+## Quick Start
+
+1. **[Self-host with Docker](/getting-started/self-hosting/)** — up and running in 5 minutes
+2. **[Create your business](/getting-started/create-business/)** — set up your company profile, GST details, and bank info
+3. **[Create your first invoice](/invoicing/create-invoice/)** — generate a GST-compliant invoice with automatic tax calculation
+4. **[Import existing data](/getting-started/import-data/)** — bring in your parties, items, and invoices from MyBillBook or CSV

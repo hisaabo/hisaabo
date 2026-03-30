@@ -25,6 +25,10 @@ export interface ComboboxProps {
   error?: string;
   className?: string;
   emptyMessage?: string;
+  /** Called with the raw text input value — use this for server-side search */
+  onQueryChange?: (query: string) => void;
+  /** Show a loading indicator while server-side results are fetching */
+  isLoading?: boolean;
 }
 
 export function Combobox({
@@ -37,6 +41,8 @@ export function Combobox({
   error,
   className,
   emptyMessage = "No results found",
+  onQueryChange,
+  isLoading,
 }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -52,8 +58,11 @@ export function Combobox({
 
   const selectedOption = options.find((o) => o.value === value) ?? null;
 
-  // Filter options based on query
-  const filteredOptions = query
+  // Filter options based on query — when onQueryChange is provided (server-side search),
+  // skip client-side filtering and show all supplied options.
+  const filteredOptions = onQueryChange
+    ? options
+    : query
     ? options.filter((o) => {
         const q = query.toLowerCase();
         return (
@@ -124,6 +133,7 @@ export function Combobox({
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
+    onQueryChange?.(e.target.value);
     if (!open) openDropdown();
   };
 
@@ -201,7 +211,7 @@ export function Combobox({
         >
           {label}
           {required && (
-            <span className="ml-0.5" style={{ color: "var(--danger)" }}>
+            <span className="ml-0.5 text-red-600">
               *
             </span>
           )}
@@ -235,8 +245,7 @@ export function Combobox({
           {value ? (
             <button
               type="button"
-              className="pointer-events-auto p-0.5 rounded"
-              style={{ color: "var(--text-tertiary)" }}
+              className="pointer-events-auto p-0.5 rounded text-text-tertiary"
               tabIndex={-1}
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -249,17 +258,16 @@ export function Combobox({
           ) : (
             <ChevronDownIcon
               className={cn(
-                "w-4 h-4 transition-transform duration-150",
+                "w-4 h-4 transition-transform duration-150 text-text-tertiary",
                 open && "rotate-180"
               )}
-              style={{ color: "var(--text-tertiary)" }}
             />
           )}
         </div>
       </div>
 
       {error && (
-        <p className="mt-1 text-xs" style={{ color: "var(--danger)" }}>
+        <p className="mt-1 text-xs text-red-600">
           {error}
         </p>
       )}
@@ -271,15 +279,15 @@ export function Combobox({
           role="listbox"
           aria-labelledby={label ? labelId : undefined}
           className="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-border shadow-dropdown bg-surface-0 max-h-60 overflow-y-auto animate-scale-in"
-          style={{
-            background: "var(--surface-0)",
-            borderColor: "var(--border-color)",
-          }}
         >
-          {filteredOptions.length === 0 ? (
+          {isLoading ? (
+            <li className="px-3 py-2 text-sm text-text-tertiary flex items-center gap-2" role="option" aria-selected={false}>
+              <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
+              Searching...
+            </li>
+          ) : filteredOptions.length === 0 ? (
             <li
-              className="px-3 py-2 text-sm"
-              style={{ color: "var(--text-tertiary)" }}
+              className="px-3 py-2 text-sm text-text-tertiary"
               role="option"
               aria-selected={false}
             >
@@ -310,10 +318,7 @@ export function Combobox({
                   <span className="flex-1 min-w-0">
                     <span className="block truncate">{option.label}</span>
                     {option.description && (
-                      <span
-                        className="block text-xs truncate"
-                        style={{ color: "var(--text-tertiary)" }}
-                      >
+                      <span className="block text-xs truncate text-text-tertiary">
                         {option.description}
                       </span>
                     )}
@@ -333,15 +338,12 @@ export function Combobox({
 
 function ChevronDownIcon({
   className,
-  style,
 }: {
   className?: string;
-  style?: React.CSSProperties;
 }) {
   return (
     <svg
       className={className}
-      style={style}
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

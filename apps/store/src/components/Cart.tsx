@@ -1,11 +1,12 @@
 import type { CartItem, StoreConfig } from "../types";
+import { cartItemKey } from "../types";
 
 interface CartProps {
   cart: CartItem[];
   config: StoreConfig;
-  onAdd: (item: CartItem["item"]) => void;
-  onRemove: (itemId: string) => void;
-  onClearItem: (itemId: string) => void;
+  onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
+  onRemoveFromCart: (key: string) => void;
+  onClearItem: (key: string) => void;
   onClose: () => void;
   onCheckout: () => void;
   /** When true, renders as an inline flex column (desktop sidebar). No backdrop, no fixed positioning. */
@@ -15,8 +16,8 @@ interface CartProps {
 export function Cart({
   cart,
   config,
-  onAdd,
-  onRemove,
+  onAddToCart,
+  onRemoveFromCart,
   onClearItem,
   onClose,
   onCheckout,
@@ -27,7 +28,7 @@ export function Cart({
   const accent = business.accentColor || "var(--store-accent)";
 
   const subtotal = cart.reduce(
-    (s, c) => s + parseFloat(c.item.price) * c.quantity,
+    (s, c) => s + parseFloat(c.effectivePrice) * c.quantity,
     0
   );
 
@@ -69,8 +70,8 @@ export function Cart({
             cart={cart}
             symbol={symbol}
             accent={accent}
-            onAdd={onAdd}
-            onRemove={onRemove}
+            onAddToCart={onAddToCart}
+            onRemoveFromCart={onRemoveFromCart}
             onClearItem={onClearItem}
           />
         </div>
@@ -153,8 +154,8 @@ export function Cart({
             cart={cart}
             symbol={symbol}
             accent={accent}
-            onAdd={onAdd}
-            onRemove={onRemove}
+            onAddToCart={onAddToCart}
+            onRemoveFromCart={onRemoveFromCart}
             onClearItem={onClearItem}
           />
         </div>
@@ -182,16 +183,16 @@ function CartItemList({
   cart,
   symbol,
   accent,
-  onAdd,
-  onRemove,
+  onAddToCart,
+  onRemoveFromCart,
   onClearItem,
 }: {
   cart: CartItem[];
   symbol: string;
   accent: string;
-  onAdd: (item: CartItem["item"]) => void;
-  onRemove: (itemId: string) => void;
-  onClearItem: (itemId: string) => void;
+  onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
+  onRemoveFromCart: (key: string) => void;
+  onClearItem: (key: string) => void;
 }) {
   if (cart.length === 0) {
     return (
@@ -237,12 +238,12 @@ function CartItemList({
     <div className="space-y-0">
       {cart.map((entry, i) => (
         <CartRow
-          key={entry.item.id}
+          key={cartItemKey(entry)}
           entry={entry}
           symbol={symbol}
           accent={accent}
-          onAdd={onAdd}
-          onRemove={onRemove}
+          onAddToCart={onAddToCart}
+          onRemoveFromCart={onRemoveFromCart}
           onClearItem={onClearItem}
           isLast={i === cart.length - 1}
         />
@@ -339,20 +340,35 @@ function CartRow({
   entry,
   symbol,
   accent,
-  onAdd,
-  onRemove,
+  onAddToCart,
+  onRemoveFromCart,
   onClearItem,
   isLast,
 }: {
   entry: CartItem;
   symbol: string;
   accent: string;
-  onAdd: (item: CartItem["item"]) => void;
-  onRemove: (itemId: string) => void;
-  onClearItem: (itemId: string) => void;
+  onAddToCart: (entry: Omit<CartItem, "quantity">) => void;
+  onRemoveFromCart: (key: string) => void;
+  onClearItem: (key: string) => void;
   isLast: boolean;
 }) {
-  const lineTotal = parseFloat(entry.item.price) * entry.quantity;
+  const key = cartItemKey(entry);
+  const lineTotal = parseFloat(entry.effectivePrice) * entry.quantity;
+
+  // Build display label for variant/unit selection
+  let selectionLabel = "";
+  if (entry.selectedVariantId && entry.item.variants) {
+    const variant = entry.item.variants.find((v) => v.id === entry.selectedVariantId);
+    if (variant) {
+      selectionLabel = Object.values(variant.attributes).join(" / ");
+    }
+  } else if (entry.selectedUnit) {
+    selectionLabel = entry.selectedUnit;
+  }
+
+  // Determine the display unit for "per X" label
+  const displayUnit = entry.selectedUnit || entry.item.unit;
 
   return (
     <div
@@ -370,10 +386,18 @@ function CartRow({
           style={{ color: "var(--store-text)" }}
         >
           {entry.item.name}
+          {selectionLabel && (
+            <span
+              className="font-normal text-xs ml-1"
+              style={{ color: "var(--store-muted)" }}
+            >
+              ({selectionLabel})
+            </span>
+          )}
         </p>
         <p className="text-xs mt-0.5" style={{ color: "var(--store-muted)" }}>
           {symbol}
-          {parseFloat(entry.item.price).toFixed(0)} per {entry.item.unit}
+          {parseFloat(entry.effectivePrice).toFixed(0)} per {displayUnit}
         </p>
       </div>
 
@@ -383,7 +407,7 @@ function CartRow({
         style={{ border: `1.5px solid var(--store-border)` }}
       >
         <button
-          onClick={() => onRemove(entry.item.id)}
+          onClick={() => onRemoveFromCart(key)}
           className="w-7 h-7 flex items-center justify-center text-sm font-bold transition-colors hover:bg-gray-50"
           style={{ color: "var(--store-text-secondary)" }}
           aria-label="Remove one"
@@ -397,7 +421,15 @@ function CartRow({
           {entry.quantity}
         </span>
         <button
-          onClick={() => onAdd(entry.item)}
+          onClick={() =>
+            onAddToCart({
+              item: entry.item,
+              selectedUnit: entry.selectedUnit,
+              conversionFactor: entry.conversionFactor,
+              selectedVariantId: entry.selectedVariantId,
+              effectivePrice: entry.effectivePrice,
+            })
+          }
           className="w-7 h-7 flex items-center justify-center text-sm font-bold transition-colors hover:bg-gray-50"
           style={{ color: "var(--store-text-secondary)" }}
           aria-label="Add one more"
@@ -417,7 +449,7 @@ function CartRow({
 
       {/* Remove */}
       <button
-        onClick={() => onClearItem(entry.item.id)}
+        onClick={() => onClearItem(key)}
         className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full transition-colors hover:bg-gray-100"
         style={{ color: "var(--store-muted)" }}
         title="Remove item"

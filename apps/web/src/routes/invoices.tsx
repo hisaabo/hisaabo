@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -54,8 +54,27 @@ function DownloadPDFButton({
   onShared?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  async function download(format: "a4" | "thermal") {
+  const { data: businesses } = trpc.business.list.useQuery();
+  const activeId = getBusinessId();
+  const activeBusiness = businesses?.find((b) => b.id === activeId);
+  const hasGstin = !!(activeBusiness?.gstin && activeBusiness.gstRegistrationType !== "unregistered");
+
+  type Format = "a4" | "a5" | "thermal";
+  const options: { format: Format; label: string }[] = hasGstin
+    ? [
+        { format: "a4", label: "GST Invoice (A4)" },
+        { format: "a5", label: "Simple Invoice (A5)" },
+        { format: "thermal", label: "Thermal Receipt" },
+      ]
+    : [
+        { format: "a5", label: "Invoice (A5)" },
+        { format: "thermal", label: "Thermal Receipt" },
+      ];
+
+  async function download(format: Format) {
+    setOpen(false);
     setLoading(true);
     try {
       const res = await fetch(
@@ -73,7 +92,6 @@ function DownloadPDFButton({
       a.download = `${invoiceNumber}_${format}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-      // Auto-mark as sent on first share
       if (invoiceStatus === "draft") {
         onShared?.();
       }
@@ -84,11 +102,11 @@ function DownloadPDFButton({
   }
 
   return (
-    <div className="flex gap-0.5">
+    <div className="relative inline-flex" onClick={(e) => e.stopPropagation()}>
       <button
-        onClick={(e) => { e.stopPropagation(); download("a4"); }}
+        onClick={() => setOpen((v) => !v)}
         disabled={loading}
-        title="Download A4 PDF"
+        title="Download PDF"
         className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
       >
         {loading ? (
@@ -99,16 +117,281 @@ function DownloadPDFButton({
           </svg>
         )}
       </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-20 min-w-[172px] rounded-lg border border-border-light bg-surface-1 shadow-lg py-1">
+            {options.map((opt) => (
+              <button
+                key={opt.format}
+                onClick={() => download(opt.format)}
+                className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Shipment helpers (reused from shipments page) ─────────────────
+
+type ShipmentStatus = "pending" | "shipped" | "in_transit" | "delivered" | "returned";
+
+const SHIPMENT_STATUS_CFG: Record<ShipmentStatus, string> = {
+  pending: "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
+  shipped: "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400",
+  in_transit: "bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400",
+  delivered: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400",
+  returned: "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400",
+};
+
+const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
+  pending: "Pending",
+  shipped: "Shipped",
+  in_transit: "In Transit",
+  delivered: "Delivered",
+  returned: "Returned",
+};
+
+const INVOICE_MODE_LABELS: Record<string, string> = {
+  hand_delivery: "Self/Driver",
+  courier: "Courier",
+  transport: "Transport",
+  post: "Post",
+};
+
+function InvoiceShipmentStatusBadge({ status }: { status: ShipmentStatus }) {
+  return (
+    <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium", SHIPMENT_STATUS_CFG[status])}>
+      {SHIPMENT_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+// ── Inline create shipment form ───────────────────────────────────
+
+function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: string; partyId: string; onCreated: () => void }) {
+  const [mode, setMode] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [tracking, setTracking] = useState("");
+
+  const utils = trpc.useUtils();
+
+  const createMutation = trpc.shipment.create.useMutation({
+    onSuccess: () => {
+      utils.shipment.list.invalidate();
+      toast.success("Shipment created");
+      onCreated();
+    },
+    onError: (err) => toast.error("Failed to create shipment", err.message),
+  });
+
+  return (
+    <div className="mt-2 p-3 rounded-lg border border-border-light bg-surface-1 space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value)}
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+        >
+          <option value="">Mode (optional)</option>
+          <option value="hand_delivery">Self/Driver</option>
+          <option value="courier">Courier</option>
+          <option value="transport">Transport</option>
+          <option value="post">Post</option>
+        </select>
+        <input
+          type="text"
+          value={carrier}
+          onChange={(e) => setCarrier(e.target.value)}
+          placeholder="Carrier (optional)"
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+      </div>
+      <input
+        type="text"
+        value={tracking}
+        onChange={(e) => setTracking(e.target.value)}
+        placeholder="Tracking number (optional)"
+        className="w-full text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+      />
       <button
-        onClick={(e) => { e.stopPropagation(); download("thermal"); }}
-        disabled={loading}
-        title="Download receipt"
-        className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
+        onClick={() =>
+          createMutation.mutate({
+            invoiceId,
+            partyId,
+            mode: mode || undefined,
+            carrier: carrier || undefined,
+            trackingNumber: tracking || undefined,
+            status: "pending",
+          })
+        }
+        disabled={createMutation.isPending}
+        className="w-full text-xs px-3 py-1.5 rounded-lg font-medium text-white bg-brand-600 hover:bg-brand-700 transition-colors disabled:opacity-50"
       >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 14.25l6-6m4.5-3.493V21.75l-3.75-1.5-3.75 1.5-3.75-1.5-3.75 1.5V4.757c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0c1.1.128 1.907 1.077 1.907 2.185z" />
-        </svg>
+        {createMutation.isPending ? "Creating…" : "Create Shipment"}
       </button>
+    </div>
+  );
+}
+
+// ── Shipment card inside invoice detail ───────────────────────────
+
+function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
+  const [showCreate, setShowCreate] = useState(false);
+  const [showTrackingForm, setShowTrackingForm] = useState(false);
+  const [trackingInput, setTrackingInput] = useState("");
+
+  const utils = trpc.useUtils();
+
+  const { data, isLoading } = trpc.shipment.list.useQuery(
+    { invoiceId, limit: 1, page: 1 },
+    { enabled: true }
+  );
+
+  const shipment = data?.data?.[0];
+
+  const updateMutation = trpc.shipment.update.useMutation({
+    onSuccess: () => {
+      utils.shipment.list.invalidate();
+      toast.success("Shipment updated");
+      setShowTrackingForm(false);
+    },
+    onError: (err) => toast.error("Failed to update shipment", err.message),
+  });
+
+  function markStatus(newStatus: ShipmentStatus) {
+    if (!shipment) return;
+    const extra: { shipmentDate?: string; actualDelivery?: string } = {};
+    if (newStatus === "shipped" || newStatus === "in_transit") extra.shipmentDate = new Date().toISOString();
+    if (newStatus === "delivered") extra.actualDelivery = new Date().toISOString();
+    updateMutation.mutate({ id: shipment.id, status: newStatus, ...extra });
+  }
+
+  function saveTracking() {
+    if (!shipment || !trackingInput.trim()) return;
+    updateMutation.mutate({ id: shipment.id, trackingNumber: trackingInput.trim() });
+  }
+
+  if (isLoading) return null;
+
+  return (
+    <div>
+      <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-2">Shipment</p>
+
+      {!shipment ? (
+        <div>
+          {!showCreate ? (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+            >
+              + Create Shipment
+            </button>
+          ) : (
+            <CreateShipmentForm
+              invoiceId={invoiceId}
+              partyId=""
+              onCreated={() => {
+                setShowCreate(false);
+                utils.shipment.list.invalidate();
+              }}
+            />
+          )}
+        </div>
+      ) : (
+        <div className="card rounded-xl border border-border-light bg-surface-1 p-3 space-y-3">
+          {/* Status row */}
+          <div className="flex items-center justify-between">
+            <InvoiceShipmentStatusBadge status={shipment.status as ShipmentStatus} />
+            <div className="flex gap-1.5">
+              {shipment.status === "pending" && (
+                <button
+                  onClick={() => markStatus("shipped")}
+                  disabled={updateMutation.isPending}
+                  className="text-[11px] px-2 py-1 rounded-md font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 border border-blue-200 dark:border-blue-800 transition-colors disabled:opacity-50"
+                >
+                  Mark Shipped
+                </button>
+              )}
+              {(shipment.status === "shipped" || shipment.status === "in_transit") && (
+                <button
+                  onClick={() => markStatus("delivered")}
+                  disabled={updateMutation.isPending}
+                  className="text-[11px] px-2 py-1 rounded-md font-medium text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 transition-colors disabled:opacity-50"
+                >
+                  Mark Delivered
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Mode + Carrier */}
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <p className="text-text-tertiary mb-0.5">Mode</p>
+              <p className="text-text-secondary">{INVOICE_MODE_LABELS[shipment.mode ?? ""] ?? shipment.mode ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-text-tertiary mb-0.5">Carrier</p>
+              <p className="text-text-secondary capitalize">{shipment.carrier?.replace(/_/g, " ") ?? "—"}</p>
+            </div>
+          </div>
+
+          {/* Tracking */}
+          <div className="text-xs">
+            <p className="text-text-tertiary mb-0.5">Tracking</p>
+            {shipment.trackingUrl ? (
+              <a
+                href={shipment.trackingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-brand-600 hover:underline"
+              >
+                {shipment.trackingNumber}
+              </a>
+            ) : shipment.trackingNumber ? (
+              <span className="font-mono text-text-primary">{shipment.trackingNumber}</span>
+            ) : showTrackingForm ? (
+              <div className="flex gap-1.5 mt-1">
+                <input
+                  type="text"
+                  value={trackingInput}
+                  onChange={(e) => setTrackingInput(e.target.value)}
+                  placeholder="Tracking number"
+                  className="flex-1 border border-border-light rounded-md px-2 py-1 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+                <button
+                  onClick={saveTracking}
+                  disabled={updateMutation.isPending || !trackingInput.trim()}
+                  className="px-2 py-1 rounded-md text-white bg-brand-600 hover:bg-brand-700 transition-colors disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowTrackingForm(true)}
+                className="text-brand-600 hover:underline"
+              >
+                Add tracking
+              </button>
+            )}
+          </div>
+
+          {/* Cost */}
+          {parseFloat(shipment.cost) > 0 && (
+            <div className="text-xs">
+              <p className="text-text-tertiary mb-0.5">Shipping Cost</p>
+              <p className="font-semibold text-text-primary tabular-nums">{formatCurrency(shipment.cost)}</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -285,7 +568,7 @@ function InvoiceDetailPanel({
                       <td className="px-3 py-2 text-text-primary">{li.description}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
                       <td className="px-3 py-2 text-text-secondary text-xs">
-                        {li.selectedUnit?.toUpperCase() || "—"}
+                        {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
                         {li.conversionFactor && parseFloat(li.conversionFactor) > 1 && (
                           <span className="text-text-tertiary"> (×{li.conversionFactor})</span>
                         )}
@@ -435,6 +718,11 @@ function InvoiceDetailPanel({
               <p className="text-xs text-text-tertiary">No payments recorded for this invoice</p>
             </div>
           )}
+
+          {/* Shipment card — sale invoices only */}
+          {invoice.type === "sale" && (
+            <InvoiceShipmentCard invoiceId={invoice.id} />
+          )}
         </div>
       )}
     </SlideOver>
@@ -459,6 +747,8 @@ function InvoicesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
+  // Tracks the partyId of the last-created invoice so "Create another" can pre-fill it
+  const [lastCreatedPartyId, setLastCreatedPartyId] = useState<string | undefined>(undefined);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
@@ -650,6 +940,7 @@ function InvoicesPage() {
           }
           title="No invoices found"
           description={`No ${type === "sale" ? "sales" : "purchase"} invoices${status ? ` with status "${status}"` : ""}.`}
+          encouragement={!search && !status ? "Create your first invoice — it only takes a minute." : undefined}
           action={
             <button
               className="btn-primary"
@@ -726,8 +1017,8 @@ function InvoicesPage() {
                               updateStatus.mutate({ id: inv.id, status: "sent" })
                             }
                           />
-                          {/* Context actions — visible on hover */}
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {/* Context actions — always visible at reduced opacity, full on hover */}
+                          <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
                             {(inv.status === "draft" || inv.status === "unfulfilled") && (
                               <button
                                 onClick={() =>
@@ -742,7 +1033,6 @@ function InvoicesPage() {
                               </button>
                             )}
                             {inv.status !== "draft" &&
-                              inv.status !== "unfulfilled" &&
                               inv.status !== "cancelled" &&
                               inv.status !== "paid" && (
                                 <button
@@ -808,12 +1098,16 @@ function InvoicesPage() {
         onCancel={() => setDeleteId(null)}
       />
 
-      {/* Document creator — new invoice */}
+      {/* Document creator — new invoice.
+          initialPartyId pre-fills the party picker when reopened after a creation,
+          enabling quick "create another for the same customer" workflow. */}
       {showCreate && (
         <DocumentCreator
           documentType="invoice"
           invoiceType={type}
+          initialPartyId={lastCreatedPartyId}
           onClose={() => setShowCreate(false)}
+          onSuccess={(partyId) => setLastCreatedPartyId(partyId)}
         />
       )}
 

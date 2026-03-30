@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { parties, items, invoices, invoiceItems, payments, paymentAllocations, businesses, bankAccounts, bankTransactions, shipments } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { router, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -37,7 +37,7 @@ export const importRouter = router({
           .map(r => r.name.toLowerCase())
       );
 
-      const newParties = [];
+      const newParties: (typeof parties.$inferInsert)[] = [];
       for (const p of input.parties) {
         // Check if party with same name already exists (case-insensitive)
         if (existingPartyNames.has(p.name.toLowerCase())) {
@@ -66,10 +66,13 @@ export const importRouter = router({
       }
 
       if (newParties.length > 0) {
-        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
-        for (let i = 0; i < newParties.length; i += 500) {
-          await ctx.db.insert(parties).values(newParties.slice(i, i + 500));
-        }
+        // Wrap all chunks in a single transaction so a mid-batch failure rolls
+        // back all chunks rather than leaving partial data committed.
+        await ctx.db.transaction(async (tx) => {
+          for (let i = 0; i < newParties.length; i += 500) {
+            await tx.insert(parties).values(newParties.slice(i, i + 500));
+          }
+        });
       }
 
       return { created, skipped, total: input.parties.length };
@@ -104,10 +107,46 @@ export const importRouter = router({
           .map(r => r.name.toLowerCase())
       );
 
-      const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"] as const;
+      const validUnits = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"] as const;
       type ValidUnit = (typeof validUnits)[number];
 
-      const newItems = [];
+      // Map MyBillBook (and common variant) unit codes to our canonical units
+      function normalizeUnit(raw: string): ValidUnit {
+        const mapping: Record<string, ValidUnit> = {
+          "BAG": "bag", "BAGS": "bag",
+          "BOX": "box", "BOXES": "box",
+          "BTL": "btl", "BOTTLE": "btl", "BOTTLES": "btl",
+          "BUN": "bun", "BUNCH": "bun", "BUNCHES": "bun",
+          "EACH": "pcs",
+          "JAR": "jar", "JARS": "jar",
+          "KG": "kg", "KGS": "kg", "KILOGRAM": "kg", "KILOGRAMS": "kg",
+          "LTR": "l", "L": "l", "LITRE": "l", "LITRES": "l", "LITER": "l",
+          "ML": "ml", "MILLILITRE": "ml",
+          "M": "m", "METER": "m", "METRE": "m",
+          "CM": "cm", "CENTIMETER": "cm",
+          "FT": "ft", "FEET": "ft", "FOOT": "ft",
+          "IN": "in", "INCH": "in", "INCHES": "in",
+          "PAC": "pack", "PACK": "pack", "PACKS": "pack",
+          "PCS": "pcs", "PIECE": "pcs", "PIECES": "pcs", "NOS": "pcs", "NUMBERS": "pcs",
+          "PERSON": "person", "PERSONS": "person",
+          "PET": "pet",
+          "PKT": "pkt", "PACKET": "pkt", "PACKETS": "pkt",
+          "POCH": "pouch", "POUCH": "pouch", "POUCHES": "pouch",
+          "TON": "ton", "TONS": "ton", "TONNE": "ton",
+          "DOZEN": "dozen", "DZ": "dozen",
+          "PAIR": "pair", "PAIRS": "pair",
+          "SET": "set", "SETS": "set",
+          "G": "g", "GM": "g", "GMS": "g", "GRAM": "g", "GRAMS": "g",
+        };
+        const upper = raw.trim().toUpperCase();
+        // Check mapping first, then fall back to direct match against validUnits
+        if (mapping[upper]) return mapping[upper];
+        if ((validUnits as readonly string[]).includes(upper.toLowerCase())) return upper.toLowerCase() as ValidUnit;
+        return "other";
+      }
+
+      const unmappedUnits = new Set<string>();
+      const newItems: (typeof items.$inferInsert)[] = [];
       for (const item of input.items) {
         // Check if item with same name already exists (case-insensitive)
         if (existingItemNames.has(item.name.toLowerCase())) {
@@ -115,10 +154,11 @@ export const importRouter = router({
           continue;
         }
 
-        // Validate unit against enum — fall back to "other" for unknown values
-        const unit: ValidUnit = (validUnits as readonly string[]).includes(item.unit)
-          ? (item.unit as ValidUnit)
-          : "other";
+        // Normalize unit using comprehensive mapping
+        const unit = normalizeUnit(item.unit);
+        if (unit === "other" && item.unit && item.unit.trim().toLowerCase() !== "other") {
+          unmappedUnits.add(item.unit.trim());
+        }
 
         newItems.push({
           businessId: ctx.businessId,
@@ -129,7 +169,7 @@ export const importRouter = router({
           taxPercent: item.taxPercent || "0",
           hsn: item.hsn || null,
           unit,
-          stockQuantity: item.stockQuantity || "0",
+          stockQuantity: "0", // always start at 0 — stock is built from imported invoices
           sku: item.sku || null,
           category: item.category || null,
           source: input.source,
@@ -140,13 +180,16 @@ export const importRouter = router({
       }
 
       if (newItems.length > 0) {
-        // Batch insert in chunks of 500 (PostgreSQL has a parameter limit)
-        for (let i = 0; i < newItems.length; i += 500) {
-          await ctx.db.insert(items).values(newItems.slice(i, i + 500));
-        }
+        // Wrap all chunks in a single transaction so a mid-batch failure rolls
+        // back all chunks rather than leaving partial data committed.
+        await ctx.db.transaction(async (tx) => {
+          for (let i = 0; i < newItems.length; i += 500) {
+            await tx.insert(items).values(newItems.slice(i, i + 500));
+          }
+        });
       }
 
-      return { created, skipped, total: input.items.length };
+      return { created, skipped, total: input.items.length, unmappedUnits: Array.from(unmappedUnits) };
     }),
 
   // ── Import invoices in batch (with optional line items) ─────────────────
@@ -175,6 +218,8 @@ export const importRouter = router({
           itemName: z.string().optional(),
           description: z.string(),
           quantity: z.string().default("1"),
+          unit: z.string().optional(),           // the unit this line was sold in (e.g. "KGS")
+          conversionFactor: z.string().optional(), // base units per this unit (e.g. "5" if 1 kg = 5 boxes)
           unitPrice: z.string(),
           taxPercent: z.string().default("0"),
           discountPercent: z.string().default("0"),
@@ -281,11 +326,14 @@ export const importRouter = router({
               discountPercent: li.discountPercent || "0",
             });
 
+            const cf = li.conversionFactor || "1";
             lineItemRows.push({
               invoiceId,
               itemId,
               description: li.description || li.itemName || "Imported item",
               quantity: li.quantity,
+              selectedUnit: li.unit || null,
+              conversionFactor: cf,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
               taxAmount: calc.taxAmount,
@@ -295,8 +343,9 @@ export const importRouter = router({
             });
 
             if (itemId) {
-              const qty = money.toNumber(li.quantity || "1");
-              stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + qty);
+              // Stock delta in base units: qty × conversionFactor
+              const baseQty = money.toNumber(li.quantity || "1") * money.toNumber(cf);
+              stockDeltas.set(itemId, (stockDeltas.get(itemId) || 0) + baseQty);
             }
           }
         } else {
@@ -389,6 +438,31 @@ export const importRouter = router({
           const autoPayments = batch.map(b => b.autoPaymentRow).filter(Boolean);
           if (autoPayments.length > 0) {
             await tx.insert(payments).values(autoPayments);
+          }
+
+          // Auto-create shipment entries only for sale invoices with shipping charges
+          const shipmentRows = batch
+            .filter(b => b.invoiceRow.type === "sale")
+            .map(b => {
+              const charges = (b.invoiceRow.charges as Array<{ label: string; amount: string }>) || [];
+              const shippingCharge = charges.find((c) =>
+                /shipping|delivery|freight|transport/i.test(c.label)
+              );
+              if (!shippingCharge || parseFloat(shippingCharge.amount) <= 0) return null;
+              return {
+                businessId: b.invoiceRow.businessId,
+                invoiceId: b.invoiceId,
+                partyId: b.invoiceRow.partyId,
+                mode: "hand_delivery",
+                cost: shippingCharge.amount,
+                status: "delivered" as const,  // imported invoices are historical — shipment already happened
+                shipmentDate: b.invoiceRow.invoiceDate,
+                actualDelivery: b.invoiceRow.invoiceDate,
+              };
+            })
+            .filter(Boolean) as Array<{ businessId: string; invoiceId: string; partyId: string; mode: string; cost: string; status: "delivered"; shipmentDate: Date; actualDelivery: Date }>;
+          if (shipmentRows.length > 0) {
+            await tx.insert(shipments).values(shipmentRows);
           }
         });
       }
@@ -669,58 +743,63 @@ export const importRouter = router({
           .sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime());
 
         if (needsPayment.length > 0) {
-          const [biz2] = await ctx.db
-            .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
-            .from(businesses)
-            .where(eq(businesses.id, ctx.businessId))
-            .for("update");
+          // Wrap counter increment + payment inserts + invoice updates in one transaction
+          // so a mid-sequence failure cannot leave the counter advanced without matching
+          // payment rows, or payments inserted without invoice amountPaid updated.
+          await ctx.db.transaction(async (tx) => {
+            const [biz2] = await tx
+              .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+              .from(businesses)
+              .where(eq(businesses.id, ctx.businessId))
+              .for("update");
 
-          let counter2 = biz2.nextNum;
-          const directPaymentRows = needsPayment.map((inv) => {
-            const shortfall = money.sub(inv.totalAmount, inv.amountPaid);
-            const paymentNumber = `${biz2.prefix}-${String(counter2).padStart(5, "0")}`;
-            counter2++;
-            return {
-              id: crypto.randomUUID(),
-              businessId: ctx.businessId,
-              partyId: inv.partyId,
-              invoiceId: inv.id,
-              paymentNumber,
-              amount: shortfall,
-              discount: "0",
-              mode: "cash" as const,
-              paymentDate: inv.invoiceDate,
-              notes: `Auto-created for direct-paid invoice ${inv.invoiceNumber}`,
-              createdByUserId: ctx.user!.id,
-              createdByName: ctx.user!.name,
-              source: input.source,
-            };
+            let counter2 = biz2.nextNum;
+            const directPaymentRows = needsPayment.map((inv) => {
+              const shortfall = money.sub(inv.totalAmount, inv.amountPaid);
+              const paymentNumber = `${biz2.prefix}-${String(counter2).padStart(5, "0")}`;
+              counter2++;
+              return {
+                id: crypto.randomUUID(),
+                businessId: ctx.businessId,
+                partyId: inv.partyId,
+                invoiceId: inv.id,
+                paymentNumber,
+                amount: shortfall,
+                discount: "0",
+                mode: "cash" as const,
+                paymentDate: inv.invoiceDate,
+                notes: `Auto-created for direct-paid invoice ${inv.invoiceNumber}`,
+                createdByUserId: ctx.user!.id,
+                createdByName: ctx.user!.name,
+                source: input.source,
+              };
+            });
+
+            await tx.update(businesses)
+              .set({ nextPaymentNumber: counter2 })
+              .where(eq(businesses.id, ctx.businessId));
+
+            for (let i = 0; i < directPaymentRows.length; i += 500) {
+              await tx.insert(payments).values(directPaymentRows.slice(i, i + 500));
+            }
+
+            // Update amountPaid + status on these invoices
+            for (const dp of directPaymentRows) {
+              await tx.execute(sql`
+                UPDATE invoices SET
+                  amount_paid = amount_paid::numeric + ${dp.amount}::numeric,
+                  status = CASE
+                    WHEN (amount_paid::numeric + ${dp.amount}::numeric) >= total_amount::numeric THEN 'paid'
+                    WHEN (amount_paid::numeric + ${dp.amount}::numeric) > 0 THEN 'partial'
+                    ELSE status
+                  END,
+                  updated_at = NOW()
+                WHERE id = ${dp.invoiceId} AND business_id = ${ctx.businessId}
+              `);
+            }
+
+            directCreated = directPaymentRows.length;
           });
-
-          await ctx.db.update(businesses)
-            .set({ nextPaymentNumber: counter2 })
-            .where(eq(businesses.id, ctx.businessId));
-
-          for (let i = 0; i < directPaymentRows.length; i += 500) {
-            await ctx.db.insert(payments).values(directPaymentRows.slice(i, i + 500));
-          }
-
-          // Update amountPaid + status on these invoices
-          for (const dp of directPaymentRows) {
-            await ctx.db.execute(sql`
-              UPDATE invoices SET
-                amount_paid = amount_paid::numeric + ${dp.amount}::numeric,
-                status = CASE
-                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) >= total_amount::numeric THEN 'paid'
-                  WHEN (amount_paid::numeric + ${dp.amount}::numeric) > 0 THEN 'partial'
-                  ELSE status
-                END,
-                updated_at = NOW()
-              WHERE id = ${dp.invoiceId} AND business_id = ${ctx.businessId}
-            `);
-          }
-
-          directCreated = directPaymentRows.length;
         }
       }
 
@@ -771,47 +850,50 @@ export const importRouter = router({
         return { created: 0, total: 0, errors: [] };
       }
 
-      // Get the payment counter
-      const [biz] = await ctx.db
-        .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
-        .from(businesses)
-        .where(eq(businesses.id, ctx.businessId))
-        .for("update");
+      // Wrap counter increment + payment inserts in one transaction so a failure
+      // never leaves the counter advanced without matching payment rows.
+      await ctx.db.transaction(async (tx) => {
+        const [biz] = await tx
+          .select({ prefix: businesses.paymentPrefix, nextNum: businesses.nextPaymentNumber })
+          .from(businesses)
+          .where(eq(businesses.id, ctx.businessId))
+          .for("update");
 
-      let counter = biz.nextNum;
+        let counter = biz.nextNum;
 
-      // Create a payment for each unmatched invoice
-      const paymentRows = rows.map((inv) => {
-        const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
-        counter++;
-        return {
-          id: crypto.randomUUID(),
-          businessId: ctx.businessId,
-          partyId: inv.party_id,
-          invoiceId: inv.id,
-          paymentNumber,
-          amount: inv.amount_paid,
-          discount: "0",
-          mode: "cash" as const,
-          paymentDate: new Date(inv.invoice_date),
-          notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
-          createdByUserId: ctx.user!.id,
-          createdByName: ctx.user!.name,
-          source: input.source,
-        };
+        // Create a payment for each unmatched invoice
+        const paymentRows = rows.map((inv) => {
+          const paymentNumber = `${biz.prefix}-${String(counter).padStart(5, "0")}`;
+          counter++;
+          return {
+            id: crypto.randomUUID(),
+            businessId: ctx.businessId,
+            partyId: inv.party_id,
+            invoiceId: inv.id,
+            paymentNumber,
+            amount: inv.amount_paid,
+            discount: "0",
+            mode: "cash" as const,
+            paymentDate: new Date(inv.invoice_date),
+            notes: `Auto-created for direct-paid invoice ${inv.invoice_number}`,
+            createdByUserId: ctx.user!.id,
+            createdByName: ctx.user!.name,
+            source: input.source,
+          };
+        });
+
+        // Update counter
+        await tx.update(businesses)
+          .set({ nextPaymentNumber: counter })
+          .where(eq(businesses.id, ctx.businessId));
+
+        // Batch insert in chunks
+        for (let i = 0; i < paymentRows.length; i += 500) {
+          await tx.insert(payments).values(paymentRows.slice(i, i + 500));
+        }
+
+        created = paymentRows.length;
       });
-
-      // Update counter
-      await ctx.db.update(businesses)
-        .set({ nextPaymentNumber: counter })
-        .where(eq(businesses.id, ctx.businessId));
-
-      // Batch insert in chunks
-      for (let i = 0; i < paymentRows.length; i += 500) {
-        await ctx.db.insert(payments).values(paymentRows.slice(i, i + 500));
-      }
-
-      created = paymentRows.length;
 
       return { created, total: rows.length, errors };
     }),

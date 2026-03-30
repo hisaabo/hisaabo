@@ -30,11 +30,11 @@ export function getStatusColor(status: string): string {
   switch (status) {
     case "paid": return "text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950";
     case "sent": return "text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-950";
-    case "draft": return "text-gray-600 bg-gray-100 dark:text-gray-400 dark:bg-gray-800";
+    case "draft": return "text-text-secondary bg-surface-2";
     case "partial": return "text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-950";
     case "overdue": return "text-red-700 bg-red-50 dark:text-red-400 dark:bg-red-950";
-    case "cancelled": return "text-gray-500 bg-gray-50 dark:text-gray-500 dark:bg-gray-900";
-    default: return "text-gray-600 bg-gray-100";
+    case "cancelled": return "text-text-tertiary bg-surface-2";
+    default: return "text-text-secondary bg-surface-2";
   }
 }
 
@@ -63,16 +63,16 @@ export function getDocumentTypeLabel(type: string): string {
 
 export function getDocumentTypeColor(type: string): string {
   const colors: Record<string, string> = {
-    invoice: "bg-blue-50 text-blue-700",
-    quotation: "bg-purple-50 text-purple-700",
-    credit_note: "bg-amber-50 text-amber-700",
-    debit_note: "bg-orange-50 text-orange-700",
-    delivery_challan: "bg-teal-50 text-teal-700",
-    proforma: "bg-indigo-50 text-indigo-700",
-    sales_return: "bg-rose-50 text-rose-700",
-    purchase_return: "bg-red-50 text-red-700",
+    invoice: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400",
+    quotation: "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400",
+    credit_note: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
+    debit_note: "bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-400",
+    delivery_challan: "bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-400",
+    proforma: "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-400",
+    sales_return: "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-400",
+    purchase_return: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400",
   };
-  return colors[type] || "bg-gray-50 text-gray-700";
+  return colors[type] || "bg-surface-2 text-text-secondary";
 }
 
 export function downloadCSV(filename: string, headers: string[], rows: (string | number)[][]) {

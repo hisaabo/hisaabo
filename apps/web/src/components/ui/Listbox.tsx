@@ -175,7 +175,7 @@ export function Listbox({
         >
           {label}
           {required && (
-            <span className="ml-0.5" style={{ color: "var(--danger)" }}>
+            <span className="ml-0.5 text-red-600">
               *
             </span>
           )}
@@ -203,7 +203,6 @@ export function Listbox({
             "flex-1 truncate",
             !selectedOption && "text-text-tertiary"
           )}
-          style={selectedOption ? undefined : { color: "var(--text-tertiary)" }}
         >
           {selectedOption ? selectedOption.label : placeholder}
         </span>
@@ -216,7 +215,7 @@ export function Listbox({
       </button>
 
       {error && (
-        <p className="mt-1 text-xs" style={{ color: "var(--danger)" }}>
+        <p className="mt-1 text-xs text-red-600">
           {error}
         </p>
       )}
@@ -228,10 +227,6 @@ export function Listbox({
           role="listbox"
           aria-labelledby={label ? labelId : undefined}
           className="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-border shadow-dropdown bg-surface-0 max-h-60 overflow-y-auto animate-scale-in"
-          style={{
-            background: "var(--surface-0)",
-            borderColor: "var(--border-color)",
-          }}
         >
           {options.map((option, index) => {
             const isSelected = option.value === value;
@@ -257,10 +252,7 @@ export function Listbox({
                 <span className="flex-1 min-w-0">
                   <span className="block truncate">{option.label}</span>
                   {option.description && (
-                    <span
-                      className="block text-xs truncate"
-                      style={{ color: "var(--text-tertiary)" }}
-                    >
+                    <span className="block text-xs truncate text-text-tertiary">
                       {option.description}
                     </span>
                   )}
