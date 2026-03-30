@@ -5,11 +5,11 @@ echo "[entrypoint] Hisaabo API — starting up"
 echo "[entrypoint] Node $(node --version) | ENV=${NODE_ENV}"
 
 # ── Run database migrations ────────────────────────────────────
-echo "[entrypoint] Running database migrations..."
+echo "[entrypoint] Pushing database schema..."
 cd /app/packages/db
-npx drizzle-kit migrate 2>&1 || {
-  echo "[entrypoint] WARNING: Migration failed! Starting server anyway for health checks."
-  echo "[entrypoint] Check DATABASE_URL and migration files."
+npx drizzle-kit push --force 2>&1 || {
+  echo "[entrypoint] WARNING: Schema push failed! Starting server anyway for health checks."
+  echo "[entrypoint] Check DATABASE_URL and schema files."
 }
 cd /app
 
