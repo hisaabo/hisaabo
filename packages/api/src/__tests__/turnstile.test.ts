@@ -297,7 +297,7 @@ describe("verifyTurnstile — IP parameter handling in request body", () => {
 
     // TypeScript signature is `ip: string | null` but we exercise the
     // empty-string coercion by casting — this is a runtime edge case.
-    await verifyTurnstile("token", "" as null);
+    await verifyTurnstile("token", "" as unknown as null);
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body).not.toHaveProperty("remoteip");

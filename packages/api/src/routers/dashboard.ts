@@ -212,10 +212,77 @@ export const dashboardRouter = router({
       months: z.number().int().min(3).max(24).default(6),
       fromDate: z.string().datetime().optional(),
       toDate: z.string().datetime().optional(),
+      granularity: z.enum(["week", "month", "fy"]).default("month"),
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
-      // If fromDate/toDate are provided, derive the month range from them.
+
+      // Fetch business financialYearStart (1-indexed month, e.g. 4 = April)
+      const [biz] = await ctx.db
+        .select({ financialYearStart: businesses.financialYearStart })
+        .from(businesses)
+        .where(eq(businesses.id, ctx.businessId))
+        .limit(1);
+
+      const fyStartMonth = biz?.financialYearStart ?? 4; // 1-indexed, e.g. 4 = April
+
+      // ── FY granularity: group by financial year ────────────────
+      if (input.granularity === "fy") {
+        // CASE expression maps a date to the FY start year:
+        //   April 2023 – March 2024  →  2023
+        //   Jan  2024  (before April) →  2023
+        const fyResults = await ctx.db.execute(sql`
+          SELECT
+            CASE
+              WHEN EXTRACT(MONTH FROM invoice_date) >= ${fyStartMonth}
+                THEN EXTRACT(YEAR FROM invoice_date)::int
+              ELSE (EXTRACT(YEAR FROM invoice_date) - 1)::int
+            END AS fy_year,
+            COALESCE(SUM(total_amount::numeric), 0)::text AS invoiced
+          FROM invoices
+          WHERE business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type = 'invoice'
+          GROUP BY fy_year
+          ORDER BY fy_year DESC
+          LIMIT 5
+        `);
+
+        // Collected amounts per FY (join payments to invoices to scope by sale invoices only)
+        const fyCollected = await ctx.db.execute(sql`
+          SELECT
+            CASE
+              WHEN EXTRACT(MONTH FROM p.payment_date) >= ${fyStartMonth}
+                THEN EXTRACT(YEAR FROM p.payment_date)::int
+              ELSE (EXTRACT(YEAR FROM p.payment_date) - 1)::int
+            END AS fy_year,
+            COALESCE(SUM(p.amount::numeric), 0)::text AS collected
+          FROM payments p
+          WHERE p.business_id = ${ctx.businessId}
+          GROUP BY fy_year
+          ORDER BY fy_year DESC
+          LIMIT 5
+        `);
+
+        type FyRow = { fy_year: number; invoiced?: string; collected?: string };
+        const rows = fyResults as unknown as FyRow[];
+        const collectedMap = new Map(
+          (fyCollected as unknown as FyRow[]).map(r => [r.fy_year, r.collected ?? "0"])
+        );
+
+        // Return most recent 5 FYs ascending
+        return rows
+          .slice(0, 5)
+          .reverse()
+          .map(r => ({
+            period: String(r.fy_year),
+            invoiced: r.invoiced ?? "0",
+            collected: collectedMap.get(r.fy_year) ?? "0",
+          }));
+      }
+
+      // ── Week / Month granularity: generate_series bucketing ───
+      // If fromDate/toDate are provided, derive the range from them.
       // Otherwise fall back to the last N months from today.
       let rangeStart: Date;
       let rangeEnd: Date;
@@ -235,37 +302,40 @@ export const dashboardRouter = router({
         rangeEnd = new Date();
       }
 
+      const truncUnit = input.granularity === "week" ? "week" : "month";
+      const stepInterval = input.granularity === "week" ? "1 week" : "1 month";
+
       const results = await ctx.db.execute(sql`
-        WITH months AS (
+        WITH periods AS (
           SELECT generate_series(
-            date_trunc('month', ${rangeStart.toISOString()}::timestamptz),
-            date_trunc('month', ${rangeEnd.toISOString()}::timestamptz),
-            '1 month'::interval
-          ) as month_start
+            date_trunc(${truncUnit}, ${rangeStart.toISOString()}::timestamptz),
+            date_trunc(${truncUnit}, ${rangeEnd.toISOString()}::timestamptz),
+            ${stepInterval}::interval
+          ) as period_start
         )
         SELECT
-          m.month_start,
+          p.period_start,
           COALESCE((
             SELECT SUM(total_amount::numeric)
             FROM invoices
             WHERE business_id = ${ctx.businessId}
               AND type = 'sale' AND document_type = 'invoice'
-              AND invoice_date >= m.month_start
-              AND invoice_date < m.month_start + '1 month'::interval
+              AND invoice_date >= p.period_start
+              AND invoice_date < p.period_start + ${stepInterval}::interval
           ), 0)::text as invoiced,
           COALESCE((
             SELECT SUM(amount::numeric)
             FROM payments
             WHERE business_id = ${ctx.businessId}
-              AND payment_date >= m.month_start
-              AND payment_date < m.month_start + '1 month'::interval
+              AND payment_date >= p.period_start
+              AND payment_date < p.period_start + ${stepInterval}::interval
           ), 0)::text as collected
-        FROM months m
-        ORDER BY m.month_start ASC
+        FROM periods p
+        ORDER BY p.period_start ASC
       `);
 
-      return (results as unknown as Array<{ month_start: Date; invoiced: string; collected: string }>).map(r => ({
-        month: new Date(r.month_start).toISOString(),
+      return (results as unknown as Array<{ period_start: Date; invoiced: string; collected: string }>).map(r => ({
+        period: new Date(r.period_start).toISOString(),
         invoiced: r.invoiced,
         collected: r.collected,
       }));

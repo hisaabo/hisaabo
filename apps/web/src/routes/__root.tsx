@@ -177,6 +177,14 @@ function RootLayout() {
     },
   });
 
+  const logoutMutation = trpc.auth.logout.useMutation({
+    onSuccess: () => {
+      setBusinessId(null);
+      queryClient.clear();
+      navigate({ to: "/login" });
+    },
+  });
+
   useHotkeys([
     {
       key: "k",
@@ -394,7 +402,14 @@ function RootLayout() {
           </button>
         </div>
 
-        {/* Business switcher — only shown if multiple businesses */}
+        {/* Business display — name only if single, switcher if multiple */}
+        {businesses && businesses.length === 1 && (
+          <div className="px-4 py-2 border-b border-border-light shrink-0">
+            <p className="text-[12px] font-medium truncate text-text-secondary">
+              {businesses[0].name}
+            </p>
+          </div>
+        )}
         {businesses && businesses.length > 1 && (
           <div className="px-3 py-2 border-b border-border-light shrink-0">
             <Listbox
@@ -466,20 +481,37 @@ function RootLayout() {
           </div>
 
           {/* User card */}
-          <div className="px-3 py-3">
-            <div className="flex items-center gap-2.5 px-2">
-              <div className="w-7 h-7 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[11px] font-semibold shrink-0">
+          <div className="px-3 py-3 space-y-2">
+            <div className="flex items-start gap-2.5 px-2">
+              <div className="w-7 h-7 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[11px] font-semibold shrink-0 mt-0.5">
                 {initials}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-medium truncate text-text-primary">
-                  {displayName}
-                </p>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <p className="text-[13px] font-medium truncate text-text-primary">
+                    {displayName}
+                  </p>
+                  {session.role && (
+                    <RoleBadge role={session.role} />
+                  )}
+                </div>
                 <p className="text-[11px] truncate text-text-tertiary">
                   {session.user.email}
                 </p>
               </div>
+              <button
+                onClick={() => logoutMutation.mutate()}
+                disabled={logoutMutation.isPending}
+                className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors mt-0.5"
+                aria-label="Sign out"
+                title="Sign out"
+              >
+                <LogoutIcon />
+              </button>
             </div>
+            <p className="px-2 text-[10px] text-text-tertiary/60 select-none">
+              v{__APP_VERSION__}
+            </p>
           </div>
         </div>
       </aside>
@@ -567,6 +599,34 @@ function ThemeToggle() {
     >
       {icons[theme]}
     </button>
+  );
+}
+
+// ── Role Badge ────────────────────────────────────────────────
+
+const roleStyles: Record<string, string> = {
+  owner: "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300",
+  admin: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  member: "bg-surface-2 text-text-secondary",
+  seller: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  accountant: "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+};
+
+const roleLabels: Record<string, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+  seller: "Seller",
+  accountant: "Accountant",
+};
+
+function RoleBadge({ role }: { role: string }) {
+  const style = roleStyles[role] ?? "bg-surface-2 text-text-secondary";
+  const label = roleLabels[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+  return (
+    <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 leading-none", style)}>
+      {label}
+    </span>
   );
 }
 
@@ -823,6 +883,16 @@ function MonitorIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" />
       <path d="M5.5 14h5M8 11.5v2.5" />
+    </svg>
+  );
+}
+
+function LogoutIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3" />
+      <path d="M11 11l3-3-3-3" />
+      <path d="M14 8H6" />
     </svg>
   );
 }
