@@ -1,3 +1,4 @@
+use tauri::Listener;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,17 +16,15 @@ pub fn run() {
 
             // Listen for deep link events (hisaabo://auth/verify?token=xxx)
             let handle = app.handle().clone();
-            app.listen("deep-link://new-url", move |event| {
-                if let Some(urls) = event.payload().as_ref().and_then(|p| {
-                    serde_json::from_str::<Vec<String>>(p).ok()
-                }) {
+            app.listen("deep-link://new-url", move |event: tauri::Event| {
+                if let Some(urls) = serde_json::from_str::<Vec<String>>(event.payload()).ok() {
                     for url in urls {
                         if url.contains("/auth/verify") {
-                            // Extract token and navigate the webview
                             if let Some(window) = handle.get_webview_window("main") {
+                                let query = url.split('?').nth(1).unwrap_or("");
                                 let js = format!(
                                     "window.location.href = '/auth/verify?{}'",
-                                    url.split('?').nth(1).unwrap_or("")
+                                    query
                                 );
                                 let _ = window.eval(&js);
                             }

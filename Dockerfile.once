@@ -77,8 +77,7 @@ COPY packages/shared/src/ packages/shared/src/
 COPY packages/shared/tsconfig.json packages/shared/
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod && \
-    pnpm --filter @hisaabo/db add -D drizzle-kit tsx
+    pnpm install --frozen-lockfile
 
 # ── s6 service: PostgreSQL ───────────────────────────────────
 #
