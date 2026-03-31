@@ -231,6 +231,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set version from tag
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          cd apps/desktop/src-tauri
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm -f tauri.conf.json.bak Cargo.toml.bak
+
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -241,7 +250,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Hisaabo ${{ github.ref_name }}"
-          releaseBody: "See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          releaseBody: "Desktop builds for ${{ github.ref_name }}. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."
           releaseDraft: true
           prerelease: false
 
@@ -270,6 +279,18 @@ jobs:
           java-version: 21
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Set version from tag
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          cd apps/mobile
+          node -e "
+            const f = 'app.json';
+            const j = JSON.parse(require('fs').readFileSync(f, 'utf8'));
+            j.expo.version = '${VERSION}';
+            require('fs').writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+          "
 
       - name: Expo prebuild
         working-directory: apps/mobile
