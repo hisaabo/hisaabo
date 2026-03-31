@@ -101,6 +101,7 @@ jobs:
         with:
           context: .
           push: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/hisaabo-api:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/hisaabo-api:latest
@@ -114,6 +115,7 @@ jobs:
           context: .
           file: Dockerfile.once
           push: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/hisaabo:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/hisaabo:latest
@@ -339,3 +341,94 @@ jobs:
       - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── Release Notes ──────────────────────────────────────────────
+  release-notes:
+    name: Publish Release Notes
+    needs: [changes, docker, web, store, desktop, mobile, cli, mcp]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: notes
+        env:
+          API: ${{ needs.changes.outputs.api }}
+          WEB: ${{ needs.changes.outputs.web }}
+          STORE: ${{ needs.changes.outputs.store }}
+          MOBILE: ${{ needs.changes.outputs.mobile }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+          CLI: ${{ needs.changes.outputs.cli }}
+          MCP: ${{ needs.changes.outputs.mcp }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          STORE_RESULT: ${{ needs.store.result }}
+          MOBILE_RESULT: ${{ needs.mobile.result }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+          CLI_RESULT: ${{ needs.cli.result }}
+          MCP_RESULT: ${{ needs.mcp.result }}
+        run: |
+          # Get commits since last tag
+          PREV=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          if [ -z "$PREV" ]; then
+            COMMITS=$(git log --oneline -20)
+          else
+            COMMITS=$(git log --oneline "${PREV}..HEAD")
+          fi
+
+          cat > /tmp/release-body.md << 'HEADER'
+          ## What's Updated
+
+          HEADER
+
+          status() {
+            local changed=$1 result=$2 label=$3
+            if [ "$changed" = "true" ]; then
+              if [ "$result" = "success" ]; then echo "| $label | Updated | :white_check_mark: |"
+              elif [ "$result" = "skipped" ]; then echo "| $label | Updated | :hourglass: Skipped |"
+              else echo "| $label | Updated | :x: Build failed |"
+              fi
+            else
+              echo "| $label | No changes | :heavy_minus_sign: |"
+            fi
+          }
+
+          cat >> /tmp/release-body.md << EOF
+          | Component | Status | Build |
+          |---|---|---|
+          $(status "$API" "$DOCKER_RESULT" "API (Docker)")
+          $(status "$WEB" "$WEB_RESULT" "Web App")
+          $(status "$STORE" "$STORE_RESULT" "Online Store")
+          $(status "$MOBILE" "$MOBILE_RESULT" "Android APK")
+          $(status "$DESKTOP" "$DESKTOP_RESULT" "Desktop (Win/Mac/Linux)")
+          $(status "$CLI" "$CLI_RESULT" "CLI (@hisaabo/cli)")
+          $(status "$MCP" "$MCP_RESULT" "MCP Server (@hisaabo/mcp)")
+
+          ## Docker
+
+          \`\`\`bash
+          docker pull ghcr.io/hisaabo/hisaabo:${{ github.ref_name }}
+          \`\`\`
+
+          ## Commits
+
+          \`\`\`
+          ${COMMITS}
+          \`\`\`
+
+          ---
+          *Components marked "No changes" are unchanged from the previous release. Download those builds from the [latest release](https://github.com/hisaabo/hisaabo/releases) that includes them.*
+          EOF
+
+          echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Hisaabo ${{ github.ref_name }}"
+          body_path: ${{ steps.notes.outputs.body_path }}
+          draft: false

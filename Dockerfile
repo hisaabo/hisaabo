@@ -44,6 +44,7 @@ COPY packages/api/fonts/ packages/api/fonts/
 # -- DB package: source (imported at runtime via workspace:*), migrations, config
 COPY packages/db/package.json packages/db/
 COPY packages/db/src/ packages/db/src/
+COPY packages/db/drizzle/ packages/db/drizzle/
 COPY packages/db/drizzle.config.ts packages/db/
 COPY packages/db/tsconfig.json packages/db/
 
@@ -61,10 +62,17 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="Hisaabo API"
+LABEL org.opencontainers.image.description="Invoicing and business management API"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
+
 EXPOSE 3000
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV HISAABO_VERSION=${VERSION}
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1

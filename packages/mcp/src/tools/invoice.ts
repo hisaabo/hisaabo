@@ -228,7 +228,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     "invoice_pdf_url",
     [
       "Get the URL to download or view an invoice as a PDF.",
-      "The URL requires the HISAABO_TOKEN for authentication (pass as a Bearer token).",
+      "The URL requires the HISAABO_API_KEY for authentication (pass as a Bearer token).",
       "Use format='a4' for standard invoices and format='thermal' for 80mm receipt printing.",
       "The URL is valid for as long as the session token is valid.",
     ].join(" "),
@@ -246,7 +246,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
           type: "text" as const,
           text: JSON.stringify({
             url,
-            note: "Fetch this URL with the Authorization: Bearer <HISAABO_TOKEN> header to download the PDF.",
+            note: "Fetch this URL with the Authorization: Bearer <HISAABO_API_KEY> header to download the PDF.",
             format: input.format,
           }, null, 2),
         }],

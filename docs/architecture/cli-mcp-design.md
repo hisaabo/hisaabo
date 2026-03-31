@@ -141,7 +141,7 @@ modification.
 - No refresh token mechanism — user must re-login after expiry. Acceptable for
   developer tooling.
 - The MCP server reads the token from an environment variable
-  (`HISAABO_TOKEN`), not the config file, so it works in CI and containerized
+  (`HISAABO_API_KEY`), not the config file, so it works in CI and containerized
   agent setups without a home directory.
 
 ---
@@ -705,7 +705,7 @@ import { registerTools } from "./server.js";
 // This makes the MCP server work cleanly in Docker, CI, and Claude Desktop.
 const config = {
   apiUrl: process.env.HISAABO_API_URL ?? "http://localhost:3000",
-  token: requireEnv("HISAABO_TOKEN"),
+  token: requireEnv("HISAABO_API_KEY"),
   tenantId: requireEnv("HISAABO_TENANT_ID"),
   businessId: requireEnv("HISAABO_BUSINESS_ID"),
 };
@@ -997,7 +997,7 @@ export function wrapTool<T>(handler: ToolHandler<T>): ToolHandler<T> {
 function formatError(err: HisaaboError): string {
   switch (err.code) {
     case "unauthorized":
-      return `Authentication required. Check that HISAABO_TOKEN is set and not expired.`;
+      return `Authentication required. Check that HISAABO_API_KEY is set and not expired.`;
     case "forbidden":
       return `Permission denied: ${err.message}`;
     case "not_found":
@@ -1050,9 +1050,9 @@ the cookie. This is the only required change to the existing API.
 
 ```
 npx @hisaabo/mcp
-# env: HISAABO_TOKEN, HISAABO_TENANT_ID, HISAABO_BUSINESS_ID, HISAABO_API_URL
+# env: HISAABO_API_KEY, HISAABO_TENANT_ID, HISAABO_BUSINESS_ID, HISAABO_API_URL
 
-All requests set: Authorization: Bearer $HISAABO_TOKEN
+All requests set: Authorization: Bearer $HISAABO_API_KEY
                   x-business-id: $HISAABO_BUSINESS_ID
                   x-tenant-id: $HISAABO_TENANT_ID
 ```
@@ -1072,7 +1072,7 @@ if any are missing. It does not attempt a lazy login.
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "http://localhost:3000",
-        "HISAABO_TOKEN": "<session-id-from-hisaabo-login>",
+        "HISAABO_API_KEY": "<session-id-from-hisaabo-login>",
         "HISAABO_TENANT_ID": "<tenant-id>",
         "HISAABO_BUSINESS_ID": "<business-id>"
       }

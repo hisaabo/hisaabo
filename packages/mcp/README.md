@@ -33,7 +33,7 @@ Open `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_TOKEN": "sess_...",
+        "HISAABO_API_KEY": "sess_...",
         "HISAABO_TENANT_ID": "tenant-uuid-here",
         "HISAABO_BUSINESS_ID": "business-uuid-here"
       }
@@ -53,7 +53,7 @@ Ask Claude: *"What is my business's total outstanding receivables?"*
 | Variable | Required | Description |
 |---|---|---|
 | `HISAABO_API_URL` | Yes | Base URL of your Hisaabo API (e.g. `http://localhost:3000` for local dev) |
-| `HISAABO_TOKEN` | Yes | Session token from `hisaabo whoami --json` → `token` |
+| `HISAABO_API_KEY` | Yes | Session token from `hisaabo whoami --json` → `token` |
 | `HISAABO_TENANT_ID` | Yes | Tenant UUID from `hisaabo whoami --json` → `tenantId` |
 | `HISAABO_BUSINESS_ID` | Yes | Business UUID from `hisaabo whoami --json` → `businessId` |
 

@@ -5,8 +5,8 @@ dist/
 .env.local
 *.log
 
-# Database
-packages/db/drizzle/
+# Database (keep migration files — they're deployment artifacts)
+# packages/db/drizzle/ — NOT ignored, migrations must be committed
 
 # Tauri
 apps/desktop/src-tauri/target/

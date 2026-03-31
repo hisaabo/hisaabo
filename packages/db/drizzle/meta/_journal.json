@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1774267140667,
+      "tag": "0000_familiar_boom_boom",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1774268905032,
+      "tag": "0001_outgoing_marvel_apes",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1774959430566,
+      "tag": "0002_pink_talos",
+      "breakpoints": true
+    }
+  ]
+}

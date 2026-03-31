@@ -7,7 +7,7 @@
  *
  * Required environment variables:
  *   HISAABO_API_URL     — Base URL of the Hisaabo API (default: http://localhost:3000)
- *   HISAABO_TOKEN       — Session ID obtained from `hisaabo login` (Bearer token)
+ *   HISAABO_API_KEY       — Session ID obtained from `hisaabo login` (Bearer token)
  *   HISAABO_TENANT_ID   — Tenant (organization) UUID
  *   HISAABO_BUSINESS_ID — Active business UUID
  *
@@ -19,7 +19,7 @@
  *         "args": ["@hisaabo/mcp"],
  *         "env": {
  *           "HISAABO_API_URL": "http://localhost:3000",
- *           "HISAABO_TOKEN": "<session-id-from-hisaabo-login>",
+ *           "HISAABO_API_KEY": "<session-id-from-hisaabo-login>",
  *           "HISAABO_TENANT_ID": "<tenant-uuid>",
  *           "HISAABO_BUSINESS_ID": "<business-uuid>"
  *         }
@@ -47,7 +47,7 @@ function requireEnv(name: string): string {
 
 const config = {
   apiUrl: process.env.HISAABO_API_URL ?? "http://localhost:3000",
-  token: requireEnv("HISAABO_TOKEN"),
+  token: requireEnv("HISAABO_API_KEY"),
   tenantId: requireEnv("HISAABO_TENANT_ID"),
   businessId: requireEnv("HISAABO_BUSINESS_ID"),
 };

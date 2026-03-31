@@ -136,7 +136,7 @@ Then add this to your Claude Desktop `claude_desktop_config.json`:
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_TOKEN": "sess_...",
+        "HISAABO_API_KEY": "sess_...",
         "HISAABO_TENANT_ID": "tenant-uuid",
         "HISAABO_BUSINESS_ID": "business-uuid"
       }
@@ -296,7 +296,7 @@ const client = createTRPCClient<AppRouter>({
       url: `${process.env.HISAABO_API_URL}/api/trpc`,
       transformer: SuperJSON,
       headers: {
-        Authorization: `Bearer ${process.env.HISAABO_TOKEN}`,
+        Authorization: `Bearer ${process.env.HISAABO_API_KEY}`,
         "x-business-id": process.env.HISAABO_BUSINESS_ID,
         "x-tenant-id": process.env.HISAABO_TENANT_ID,
       },

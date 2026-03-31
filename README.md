@@ -1,13 +1,22 @@
 # Hisaabo
 
-> Self-hosted invoicing and business management for Indian businesses. GST-compliant. Multi-platform.
+> Free, open-source invoicing and business management for Indian businesses. GST-compliant. Multi-platform.
 
+[![CI](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
-[![React Native](https://img.shields.io/badge/React_Native-0.76-61DAFB?logo=react&logoColor=black)](https://reactnative.dev/)
+[![Expo](https://img.shields.io/badge/Expo-55-000020?logo=expo&logoColor=white)](https://expo.dev/)
+[![React Native](https://img.shields.io/badge/React_Native-0.83-61DAFB?logo=react&logoColor=black)](https://reactnative.dev/)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
+[![Hono](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
+[![tRPC](https://img.shields.io/badge/tRPC-11-2596BE?logo=trpc&logoColor=white)](https://trpc.io/)
+[![Drizzle](https://img.shields.io/badge/Drizzle-0.38-C5F74F?logo=drizzle&logoColor=black)](https://orm.drizzle.team/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?logo=docker&logoColor=white)](https://ghcr.io/hisaabo/hisaabo)
+[![npm](https://img.shields.io/badge/npm-@hisaabo/cli-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/org/hisaabo)
 
 **Hisaab, pakka.** (Honest accounting.)
 
@@ -74,7 +83,7 @@ Add to Claude Desktop's `claude_desktop_config.json`:
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_TOKEN": "sess_...",
+        "HISAABO_API_KEY": "sess_...",
         "HISAABO_TENANT_ID": "tenant-uuid",
         "HISAABO_BUSINESS_ID": "business-uuid"
       }

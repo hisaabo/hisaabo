@@ -76,7 +76,7 @@ Add the `hisaabo` entry using the values from `hisaabo whoami --json`:
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_TOKEN": "sess_VbK2mQ9xP4nR7wA1...",
+        "HISAABO_API_KEY": "sess_VbK2mQ9xP4nR7wA1...",
         "HISAABO_TENANT_ID": "tenant-uuid-here",
         "HISAABO_BUSINESS_ID": "business-uuid-here"
       }
@@ -218,7 +218,7 @@ The MCP server is configured entirely through environment variables passed in th
 | Variable | Where to find it | Description |
 |---|---|---|
 | `HISAABO_API_URL` | Your deployment URL | Base URL of your Hisaabo API, e.g. `https://your-hisaabo-instance.com` |
-| `HISAABO_TOKEN` | `hisaabo whoami --json` → `token` | Session token (same as Bearer token used by the mobile app) |
+| `HISAABO_API_KEY` | `hisaabo whoami --json` → `token` | Session token (same as Bearer token used by the mobile app) |
 | `HISAABO_TENANT_ID` | `hisaabo whoami --json` → `tenantId` | Your organization/tenant UUID |
 | `HISAABO_BUSINESS_ID` | `hisaabo whoami --json` → `businessId` | The business to operate on |
 
@@ -270,7 +270,7 @@ hisaabo login
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_TOKEN": "sess_VbK2mQ9xP4nR7wA1...",
+        "HISAABO_API_KEY": "sess_VbK2mQ9xP4nR7wA1...",
         "HISAABO_TENANT_ID": "tenant-uuid-here",
         "HISAABO_BUSINESS_ID": "business-uuid-here"
       }
@@ -291,7 +291,7 @@ The MCP server runs as a child process of Claude Desktop over stdio — Claude D
 
 Claude will call the `dashboard_summary` tool and return a structured response with your current data.
 
-**If Claude reports it cannot connect:** Check that the `HISAABO_TOKEN` is not expired (`hisaabo login` to refresh it) and that `HISAABO_API_URL` is reachable from the machine running Claude Desktop.
+**If Claude reports it cannot connect:** Check that the `HISAABO_API_KEY` is not expired (`hisaabo login` to refresh it) and that `HISAABO_API_URL` is reachable from the machine running Claude Desktop.
 
 ---
 
@@ -307,7 +307,7 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_TOKEN: "sess_VbK2mQ9xP4nR7wA1..."
+      HISAABO_API_KEY: "sess_VbK2mQ9xP4nR7wA1..."
       HISAABO_TENANT_ID: "tenant-uuid-here"
       HISAABO_BUSINESS_ID: "business-uuid-here"
     description: "Hisaabo business management — invoices, parties, inventory, GST, shipping, banking"
@@ -1085,7 +1085,7 @@ MCP resources are read-only data snapshots that AI agents can load into their co
 
 **Use a limited-privilege account** — Create a dedicated Hisaabo user account for MCP access with the lowest role needed (e.g. `accountant` for read-only reporting, `seller` for invoice creation). The MCP server inherits the permissions of the authenticated user.
 
-**Token rotation** — The `HISAABO_TOKEN` is a session token with a 30-day expiry. Set a calendar reminder to refresh it before it expires: `hisaabo login && hisaabo whoami --json` to get a new token.
+**Token rotation** — The `HISAABO_API_KEY` is a session token with a 30-day expiry. Set a calendar reminder to refresh it before it expires: `hisaabo login && hisaabo whoami --json` to get a new token.
 
 **Do not share tokens** — Each Claude Desktop instance or OpenClaw agent should use its own session token tied to a purpose-specific user account. This makes it possible to revoke one agent's access without affecting others.
 

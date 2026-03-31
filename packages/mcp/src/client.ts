@@ -16,7 +16,7 @@ import superjson from "superjson";
 export interface ClientConfig {
   /** Base API URL, e.g. "http://localhost:3000" or "https://api.hisaabo.in" */
   apiUrl: string;
-  /** Session ID used as Bearer token — from HISAABO_TOKEN env var */
+  /** Session ID used as Bearer token — from HISAABO_API_KEY env var */
   token: string;
   /** Tenant (organization) UUID — from HISAABO_TENANT_ID env var */
   tenantId: string;
@@ -43,7 +43,7 @@ export class HisaaboApiError extends Error {
 export function formatHisaaboError(err: HisaaboError): string {
   switch (err.code) {
     case "unauthorized":
-      return `Authentication required: ${err.message}. Check that HISAABO_TOKEN is set and not expired.`;
+      return `Authentication required: ${err.message}. Check that HISAABO_API_KEY is set and not expired.`;
     case "forbidden":
       return `Permission denied: ${err.message}`;
     case "not_found":
