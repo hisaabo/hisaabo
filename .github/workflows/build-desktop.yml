@@ -82,7 +82,7 @@ jobs:
         run: pnpm --filter @hisaabo/web build
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version "^2" --locked --force
 
       - name: Build Tauri desktop app
         run: cargo tauri build

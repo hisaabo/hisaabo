@@ -25,10 +25,7 @@ import { getApiUrl } from "../../../src/lib/api-url";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
-import { StatusBadge, Card, QueryError, Skeleton } from "../../../src/components/ui";
-
-// Alias for backward compatibility with inline color references
-const C = colors;
+import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 

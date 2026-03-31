@@ -149,7 +149,7 @@ export default function ItemDetailScreen() {
     lowStockThreshold !== null &&
     currentStock <= lowStockThreshold;
 
-  const newStockPreview = () => {
+  const _newStockPreview = () => {
     const qty = parseFloat(adjustQty) || 0;
     if (adjustDirection === "add") return currentStock + qty;
     return Math.max(0, currentStock - qty);

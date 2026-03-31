@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import type { EndpointDef } from "../content/types";
-import { endpointById, groupById, allEndpointGroups } from "../content";
+import { endpointById, allEndpointGroups } from "../content";
 import { ParamTable } from "./ParamTable";
 
 interface Props {

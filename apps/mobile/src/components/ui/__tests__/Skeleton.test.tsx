@@ -40,7 +40,7 @@ import { Skeleton } from "../Skeleton";
 // This avoids "act()" warnings from React when the animation loop fires
 // during teardown.
 // ---------------------------------------------------------------------------
-jest.spyOn(Animated, "loop").mockImplementation((animation) => ({
+jest.spyOn(Animated, "loop").mockImplementation((_animation) => ({
   start: jest.fn(),
   stop: jest.fn(),
   reset: jest.fn(),

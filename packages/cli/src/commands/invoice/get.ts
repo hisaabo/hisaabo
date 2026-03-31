@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, termWidth, hasColor } from "../../output.js";
-import { formatAmount, formatDate, formatStatus, formatINR, deliveryMethodLabel } from "../../format.js";
+import { formatAmount, formatDate, formatStatus, deliveryMethodLabel } from "../../format.js";
 import chalk from "chalk";
 
 export async function invoiceGetCommand(id: string, opts: { json?: boolean }): Promise<void> {
@@ -36,6 +36,7 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
 
     const title = `SALE INVOICE  ${inv.invoiceNumber}`;
     const statusBadge = formatStatus(inv.status);
+    // eslint-disable-next-line no-control-regex
     const topPad = Math.max(1, inner - title.length - statusBadge.replace(/\x1b\[[0-9;]*m/g, "").length);
 
     process.stdout.write(`\n ┌${"─".repeat(inner + 2)}┐\n`);
@@ -68,7 +69,7 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
 
     // Totals
     const subtotal = inv.lineItems.reduce((s, i) => s + parseFloat(i.amount), 0);
-    const tax = parseFloat(inv.totalAmount) - subtotal - parseFloat(inv.roundOff ?? "0") + parseFloat(inv.invoiceDiscount ?? "0");
+    const _tax = parseFloat(inv.totalAmount) - subtotal - parseFloat(inv.roundOff ?? "0") + parseFloat(inv.invoiceDiscount ?? "0");
 
     line(`Subtotal:`, formatAmount(String(subtotal)).padStart(16));
     if (parseFloat(inv.invoiceDiscount ?? "0") !== 0)

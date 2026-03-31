@@ -381,7 +381,7 @@ export default function InvoiceEditScreen() {
   }, [invoice, initialized]);
 
   const updateMutation = trpc.invoice.update.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (_data) => {
       utils.invoice.list.invalidate();
       utils.invoice.getById.invalidate({ id: id ?? "" });
       router.back();

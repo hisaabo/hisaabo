@@ -76,5 +76,5 @@ if (rootReactPath !== react19Path) {
     if (require.cache[react19CjsPath] && !require.cache[rootReactCjsPath]) {
       require.cache[rootReactCjsPath] = require.cache[react19CjsPath];
     }
-  } catch (_) {}
+  } catch {}
 }

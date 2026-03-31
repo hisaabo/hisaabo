@@ -18,7 +18,7 @@ export const Route = createFileRoute("/shipments")({
 // ── Types ─────────────────────────────────────────────────────────
 
 type ShipmentStatus = "pending" | "shipped" | "in_transit" | "delivered" | "returned";
-type ShipmentMode = "hand_delivery" | "courier" | "transport" | "post";
+type _ShipmentMode = "hand_delivery" | "courier" | "transport" | "post";
 
 interface ShipmentRow {
   id: string;

@@ -135,10 +135,9 @@ describe("EmptyState — zero-data placeholder for list screens", () => {
     // WHAT: The Ionicons size prop must be 48 as specified in the component.
     // WHY: A 16pt icon in the middle of a blank screen is nearly invisible
     //      and makes the empty state look accidental rather than designed.
-    const { UNSAFE_getByType } = render(
+    render(
       <EmptyState icon="pricetag-outline" title="No items" />
     );
-    const { Text } = require("react-native");
 
     // Our mock renders Ionicons as Text — check the mocked component rendered
     // We verify by the testID that the icon is rendered with our mock

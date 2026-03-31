@@ -15,7 +15,6 @@
 
 import { describe, it, expect } from "vitest";
 import { calcLineItem, calcInvoiceTotals } from "../calc.js";
-import type { LineItemInput } from "../calc.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // calcLineItem — single invoice line item calculations

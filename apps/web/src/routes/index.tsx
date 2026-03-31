@@ -1108,12 +1108,6 @@ const PERIOD_TABS = PERIODS.map((p) => ({ value: p.id, label: p.label }));
 
 // ─── Summary cards ────────────────────────────────────────────────────────────
 
-function getFYLabel(fyStartIso: string): string {
-  const fyStart = new Date(fyStartIso);
-  const startYear = fyStart.getFullYear();
-  return `FY ${startYear}–${String(startYear + 1).slice(-2)}`;
-}
-
 const PERIOD_LABELS: Record<PeriodId, string> = {
   "this-month": "This Month",
   "this-quarter": "This Quarter",

@@ -1,4 +1,4 @@
-import { HisaaboClient, HisaaboApiError, type TargetRow, type TargetWithProgress } from "../../client.js";
+import { HisaaboClient, HisaaboApiError, type TargetRow } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import {
   fatalError, outputJSON, outputTable, EXIT, success, type ColumnDef,

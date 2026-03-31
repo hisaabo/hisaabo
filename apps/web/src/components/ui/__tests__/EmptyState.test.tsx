@@ -33,7 +33,7 @@ describe("EmptyState — zero-data placeholder for list and filter views", () =>
     });
 
     it("renders only the title and nothing else when no optional props are provided (minimal footprint)", () => {
-      const { container } = render(<EmptyState title="No results" />);
+      render(<EmptyState title="No results" />);
 
       // Only the title paragraph should be present; no description or action.
       expect(screen.getByText("No results")).toBeInTheDocument();

@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { CodePanel } from "./CodePanel";
 import { AuthBanner } from "./AuthBanner";
-import { allEndpointGroups, endpointById, groupById } from "../content";
+import { endpointById, groupById } from "../content";
 import { EndpointDoc } from "./EndpointDoc";
 
 interface LayoutProps {

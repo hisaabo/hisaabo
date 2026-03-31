@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useEffect, useRef, forwardRef } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBusinessStore } from "../../../../src/stores/business";
 import { colors } from "../../../../src/lib/theme";
@@ -31,8 +31,6 @@ const DOC_TYPES = [
 
 type DocTypeKey = typeof DOC_TYPES[number]["key"];
 type PrefixField = typeof DOC_TYPES[number]["prefixField"];
-type CounterField = typeof DOC_TYPES[number]["counterField"];
-
 interface SeqEditorState {
   docKey: DocTypeKey;
   label: string;

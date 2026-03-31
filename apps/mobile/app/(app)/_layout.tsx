@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
-import { Redirect, Tabs } from "expo-router";
+import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
@@ -47,7 +47,7 @@ export default function AppLayout() {
   }, [businesses, businessId]);
 
   // Low stock badge (only when business is ready)
-  const { data: lowStockCount } = trpc.item.lowStockCount.useQuery(undefined, {
+  const { data: _lowStockCount } = trpc.item.lowStockCount.useQuery(undefined, {
     enabled: !!businessId,
   });
 

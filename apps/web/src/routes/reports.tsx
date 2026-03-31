@@ -86,20 +86,6 @@ interface DaybookEntry {
   meta: Record<string, string | null>;
 }
 
-interface DaybookSummary {
-  totalSalesInvoiced: string;
-  totalPurchaseInvoiced: string;
-  totalPaymentsReceived: string;
-  totalPaymentsMade: string;
-  totalExpenses: string;
-  netCashMovement: string;
-}
-
-interface DaybookData {
-  entries: DaybookEntry[];
-  summary: DaybookSummary;
-}
-
 // Outstanding — matches router's actual return shape
 interface OutstandingPartyRow {
   partyId: string;
@@ -122,11 +108,6 @@ interface AgingBucket {
     days90Plus: string;
     total: string;
   };
-}
-
-interface OutstandingData {
-  receivables: AgingBucket | null;
-  payables: AgingBucket | null;
 }
 
 // ── Daybook report ───────────────────────────────────────────────

@@ -1,8 +1,7 @@
 import { HisaaboClient, HisaaboApiError, type InvoiceStatus } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, EXIT, hasColor } from "../../output.js";
+import { fatalError, outputJSON, EXIT } from "../../output.js";
 import { formatStatus } from "../../format.js";
-import chalk from "chalk";
 
 const VALID_STATUSES: InvoiceStatus[] = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"];
 

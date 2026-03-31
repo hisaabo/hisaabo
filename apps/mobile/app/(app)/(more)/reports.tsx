@@ -4,7 +4,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,7 +13,7 @@ import { useState } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
-import { Card, QueryError, Skeleton, ScreenHeader, DatePickerField } from "../../../src/components/ui";
+import { Card, QueryError, Skeleton, DatePickerField } from "../../../src/components/ui";
 
 type Period = "month" | "quarter" | "fy" | "all" | "custom";
 
@@ -151,7 +150,7 @@ export default function ReportsScreen() {
     ? expenseData.reduce((sum, e) => sum + parseFloat(e.total ?? "0"), 0)
     : 0;
 
-  const totalStatusAmount = statusData
+  const _totalStatusAmount = statusData
     ? statusData.reduce((sum, s) => sum + parseFloat(s.total ?? "0"), 0)
     : 0;
 

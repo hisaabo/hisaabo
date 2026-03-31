@@ -16,7 +16,8 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?logo=docker&logoColor=white)](https://ghcr.io/hisaabo/hisaabo)
-[![npm](https://img.shields.io/badge/npm-@hisaabo/cli-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/org/hisaabo)
+[![@hisaabo/cli](https://img.shields.io/npm/v/@hisaabo/cli?logo=npm&logoColor=white&label=@hisaabo/cli)](https://www.npmjs.com/package/@hisaabo/cli)
+[![@hisaabo/mcp](https://img.shields.io/npm/v/@hisaabo/mcp?logo=npm&logoColor=white&label=@hisaabo/mcp)](https://www.npmjs.com/package/@hisaabo/mcp)
 
 **Hisaab, pakka.** (Honest accounting.)
 
@@ -92,25 +93,34 @@ Add to Claude Desktop's `claude_desktop_config.json`:
 }
 ```
 
-Get your credentials: `npm install -g @hisaabo/cli && hisaabo login && hisaabo whoami --json`
+Get your credentials: `npm install -g @hisaabo/cli && hisaabo login --api-url https://your-instance.com && hisaabo whoami --json`
 
 130+ API endpoints. 14 business domains. GST-compliant out of the box. Multi-tenant with full business isolation.
 
 ### CLI Tool — Script everything
 
-Script your business operations from the terminal. JSON output by default, pipes into `jq`, `curl`, `mail`. Copy-paste ready cron jobs for daily reports, GST filing prep, and stock reorder alerts.
+Manage your entire business from the terminal. Every command supports `--json` for piping into `jq`, `--format csv` for spreadsheets, and `--format ids` for scripting with `xargs`.
 
 ```bash
 npm install -g @hisaabo/cli
+hisaabo login --api-url https://your-hisaabo-instance.com
 
-# Morning business brief in one line
-hisaabo dashboard --period today --json | jq '{revenue, outstanding, overdueCount}'
+# Morning business brief
+hisaabo dashboard --json | jq '{revenue, outstanding, overdueCount}'
 
-# Automated GST filing prep — runs on the 28th of every month
-hisaabo gst export --type gstr1 --month $(date +%m) --year $(date +%Y) --format json
+# This month's invoices as a CSV
+hisaabo invoice list --this-month --format csv > invoices.csv
+
+# GSTR-3B numbers for Q4 filing
+hisaabo gst r3b --quarter Q4 --json | jq '.taxPayable'
+
+# Mark all draft invoices as sent
+hisaabo invoice list --status draft --format ids | xargs -I{} hisaabo invoice status {} sent
 ```
 
-**Deep-dive:** [docs.hisaabo.in/ai/cli](https://docs.hisaabo.in/ai/cli)
+14 command groups: `invoice`, `party`, `item`, `payment`, `expense`, `bank`, `gst`, `report`, `shipment`, `target`, `store`, `import`, `dashboard`, `business`.
+
+**Deep-dive:** [@hisaabo/cli on npm](https://www.npmjs.com/package/@hisaabo/cli) | [docs.hisaabo.in/cli](https://docs.hisaabo.in/cli)
 
 ### Integrations
 
@@ -190,7 +200,7 @@ If you already have Hisaabo running and want to connect Claude Desktop:
 ```bash
 npm install -g @hisaabo/cli
 hisaabo login --api-url https://your-hisaabo-instance.com
-hisaabo whoami --json  # copy token, tenantId, businessId
+hisaabo whoami --json  # copy token, tenantId, businessId from the output
 ```
 
 Then add to `claude_desktop_config.json` — see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
@@ -239,6 +249,14 @@ For production deployment, database setup, and HTTPS configuration, see the [sel
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
+│              CLI & AI Agents                              │
+│                                                          │
+│  packages/cli    Terminal CLI (@hisaabo/cli)              │
+│  packages/mcp    MCP server for Claude, OpenClaw, etc.   │
+│  Both call the API with x-business-id header             │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
 │               Documentation                              │
 │  apps/docs (Starlight/Astro) · apps/api-docs (React)     │
 └─────────────────────────────────────────────────────────┘
@@ -270,7 +288,9 @@ hisaabo/
 ├── packages/
 │   ├── api/          # Hono + tRPC server (14 routers, 130+ procedures)
 │   ├── db/           # Drizzle ORM schema + PostgreSQL client
-│   └── shared/       # Zod validators, TypeScript types, money module
+│   ├── shared/       # Zod validators, TypeScript types, money module
+│   ├── cli/          # Terminal CLI (@hisaabo/cli on npm)
+│   └── mcp/          # MCP server for AI agents (@hisaabo/mcp on npm)
 ├── nginx/            # Production nginx configuration
 ├── docker-compose.yml        # Local development PostgreSQL
 ├── docker-compose.prod.yml   # Production API + PostgreSQL deployment

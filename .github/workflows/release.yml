@@ -291,6 +291,9 @@ jobs:
     if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -309,9 +312,7 @@ jobs:
         working-directory: packages/cli
         run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
 
-      - run: pnpm --filter @hisaabo/cli publish --no-git-checks --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: pnpm --filter @hisaabo/cli publish --no-git-checks --access public --provenance
 
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
@@ -320,6 +321,9 @@ jobs:
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -338,9 +342,7 @@ jobs:
         working-directory: packages/mcp
         run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
 
-      - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public --provenance
 
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:
@@ -348,6 +350,8 @@ jobs:
     needs: [changes, docker, web, store, desktop, mobile, cli, mcp]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:

@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
-import { formatAmount, formatINR } from "../../format.js";
+import { formatINR } from "../../format.js";
 
 export async function partyGetCommand(id: string, opts: { json?: boolean }): Promise<void> {
   const cfg = requireAuth();

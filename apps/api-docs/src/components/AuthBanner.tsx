@@ -1,10 +1,8 @@
 import React from "react";
 import { useUser } from "../lib/user-context";
 
-const APP_URL = import.meta.env.VITE_APP_URL || "https://app.hisaabo.in";
-
 export function AuthBanner() {
-  const { session, loading, error } = useUser();
+  const { session, loading } = useUser();
 
   // Loading state -- only shows when VITE_API_URL is configured
   if (loading) {

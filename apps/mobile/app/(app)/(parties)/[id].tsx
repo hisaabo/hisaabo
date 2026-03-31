@@ -21,7 +21,7 @@ import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
-import { Card, QueryError, DatePickerField } from "../../../src/components/ui";
+import { QueryError, DatePickerField } from "../../../src/components/ui";
 
 type LedgerTab = "ledger" | "topItems";
 
@@ -36,7 +36,7 @@ export default function PartyDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<LedgerTab>("ledger");
-  const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerPage, _setLedgerPage] = useState(1);
   const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
   const [ledgerTo, setLedgerTo] = useState<Date | null>(null);
   const [showDateFilter, setShowDateFilter] = useState(false);

@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   View,
   Text,
-  ScrollView,
   FlatList,
   TouchableOpacity,
   StyleSheet,

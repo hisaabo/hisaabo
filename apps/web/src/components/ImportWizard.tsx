@@ -1070,7 +1070,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
   const importInvoicesMut = trpc.import.importInvoices.useMutation();
   const importPaymentsMut = trpc.import.importPayments.useMutation();
   const importTransfersMut = trpc.import.importTransfers.useMutation();
-  const reconcileDirectMut = trpc.import.reconcileDirectPayments.useMutation();
+  const _reconcileDirectMut = trpc.import.reconcileDirectPayments.useMutation();
   const createExpenseMut = trpc.expense.create.useMutation();
   const updateItemMut = trpc.item.update.useMutation();
   const trpcUtils = trpc.useUtils();
@@ -1762,7 +1762,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
     }
 
     // Track allocated invoice IDs across all C&B batches for reconciliation
-    let allAllocatedInvoiceIds: string[] = [];
+    let _allAllocatedInvoiceIds: string[] = [];
 
     // ── Step 4: Import payments from Cash & Bank PDF ───────────────────────
     if (cashBankFile) {

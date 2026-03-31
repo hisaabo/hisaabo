@@ -801,7 +801,7 @@ export const paymentRouter = router({
             : money.sub(totalDeposited, pmt.amount);
 
           // Calculate running balance after this transaction
-          const currentBal = money.add(account.currentBalance, totalDeposited);
+          const _currentBal = money.add(account.currentBalance, totalDeposited);
 
           // Create bank transaction
           await tx.insert(bankTransactions).values({

@@ -16,8 +16,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-const CURRENT_YEAR = new Date().getFullYear();
-
 export function registerReportTools(server: McpServer, client: HisaaboClient) {
 
   server.tool(

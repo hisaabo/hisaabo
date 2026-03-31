@@ -224,7 +224,7 @@ function borderedRect(
   w: number,
   h: number,
   strokeColor: string,
-  weight = 0.5
+  _weight = 0.5
 ) {
   doc.save();
   doc.rect(x, y, w, h).stroke(strokeColor);
@@ -373,7 +373,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   y += topSectionH + 1;
 
   // ── Buyer section ─────────────────────────────────────────
-  const buyerSectionH = 60;
+  const _buyerSectionH = 60;
   filledRect(doc, margin - 4, y, contentW + 8, 16, cHeaderBg);
   doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
     .text("BUYER / BILL TO", margin, y + 4);
@@ -496,7 +496,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     const G2 = margin + 65;
     const G3 = margin + 150;
     const G4 = margin + 230;
-    const G5 = margin + 290;
+    const _G5 = margin + 290;
     const GW = 70;
 
     doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
@@ -532,7 +532,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // ── Totals (right-aligned block) ─────────────────────────
   // We go back up to align totals with the right side of the table
-  const totalsTop = y;
+  const _totalsTop = y;
   // Re-position y for the bottom of totals after they are drawn
 
   const totalLabelX = margin + contentW * 0.6;
@@ -609,7 +609,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   if (hasPaymentInfo) {
     const payLeft = margin;
-    const payRight = margin + contentW * 0.5 + 10;
+    const _payRight = margin + contentW * 0.5 + 10;
     const payColW  = contentW * 0.5 - 10;
 
     filledRect(doc, margin - 4, y, contentW + 8, 14, cHeaderBg);
@@ -747,7 +747,7 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const cAccent    = "#5b5bd6"; // indigo
   const cBorder    = "#e8e8f0";
   const cBg        = "#f4f4f8"; // very light lavender-grey
-  const cAccentBg  = "#ededfb"; // lightest indigo wash
+  const _cAccentBg = "#ededfb"; // lightest indigo wash
 
   const gstMode  = isGstRegistered(data);
   const titleLabel = getInvoiceTitle(data);

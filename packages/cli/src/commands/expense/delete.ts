@@ -9,7 +9,7 @@ export async function expenseDeleteCommand(id: string, opts: { yes?: boolean; js
 
   try {
     // Fetch expense first
-    const list = await client.expense.list({ page: 1, limit: 1 });
+    const _list = await client.expense.list({ page: 1, limit: 1 });
     // We can't get by ID directly; use delete and check error
     if (!opts.yes && process.stdin.isTTY) {
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

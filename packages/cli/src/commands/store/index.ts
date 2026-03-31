@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError, type StoreOrderSummary } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import {
-  fatalError, outputJSON, outputTable, paginationFooter, EXIT, success, type ColumnDef,
+  fatalError, outputJSON, outputTable, paginationFooter, EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatDate, formatAmount, formatStatus } from "../../format.js";
 

@@ -410,7 +410,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
           ) : (
             <SectionList
               sections={sections}
-              keyExtractor={(item, index) =>
+              keyExtractor={(item, _index) =>
                 item.kind === "party" ? item.id : `contact-${item.contact.id}`
               }
               contentContainerStyle={modalStyles.listContent}

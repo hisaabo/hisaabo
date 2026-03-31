@@ -634,7 +634,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
       }
       return true;
     })
-    .map(({ stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
+    .map(({ stockQty: _stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
       const base = {
         ...rest,
         inStock: rest.inStock || allowNeg,
@@ -875,7 +875,7 @@ app.post("/store/:slug/order", async (c) => {
       eq(items.storeEnabled, true),
     ));
 
-  if (foundItems.length !== [...new Set(itemIds)].length) {
+  if (foundItems.length !== new Set(itemIds).size) {
     return c.json({ error: "One or more items are not available in this store" }, 400);
   }
 

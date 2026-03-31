@@ -1,0 +1,45 @@
+name: Deploy API Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api-docs/**"
+      - "packages/api/src/index.ts"
+      - "packages/api/src/router.ts"
+      - "packages/api/src/routers/**"
+
+concurrency:
+  group: deploy-api-docs
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy API Docs to Cloudflare Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API docs
+        run: pnpm --filter @hisaabo/api-docs build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy apps/api-docs/dist --project-name=hisaabo-api-docs

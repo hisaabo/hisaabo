@@ -5,17 +5,15 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  TextInput,
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
-import { FAB, SearchBar, PressableRow, EmptyState, QueryError } from "../../../src/components/ui";
+import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
 
 type PartyType = "customer" | "supplier";
 

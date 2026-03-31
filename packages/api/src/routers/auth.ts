@@ -1,4 +1,4 @@
-import { eq, and, gt, isNull, sql } from "drizzle-orm";
+import { eq, and, gt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";

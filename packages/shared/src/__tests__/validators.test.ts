@@ -17,7 +17,6 @@ import {
   // Auth
   loginSchema,
   registerSchema,
-  magicLinkRequestSchema,
   // Business
   createBusinessSchema,
   // Party

@@ -159,7 +159,6 @@ export async function login(apiUrl: string, email: string, password: string): Pr
     });
 
     success(`Active business: ${selected.name}`);
-    const cfg = getConfig();
     console.log("  Config saved to " + getConfigPath());
     console.log("\n  You can switch businesses anytime with:");
     console.log("    hisaabo business switch\n");

@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { calcLineItem } from "@hisaabo/shared";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Invoice number formatting — padded to 5 digits

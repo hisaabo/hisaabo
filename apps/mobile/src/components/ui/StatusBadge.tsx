@@ -1,5 +1,4 @@
 import { View, Text, StyleSheet } from "react-native";
-import { colors } from "../../lib/theme";
 
 const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
   draft: { bg: "rgba(107, 114, 128, 0.2)", text: "#9ca3af", label: "Draft" },

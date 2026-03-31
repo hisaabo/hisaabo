@@ -339,7 +339,7 @@ function CartFooter({
 function CartRow({
   entry,
   symbol,
-  accent,
+  accent: _accent,
   onAddToCart,
   onRemoveFromCart,
   onClearItem,

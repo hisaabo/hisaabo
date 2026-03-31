@@ -58,12 +58,12 @@ program
 program
   .command("login")
   .description("Authenticate and configure your Hisaabo server")
-  .option("--url <url>", "Server URL")
+  .option("--api-url <url>", "Server URL")
   .option("--email <email>", "Email address")
   .option("--password <password>", "Password")
   .option("--token <token>", "API key (hisaabo_key_...) for passwordless auth")
   .action(async (opts) => {
-    let apiUrl = opts.url;
+    let apiUrl = opts.apiUrl;
 
     // ── API key path — skip email/password flow ──
     if (opts.token) {
