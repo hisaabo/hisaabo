@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
+  FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -23,6 +24,18 @@ import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
 
 type DetailTab = "stats" | "priceHistory" | "stockMovements";
+
+type VariantModalState = {
+  visible: boolean;
+  mode: "create" | "edit";
+  variantId?: string;
+  attributeValues: string; // JSON-like "Key:Val, Key2:Val2"
+  sku: string;
+  salePrice: string;
+  purchasePrice: string;
+  stockQuantity: string;
+  lowStockAlert: string;
+};
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -36,6 +49,39 @@ export default function ItemDetailScreen() {
   );
   const [adjustQty, setAdjustQty] = useState("");
   const [adjustReason, setAdjustReason] = useState("");
+
+  // Action menu
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+
+  // Variant modal state
+  const [variantModal, setVariantModal] = useState<VariantModalState>({
+    visible: false,
+    mode: "create",
+    attributeValues: "",
+    sku: "",
+    salePrice: "",
+    purchasePrice: "",
+    stockQuantity: "",
+    lowStockAlert: "",
+  });
+
+  // Merge modal
+  const [mergeModalVisible, setMergeModalVisible] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [mergeTargetSearch, setMergeTargetSearch] = useState("");
+  const [mergeConversionFactor, setMergeConversionFactor] = useState("1");
+
+  // Switch base unit modal
+  const [switchUnitModalVisible, setSwitchUnitModalVisible] = useState(false);
+  const [switchNewUnit, setSwitchNewUnit] = useState("");
+  const [switchConversionFactor, setSwitchConversionFactor] = useState("1");
+
+  // Rename unit modal
+  const [renameUnitModalVisible, setRenameUnitModalVisible] = useState(false);
+  const [renameNewUnit, setRenameNewUnit] = useState("");
+
+  // Stock adjustment history pagination
+  const [adjHistoryPage, setAdjHistoryPage] = useState(1);
 
   const { data: item, isLoading, refetch: refetchItem, isRefetching: isRefetchingItem } = trpc.item.getById.useQuery(
     { id: id ?? "" },
@@ -59,6 +105,17 @@ export default function ItemDetailScreen() {
       { id: id ?? "" },
       { enabled: !!id && activeTab === "stockMovements" }
     );
+
+  const { data: adjHistory, isLoading: adjHistoryLoading } =
+    trpc.item.stockAdjustmentHistory.useQuery(
+      { itemId: id ?? "", page: adjHistoryPage, limit: 20 },
+      { enabled: !!id && activeTab === "stockMovements" }
+    );
+
+  const { data: itemSearchResults } = trpc.item.list.useQuery(
+    { search: mergeTargetSearch, limit: 10 },
+    { enabled: mergeModalVisible && mergeTargetSearch.length >= 2 }
+  );
 
   const deleteItem = trpc.item.delete.useMutation({
     onSuccess: () => {
@@ -100,6 +157,206 @@ export default function ItemDetailScreen() {
       Alert.alert("Error", error.message || "Failed to adjust stock");
     },
   });
+
+  // Variant mutations
+  const createVariant = trpc.item.createVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: id ?? "" });
+      setVariantModal((s) => ({ ...s, visible: false }));
+      haptic.success();
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to create variant"),
+  });
+
+  const updateVariant = trpc.item.updateVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: id ?? "" });
+      setVariantModal((s) => ({ ...s, visible: false }));
+      haptic.success();
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to update variant"),
+  });
+
+  const deleteVariant = trpc.item.deleteVariant.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: id ?? "" });
+      haptic.medium();
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to delete variant"),
+  });
+
+  // Merge mutation
+  const mergeItem = trpc.item.merge.useMutation({
+    onSuccess: () => {
+      utils.item.list.invalidate();
+      setMergeModalVisible(false);
+      haptic.success();
+      Alert.alert("Merged", "Item merged successfully.", [
+        { text: "OK", onPress: () => router.back() },
+      ]);
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to merge item"),
+  });
+
+  // Switch base unit mutation
+  const switchBaseUnit = trpc.item.switchBaseUnit.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: id ?? "" });
+      setSwitchUnitModalVisible(false);
+      setSwitchNewUnit("");
+      setSwitchConversionFactor("1");
+      haptic.success();
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to switch unit"),
+  });
+
+  // Rename unit mutation
+  const renameUnit = trpc.item.renameUnit.useMutation({
+    onSuccess: () => {
+      utils.item.getById.invalidate({ id: id ?? "" });
+      setRenameUnitModalVisible(false);
+      setRenameNewUnit("");
+      haptic.success();
+    },
+    onError: (err) => Alert.alert("Error", err.message || "Failed to rename unit"),
+  });
+
+  // Helpers
+  const openCreateVariant = () => {
+    setVariantModal({
+      visible: true,
+      mode: "create",
+      variantId: undefined,
+      attributeValues: "",
+      sku: "",
+      salePrice: "",
+      purchasePrice: "",
+      stockQuantity: "0",
+      lowStockAlert: "",
+    });
+  };
+
+  const openEditVariant = (v: NonNullable<typeof item>["variants"][number]) => {
+    const attrStr = Object.entries(v.attributeValues)
+      .map(([k, val]) => `${k}: ${val}`)
+      .join(", ");
+    setVariantModal({
+      visible: true,
+      mode: "edit",
+      variantId: v.id,
+      attributeValues: attrStr,
+      sku: v.sku ?? "",
+      salePrice: v.salePrice ?? "",
+      purchasePrice: v.purchasePrice ?? "",
+      stockQuantity: v.stockQuantity ?? "0",
+      lowStockAlert: v.lowStockAlert ?? "",
+    });
+  };
+
+  const parseAttributeValues = (raw: string): Record<string, string> => {
+    const result: Record<string, string> = {};
+    raw.split(",").forEach((part) => {
+      const idx = part.indexOf(":");
+      if (idx !== -1) {
+        const key = part.slice(0, idx).trim();
+        const val = part.slice(idx + 1).trim();
+        if (key) result[key] = val;
+      }
+    });
+    return result;
+  };
+
+  const handleVariantSubmit = () => {
+    const attrs = parseAttributeValues(variantModal.attributeValues);
+    if (Object.keys(attrs).length === 0) {
+      Alert.alert("Error", "Enter at least one attribute (e.g. Size: L)");
+      return;
+    }
+    const qty = parseFloat(variantModal.stockQuantity);
+    if (isNaN(qty)) {
+      Alert.alert("Error", "Enter a valid stock quantity");
+      return;
+    }
+
+    const payload = {
+      attributeValues: attrs,
+      sku: variantModal.sku.trim() || undefined,
+      salePrice: variantModal.salePrice.trim() || undefined,
+      purchasePrice: variantModal.purchasePrice.trim() || undefined,
+      stockQuantity: variantModal.stockQuantity,
+      lowStockAlert: variantModal.lowStockAlert.trim() || undefined,
+    };
+
+    haptic.medium();
+    if (variantModal.mode === "create") {
+      createVariant.mutate({ itemId: id ?? "", variant: payload });
+    } else if (variantModal.variantId) {
+      updateVariant.mutate({ variantId: variantModal.variantId, data: payload });
+    }
+  };
+
+  const handleDeleteVariant = (variantId: string, label: string) => {
+    Alert.alert("Delete Variant", `Delete variant "${label}"?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          haptic.error();
+          deleteVariant.mutate({ variantId });
+        },
+      },
+    ]);
+  };
+
+  const handleMergeSubmit = () => {
+    if (!mergeTargetId) {
+      Alert.alert("Error", "Select a target item to merge into");
+      return;
+    }
+    const factor = parseFloat(mergeConversionFactor);
+    if (isNaN(factor) || factor <= 0) {
+      Alert.alert("Error", "Enter a valid conversion factor");
+      return;
+    }
+    haptic.medium();
+    mergeItem.mutate({
+      sourceId: id ?? "",
+      targetId: mergeTargetId,
+      stockConversionFactor: parseFloat(mergeConversionFactor),
+    });
+  };
+
+  const handleSwitchUnitSubmit = () => {
+    if (!switchNewUnit.trim()) {
+      Alert.alert("Error", "Enter a new unit name");
+      return;
+    }
+    const factor = parseFloat(switchConversionFactor);
+    if (isNaN(factor) || factor <= 0) {
+      Alert.alert("Error", "Enter a valid conversion factor");
+      return;
+    }
+    haptic.medium();
+    switchBaseUnit.mutate({
+      id: id ?? "",
+      newUnit: switchNewUnit.trim(),
+      conversionFactor: parseFloat(switchConversionFactor),
+    });
+  };
+
+  const handleRenameUnitSubmit = () => {
+    if (!renameNewUnit.trim()) {
+      Alert.alert("Error", "Enter a new unit name");
+      return;
+    }
+    haptic.medium();
+    renameUnit.mutate({
+      id: id ?? "",
+      oldUnit: item?.unit ?? "",
+      newUnit: renameNewUnit.trim(),
+    });
+  };
 
   const handleAdjustSubmit = () => {
     const qty = parseFloat(adjustQty);
@@ -173,6 +430,13 @@ export default function ItemDetailScreen() {
             activeOpacity={0.7}
           >
             <Ionicons name="create-outline" size={22} color={colors.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionMenuButton}
+            onPress={() => setActionMenuVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="ellipsis-vertical" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.deleteButton}
@@ -256,10 +520,20 @@ export default function ItemDetailScreen() {
                 {parseFloat(item.taxPercent ?? "0").toFixed(0)}%
               </Text>
             </View>
-            <View style={styles.infoCell}>
+            <TouchableOpacity
+              style={styles.infoCell}
+              onPress={() => {
+                setRenameNewUnit(item.unit);
+                setRenameUnitModalVisible(true);
+              }}
+              activeOpacity={0.7}
+            >
               <Text style={styles.infoCellLabel}>Unit</Text>
-              <Text style={styles.infoCellValue}>{item.unit}</Text>
-            </View>
+              <View style={styles.unitTappableRow}>
+                <Text style={styles.infoCellValue}>{item.unit}</Text>
+                <Ionicons name="pencil-outline" size={13} color={colors.brand} />
+              </View>
+            </TouchableOpacity>
             {item.hsn && (
               <View style={styles.infoCell}>
                 <Text style={styles.infoCellLabel}>HSN</Text>
@@ -332,49 +606,100 @@ export default function ItemDetailScreen() {
         )}
 
         {/* Variants Section */}
-        {isVariant && item.variants && item.variants.length > 0 && (
+        {isVariant && (
           <View style={styles.card}>
-            <Text style={styles.sectionLabel}>
-              Variants ({item.variants.length})
-            </Text>
-            {item.variants.map((v, idx) => (
-              <View
-                key={v.id}
-                style={[
-                  styles.variantRow,
-                  idx < item.variants.length - 1 && styles.variantRowBorder,
-                ]}
-              >
-                <View style={styles.variantInfo}>
-                  <Text style={styles.variantAttrs}>
-                    {Object.values(v.attributeValues).join(" / ")}
-                  </Text>
-                  {v.sku && (
-                    <Text style={styles.variantSku}>{v.sku}</Text>
-                  )}
-                </View>
-                <View style={styles.variantRight}>
-                  <Text style={styles.variantPrice}>
-                    {v.salePrice ? formatCurrency(v.salePrice) : "—"}
-                  </Text>
-                  <Text style={styles.variantStock}>
-                    {parseFloat(v.stockQuantity ?? "0").toFixed(0)} {item.unit}
-                  </Text>
-                </View>
-              </View>
-            ))}
-            <View style={styles.variantTotalRow}>
-              <Text style={styles.variantTotalLabel}>Total Stock</Text>
-              <Text style={styles.variantTotalValue}>
-                {item.variants
-                  .reduce(
-                    (sum, v) => sum + parseFloat(v.stockQuantity ?? "0"),
-                    0
-                  )
-                  .toFixed(0)}{" "}
-                {item.unit}
+            <View style={styles.sectionLabelRow}>
+              <Text style={styles.sectionLabel}>
+                Variants ({item.variants?.length ?? 0})
               </Text>
+              <TouchableOpacity
+                style={styles.addVariantButton}
+                onPress={openCreateVariant}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add" size={15} color={colors.brand} />
+                <Text style={styles.addVariantButtonText}>Add</Text>
+              </TouchableOpacity>
             </View>
+            {item.variants && item.variants.length > 0 ? (
+              <>
+                {item.variants.map((v, idx) => {
+                  const attrLabel = Object.entries(v.attributeValues)
+                    .map(([k, val]) => `${k}: ${val}`)
+                    .join(", ");
+                  const vStock = parseFloat(v.stockQuantity ?? "0");
+                  const vLowAlert = v.lowStockAlert ? parseFloat(v.lowStockAlert) : null;
+                  const vLow = vLowAlert !== null && vStock <= vLowAlert;
+                  return (
+                    <View
+                      key={v.id}
+                      style={[
+                        styles.variantRow,
+                        idx < item.variants.length - 1 && styles.variantRowBorder,
+                      ]}
+                    >
+                      <View style={styles.variantInfo}>
+                        <View style={styles.variantAttrPills}>
+                          {Object.entries(v.attributeValues).map(([k, val]) => (
+                            <View key={k} style={styles.attrPill}>
+                              <Text style={styles.attrPillText}>
+                                {k}: {val}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                        {v.sku && (
+                          <Text style={styles.variantSku}>{v.sku}</Text>
+                        )}
+                        {vLow && (
+                          <View style={styles.variantLowStockBadge}>
+                            <Ionicons name="warning-outline" size={11} color={colors.warning} />
+                            <Text style={styles.variantLowStockText}>Low stock</Text>
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.variantRight}>
+                        <Text style={styles.variantPrice}>
+                          {v.salePrice ? formatCurrency(v.salePrice) : "—"}
+                        </Text>
+                        <Text style={[styles.variantStock, vLow && { color: colors.warning }]}>
+                          {vStock % 1 === 0 ? vStock.toFixed(0) : vStock.toFixed(2)} {item.unit}
+                        </Text>
+                        <View style={styles.variantActions}>
+                          <TouchableOpacity
+                            onPress={() => openEditVariant(v)}
+                            style={styles.variantActionBtn}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="pencil-outline" size={14} color={colors.brand} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => handleDeleteVariant(v.id, attrLabel)}
+                            style={[styles.variantActionBtn, styles.variantActionBtnDanger]}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="trash-outline" size={14} color={colors.danger} />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })}
+                <View style={styles.variantTotalRow}>
+                  <Text style={styles.variantTotalLabel}>Total Stock</Text>
+                  <Text style={styles.variantTotalValue}>
+                    {item.variants
+                      .reduce((sum, v) => sum + parseFloat(v.stockQuantity ?? "0"), 0)
+                      .toFixed(0)}{" "}
+                    {item.unit}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.emptyVariants}>
+                <Text style={styles.emptyVariantsText}>No variants yet. Tap Add to create one.</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -591,6 +916,92 @@ export default function ItemDetailScreen() {
                   color={colors.border}
                 />
                 <Text style={styles.emptyTabText}>No stock movements</Text>
+              </View>
+            )}
+
+            {/* Stock Adjustment History */}
+            {!isVariant && (
+              <View style={styles.adjHistorySection}>
+                <Text style={styles.adjHistorySectionTitle}>Manual Adjustments</Text>
+                {adjHistoryLoading ? (
+                  <ActivityIndicator color={colors.brand} style={{ paddingVertical: 20 }} />
+                ) : adjHistory && adjHistory.data && adjHistory.data.length > 0 ? (
+                  <>
+                    {adjHistory.data.map((adj, idx) => {
+                      const qty = parseFloat(adj.quantity ?? "0");
+                      const isPositive = qty >= 0;
+                      return (
+                        <View
+                          key={adj.id ?? idx}
+                          style={[
+                            styles.adjRow,
+                            idx < adjHistory.data.length - 1 && styles.adjRowBorder,
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.adjIcon,
+                              isPositive ? styles.adjIconIn : styles.adjIconOut,
+                            ]}
+                          >
+                            <Ionicons
+                              name={isPositive ? "add-outline" : "remove-outline"}
+                              size={16}
+                              color={isPositive ? colors.success : colors.danger}
+                            />
+                          </View>
+                          <View style={styles.adjInfo}>
+                            <Text style={styles.adjDate}>
+                              {formatDate(adj.adjustmentDate)}
+                            </Text>
+                            {adj.reason ? (
+                              <Text style={styles.adjReason}>{adj.reason}</Text>
+                            ) : null}
+                          </View>
+                          <View style={styles.adjRight}>
+                            <Text
+                              style={[
+                                styles.adjQty,
+                                isPositive ? styles.adjQtyIn : styles.adjQtyOut,
+                              ]}
+                            >
+                              {isPositive ? "+" : ""}{qty % 1 === 0 ? qty.toFixed(0) : qty.toFixed(2)} {item.unit}
+                            </Text>
+                            {adj.newStock != null && (
+                              <Text style={styles.adjResultStock}>
+                                Stock: {parseFloat(adj.newStock).toFixed(0)}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    })}
+                    <View style={styles.adjHistoryPagination}>
+                      {adjHistoryPage > 1 && (
+                        <TouchableOpacity
+                          style={styles.adjPageBtn}
+                          onPress={() => setAdjHistoryPage((p) => p - 1)}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="chevron-back-outline" size={14} color={colors.brand} />
+                          <Text style={styles.adjPageBtnText}>Prev</Text>
+                        </TouchableOpacity>
+                      )}
+                      {adjHistory.data.length < adjHistory.total && (
+                        <TouchableOpacity
+                          style={[styles.adjPageBtn, { marginLeft: "auto" }]}
+                          onPress={() => setAdjHistoryPage((p) => p + 1)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.adjPageBtnText}>Next</Text>
+                          <Ionicons name="chevron-forward-outline" size={14} color={colors.brand} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                ) : (
+                  <Text style={styles.adjHistoryEmpty}>No manual adjustments recorded.</Text>
+                )}
               </View>
             )}
           </View>
@@ -1360,5 +1771,209 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: colors.textPrimary,
+  },
+  // Action menu button
+  actionMenuButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+  },
+  // Unit tappable row
+  unitTappableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  // Section label row (header with an action button)
+  sectionLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  // Add variant button
+  addVariantButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.brand,
+    backgroundColor: colors.brandLight,
+  },
+  addVariantButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.brand,
+  },
+  // Variant attribute pills (flex-row wrap container)
+  variantAttrPills: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    marginBottom: 4,
+  },
+  attrPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: "rgba(99,102,241,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.25)",
+  },
+  attrPillText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.brand,
+  },
+  // Variant low-stock badge
+  variantLowStockBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginTop: 3,
+  },
+  variantLowStockText: {
+    fontSize: 11,
+    color: colors.warning,
+    fontWeight: "600",
+  },
+  // Variant action buttons
+  variantActions: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 4,
+  },
+  variantActionBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.brandLight,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.2)",
+  },
+  variantActionBtnDanger: {
+    backgroundColor: "rgba(239,68,68,0.1)",
+    borderColor: "rgba(239,68,68,0.2)",
+  },
+  // Empty variants placeholder
+  emptyVariants: {
+    alignItems: "center",
+    paddingVertical: 24,
+  },
+  emptyVariantsText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: "center",
+  },
+  // Stock adjustment history section
+  adjHistorySection: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  adjHistorySectionTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 12,
+    paddingHorizontal: 20,
+  },
+  // Adjustment row
+  adjRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    gap: 12,
+  },
+  adjRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surface,
+  },
+  adjIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  adjIconIn: {
+    backgroundColor: "rgba(16,185,129,0.15)",
+  },
+  adjIconOut: {
+    backgroundColor: "rgba(239,68,68,0.15)",
+  },
+  adjInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  adjDate: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  adjReason: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  adjRight: {
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  adjQty: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  adjQtyIn: {
+    color: colors.success,
+  },
+  adjQtyOut: {
+    color: colors.danger,
+  },
+  adjResultStock: {
+    fontSize: 11,
+    color: colors.textMuted,
+  },
+  // Adjustment history pagination
+  adjHistoryPagination: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  adjPageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.brand,
+    backgroundColor: colors.brandLight,
+  },
+  adjPageBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.brand,
+  },
+  // Empty adjustment history
+  adjHistoryEmpty: {
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: "center",
+    paddingVertical: 24,
+    paddingHorizontal: 20,
   },
 });

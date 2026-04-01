@@ -5,6 +5,8 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -12,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
+import { haptic } from "../../../../src/lib/haptics";
 import {
   StatusBadge,
   FAB,
@@ -38,6 +41,17 @@ export default function CreditNotesScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const utils = trpc.useUtils();
+
+  const deleteMutation = trpc.creditNote.delete.useMutation({
+    onSuccess: () => { utils.creditNote.list.invalidate(); haptic.success(); },
+    onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
+  });
+
+  const updateStatusMutation = trpc.creditNote.updateStatus.useMutation({
+    onSuccess: () => { utils.creditNote.list.invalidate(); haptic.success(); },
+    onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
+  });
 
   const queryInput = {
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -66,6 +80,28 @@ export default function CreditNotesScreen() {
   const handleLoadMore = useCallback(() => {
     if (hasMore && !isLoading) setPage((p) => p + 1);
   }, [hasMore, isLoading]);
+
+  const handleDelete = useCallback((id: string, num: string) => {
+    Alert.alert("Delete", `Delete ${num}? This cannot be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => deleteMutation.mutate({ id }) },
+    ]);
+  }, [deleteMutation]);
+
+  const handleMarkSent = useCallback((id: string) => {
+    updateStatusMutation.mutate({ id, status: "sent" });
+  }, [updateStatusMutation]);
+
+  const handleMarkPaid = useCallback((id: string) => {
+    updateStatusMutation.mutate({ id, status: "paid" });
+  }, [updateStatusMutation]);
+
+  const handleCancel = useCallback((id: string, num: string) => {
+    Alert.alert("Cancel", `Cancel ${num}?`, [
+      { text: "Keep", style: "cancel" },
+      { text: "Cancel", style: "destructive", onPress: () => updateStatusMutation.mutate({ id, status: "cancelled" }) },
+    ]);
+  }, [updateStatusMutation]);
 
   const ListHeader = (
     <View style={styles.listHeader}>
@@ -118,17 +154,43 @@ export default function CreditNotesScreen() {
   );
 
   const renderItem = ({ item }: { item: typeof docs[0] }) => (
-    <PressableRow style={styles.docRow} onPress={() => {}}>
-      <View style={styles.docLeft}>
-        <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
-        <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>
-        <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
-      </View>
-      <View style={styles.docRight}>
-        <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
-        <StatusBadge status={item.status} />
-      </View>
-    </PressableRow>
+    <View style={styles.docCard}>
+      <PressableRow style={styles.docRow} onPress={() => {}}>
+        <View style={styles.docLeft}>
+          <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
+          <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>
+          <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
+        </View>
+        <View style={styles.docRight}>
+          <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
+          <StatusBadge status={item.status} />
+        </View>
+      </PressableRow>
+      {item.status === "draft" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleMarkSent(item.id)}>
+            <Ionicons name="send-outline" size={13} color={colors.info || "#3b82f6"} />
+            <Text style={[styles.actionBtnText, { color: colors.info || "#3b82f6" }]}>Mark Sent</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item.id, item.invoiceNumber)}>
+            <Ionicons name="trash-outline" size={13} color={colors.danger} />
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {item.status === "sent" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleMarkPaid(item.id)}>
+            <Ionicons name="checkmark-circle-outline" size={13} color={colors.success || "#22c55e"} />
+            <Text style={[styles.actionBtnText, { color: colors.success || "#22c55e" }]}>Mark Paid</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleCancel(item.id, item.invoiceNumber)}>
+            <Ionicons name="close-circle-outline" size={13} color={colors.danger} />
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 
   const ListEmpty = isError ? (
@@ -226,16 +288,19 @@ const styles = StyleSheet.create({
   statusFilterText: { fontSize: 12, fontWeight: "600", color: colors.textMuted },
   statusFilterTextActive: { color: colors.textPrimary },
   countText: { fontSize: 12, color: colors.textMuted, paddingHorizontal: 16, marginBottom: 8 },
-  docRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  docCard: {
     backgroundColor: colors.surface,
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: "hidden",
+  },
+  docRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
@@ -245,6 +310,9 @@ const styles = StyleSheet.create({
   docDate: { fontSize: 11, color: colors.textMuted },
   docRight: { alignItems: "flex-end", gap: 6 },
   docAmount: { fontSize: 15, fontWeight: "700", color: colors.textPrimary },
+  actionRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: colors.border },
+  actionBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 9 },
+  actionBtnText: { fontSize: 12, fontWeight: "600" },
   loadMoreBtn: {
     marginHorizontal: 16,
     marginTop: 4,

@@ -58,6 +58,7 @@ const navSections = [
       { to: "/credit-notes", label: "Credit Notes", icon: CreditNoteIcon },
       { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon },
       { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon },
+      { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon },
     ],
   },
   {
@@ -831,6 +832,17 @@ function SettingsIcon() {
       <path d="M8 1.5v2M8 12.5v2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M1.5 8h2M12.5 8h2M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
     </svg>
   );
+}
+
+function StoreOrdersIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 2.5h13l-1.5 6h-10z" />
+      <circle cx="5.5" cy="13" r="1.2" />
+      <circle cx="10.5" cy="13" r="1.2" />
+      <path d="M5.5 11.8V9.5M10.5 11.8V9.5" />
+    </svg>
+  )
 }
 
 function SunIcon() {

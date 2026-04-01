@@ -467,6 +467,7 @@ const RELOCK_THRESHOLD = 30_000;
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
 
   // Auth store
   const hydrate = useAuthStore((s) => s.hydrate);
@@ -542,8 +543,15 @@ export default function RootLayout() {
       const result = await vanillaTRPC.auth.me.query();
       if (__DEV__) console.log("[AuthGate] verifyTokenAndProceed: result.user =", result.user ? result.user.email : "null");
       if (result.user) {
-        unlockApp();
-        setAuthGate("ready");
+        if (!result.user.name) {
+          // Account exists but profile is incomplete -- send to complete-profile
+          if (__DEV__) console.log("[AuthGate] verifyTokenAndProceed: no name, redirecting to complete-profile");
+          setAuthGate("login");
+          router.replace("/(auth)/complete-profile");
+        } else {
+          unlockApp();
+          setAuthGate("ready");
+        }
       } else {
         // Token exists but server says no user -- session expired
         await logout();
@@ -561,7 +569,7 @@ export default function RootLayout() {
       unlockApp();
       setAuthGate("ready");
     }
-  }, [logout, unlockApp]);
+  }, [logout, unlockApp, router]);
 
   // --- Lock screen callbacks ---------------------------------------------
   /**
