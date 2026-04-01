@@ -1,0 +1,122 @@
+# parity-exceptions.yaml
+#
+# Procedures intentionally excluded from specific platforms.
+# Everything else is auto-detected from source code by scripts/check-parity.ts.
+#
+# If a procedure exists on web but not on mobile and is NOT listed here,
+# the parity check will flag it as a gap and CI will fail.
+#
+# To add an exception: list the procedure under the relevant platform's
+# not-applicable key and explain WHY in a comment.
+#
+# Schema: procedure names use "router.procedure" form (same as trpc.X.Y calls).
+
+schema_version: "2.0"
+
+exceptions:
+  mobile:
+    not-applicable:
+      # --- Multi-Tenancy ---
+      # Mobile derives current tenant info from auth.me; the standalone
+      # procedure is not needed.
+      - tenant.current
+
+      # --- Business ---
+      # Admin/compliance feature. Desktop-only; not meaningful on mobile.
+      - business.auditTrail
+      # Bulk data export requires file system access; not available on mobile.
+      - business.exportData
+
+      # --- Parties ---
+      # Tally integration is an accounting desktop workflow.
+      - party.tallyExport
+
+      # --- Invoicing ---
+      # Used by web to pre-fill delivery method on re-send. Mobile uses
+      # expo-sharing which has no delivery-method concept.
+      - invoice.lastDeliveryMethod
+
+      # --- Document Types ---
+      # Debit Notes — rare document type; intentionally omitted from mobile.
+      - debitNote.list
+      - debitNote.getById
+      - debitNote.create
+      - debitNote.updateStatus
+      - debitNote.delete
+      # Purchase Returns — rare document type; intentionally omitted from mobile.
+      - purchaseReturn.list
+      - purchaseReturn.getById
+      - purchaseReturn.create
+      - purchaseReturn.updateStatus
+      - purchaseReturn.delete
+
+      # --- Payments ---
+      # Bulk bank-account assignment for untracked payments is a desktop
+      # admin workflow.
+      - payment.untrackedPayments
+      - payment.assignAccount
+
+      # --- Dashboard / Analytics ---
+      # Complex charting analytics; intentionally desktop-only.
+      - dashboard.salesTrend
+      - dashboard.topCustomers
+      - dashboard.topSellingItems
+      - dashboard.paymentModeBreakdown
+      - dashboard.collectionEfficiency
+      - dashboard.expenseCategoryBreakdown
+      - dashboard.monthlyComparison
+
+      # --- GST Compliance ---
+      # GST compliance reports are complex accounting workflows; desktop-only.
+      - gst.gstr1
+      - gst.gstr1CSV
+      - gst.gstr3b
+
+      # --- Online Store Admin ---
+      # Store settings and item-visibility management are admin setup
+      # workflows; intentionally desktop-only.
+      - store.getSettings
+      - store.updateSettings
+      - store.checkSlug
+      - store.listStoreItems
+      - store.bulkToggleItems
+      - store.updateItemStoreSettings
+      - store.updateVariantStoreSettings
+
+      # --- Data Import ---
+      # Bulk CSV import is a desktop/power-user workflow.
+      - import.importParties
+      - import.importItems
+      - import.importInvoices
+      - import.importPayments
+      - import.importTransfers
+      - import.reconcileDirectPayments
+
+      # --- Sales Targets ---
+      # Sales target management is a desktop admin workflow.
+      - target.list
+      - target.myTargets
+      - target.create
+      - target.update
+      - target.delete
+      - target.getProgress
+
+      # --- Reports ---
+      # Complex reporting workflows; intentionally desktop-only.
+      - reports.daybook
+      - reports.outstanding
+      - reports.salesRegister
+      - reports.purchaseRegister
+      - reports.taxSummary
+      - reports.cashFlowForecast
+      - reports.collectionEfficiency
+      - reports.itemSales
+      - reports.stockSummary
+      - reports.partyStatement
+      - reports.paymentSummary
+
+      # --- API Keys ---
+      # Developer/integration feature; desktop-only.
+      - apiKey.list
+      - apiKey.create
+      - apiKey.revoke

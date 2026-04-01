@@ -5,7 +5,9 @@ on:
     paths:
       - "apps/**"
       - "packages/api/**"
-      - "feature-parity.yaml"
+      - "packages/cli/**"
+      - "packages/mcp/**"
+      - "parity-exceptions.yaml"
 
 permissions:
   contents: read
@@ -37,13 +39,12 @@ jobs:
           FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')
           echo "files=$FILES" >> $GITHUB_OUTPUT
 
-          # Detect what areas changed
           echo "touches_api=$(echo "$FILES" | grep -c 'packages/api/src/routers/' || true)" >> $GITHUB_OUTPUT
           echo "touches_web=$(echo "$FILES" | grep -c 'apps/web/' || true)" >> $GITHUB_OUTPUT
           echo "touches_mobile=$(echo "$FILES" | grep -c 'apps/mobile/' || true)" >> $GITHUB_OUTPUT
-          echo "touches_parity=$(echo "$FILES" | grep -c 'feature-parity.yaml' || true)" >> $GITHUB_OUTPUT
+          echo "touches_exceptions=$(echo "$FILES" | grep -c 'parity-exceptions.yaml' || true)" >> $GITHUB_OUTPUT
 
-      - name: Validate parity matrix
+      - name: Validate exceptions file
         id: validate
         run: |
           set +e
@@ -60,10 +61,12 @@ jobs:
         run: |
           set +e
           OUTPUT=$(npx tsx scripts/check-parity.ts --scan 2>&1)
+          SCAN_EXIT=$?
           echo "$OUTPUT"
           echo "output<<EOF" >> $GITHUB_OUTPUT
           echo "$OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "exit_code=$SCAN_EXIT" >> $GITHUB_OUTPUT
 
       - name: Check changed files for parity gaps
         id: changed_check
@@ -92,45 +95,46 @@ jobs:
             const validateOutput = `${{ steps.validate.outputs.output }}`.trim();
             const scanOutput = `${{ steps.scan.outputs.output }}`.trim();
             const changedOutput = `${{ steps.changed_check.outputs.output }}`.trim();
+            const hasGaps = '${{ steps.scan.outputs.exit_code }}' === '1';
 
             const touchesApi = '${{ steps.changed.outputs.touches_api }}' !== '0';
             const touchesWeb = '${{ steps.changed.outputs.touches_web }}' !== '0';
             const touchesMobile = '${{ steps.changed.outputs.touches_mobile }}' !== '0';
-            const touchesParity = '${{ steps.changed.outputs.touches_parity }}' !== '0';
+            const touchesExceptions = '${{ steps.changed.outputs.touches_exceptions }}' !== '0';
 
             let body = `## Feature Parity Report\n\n`;
 
-            // What this PR touches
             const areas = [];
             if (touchesApi) areas.push('API');
             if (touchesWeb) areas.push('Web');
             if (touchesMobile) areas.push('Mobile');
-            if (touchesParity) areas.push('Parity Matrix');
+            if (touchesExceptions) areas.push('Exceptions');
             body += `**PR touches**: ${areas.join(', ') || 'None of the tracked areas'}\n\n`;
 
-            // Changed files check
-            if (changedOutput && !changedOutput.includes('No parity issues')) {
-              body += `### Parity Warnings\n\n\`\`\`\n${changedOutput}\n\`\`\`\n\n`;
+            if (hasGaps) {
+              body += `> **PARITY GAPS FOUND** — web procedures exist that mobile does not implement and are not in \`parity-exceptions.yaml\`. See scan output below.\n\n`;
             }
 
-            // Validation summary (truncated)
+            if (changedOutput && !changedOutput.includes('No parity gaps')) {
+              body += `### Changed-File Parity Check\n\n\`\`\`\n${changedOutput}\n\`\`\`\n\n`;
+            }
+
+            // Validation summary line
             const validateLines = validateOutput.split('\n');
             const summaryLine = validateLines.find(l => l.includes('Summary:'));
             if (summaryLine) {
-              body += `### Matrix Validation\n\n${summaryLine.trim()}\n\n`;
+              body += `### Exceptions Validation\n\n${summaryLine.trim()}\n\n`;
             }
 
-            // tRPC scan summary (just the parity line)
+            // Scan: show parity percentage lines
             const scanLines = scanOutput.split('\n');
-            const parityLine = scanLines.find(l => l.includes('Overall parity'));
-            if (parityLine) {
-              body += `### tRPC Coverage\n\n${parityLine.trim()}\n\n`;
+            const parityLines = scanLines.filter(l => l.includes('parity'));
+            if (parityLines.length > 0) {
+              body += `### tRPC Coverage\n\n${parityLines.join('\n').trim()}\n\n`;
             }
 
-            // Collapsible details
             body += `<details>\n<summary>Full scan output</summary>\n\n\`\`\`\n${scanOutput}\n\`\`\`\n\n</details>\n`;
 
-            // Find and update existing comment or create new
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -159,4 +163,8 @@ jobs:
 
       - name: Fail if validation errors
         if: steps.validate.outputs.exit_code != '0'
+        run: exit 1
+
+      - name: Fail if parity gaps found
+        if: steps.scan.outputs.exit_code != '0'
         run: exit 1

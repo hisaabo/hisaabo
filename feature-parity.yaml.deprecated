@@ -1,0 +1,1385 @@
+# DEPRECATED — this file is no longer used.
+#
+# The parity check is now fully automatic. See:
+#   parity-exceptions.yaml  — intentional exclusions only
+#   scripts/check-parity.ts — auto-detects tRPC usage across all platforms
+#
+# This file is kept for historical reference only and is NOT read by any tooling.
+# ---------------------------------------------------------------------------
+# Original contents below.
+# ---------------------------------------------------------------------------
+# Feature Parity Matrix -- Hisaabo
+#
+# This file was the source of truth for which features are implemented on which
+# platform. It was checked by CI on every PR and used to generate release notes.
+#
+# Status values:
+#   implemented    -- feature is fully working on this platform
+#   partial        -- some sub-features or screens exist, but not complete
+#   planned        -- explicitly on the roadmap, tracked in an issue/milestone
+#   not-started    -- not yet planned or prioritised
+#   not-applicable -- this feature does not make sense for this platform
+#   placeholder    -- a screen/route exists but shows "Coming soon" with no logic
+#
+# Platforms:
+#   web     -- apps/web (React + TanStack Router). Desktop wraps this, so desktop
+#              is always at parity with web and is omitted from this matrix.
+#   mobile  -- apps/mobile (Expo / React Native)
+#   store   -- apps/store (public customer-facing storefront, REST not tRPC)
+#   cli     -- packages/cli (Ink / Node.js terminal client)
+#   mcp     -- packages/mcp (Model Context Protocol server)
+#
+# Each feature maps to one or more tRPC procedures (or REST endpoints for store).
+# The `api` field lists every procedure the feature depends on.
+#
+# Maintainers: when you add a new procedure to packages/api/src/routers/ or a
+# new screen to any app, update this file in the same PR.
+
+schema_version: "1.0"
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+features:
+
+  - id: auth.register
+    name: Password Registration
+    category: Authentication
+    api: [auth.register]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Web and mobile both support email+password registration."
+
+  - id: auth.login
+    name: Password Login
+    category: Authentication
+    api: [auth.login]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: auth.magic-link
+    name: Magic Link Login
+    category: Authentication
+    api: [auth.sendMagicLink, auth.verifyMagicLink]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile uses deep links for token verification."
+
+  - id: auth.complete-profile
+    name: Complete Profile (post magic-link)
+    category: Authentication
+    api: [auth.completeProfile]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a complete-profile screen with a gate that redirects users who haven't set a name yet."
+
+  - id: auth.update-name
+    name: Update Display Name
+    category: Authentication
+    api: [auth.updateName]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Web has this in Settings > Account tab. Mobile has this in Settings > Profile tab (updateName mutation)."
+
+  - id: auth.email-change
+    name: Change Email Address
+    category: Authentication
+    api: [auth.requestEmailChange, auth.confirmEmailChange]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Profile tab has requestEmailChange. confirmEmailChange is handled via deep-link (same as magic-link flow)."
+
+  - id: auth.logout
+    name: Logout
+    category: Authentication
+    api: [auth.logout]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: auth.logout-all
+    name: Logout All Sessions
+    category: Authentication
+    api: [auth.logoutAll]
+    platforms:
+      web: not-started
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile settings screen has a 'logout all devices' action. Web has no UI for this yet."
+
+  - id: auth.me
+    name: Current Session / User Info
+    category: Authentication
+    api: [auth.me]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+# ============================================================================
+# MULTI-TENANCY
+# ============================================================================
+
+  - id: tenant.list
+    name: List Tenant Memberships
+    category: Multi-Tenancy
+    api: [tenant.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Web shows a tenant switcher in the sidebar when multiple tenants exist. Mobile uses tenant.list in the app layout to auto-select the tenant."
+
+  - id: tenant.select
+    name: Switch Active Tenant
+    category: Multi-Tenancy
+    api: [tenant.select]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile app layout auto-selects the tenant via tenant.select mutation when only one tenant exists."
+
+  - id: tenant.current
+    name: Current Tenant Info
+    category: Multi-Tenancy
+    api: [tenant.current]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Mobile derives current tenant info from auth.me (session.tenantId). The standalone tenant.current procedure is not called on mobile."
+
+  - id: tenant.members
+    name: List Team Members
+    category: Multi-Tenancy
+    api: [tenant.members]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Web has Settings > Team tab. Mobile has Settings > Team screen with full member list."
+
+  - id: tenant.invite
+    name: Invite Team Member
+    category: Multi-Tenancy
+    api: [tenant.inviteMember, tenant.acceptInvitation]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Team screen has inviteMember mutation. acceptInvitation is handled via deep-link."
+
+  - id: tenant.remove-member
+    name: Remove Team Member
+    category: Multi-Tenancy
+    api: [tenant.removeMember]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Team screen has removeMember mutation."
+
+  - id: tenant.update-role
+    name: Change Member Role
+    category: Multi-Tenancy
+    api: [tenant.updateMemberRole]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile settings > team screen allows role changes."
+
+# ============================================================================
+# BUSINESS MANAGEMENT
+# ============================================================================
+
+  - id: business.list
+    name: List Businesses
+    category: Business
+    api: [business.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: business.get
+    name: Get Business Details
+    category: Business
+    api: [business.getById]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Business and Settings > Documents tabs both call business.getById."
+
+  - id: business.create
+    name: Create Business
+    category: Business
+    api: [business.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a create-business onboarding screen. Web has Settings > Business tab."
+
+  - id: business.update
+    name: Update Business Details
+    category: Business
+    api: [business.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Business tab has business.update mutation."
+
+  - id: business.sequence-numbers
+    name: Update Document Sequence Numbers
+    category: Business
+    api: [business.updateSequenceNumber]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Settings > Documents tab has updateSequenceNumber mutation."
+
+  - id: business.audit-trail
+    name: Business Audit Trail
+    category: Business
+    api: [business.auditTrail]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Admin/compliance feature. Desktop-only; not meaningful on mobile."
+
+  - id: business.export-data
+    name: Export Business Data (CSV)
+    category: Business
+    api: [business.exportData]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk data export. Desktop-only; file system access not available on mobile."
+
+# ============================================================================
+# PARTIES (CUSTOMERS / SUPPLIERS)
+# ============================================================================
+
+  - id: party.list
+    name: List Parties
+    category: Parties
+    api: [party.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: party.get
+    name: Party Detail View
+    category: Parties
+    api: [party.getById, party.getStats, party.topItems]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: party.create
+    name: Create Party
+    category: Parties
+    api: [party.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: party.update
+    name: Update Party
+    category: Parties
+    api: [party.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a full party edit screen at (parties)/edit.tsx."
+
+  - id: party.delete
+    name: Delete Party
+    category: Parties
+    api: [party.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile party detail screen has a delete action."
+
+  - id: party.merge
+    name: Merge Duplicate Parties
+    category: Parties
+    api: [party.merge]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile party detail screen has a merge action with party search and party.merge mutation."
+
+  - id: party.ledger
+    name: Party Ledger (paginated)
+    category: Parties
+    api: [party.ledger]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: party.ledger-report
+    name: Party Ledger Report (full)
+    category: Parties
+    api: [party.ledgerReport, party.ledgerReportCSV]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile shows the full ledger report. CSV download (party.ledgerReportCSV) is desktop-only."
+
+  - id: party.tally-export
+    name: Tally-Compatible Export
+    category: Parties
+    api: [party.tallyExport]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Tally integration is an accounting desktop workflow; not applicable on mobile."
+
+# ============================================================================
+# ITEMS / PRODUCTS
+# ============================================================================
+
+  - id: item.list
+    name: List Items
+    category: Items
+    api: [item.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: item.get
+    name: Item Detail View
+    category: Items
+    api: [item.getById, item.salesStats, item.priceHistory, item.stockMovements]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: item.create
+    name: Create Item
+    category: Items
+    api: [item.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: item.update
+    name: Update Item
+    category: Items
+    api: [item.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a full item edit screen at (items)/edit.tsx."
+
+  - id: item.delete
+    name: Delete Item
+    category: Items
+    api: [item.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile item detail screen has a delete action."
+
+  - id: item.variants
+    name: Item Variants (CRUD)
+    category: Items
+    api: [item.listVariants, item.createVariant, item.updateVariant, item.deleteVariant, item.bulkCreateVariants]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile supports createVariant, updateVariant, deleteVariant, and stockAdjustmentHistory. bulkCreateVariants is web-only."
+
+  - id: item.stock-adjust
+    name: Stock Adjustment
+    category: Items
+    api: [item.adjustStock, item.stockAdjustmentHistory]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: item.merge
+    name: Merge Duplicate Items
+    category: Items
+    api: [item.merge, item.suggestMerges]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile supports item.merge and item.suggestMerges via power-features flow."
+
+  - id: item.switch-unit
+    name: Switch Base Unit
+    category: Items
+    api: [item.switchBaseUnit]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile supports switchBaseUnit via power-features flow."
+
+  - id: item.rename-unit
+    name: Rename Unit of Measure
+    category: Items
+    api: [item.renameUnit]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile supports renameUnit via power-features flow."
+
+  - id: item.low-stock
+    name: Low Stock Count Badge
+    category: Items
+    api: [item.lowStockCount]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile app layout fetches item.lowStockCount to display badge on the Items tab."
+
+  - id: item.related-invoices
+    name: Related Invoices for Item
+    category: Items
+    api: [item.relatedInvoices]
+    platforms:
+      web: not-started
+      mobile: not-started
+      store: not-applicable
+    notes: "Procedure exists but no UI uses it yet."
+
+  - id: item.top-buyers
+    name: Top Buyers for Item
+    category: Items
+    api: [item.topBuyers]
+    platforms:
+      web: not-started
+      mobile: not-started
+      store: not-applicable
+    notes: "Procedure exists but no UI uses it yet."
+
+# ============================================================================
+# INVOICES
+# ============================================================================
+
+  - id: invoice.list
+    name: List Invoices
+    category: Invoicing
+    api: [invoice.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: invoice.get
+    name: Invoice Detail View
+    category: Invoicing
+    api: [invoice.getById]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: invoice.create
+    name: Create Invoice
+    category: Invoicing
+    api: [invoice.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a full invoice creation flow with line items."
+
+  - id: invoice.update
+    name: Edit Invoice
+    category: Invoicing
+    api: [invoice.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a full invoice edit screen at (invoices)/edit.tsx."
+
+  - id: invoice.update-status
+    name: Update Invoice Status
+    category: Invoicing
+    api: [invoice.updateStatus]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: invoice.delete
+    name: Delete Invoice
+    category: Invoicing
+    api: [invoice.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: invoice.pdf
+    name: View / Download Invoice PDF
+    category: Invoicing
+    api: ["GET /api/invoices/:id/pdf"]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Web opens PDF in new tab. Mobile downloads the PDF and shares it via expo-sharing."
+
+  - id: invoice.last-delivery-method
+    name: Last Delivery Method for Invoice
+    category: Invoicing
+    api: [invoice.lastDeliveryMethod]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Procedure used by web to pre-fill the delivery method on re-send. Mobile uses expo-sharing which has no delivery-method concept; not applicable."
+
+# ============================================================================
+# DOCUMENT TYPES (Quotation, Credit Note, etc.)
+# ============================================================================
+
+  - id: quotation.crud
+    name: Quotations (CRUD)
+    category: Documents
+    api: [quotation.list, quotation.getById, quotation.create, quotation.updateStatus, quotation.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile now has full quotation list, detail, create, updateStatus, and delete."
+
+  - id: credit-note.crud
+    name: Credit Notes (CRUD)
+    category: Documents
+    api: [creditNote.list, creditNote.getById, creditNote.create, creditNote.updateStatus, creditNote.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile now has full credit note lifecycle."
+
+  - id: debit-note.crud
+    name: Debit Notes (CRUD)
+    category: Documents
+    api: [debitNote.list, debitNote.getById, debitNote.create, debitNote.updateStatus, debitNote.delete]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Rare document type; intentionally omitted from mobile for now."
+
+  - id: delivery-challan.crud
+    name: Delivery Challans (CRUD)
+    category: Documents
+    api: [deliveryChallan.list, deliveryChallan.getById, deliveryChallan.create, deliveryChallan.updateStatus, deliveryChallan.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile now has full delivery challan lifecycle."
+
+  - id: proforma.crud
+    name: Proforma Invoices (CRUD)
+    category: Documents
+    api: [proforma.list, proforma.getById, proforma.create, proforma.updateStatus, proforma.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile now has full proforma invoice lifecycle."
+
+  - id: sales-return.crud
+    name: Sales Returns (CRUD)
+    category: Documents
+    api: [salesReturn.list, salesReturn.getById, salesReturn.create, salesReturn.updateStatus, salesReturn.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile now has full sales return lifecycle."
+
+  - id: purchase-return.crud
+    name: Purchase Returns (CRUD)
+    category: Documents
+    api: [purchaseReturn.list, purchaseReturn.getById, purchaseReturn.create, purchaseReturn.updateStatus, purchaseReturn.delete]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Rare document type; intentionally omitted from mobile for now."
+
+  - id: document.convert
+    name: Convert Document (e.g. Quotation to Invoice)
+    category: Documents
+    api: [document.convert]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile uses document.convert in quotations, proforma invoices, and delivery challans list/detail screens."
+
+# ============================================================================
+# PAYMENTS
+# ============================================================================
+
+  - id: payment.list
+    name: List Payments
+    category: Payments
+    api: [payment.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: payment.get
+    name: Payment Detail View
+    category: Payments
+    api: [payment.getById]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has payment detail screens at (payments)/[id].tsx and (more)/payments/[id].tsx."
+
+  - id: payment.create
+    name: Record Payment
+    category: Payments
+    api: [payment.create, payment.unpaidInvoices, payment.defaultAccount]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a payment creation form with party selector and unpaid invoices."
+
+  - id: payment.update
+    name: Edit Payment
+    category: Payments
+    api: [payment.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile payment detail screen has an edit action via payment.update mutation."
+
+  - id: payment.delete
+    name: Delete Payment
+    category: Payments
+    api: [payment.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile payment detail screen has a delete action."
+
+  - id: payment.untracked
+    name: Untracked Payments (no bank account)
+    category: Payments
+    api: [payment.untrackedPayments, payment.assignAccount]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk bank-account assignment for untracked payments is a desktop admin workflow."
+
+# ============================================================================
+# EXPENSES
+# ============================================================================
+
+  - id: expense.list
+    name: List Expenses
+    category: Expenses
+    api: [expense.list, expense.categories]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: expense.create
+    name: Create Expense
+    category: Expenses
+    api: [expense.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: expense.update
+    name: Update Expense
+    category: Expenses
+    api: [expense.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile expense detail screen has an edit action via expense.update mutation."
+
+  - id: expense.delete
+    name: Delete Expense
+    category: Expenses
+    api: [expense.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile expense detail screen has a delete action."
+
+  - id: expense.summary
+    name: Expense Summary by Category
+    category: Expenses
+    api: [expense.summary]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+# ============================================================================
+# CASH & BANK ACCOUNTS
+# ============================================================================
+
+  - id: bank.list
+    name: List Bank Accounts
+    category: Cash & Bank
+    api: [bankAccount.list, bankAccount.summary]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile shows account list and summary. Full account detail, create, update, delete, add transaction, and transfer are also implemented."
+
+  - id: bank.get
+    name: Bank Account Detail / Transactions
+    category: Cash & Bank
+    api: [bankAccount.getById, bankAccount.listTransactions]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile bank account detail screen at (more)/bank/[id].tsx fetches getById and listTransactions."
+
+  - id: bank.create
+    name: Create Bank Account
+    category: Cash & Bank
+    api: [bankAccount.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a bank account creation screen at (more)/bank/create.tsx."
+
+  - id: bank.update
+    name: Update Bank Account
+    category: Cash & Bank
+    api: [bankAccount.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a bank account edit screen at (more)/bank/edit.tsx."
+
+  - id: bank.delete
+    name: Delete Bank Account
+    category: Cash & Bank
+    api: [bankAccount.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile bank account detail screen has a delete action."
+
+  - id: bank.add-transaction
+    name: Add Manual Transaction
+    category: Cash & Bank
+    api: [bankAccount.addTransaction]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile bank account detail screen has an add transaction form via addTransaction mutation."
+
+  - id: bank.transfer
+    name: Inter-Account Transfer
+    category: Cash & Bank
+    api: [bankAccount.transfer]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile has a dedicated inter-account transfer screen at (more)/bank/transfer.tsx."
+
+# ============================================================================
+# DASHBOARD & REPORTS
+# ============================================================================
+
+  - id: dashboard.summary
+    name: Dashboard Summary (Sales, Purchases, Receivables)
+    category: Dashboard
+    api: [dashboard.summary]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: dashboard.sales-trend
+    name: Sales Trend Chart
+    category: Dashboard
+    api: [dashboard.salesTrend]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex charting analytics; intentionally desktop-only."
+
+  - id: dashboard.top-outstanding
+    name: Top Outstanding Parties
+    category: Dashboard
+    api: [dashboard.topOutstanding]
+    platforms:
+      web: implemented
+      mobile: not-started
+      store: not-applicable
+
+  - id: dashboard.expenses-by-category
+    name: Expenses by Category Chart
+    category: Dashboard
+    api: [dashboard.expensesByCategory]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: dashboard.invoice-status-breakdown
+    name: Invoice Status Breakdown
+    category: Dashboard
+    api: [dashboard.invoiceStatusBreakdown]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Reports screen uses dashboard.invoiceStatusBreakdown."
+
+  - id: dashboard.profit-and-loss
+    name: Profit & Loss Report
+    category: Dashboard
+    api: [dashboard.profitAndLoss]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Reports screen uses dashboard.profitAndLoss."
+
+  - id: dashboard.receivables-aging
+    name: Receivables Aging Report
+    category: Dashboard
+    api: [dashboard.receivablesAging]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile Reports screen uses dashboard.receivablesAging."
+
+  - id: dashboard.shipping-summary
+    name: Shipping Summary
+    category: Dashboard
+    api: [dashboard.shippingSummary]
+    platforms:
+      web: not-started
+      mobile: not-started
+      store: not-applicable
+    notes: "Procedure exists but no UI uses it on any platform."
+
+  - id: dashboard.top-customers
+    name: Top Customers Chart
+    category: Dashboard
+    api: [dashboard.topCustomers]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+  - id: dashboard.top-selling-items
+    name: Top Selling Items Chart
+    category: Dashboard
+    api: [dashboard.topSellingItems]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+  - id: dashboard.payment-mode-breakdown
+    name: Payment Mode Breakdown
+    category: Dashboard
+    api: [dashboard.paymentModeBreakdown]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+  - id: dashboard.collection-efficiency
+    name: Collection Efficiency Report
+    category: Dashboard
+    api: [dashboard.collectionEfficiency]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+  - id: dashboard.expense-category-breakdown
+    name: Expense Category Breakdown
+    category: Dashboard
+    api: [dashboard.expenseCategoryBreakdown]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+  - id: dashboard.monthly-comparison
+    name: Monthly Comparison Chart
+    category: Dashboard
+    api: [dashboard.monthlyComparison]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics; intentionally desktop-only."
+
+# ============================================================================
+# GST COMPLIANCE
+# ============================================================================
+
+  - id: gst.gstr1
+    name: GSTR-1 Report
+    category: GST
+    api: [gst.gstr1, gst.gstr1CSV]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "GST compliance reports are complex accounting workflows; intentionally desktop-only."
+
+  - id: gst.gstr3b
+    name: GSTR-3B Report
+    category: GST
+    api: [gst.gstr3b]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "GST compliance reports are complex accounting workflows; intentionally desktop-only."
+
+# ============================================================================
+# ONLINE STORE (Admin side -- managing the store from the business dashboard)
+# ============================================================================
+
+  - id: store.settings
+    name: Store Settings (slug, colors, limits)
+    category: Online Store
+    api: [store.getSettings, store.updateSettings, store.checkSlug]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Admin setup workflow; intentionally desktop-only."
+
+  - id: store.item-visibility
+    name: Toggle Item Store Visibility
+    category: Online Store
+    api: [store.listStoreItems, store.bulkToggleItems, store.updateItemStoreSettings, store.updateVariantStoreSettings]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk item management; intentionally desktop-only."
+
+  - id: store.orders
+    name: Manage Store Orders
+    category: Online Store
+    api: [store.listOrders, store.getOrder, store.confirmOrder, store.cancelOrder, store.updateOrderStatus]
+    platforms:
+      web: not-started
+      mobile: placeholder
+      store: not-applicable
+    notes: "Mobile has a Store Orders screen showing 'Coming soon'. Web has no orders management UI yet -- orders are visible only via the store admin tab."
+
+# ============================================================================
+# ONLINE STORE (Customer-facing -- the public storefront)
+# ============================================================================
+
+  - id: storefront.browse
+    name: Browse Store Catalog
+    category: Storefront
+    api: ["GET /store/:slug/catalog.json"]
+    platforms:
+      web: not-applicable
+      mobile: not-applicable
+      store: implemented
+
+  - id: storefront.cart
+    name: Cart Management
+    category: Storefront
+    api: []
+    platforms:
+      web: not-applicable
+      mobile: not-applicable
+      store: implemented
+    notes: "Client-side only -- persisted in localStorage."
+
+  - id: storefront.phone-verify
+    name: Phone Verification Before Checkout
+    category: Storefront
+    api: ["POST /store/:slug/verify-phone"]
+    platforms:
+      web: not-applicable
+      mobile: not-applicable
+      store: implemented
+
+  - id: storefront.place-order
+    name: Place Store Order
+    category: Storefront
+    api: ["POST /store/:slug/order"]
+    platforms:
+      web: not-applicable
+      mobile: not-applicable
+      store: implemented
+
+# ============================================================================
+# DATA IMPORT
+# ============================================================================
+
+  - id: import.parties
+    name: Import Parties (Batch)
+    category: Import
+    api: [import.importParties]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+  - id: import.items
+    name: Import Items (Batch)
+    category: Import
+    api: [import.importItems]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+  - id: import.invoices
+    name: Import Invoices (Batch)
+    category: Import
+    api: [import.importInvoices]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+  - id: import.payments
+    name: Import Payments (Batch)
+    category: Import
+    api: [import.importPayments]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+  - id: import.transfers
+    name: Import Bank Transfers
+    category: Import
+    api: [import.importTransfers]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+  - id: import.reconcile
+    name: Reconcile Direct Payments
+    category: Import
+    api: [import.reconcileDirectPayments]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Bulk CSV import is a desktop/power-user workflow; not applicable on mobile."
+
+# ============================================================================
+# SHIPMENTS
+# ============================================================================
+
+  - id: shipment.list
+    name: List Shipments
+    category: Shipments
+    api: [shipment.list]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: shipment.get
+    name: Shipment Detail View
+    category: Shipments
+    api: [shipment.getById]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: shipment.create
+    name: Create Shipment
+    category: Shipments
+    api: [shipment.create]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+  - id: shipment.update
+    name: Update Shipment
+    category: Shipments
+    api: [shipment.update]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+    notes: "Mobile uses shipment.update in the shipment detail screen and also inline from the invoice detail screen."
+
+  - id: shipment.delete
+    name: Delete Shipment
+    category: Shipments
+    api: [shipment.delete]
+    platforms:
+      web: implemented
+      mobile: implemented
+      store: not-applicable
+
+# ============================================================================
+# SALES TARGETS
+# ============================================================================
+
+  - id: target.list
+    name: List Sales Targets
+    category: Sales Targets
+    api: [target.list, target.myTargets]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Sales target management is a desktop admin workflow."
+
+  - id: target.create
+    name: Create Sales Target
+    category: Sales Targets
+    api: [target.create]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Sales target management is a desktop admin workflow."
+
+  - id: target.update
+    name: Update Sales Target
+    category: Sales Targets
+    api: [target.update]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Sales target management is a desktop admin workflow."
+
+  - id: target.delete
+    name: Delete Sales Target
+    category: Sales Targets
+    api: [target.delete]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Sales target management is a desktop admin workflow."
+
+  - id: target.progress
+    name: Sales Target Progress
+    category: Sales Targets
+    api: [target.getProgress]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex analytics view; intentionally desktop-only."
+
+# ============================================================================
+# REPORTS
+# ============================================================================
+
+  - id: reports.daybook
+    name: Day Book Report
+    category: Reports
+    api: [reports.daybook]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.outstanding
+    name: Outstanding Balances Report
+    category: Reports
+    api: [reports.outstanding]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.sales-register
+    name: Sales Register Report
+    category: Reports
+    api: [reports.salesRegister]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.purchase-register
+    name: Purchase Register Report
+    category: Reports
+    api: [reports.purchaseRegister]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.tax-summary
+    name: Tax Summary Report
+    category: Reports
+    api: [reports.taxSummary]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.cash-flow-forecast
+    name: Cash Flow Forecast Report
+    category: Reports
+    api: [reports.cashFlowForecast]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.collection-efficiency
+    name: Collection Efficiency Report
+    category: Reports
+    api: [reports.collectionEfficiency]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.item-sales
+    name: Item Sales Report
+    category: Reports
+    api: [reports.itemSales]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.stock-summary
+    name: Stock Summary Report
+    category: Reports
+    api: [reports.stockSummary]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.party-statement
+    name: Party Statement Report
+    category: Reports
+    api: [reports.partyStatement]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+  - id: reports.payment-summary
+    name: Payment Summary Report
+    category: Reports
+    api: [reports.paymentSummary]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Complex reporting; intentionally desktop-only."
+
+# ============================================================================
+# API KEYS
+# ============================================================================
+
+  - id: apikey.manage
+    name: API Key Management
+    category: API Keys
+    api: [apiKey.list, apiKey.create, apiKey.revoke]
+    platforms:
+      web: implemented
+      mobile: not-applicable
+      store: not-applicable
+    notes: "Developer/integration feature; desktop-only."
