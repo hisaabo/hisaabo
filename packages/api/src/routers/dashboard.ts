@@ -78,7 +78,7 @@ export const dashboardRouter = router({
           dateCondition(expenses.expenseDate),
         )),
 
-      // Receivable = total sale invoices - amount paid on sales
+      // Receivable = current outstanding balance (balance sheet metric, NOT period-scoped)
       ctx.db.select({
         total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
       }).from(invoices)
@@ -89,7 +89,7 @@ export const dashboardRouter = router({
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),
 
-      // Payable = total purchase invoices - amount paid on purchases
+      // Payable = current outstanding balance (balance sheet metric, NOT period-scoped)
       ctx.db.select({
         total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
       }).from(invoices)
@@ -302,14 +302,25 @@ export const dashboardRouter = router({
         rangeEnd = new Date();
       }
 
-      const truncUnit = input.granularity === "week" ? "week" : "month";
       const stepInterval = input.granularity === "week" ? "1 week" : "1 month";
+
+      // Week: use raw fromDate/toDate so buckets align to the selected
+      // period (e.g. March 1 for calendar months) rather than snapping to
+      // ISO week boundaries which can bleed into adjacent months.
+      // Month: date_trunc ensures buckets always start on the 1st.
+      const useRawBounds = input.granularity === "week";
+      const seriesStart = useRawBounds
+        ? sql`${rangeStart.toISOString()}::timestamptz`
+        : sql`date_trunc('month', ${rangeStart.toISOString()}::timestamptz)`;
+      const seriesEnd = useRawBounds
+        ? sql`${rangeEnd.toISOString()}::timestamptz`
+        : sql`date_trunc('month', ${rangeEnd.toISOString()}::timestamptz)`;
 
       const results = await ctx.db.execute(sql`
         WITH periods AS (
           SELECT generate_series(
-            date_trunc(${truncUnit}, ${rangeStart.toISOString()}::timestamptz),
-            date_trunc(${truncUnit}, ${rangeEnd.toISOString()}::timestamptz),
+            ${seriesStart},
+            ${seriesEnd},
             ${stepInterval}::interval
           ) as period_start
         )

@@ -88,6 +88,12 @@ const navSections = [
       { to: "/reports", label: "Reports", icon: ReportsIcon },
     ],
   },
+  {
+    label: "ACCOUNT",
+    items: [
+      { to: "/settings", label: "Settings", icon: SettingsIcon },
+    ],
+  },
 ] as const;
 
 // ── TenantPicker ───────────────────────────────────────────────
@@ -382,34 +388,7 @@ function RootLayout() {
           </span>
         </div>
 
-        {/* Tenant name */}
-        <div className="px-4 py-2 border-b border-border-light shrink-0">
-          <button
-            onClick={() => hasMultipleTenants && setShowTenantPicker(true)}
-            className={cn(
-              "text-[11px] font-semibold uppercase tracking-widest text-text-tertiary transition-colors w-full text-left truncate",
-              hasMultipleTenants
-                ? "hover:text-text-secondary cursor-pointer"
-                : "cursor-default",
-            )}
-            disabled={!hasMultipleTenants}
-            aria-label={hasMultipleTenants ? "Switch organization" : undefined}
-          >
-            {tenantName}
-            {hasMultipleTenants && (
-              <span className="ml-1 text-text-tertiary">▾</span>
-            )}
-          </button>
-        </div>
-
-        {/* Business display — name only if single, switcher if multiple */}
-        {businesses && businesses.length === 1 && (
-          <div className="px-4 py-2 border-b border-border-light shrink-0">
-            <p className="text-[12px] font-medium truncate text-text-secondary">
-              {businesses[0].name}
-            </p>
-          </div>
-        )}
+        {/* Business switcher — only shown when multiple businesses */}
         {businesses && businesses.length > 1 && (
           <div className="px-3 py-2 border-b border-border-light shrink-0">
             <Listbox
@@ -462,68 +441,16 @@ function RootLayout() {
           })}
         </nav>
 
-        {/* Bottom: Settings + User card */}
-        <div className="shrink-0 border-t border-border-light">
-          <div className="pt-1 pb-1">
-            <Link
-              to="/settings"
-              className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
-              activeProps={{
-                className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
-              }}
-              inactiveProps={{
-                className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
-              }}
-            >
-              <SettingsIcon />
-              Settings
-            </Link>
-          </div>
-
-          {/* User card */}
-          <div className="px-3 py-3 space-y-2">
-            <div className="flex items-start gap-2.5 px-2">
-              <div className="w-7 h-7 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[11px] font-semibold shrink-0 mt-0.5">
-                {initials}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <p className="text-[13px] font-medium truncate text-text-primary">
-                    {displayName}
-                  </p>
-                  {session.role && (
-                    <RoleBadge role={session.role} />
-                  )}
-                </div>
-                <p className="text-[11px] truncate text-text-tertiary">
-                  {session.user.email}
-                </p>
-              </div>
-              <button
-                onClick={() => logoutMutation.mutate()}
-                disabled={logoutMutation.isPending}
-                className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-surface-2 transition-colors mt-0.5"
-                aria-label="Sign out"
-                title="Sign out"
-              >
-                <LogoutIcon />
-              </button>
-            </div>
-            <p className="px-2 text-[10px] text-text-tertiary/60 select-none">
-              v{__APP_VERSION__}
-            </p>
-          </div>
-        </div>
       </aside>
 
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden bg-surface-1 md:ml-0">
         {/* Top bar */}
-        <div className="h-14 border-b border-border-light flex items-center justify-between px-4 md:px-6 shrink-0 bg-surface-0">
+        <div className="h-14 border-b border-border-light flex items-center gap-2 px-4 md:px-6 shrink-0 bg-surface-0">
           {/* Hamburger — mobile only */}
           <button
             type="button"
-            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors"
+            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors shrink-0"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open navigation menu"
           >
@@ -531,17 +458,62 @@ function RootLayout() {
               <path d="M2 4.5h14M2 9h14M2 13.5h14" />
             </svg>
           </button>
-          <div className="md:hidden" /> {/* spacer on mobile so flex justify-between works */}
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
+
+          {/* Theme + shortcuts */}
+          <ThemeToggle />
+          <button
+            onClick={() => setShowShortcuts(true)}
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            <span className="font-mono text-xs">?</span>
+          </button>
+
+          {/* User info — pushed to the right */}
+          <div className="ml-auto flex items-center gap-3 min-w-0">
+            {/* Business name */}
+            {activeBusiness && (
+              <span className="hidden sm:block text-xs text-text-tertiary truncate max-w-[140px]">
+                {activeBusiness.name}
+              </span>
+            )}
+
+            {/* Divider */}
+            {activeBusiness && (
+              <span className="hidden sm:block w-px h-4 bg-border-light shrink-0" aria-hidden="true" />
+            )}
+
+            {/* Avatar + name + role */}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
+                {initials}
+              </div>
+              <span className="hidden sm:block text-sm font-medium text-text-primary truncate max-w-[120px]">
+                {displayName}
+              </span>
+              {session.role && (
+                <span className="hidden sm:block shrink-0">
+                  <RoleBadge role={session.role} />
+                </span>
+              )}
+            </div>
+
+            {/* Logout */}
             <button
-              onClick={() => setShowShortcuts(true)}
-              className="flex items-center justify-center w-8 h-8 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
-              aria-label="Keyboard shortcuts"
-              title="Keyboard shortcuts (?)"
+              onClick={() => logoutMutation.mutate()}
+              disabled={logoutMutation.isPending}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+              aria-label="Sign out"
+              title="Sign out"
             >
-              <span className="font-mono text-xs">?</span>
+              <LogoutIcon />
             </button>
+
+            {/* Version */}
+            <span className="hidden md:block text-[10px] text-text-tertiary/50 select-none shrink-0">
+              v{__APP_VERSION__}
+            </span>
           </div>
         </div>
 

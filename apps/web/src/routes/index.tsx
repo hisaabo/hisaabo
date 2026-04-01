@@ -472,15 +472,16 @@ function SalesTrendChart({
     granularity,
   }, { placeholderData: keepPreviousData });
 
-  const data = raw && raw.length > 0
-    ? raw.map((r) => ({
-        label: formatPeriodLabel(r.period, granularity),
-        invoiced: parseFloat(r.invoiced),
-        collected: parseFloat(r.collected),
-      }))
-    : undefined;
+  const mapped = raw?.map((r) => ({
+    label: formatPeriodLabel(r.period, granularity),
+    invoiced: parseFloat(r.invoiced),
+    collected: parseFloat(r.collected),
+  }));
 
-  if (!data || data.length === 0) {
+  // Show empty state when there are no rows OR all values are zero
+  const hasData = mapped && mapped.length > 0 && mapped.some((d) => d.invoiced > 0 || d.collected > 0);
+
+  if (!hasData) {
     return (
       <ChartCard title="Sales & Collections" responsive={false}>
         <ChartEmpty />
@@ -490,7 +491,7 @@ function SalesTrendChart({
 
   return (
     <ChartCard title="Sales & Collections">
-      <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+      <BarChart data={mapped} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
         <XAxis
           dataKey="label"
