@@ -12,6 +12,11 @@ Both packages are thin clients. They share a common HTTP client layer and both c
 the existing tRPC API. No business logic is duplicated — all validation, authorization,
 and computation stays in `packages/api`.
 
+**Current scope (as implemented):**
+
+- CLI: ~140 methods across 22 domain command groups
+- MCP: 96 tools across 16 tool files
+
 ---
 
 ## ADR-001: Shared HTTP Client as a Standalone Package
@@ -231,7 +236,7 @@ hisaabo/
     shared/           (existing — Zod validators + TypeScript types)
     db/               (existing — Drizzle schema)
     api/              (existing — Hono + tRPC server)
-    client/           (NEW — shared HTTP client)
+    client/           (planned — shared HTTP client; see Design Review §8 for current status)
       src/
         index.ts            — re-exports
         client.ts           — HisaaboClient class
@@ -240,57 +245,108 @@ hisaabo/
           auth.ts           — login, logout, whoami
           business.ts       — list, get, setActive
           invoice.ts        — list, create, get, updateStatus, pdf
-          party.ts          — list, create, get, ledger
-          item.ts           — list, create, get, adjustStock
-          payment.ts        — list, create
+          party.ts          — list, create, get, ledger, stats, merge
+          item.ts           — list, create, get, adjustStock, variants, units
+          payment.ts        — list, create, reconcile
           expense.ts        — list, create
           dashboard.ts      — summary
           gst.ts            — gstr1, gstr3b
+          tenant.ts         — get, update
+          document.ts       — convert (shared document conversion)
+          apiKey.ts         — list, create, revoke
+          bankAccount.ts    — list, get, create, transfer, transactions
+          reports.ts        — daybook, outstanding, taxSummary, itemSales, stockSummary
+          shipment.ts       — list, get, create, update
+          store.ts          — settings, orders, orderStatus
+          target.ts         — list, my, create
+          import.ts         — parties, items
       package.json
       tsconfig.json
       tsup.config.ts
-    cli/              (NEW — hisaabo CLI binary)
+    cli/              (implemented — hisaabo CLI binary)
       src/
-        index.ts            — entry point, program setup
+        bin/
+          hisaabo.ts        — entry point, commander program setup, auth commands
+        auth.ts             — login, loginWithToken, logout, whoami implementations
+        client.ts           — inline HisaaboClient (replaces packages/client until built)
         config.ts           — read/write ~/.hisaabo/config.json
+        output.ts           — table/JSON/CSV formatters, color helpers
+        format.ts           — display formatting utilities
         commands/
-          auth.ts           — login, logout, whoami
-          business.ts       — list, use
-          invoice.ts        — list, create, get, pdf, send
-          party.ts          — list, create, ledger
-          item.ts           — list, create, adjust-stock
-          payment.ts        — create, list
           dashboard.ts      — summary
-          export.ts         — invoices csv, gstr1
-        lib/
-          output.ts         — table/JSON/CSV formatters, color helpers
-          prompt.ts         — inquirer-based interactive prompts
-          errors.ts         — translate API errors to terminal output
+          invoice/
+            list.ts create.ts get.ts status.ts pdf.ts delete.ts
+          party/
+            list.ts create.ts get.ts ledger.ts delete.ts
+          item/
+            list.ts create.ts stock.ts delete.ts
+          payment/
+            list.ts create.ts delete.ts
+          expense/
+            list.ts create.ts delete.ts
+          gst/
+            index.ts        — gstr1, gstr3b, gstr1-csv
+          bank/
+            index.ts        — list, get, create, transfer, transactions
+          report/
+            index.ts        — daybook, outstanding, tax-summary, item-sales, stock-summary
+          shipment/
+            index.ts        — list, get, create, update
+          store/
+            index.ts        — settings, orders
+          target/
+            index.ts        — list, my, create
+          import/
+            index.ts        — parties, items
       package.json
       tsconfig.json
       tsup.config.ts
-    mcp/              (NEW — MCP server)
+    mcp/              (implemented — MCP server)
       src/
-        index.ts            — entry point, MCP server init
-        server.ts           — tool + resource registration
+        index.ts            — entry point, MCP server init, env var validation
+        server.ts           — tool + resource registration aggregator
+        client.ts           — inline HisaaboClient (replaces packages/client until built)
         tools/
-          invoice.ts        — invoice_list, invoice_create, invoice_get,
-                              invoice_update_status
-          party.ts          — party_list, party_create, party_get
-          item.ts           — item_list, item_create, item_adjust_stock
-          payment.ts        — payment_create, payment_list
-          dashboard.ts      — dashboard_summary
-          gst.ts            — gst_report
+          invoice.ts        — 7 tools: invoice_list, invoice_create, invoice_get,
+                              invoice_update_status, invoice_delete, invoice_pdf_url,
+                              invoice_update
+          party.ts          — 10 tools: party_list, party_create, party_get,
+                              party_update, party_delete, party_ledger,
+                              party_stats, party_merge, party_outstanding,
+                              party_search
+          item.ts           — 16 tools: item_list, item_create, item_get,
+                              item_update, item_delete, item_adjust_stock,
+                              item variants, units, merge, and low-stock ops
+          payment.ts        — 8 tools: payment_create, payment_list, payment_get,
+                              payment_delete, payment_reconcile, and related
+          expense.ts        — 5 tools: expense_list, expense_create, expense_get,
+                              expense_update, expense_delete
+          dashboard.ts      — 1 tool: dashboard_summary
+          gst.ts            — 2 tools: gst_report, gst_r3b
+          bankAccount.ts    — 6 tools: bank_list, bank_get, bank_create,
+                              bank_transfer, bank_transactions, bank_summary
+          reports.ts        — 7 tools: report_daybook, report_outstanding,
+                              report_tax_summary, report_item_sales,
+                              report_stock_summary, report_party_statement,
+                              report_payment_summary
+          shipment.ts       — 5 tools: shipment_list, shipment_get,
+                              shipment_create, shipment_update, shipment_delete
+          document.ts       — 6 tools: document_convert and CRUD for
+                              document-type–agnostic operations
+          tenant.ts         — 5 tools: tenant_get, tenant_update, tenant_users,
+                              tenant_invite, tenant_remove_user
+          apiKey.ts         — 3 tools: api_key_list, api_key_create, api_key_revoke
+          store.ts          — 7 tools: store_settings, store_orders, store_order_get,
+                              store_order_update_status, and related
+          target.ts         — 4 tools: target_list, target_my, target_create,
+                              target_delete
+          import.ts         — 4 tools: import_parties, import_items,
+                              import_invoices, import_payments
         resources/
-          index.ts          — resource URI router
-          business.ts       — business://current
-          parties.ts        — parties://customers, parties://suppliers
-          items.ts          — items://inventory
-          invoices.ts       — invoices://recent
-          dashboard.ts      — dashboard://summary
+          index.ts          — resource URI router and registration
         lib/
           errors.ts         — normalize tRPC errors to MCP error contract
-          pagination.ts     — bounded pagination helpers
+          pagination.ts     — MAX_PAGE_SIZE constant, bounded page helpers
       package.json
       tsconfig.json
       tsup.config.ts
@@ -545,36 +601,40 @@ export function clearConfig(): void {
 }
 ```
 
-### `src/index.ts` — skeleton
+### `src/bin/hisaabo.ts` — entry point (actual structure)
+
+The CLI entry point is `src/bin/hisaabo.ts` rather than `src/index.ts`. Commands
+are split into per-action files nested under domain subdirectories and imported
+individually. This keeps each file small and independently testable.
 
 ```typescript
 #!/usr/bin/env node
 import { Command } from "commander";
-import { registerAuthCommands } from "./commands/auth.js";
-import { registerBusinessCommands } from "./commands/business.js";
-import { registerInvoiceCommands } from "./commands/invoice.js";
-import { registerPartyCommands } from "./commands/party.js";
-import { registerItemCommands } from "./commands/item.js";
-import { registerPaymentCommands } from "./commands/payment.js";
-import { registerDashboardCommands } from "./commands/dashboard.js";
-import { registerExportCommands } from "./commands/export.js";
+// Auth commands are defined inline in the entry point
+import { dashboardCommand } from "../commands/dashboard.js";
+import { invoiceListCommand, invoiceCreateCommand, /* ... */ } from "../commands/invoice/*.js";
+import { partyListCommand, partyCreateCommand, partyLedgerCommand, /* ... */ } from "../commands/party/*.js";
+import { itemListCommand, itemCreateCommand, itemStockCommand, /* ... */ } from "../commands/item/*.js";
+import { paymentListCommand, paymentCreateCommand, /* ... */ } from "../commands/payment/*.js";
+import { expenseListCommand, expenseCreateCommand, /* ... */ } from "../commands/expense/*.js";
+import { gstR1Command, gstR3bCommand, gstR1CsvCommand } from "../commands/gst/index.js";
+import { bankListCommand, bankGetCommand, bankCreateCommand, /* ... */ } from "../commands/bank/index.js";
+import { reportDaybookCommand, reportOutstandingCommand, /* ... */ } from "../commands/report/index.js";
+import { shipmentListCommand, shipmentGetCommand, /* ... */ } from "../commands/shipment/index.js";
+import { targetListCommand, targetMyCommand, targetCreateCommand } from "../commands/target/index.js";
+import { storeSettingsCommand, storeOrdersCommand } from "../commands/store/index.js";
+import { importPartiesCommand, importItemsCommand } from "../commands/import/index.js";
 
 const program = new Command()
   .name("hisaabo")
-  .description("Hisaabo CLI — manage invoices, parties, and items from the terminal")
+  .description("Hisaabo CLI — Invoicing and business management")
   .version("0.1.0");
 
-registerAuthCommands(program);
-registerBusinessCommands(program);
-registerInvoiceCommands(program);
-registerPartyCommands(program);
-registerItemCommands(program);
-registerPaymentCommands(program);
-registerDashboardCommands(program);
-registerExportCommands(program);
+// Auth commands (login, logout, whoami, switch) are registered directly here.
+// All domain commands are registered via their imported command objects.
+// 22 domain groups total; ~140 methods across all groups.
 
 program.parseAsync(process.argv).catch((err) => {
-  // Top-level error handler: prints a clean message, exits non-zero
   printError(err);
   process.exit(1);
 });
@@ -734,18 +794,46 @@ import { registerInvoiceTools } from "./tools/invoice.js";
 import { registerPartyTools } from "./tools/party.js";
 import { registerItemTools } from "./tools/item.js";
 import { registerPaymentTools } from "./tools/payment.js";
+import { registerExpenseTools } from "./tools/expense.js";
 import { registerDashboardTools } from "./tools/dashboard.js";
 import { registerGstTools } from "./tools/gst.js";
+import { registerBankAccountTools } from "./tools/bankAccount.js";
+import { registerReportsTools } from "./tools/reports.js";
+import { registerShipmentTools } from "./tools/shipment.js";
+import { registerDocumentTools } from "./tools/document.js";
+import { registerTenantTools } from "./tools/tenant.js";
+import { registerApiKeyTools } from "./tools/apiKey.js";
+import { registerStoreTools } from "./tools/store.js";
+import { registerTargetTools } from "./tools/target.js";
+import { registerImportTools } from "./tools/import.js";
 import { registerResources } from "./resources/index.js";
 
 export function registerTools(server: McpServer, client: HisaaboClient) {
-  registerInvoiceTools(server, client);
-  registerPartyTools(server, client);
-  registerItemTools(server, client);
-  registerPaymentTools(server, client);
-  registerDashboardTools(server, client);
-  registerGstTools(server, client);
+  // Core business operations
+  registerInvoiceTools(server, client);    // 7 tools
+  registerPartyTools(server, client);      // 10 tools
+  registerItemTools(server, client);       // 16 tools
+  registerPaymentTools(server, client);    // 8 tools
+  registerExpenseTools(server, client);    // 5 tools
+  // Reporting and analytics
+  registerDashboardTools(server, client);  // 1 tool
+  registerGstTools(server, client);        // 2 tools
+  registerBankAccountTools(server, client);// 6 tools
+  registerReportsTools(server, client);    // 7 tools
+  // Operations
+  registerShipmentTools(server, client);   // 5 tools
+  registerStoreTools(server, client);      // 7 tools
+  registerTargetTools(server, client);     // 4 tools
+  // Document types and conversion
+  registerDocumentTools(server, client);   // 6 tools
+  // Platform / tenant management
+  registerTenantTools(server, client);     // 5 tools
+  registerApiKeyTools(server, client);     // 3 tools
+  // Data migration
+  registerImportTools(server, client);     // 4 tools
+  // MCP resources (read-only context snapshots)
   registerResources(server, client);
+  // Total: 96 tools across 16 tool files
 }
 ```
 
@@ -869,39 +957,62 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
 #### `src/tools/party.ts` — summary (full structure mirrors invoice.ts)
 
 ```typescript
-// Tools registered:
+// Tools registered (10 total):
 //
-// party_list      — list parties with type/search filter, paginated
-// party_create    — create customer or supplier, returns created party
-// party_get       — get party details including outstanding balance
-//
-// party_get includes the "balance" field (receivable/payable) which the
-// API computes server-side. The MCP server does not compute balances itself.
+// party_list           — list parties with type/search/filter, paginated
+//                        filter param supports: "outstanding", "overdue"
+// party_create         — create customer or supplier, returns created party
+// party_get            — get party details including outstanding balance
+//                        balance field (receivable/payable) is computed server-side
+// party_update         — update party name, contact, credit terms
+// party_delete         — remove a party (fails if transactions exist)
+// party_ledger         — paginated ledger of all transactions for a party
+// party_stats          — sales/purchase totals, payment history summary
+// party_merge          — merge a duplicate party record into a canonical one
+// party_outstanding    — list invoices with unpaid balance for a party
+// party_search         — search across all parties by name/GSTIN/phone
 ```
 
 #### `src/tools/item.ts` — summary
 
 ```typescript
-// Tools registered:
+// Tools registered (16 total):
 //
-// item_list         — list items, supports --low-stock filter
-//                     (items where stockQuantity < lowStockAlert)
-// item_create       — create a new inventory item
-// item_adjust_stock — adjust stock quantity with a reason note
-//                     Input: { item_id, adjustment, reason }
-//                     adjustment is a signed decimal string: "+50" or "-3.5"
-//                     The API records a stock movement entry for audit.
+// item_list              — list items, supports low_stock=true filter
+//                          (items where stockQuantity < lowStockAlert)
+// item_create            — create a new inventory item
+// item_get               — get item details with current stock level
+// item_update            — update item name, price, HSN, tax rate
+// item_delete            — remove an item (fails if used in invoices)
+// item_adjust_stock      — adjust stock with a signed decimal and reason note
+//                          e.g. "+50" or "-3.5"; API records audit movement
+// item_get_variants      — list variants for an item
+// item_create_variant    — add a variant (size, colour, etc.) to an item
+// item_update_variant    — update a variant's price or attributes
+// item_delete_variant    — remove a variant
+// item_get_units         — list alternate units for an item
+// item_create_unit       — add an alternate unit with conversion factor
+// item_update_unit       — update unit conversion factor
+// item_delete_unit       — remove an alternate unit
+// item_merge             — merge a duplicate item into a canonical one
+// item_low_stock         — list items below their low-stock alert threshold
 ```
 
 #### `src/tools/payment.ts` — summary
 
 ```typescript
-// Tools registered:
+// Tools registered (8 total):
 //
-// payment_create  — record a payment received from a customer or made to a supplier
-//                   Can optionally link to a specific invoice (invoice_id)
-//                   or leave unlinked (applied to party balance)
-// payment_list    — list payments for a party or date range
+// payment_create       — record a payment received from a customer or made to a supplier
+//                        Can optionally link to a specific invoice (invoice_id)
+//                        or leave unlinked (applied to party balance)
+// payment_list         — list payments for a party or date range, paginated
+// payment_get          — get a single payment record by ID
+// payment_delete       — remove a payment record
+// payment_reconcile    — match a bank transaction to one or more invoices
+// payment_unreconcile  — reverse a reconciliation link
+// payment_modes        — list available payment modes for the business
+// payment_summary      — aggregate totals by mode and period
 ```
 
 #### `src/tools/dashboard.ts`
@@ -918,12 +1029,130 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
 #### `src/tools/gst.ts`
 
 ```typescript
-// Tools registered:
+// Tools registered (2 total):
 //
 // gst_report — generate GSTR1 or GSTR3B summary data
 //              Input: { report_type: "gstr1" | "gstr3b", month: 1..12, year: 2024..2030 }
 //              Returns JSON summary (not PDF). PDF generation is out of scope for MCP
 //              because AI agents cannot consume binary content in tool responses.
+// gst_r3b    — generate GSTR3B summary specifically (dedicated shorthand)
+```
+
+#### `src/tools/bankAccount.ts` — summary
+
+```typescript
+// Tools registered (6 total):
+//
+// bank_list         — list all bank/cash accounts for the business
+// bank_get          — get account details with current balance
+// bank_create       — add a new bank or cash account
+// bank_transfer     — transfer funds between two accounts (creates paired entries)
+// bank_transactions — paginated ledger for a single account
+// bank_summary      — aggregate balance and transaction counts across all accounts
+```
+
+#### `src/tools/reports.ts` — summary
+
+```typescript
+// Tools registered (7 total):
+//
+// report_daybook          — chronological record of all transactions for a date range
+// report_outstanding      — unpaid/partially-paid receivables and payables
+// report_tax_summary      — GST collected and paid, period-wise
+// report_item_sales       — revenue and quantity breakdown per item
+// report_stock_summary    — current stock levels per item
+// report_party_statement  — ledger-style transaction history for a party
+// report_payment_summary  — payments grouped by mode and period
+```
+
+#### `src/tools/shipment.ts` — summary
+
+```typescript
+// Tools registered (5 total):
+//
+// shipment_list   — list shipments, filterable by status or invoice
+// shipment_get    — get shipment details including tracking info
+// shipment_create — create a shipment record linked to an invoice or party
+// shipment_update — update status, carrier, tracking number
+// shipment_delete — remove a shipment record
+```
+
+#### `src/tools/document.ts` — summary
+
+```typescript
+// Tools registered (6 total):
+//
+// document_convert      — convert any document type (quotation, challan, proforma,
+//                         sales return, purchase return) to a final tax invoice
+//                         Passes skipStockAdjustment: true when source is a challan.
+// document_list         — list documents of a given type
+// document_get          — get a single document by ID
+// document_create       — create a document of a specified type
+// document_update       — update a document
+// document_delete       — delete a document
+//
+// Supported document types: quotation, proforma, deliveryChallan,
+// creditNote, debitNote, salesReturn, purchaseReturn
+```
+
+#### `src/tools/tenant.ts` — summary
+
+```typescript
+// Tools registered (5 total):
+//
+// tenant_get         — get current tenant profile (name, plan, settings)
+// tenant_update      — update tenant-level settings
+// tenant_users       — list all users in the tenant with their roles
+// tenant_invite      — invite a new user to the tenant by email
+// tenant_remove_user — remove a user from the tenant
+```
+
+#### `src/tools/apiKey.ts` — summary
+
+```typescript
+// Tools registered (3 total):
+//
+// api_key_list   — list all API keys for the current user
+// api_key_create — generate a new API key (hisaabo_key_...) with a label
+// api_key_revoke — permanently revoke an API key by ID
+```
+
+#### `src/tools/store.ts` — summary
+
+```typescript
+// Tools registered (7 total):
+//
+// store_settings          — get the online store configuration
+// store_orders            — list store orders with status filter, paginated
+// store_order_get         — get a single order with line items and customer info
+// store_order_update_status — advance order status (pending → processing → shipped → delivered)
+// store_order_cancel      — cancel an order
+// store_catalogue         — list published store catalogue items
+// store_update_settings   — update store settings (name, description, policies)
+```
+
+#### `src/tools/target.ts` — summary
+
+```typescript
+// Tools registered (4 total):
+//
+// target_list   — list all sales targets for the business
+// target_my     — get the current user's active target with progress
+// target_create — create a new sales target for a seller
+// target_delete — remove a target
+```
+
+#### `src/tools/import.ts` — summary
+
+```typescript
+// Tools registered (4 total):
+//
+// import_parties  — bulk-import customers and vendors from parsed CSV/JSON
+// import_items    — bulk-import inventory items (normalizeUnit maps 45+ unit codes)
+// import_invoices — bulk-import sale and purchase invoices
+// import_payments — bulk-import payment records linked to imported invoices
+//
+// Unmapped unit codes are returned in the response — no data is silently dropped.
 ```
 
 ### MCP Resource Definitions
@@ -1187,16 +1416,34 @@ auth paths.
 
 | Path | Purpose |
 |------|---------|
-| `packages/client/src/client.ts` | `HisaaboClient` class, `normalizeTrpcError` |
-| `packages/client/src/procedures/` | Typed wrappers for each router namespace |
+| `packages/client/src/client.ts` | `HisaaboClient` class, `normalizeTrpcError` (planned; currently inlined) |
+| `packages/client/src/procedures/` | Typed wrappers for each router namespace (planned) |
+| `packages/cli/src/bin/hisaabo.ts` | CLI entry point, `commander` program, auth commands |
+| `packages/cli/src/auth.ts` | Login, logout, whoami implementations |
+| `packages/cli/src/client.ts` | Inline `HisaaboClient` (used until `packages/client` is extracted) |
 | `packages/cli/src/config.ts` | Read/write `~/.hisaabo/config.json` |
-| `packages/cli/src/index.ts` | CLI entry point, `commander` program |
-| `packages/cli/src/commands/` | One file per top-level command group |
-| `packages/cli/src/lib/output.ts` | Table + JSON output formatters |
+| `packages/cli/src/output.ts` | Table + JSON output formatters |
+| `packages/cli/src/commands/` | One subdirectory per domain; one file per action |
 | `packages/mcp/src/index.ts` | MCP server entry point, env var validation |
-| `packages/mcp/src/server.ts` | Tool + resource registration aggregator |
-| `packages/mcp/src/tools/` | One file per tool group |
-| `packages/mcp/src/resources/` | MCP resource handlers |
+| `packages/mcp/src/server.ts` | Tool + resource registration aggregator (16 tool files) |
+| `packages/mcp/src/client.ts` | Inline `HisaaboClient` (used until `packages/client` is extracted) |
+| `packages/mcp/src/tools/invoice.ts` | 7 invoice tools |
+| `packages/mcp/src/tools/party.ts` | 10 party tools |
+| `packages/mcp/src/tools/item.ts` | 16 item tools (variants, units, merge) |
+| `packages/mcp/src/tools/payment.ts` | 8 payment tools (including reconciliation) |
+| `packages/mcp/src/tools/expense.ts` | 5 expense tools |
+| `packages/mcp/src/tools/dashboard.ts` | 1 dashboard summary tool |
+| `packages/mcp/src/tools/gst.ts` | 2 GST report tools |
+| `packages/mcp/src/tools/bankAccount.ts` | 6 bank account tools |
+| `packages/mcp/src/tools/reports.ts` | 7 business report tools |
+| `packages/mcp/src/tools/shipment.ts` | 5 shipment tools |
+| `packages/mcp/src/tools/document.ts` | 6 tools for document types and conversion |
+| `packages/mcp/src/tools/tenant.ts` | 5 tenant management tools |
+| `packages/mcp/src/tools/apiKey.ts` | 3 API key management tools |
+| `packages/mcp/src/tools/store.ts` | 7 online store tools |
+| `packages/mcp/src/tools/target.ts` | 4 sales target tools |
+| `packages/mcp/src/tools/import.ts` | 4 bulk data import tools |
+| `packages/mcp/src/resources/` | MCP resource handlers (read-only context snapshots) |
 | `packages/mcp/src/lib/errors.ts` | `wrapTool` error normalization |
 | `packages/mcp/src/lib/pagination.ts` | `MAX_PAGE_SIZE` constant, page helpers |
 
@@ -1302,3 +1549,13 @@ The inline client is architecturally identical to the design in ADR-001.
 | Track expense | `expense_create` | Yes (added) |
 | Check low stock | `item_list` (with low_stock=true) | Yes |
 | Party account statement | `party_ledger` | Yes |
+| Convert a quotation to an invoice | `document_convert` (source_type + source_id + target_type) | Yes |
+| Convert a delivery challan to an invoice | `document_convert` with `skip_stock_adjustment: true` | Yes |
+| Check bank account balance | `bank_get` or `bank_summary` | Yes |
+| Reconcile a payment with a bank transaction | `payment_reconcile` (payment_id + bank_transaction reference) | Yes |
+| Invite a user to the tenant | `tenant_invite` (email + role) | Yes |
+| Generate an API key for CLI/automation | `api_key_create` (label) | Yes |
+| View store orders awaiting fulfillment | `store_orders` (status: "pending") | Yes |
+| Check a seller's target progress | `target_my` | Yes |
+| Bulk import parties from CSV | `import_parties` (parsed payload) | Yes |
+| Get outstanding report for a period | `report_outstanding` (from_date + to_date) | Yes |

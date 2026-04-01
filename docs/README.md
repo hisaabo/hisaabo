@@ -7,7 +7,7 @@ This folder contains **internal architecture documents, audit reports, and desig
 ## Contents
 
 ### Architecture
-- [`architecture/cli-mcp-design.md`](architecture/cli-mcp-design.md) — CLI tool + MCP server architecture (ADRs, package structure, tool schemas)
+- [`architecture/cli-mcp-design.md`](architecture/cli-mcp-design.md) — CLI tool + MCP server architecture (ADRs, package structure, tool schemas); CLI covers ~140 methods across 22 domain groups, MCP exposes 96 tools across 16 tool files including tenant, document types, apiKey, store, shipment, reports, and bank account domains
 - [`architecture/testing-plan.md`](architecture/testing-plan.md) — Test infrastructure design (Vitest/Jest setup, coverage strategy, CI integration)
 - [`architecture/ai-features-roadmap.md`](architecture/ai-features-roadmap.md) — AI feature implementation plans (HSN auto-fill, photo-to-item, product photography)
 - [`architecture/online-store.md`](architecture/online-store.md) — Online store design proposal (storefront, catalogue, order flow)

@@ -1,6 +1,6 @@
 ---
 title: MCP Server
-description: Connect Hisaabo to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 5-minute setup, zero config, ~50 tools covering every business operation.
+description: Connect Hisaabo to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 5-minute setup, zero config, 130+ tools covering every business operation.
 sidebar:
   order: 2
 ---
@@ -181,6 +181,60 @@ Claude: "March 2026 GSTR-1 summary:
          Filing deadline: April 11, 2026 — 14 days away."
 ```
 
+**Create a quotation and convert it to an invoice:**
+
+```
+You: "Send Sharma Textiles a quote for 500 meters of silk at ₹320/m,
+      valid for 15 days"
+
+Claude: [calls party_list to resolve "Sharma Textiles"]
+        [calls item_list to resolve "silk" to item ID]
+        [calls quotation_create with resolved IDs]
+
+Claude: "Done. Quotation QT-0041 created for Sharma Textiles:
+         500m Silk Fabric @ ₹320/m = ₹1,60,000 + 5% GST
+         Total: ₹1,68,000 | Valid until: April 16, 2026
+
+         Let me know when they confirm and I'll convert it to an invoice."
+
+You: "They confirmed — convert it"
+
+Claude: [calls document_convert with source_id: QT-0041's UUID, target_type: "invoice"]
+
+Claude: "Invoice BB-15109 created from QT-0041.
+         Sharma Textiles — ₹1,68,000 | Due: May 1, 2026
+         Stock updated: 500m Silk Fabric deducted."
+```
+
+**Invite a team member and set their role:**
+
+```
+You: "Add priya@sharmatraders.in as an accountant"
+
+Claude: [calls tenant_invite_member with email, role: "accountant"]
+
+Claude: "Done. Invitation sent to priya@sharmatraders.in.
+         She'll have read-only access to reports and ledgers.
+         The invitation link expires in 7 days."
+```
+
+**Record an incoming payment and apply it across invoices:**
+
+```
+You: "Gupta Enterprises paid ₹50,000 by bank transfer — 
+      apply it to their oldest invoices"
+
+Claude: [calls payment_unpaid_invoices with Gupta Enterprises' UUID]
+        [calls payment_create with allocations across oldest invoices]
+
+Claude: "Payment recorded — ₹50,000 bank transfer from Gupta Enterprises:
+         — INV-12801 (63 days): ₹28,000 — now paid in full
+         — INV-12880 (31 days): ₹19,500 — now paid in full
+         — INV-12934 (2 days):  ₹2,500 partial (₹750 remaining)
+         
+         Remaining balance: ₹750"
+```
+
 ---
 
 ## What You Can Build
@@ -321,7 +375,7 @@ For long-running OpenClaw deployments, store credentials in your secrets manager
 
 ## Available Tools
 
-The MCP server exposes ~50 tools organized by business domain.
+The MCP server exposes 130+ tools organized by business domain.
 
 ---
 
@@ -384,6 +438,34 @@ Create a sale or purchase invoice.
 Get a single invoice with all line items and payment history.
 
 **Input:** `{ id: string }`
+
+#### `invoice_update`
+
+Edit an existing invoice — update line items, dates, notes, or discount. Only provide the fields you want to change; omitted fields are not modified.
+
+**Input:**
+```typescript
+{
+  invoice_id: string;
+  line_items?: Array<{
+    description: string;
+    quantity: string;       // decimal string e.g. "2.000"
+    unit_price: string;     // decimal string e.g. "500.00"
+    tax_percent?: string;   // default "0"
+    discount_percent?: string;
+    item_id?: string;
+  }>;
+  invoice_date?: string;
+  due_date?: string;
+  notes?: string;
+  terms_and_conditions?: string;
+  invoice_discount?: string;
+  invoice_discount_type?: "amount" | "percent";
+  round_off?: string;
+}
+```
+
+> **Warning:** Updating a paid invoice recalculates totals and may affect payment status. Changing the party after creation is not supported.
 
 #### `invoice_update_status`
 
@@ -484,6 +566,43 @@ Get a party's complete transaction ledger (invoices, payments, and running balan
 
 The `balance` field is positive when the party owes you (receivable) and negative when you owe them (payable).
 
+#### `party_ledger_report`
+
+Get a detailed aggregated ledger report for a party with date range filtering. Returns party details, all entries (invoices and payments) in chronological order with running balance, and a closing summary. Suitable for generating an account statement to share with the party.
+
+**Input:**
+```typescript
+{
+  party_id: string;
+  from_date?: string; // ISO 8601
+  to_date?: string;
+}
+```
+
+#### `party_get_stats`
+
+Get aggregate statistics for a party — total invoice count and total payment count. Use this to quickly understand the transaction volume with a customer or supplier.
+
+**Input:** `{ party_id: string }`
+
+#### `party_top_items`
+
+Get the top 5 items most frequently transacted with a specific party. Returns item name, total quantity, total amount, and invoice count. Useful for understanding what a customer typically buys or what a supplier typically sells.
+
+**Input:** `{ party_id: string }`
+
+#### `party_merge`
+
+Merge two party records into one — moves all invoices and payments from the source party to the target, then deletes the source. Opening balances are combined. Use this to deduplicate parties that were created twice with slightly different names. Requires admin role.
+
+**Input:**
+```typescript
+{
+  source_id: string; // party to merge FROM (deleted after merging)
+  target_id: string; // party to merge INTO (kept)
+}
+```
+
 ---
 
 ### Items & Inventory
@@ -559,6 +678,110 @@ List all item categories used in your catalog.
 
 **Input:** `{}` (no parameters)
 
+#### `item_list_variants`
+
+List all variants for a variant-mode inventory item. Each variant has its own attribute values (e.g. size, color), SKU, prices, and stock quantity.
+
+**Input:** `{ item_id: string }`
+
+#### `item_create_variant`
+
+Add a new variant to a variant-mode inventory item. The parent item must already be in variants mode. Attribute values define what makes this variant distinct, e.g. `{ size: "L", color: "Red" }`.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  attribute_values: Record<string, string>;
+  sku?: string;
+  sale_price?: string;
+  purchase_price?: string;
+  stock_quantity?: string;
+  low_stock_alert?: string;
+}
+```
+
+#### `item_update_variant`
+
+Update an existing variant's price, stock, or attributes. Only provide the fields you want to change.
+
+**Input:**
+```typescript
+{
+  variant_id: string;
+  attribute_values?: Record<string, string>;
+  sku?: string;
+  sale_price?: string;
+  purchase_price?: string;
+  stock_quantity?: string;
+  low_stock_alert?: string;
+}
+```
+
+#### `item_delete_variant`
+
+Permanently delete an item variant. Requires admin role. Existing invoice line items that referenced this variant retain their data.
+
+**Input:** `{ variant_id: string }`
+
+#### `item_merge`
+
+Merge two inventory items — moves all invoice history from the source item to the target, then deletes the source. Cannot merge variant-mode items. Requires admin role.
+
+**Input:**
+```typescript
+{
+  source_id: string; // item to merge FROM (deleted)
+  target_id: string; // item to merge INTO (kept)
+  stock_conversion_factor?: number; // how many target units equal 1 source unit (default 1)
+}
+```
+
+#### `item_switch_base_unit`
+
+Change the base unit of measure for an item (e.g. switch from `kg` to `g`). Converts existing stock and prices using the conversion factor provided.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  new_unit: string;           // e.g. "g", "ml"
+  conversion_factor: number;  // how many NEW units equal 1 OLD unit (e.g. kg → g: 1000)
+}
+```
+
+#### `item_rename_unit`
+
+Rename a unit (base or alt unit) for an item, cascading the rename across all linked invoice line items. Use this to correct typos in unit names. Requires admin role.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  old_unit: string;
+  new_unit: string;
+}
+```
+
+#### `item_stock_adjustment_history`
+
+View the audit log of manual stock adjustments for an inventory item. Each entry shows the adjustment quantity, reason, user, and timestamp.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  variant_id?: string; // filter by variant (for variant-mode items)
+  page?: number;
+}
+```
+
+#### `item_low_stock_count`
+
+Get the total count of items (and variants) that are below their low-stock alert threshold. Use this as a quick dashboard metric. For the full list, use `item_list` with `low_stock: true`.
+
+**Input:** `{}` (no parameters)
+
 ---
 
 ### Payments
@@ -612,6 +835,33 @@ Update a payment's notes or reference number.
 Delete a payment record. Use with care — this affects party outstanding balances.
 
 **Input:** `{ id: string }`
+
+#### `payment_unpaid_invoices`
+
+List all unpaid or partially-paid invoices for a specific party. Returns invoices with status `sent`, `partial`, or `overdue` — excludes paid and cancelled. Each result includes the remaining balance (`totalAmount - amountPaid`). Use this before recording a payment to find which invoices to allocate it against.
+
+**Input:** `{ party_id: string }`
+
+#### `payment_untracked`
+
+List payments that have not been linked to a bank account. Use this to find payments that need to be assigned to an account for accurate cash flow tracking.
+
+**Input:**
+```typescript
+{
+  search?: string;
+  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  from_date?: string;
+  to_date?: string;
+  page?: number;
+}
+```
+
+#### `payment_default_account`
+
+Get the recommended bank or cash account to use when recording a payment. Priority: most recently used account for this party → most common recent account → business default account. Use this to pre-fill the `bank_account_id` field in `payment_create`.
+
+**Input:** `{ party_id?: string }`
 
 ---
 
@@ -960,9 +1210,27 @@ Get a single order with line items, customer details, and current status.
 
 #### `store_order_update`
 
-Update an order's status (confirm, dispatch, cancel).
+Update a confirmed order's status to `preparing`, `ready`, or `delivered`. Use this after an order has been confirmed to track fulfillment progress.
 
-**Input:** `{ id: string; status: "confirmed" | "dispatched" | "delivered" | "cancelled"; notes?: string }`
+**Input:** `{ order_id: string; status: "preparing" | "ready" | "delivered" }`
+
+#### `store_confirm_order`
+
+Confirm a pending store order, activating it for fulfillment. Moves the order from `pending` to `confirmed`. If a draft invoice was linked to the order, it is automatically updated to `sent`.
+
+**Input:** `{ order_id: string }`
+
+#### `store_cancel_order`
+
+Cancel an order. Can be applied to any order that is not already delivered or cancelled. The linked invoice (if any) is also cancelled automatically.
+
+**Input:**
+```typescript
+{
+  order_id: string;
+  reason?: string; // e.g. "Customer requested cancellation", "Out of stock"
+}
+```
 
 ---
 
@@ -1058,6 +1326,221 @@ Bulk-import historical payment records.
   data: string;
 }
 ```
+
+---
+
+### Documents
+
+Business documents other than invoices — quotations, credit/debit notes, challans, proforma invoices, and returns. Each type has a standard set of five tools: `list`, `get`, `create`, `update_status`, and `delete`.
+
+#### `document_convert`
+
+Convert a document to a different type — for example, a quotation to an invoice, or a proforma to a delivery challan. Copies all line items from the source document and creates a new linked document. The original document is not modified.
+
+Common conversion flows:
+- `quotation → invoice` (customer accepts the quote)
+- `proforma → invoice` (proforma confirmed)
+- `delivery_challan → invoice` (challan converted to bill)
+
+**Input:**
+```typescript
+{
+  source_id: string;   // UUID of the document to convert from
+  target_type: "quotation" | "credit_note" | "debit_note" | "delivery_challan"
+             | "proforma" | "sales_return" | "purchase_return";
+}
+```
+
+#### Quotations (`quotation_*`)
+
+Price quotes sent to customers before an order is confirmed. Status flow: `draft → sent → cancelled`. Once accepted, convert to an invoice with `document_convert`.
+
+| Tool | What it does |
+|---|---|
+| `quotation_list` | List quotations with filters (party, date range, status) |
+| `quotation_get` | Get a single quotation with all line items |
+| `quotation_create` | Create a new quotation |
+| `quotation_update_status` | Advance status: `draft → sent → cancelled` |
+| `quotation_delete` | Soft-delete a quotation |
+
+#### Credit Notes (`credit_note_*`)
+
+Issued to reverse or reduce a previous sale invoice. Status flow: `draft → sent → paid → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `credit_note_list` | List credit notes |
+| `credit_note_get` | Get a single credit note |
+| `credit_note_create` | Create a new credit note |
+| `credit_note_update_status` | Advance status |
+| `credit_note_delete` | Soft-delete |
+
+#### Debit Notes (`debit_note_*`)
+
+Issued to increase a previous purchase bill or to request additional payment. Status flow: `draft → sent → paid → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `debit_note_list` | List debit notes |
+| `debit_note_get` | Get a single debit note |
+| `debit_note_create` | Create a new debit note |
+| `debit_note_update_status` | Advance status |
+| `debit_note_delete` | Soft-delete |
+
+#### Delivery Challans (`delivery_challan_*`)
+
+Accompanying documents for goods in transit, before an invoice is raised. Status flow: `draft → sent → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `delivery_challan_list` | List delivery challans |
+| `delivery_challan_get` | Get a single challan |
+| `delivery_challan_create` | Create a new challan |
+| `delivery_challan_update_status` | Advance status |
+| `delivery_challan_delete` | Soft-delete |
+
+#### Proforma Invoices (`proforma_*`)
+
+Pre-invoice documents used to request advance payment or as a formal quotation. Status flow: `draft → sent → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `proforma_list` | List proforma invoices |
+| `proforma_get` | Get a single proforma |
+| `proforma_create` | Create a new proforma invoice |
+| `proforma_update_status` | Advance status |
+| `proforma_delete` | Soft-delete |
+
+#### Sales Returns (`sales_return_*`)
+
+Documents recording goods returned by customers. Status flow: `draft → sent → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `sales_return_list` | List sales returns |
+| `sales_return_get` | Get a single sales return |
+| `sales_return_create` | Create a new sales return |
+| `sales_return_update_status` | Advance status |
+| `sales_return_delete` | Soft-delete |
+
+#### Purchase Returns (`purchase_return_*`)
+
+Documents recording goods returned to suppliers. Status flow: `draft → sent → cancelled`.
+
+| Tool | What it does |
+|---|---|
+| `purchase_return_list` | List purchase returns |
+| `purchase_return_get` | Get a single purchase return |
+| `purchase_return_create` | Create a new purchase return |
+| `purchase_return_update_status` | Advance status |
+| `purchase_return_delete` | Soft-delete |
+
+**Common `create` input** (same schema for all document types):
+```typescript
+{
+  party_id: string;                // customer or supplier UUID
+  type: "sale" | "purchase";
+  line_items: Array<{
+    description: string;
+    quantity: string;              // decimal string e.g. "5.000"
+    unit_price: string;            // decimal string e.g. "200.00"
+    tax_percent?: string;          // default "0"
+    discount_percent?: string;
+    item_id?: string;              // optional link to inventory item
+  }>;
+  document_date?: string;          // ISO 8601, defaults to today
+  due_date?: string;
+  notes?: string;
+  terms_and_conditions?: string;
+  reference_document_id?: string;  // source document UUID (e.g. when converting)
+}
+```
+
+---
+
+### Tenant / Team Management
+
+Manage the organization (tenant) and its members. Tenant tools operate at the organization level, above individual businesses. The `HISAABO_TENANT_ID` environment variable determines which tenant is active.
+
+#### `tenant_list`
+
+List all organizations the current user belongs to. Returns each tenant's UUID, name, slug, plan, and the user's role in it.
+
+**Input:** `{}` (no parameters)
+
+#### `tenant_members`
+
+List all members of the current tenant. Returns each member's user ID, name, email, role, and when they joined.
+
+**Input:** `{}` (no parameters)
+
+#### `tenant_invite_member`
+
+Invite a user to join the current tenant by email address. Requires admin or owner role. The invitation link is valid for 7 days.
+
+Available roles:
+- `admin` — full access to all businesses and settings
+- `seller_manager` — manage the sales team and see all invoices
+- `seller` — create invoices and record payments
+- `accountant` — read-only access to reports and ledgers
+
+**Input:**
+```typescript
+{
+  email: string; // email address to invite
+  role: "admin" | "seller_manager" | "seller" | "accountant"; // default "seller"
+}
+```
+
+#### `tenant_remove_member`
+
+Remove a member from the current tenant. Requires admin or owner role. The removed user loses access to all businesses within this tenant immediately. You cannot remove yourself or a superadmin/owner.
+
+**Input:** `{ user_id: string }` — use `tenant_members` to find user UUIDs.
+
+#### `tenant_update_member_role`
+
+Change the role of an existing tenant member. Requires admin or owner role.
+
+**Input:**
+```typescript
+{
+  user_id: string;
+  role: "admin" | "seller_manager" | "seller" | "accountant";
+}
+```
+
+---
+
+### API Keys
+
+Manage long-lived programmatic access credentials (as opposed to session tokens). API keys are suitable for CI/CD pipelines, integrations, and automation bots. Available on paid plans only.
+
+#### `api_key_list`
+
+List all API keys belonging to the current user in the active tenant. Returns display-safe metadata only — never the full key. Check `expiresAt` to find keys that need renewal.
+
+**Input:** `{}` (no parameters)
+
+#### `api_key_create`
+
+Create a new API key. The full key is returned **exactly once** in this response — it is never stored in plain text and cannot be retrieved again. Save it immediately.
+
+**Input:**
+```typescript
+{
+  name: string;         // descriptive name, e.g. "CI/CD Pipeline", "Accounting Bot"
+  expires_at?: string;  // ISO 8601 expiry date — omit for a non-expiring key
+}
+```
+
+**Output:** includes `key` (the full key), `keyPrefix` (for identification), `name`, `expiresAt`, and a `warning` field reminding you to save the key.
+
+#### `api_key_revoke`
+
+Permanently revoke an API key by its ID. Revoked keys stop working immediately. This action cannot be undone.
+
+**Input:** `{ key_id: string }` — use `api_key_list` to find key IDs.
 
 ---
 

@@ -78,6 +78,22 @@ Or non-interactively:
 hisaabo switch <business-id>
 ```
 
+### Register and profile management
+
+```bash
+# Register a new account
+hisaabo auth register --email you@example.com --name "Your Name"
+
+# Complete profile setup after an invite-based registration
+hisaabo auth complete-profile --name "Your Name"
+
+# Update your display name
+hisaabo auth update-name --name "New Name"
+
+# Sign out of all active sessions (useful after a credential change)
+hisaabo auth logout-all
+```
+
 ---
 
 ## Command Reference
@@ -201,6 +217,18 @@ hisaabo invoice pdf BB-12948 --output /tmp/invoices/
 hisaabo invoice pdf BB-12948 --format thermal
 ```
 
+#### `hisaabo invoice update`
+
+Update fields on an existing invoice. Only draft invoices can be fully edited; sent or paid invoices accept a limited set of changes.
+
+```bash
+hisaabo invoice update BB-12948 \
+  --notes "Updated payment terms: 30 days net" \
+  --due-date 2026-04-30
+```
+
+Pass `--from-file invoice.json` to replace the full invoice body from a JSON file (same format as `invoice create`).
+
 #### `hisaabo invoice delete`
 
 ```bash
@@ -242,6 +270,41 @@ hisaabo party create \
   --gstin 27AABCU9603R1ZX \
   --city Mumbai \
   --state Maharashtra
+```
+
+#### `hisaabo party ledger-report`
+
+Full ledger report with opening balance, all transactions, and closing balance for a date range:
+
+```bash
+hisaabo party ledger-report --party "Gupta Enterprises" --from 2026-04-01 --to 2026-03-31
+hisaabo party ledger-report --party party_xxxxxxxxxx --json
+```
+
+#### `hisaabo party stats`
+
+Aggregate transaction statistics (total sales, purchases, payments) for a party:
+
+```bash
+hisaabo party stats party_xxxxxxxxxx
+hisaabo party stats "Sharma Traders" --json
+```
+
+#### `hisaabo party top-items`
+
+Items most frequently bought from or sold to a party, ranked by quantity or value:
+
+```bash
+hisaabo party top-items party_xxxxxxxxxx
+hisaabo party top-items "Gupta Enterprises" --limit 10 --json
+```
+
+#### `hisaabo party merge`
+
+Merge two duplicate party records. All invoices, payments, and ledger entries are reassigned to the target party and the source is deleted.
+
+```bash
+hisaabo party merge --source party_xxxxxxxxxx --target party_yyyyyyyyyy
 ```
 
 #### `hisaabo party delete`
@@ -307,6 +370,96 @@ hisaabo item stock "Basmati Rice 25kg" --adjustment +50 --reason "Purchase from 
 hisaabo item stock "Mustard Oil 15L" --adjustment -3 --reason "Damaged in transit"
 ```
 
+#### `hisaabo item stock-history`
+
+Full log of every stock adjustment ever made on an item:
+
+```bash
+hisaabo item stock-history "Basmati Rice 25kg"
+hisaabo item stock-history item_xxxxxxxxxx --from 2026-01-01 --json
+```
+
+#### `hisaabo item stock-movements`
+
+Every stock movement including invoice deductions, purchase additions, and manual adjustments:
+
+```bash
+hisaabo item stock-movements "Mustard Oil 15L"
+hisaabo item stock-movements item_xxxxxxxxxx --json
+```
+
+#### `hisaabo item low-stock-count`
+
+Quick count of items currently at or below their low-stock threshold:
+
+```bash
+hisaabo item low-stock-count
+```
+
+#### `hisaabo item price-history`
+
+Historical sale price changes for an item:
+
+```bash
+hisaabo item price-history "Basmati Rice 25kg"
+hisaabo item price-history item_xxxxxxxxxx --json
+```
+
+#### `hisaabo item sales-stats`
+
+Total units sold and revenue for an item over a period:
+
+```bash
+hisaabo item sales-stats "Basmati Rice 25kg" --from 2026-04-01 --to 2026-03-31
+hisaabo item sales-stats item_xxxxxxxxxx --json
+```
+
+#### `hisaabo item variants`
+
+Manage variants (size, grade, colour, etc.) for an item that has multiple options at different prices or units.
+
+```bash
+# List variants
+hisaabo item variants list item_xxxxxxxxxx
+
+# Add a variant
+hisaabo item variants create \
+  --item item_xxxxxxxxxx \
+  --name "500g Pack" \
+  --price 120 \
+  --unit pack
+
+# Update a variant
+hisaabo item variants update variant_xxxxxxxxxx --price 130
+
+# Delete a variant
+hisaabo item variants delete variant_xxxxxxxxxx
+```
+
+#### `hisaabo item merge`
+
+Merge two duplicate item records. All line items and stock history are reassigned to the target and the source is deleted.
+
+```bash
+hisaabo item merge --source item_xxxxxxxxxx --target item_yyyyyyyyyy
+```
+
+#### `hisaabo item switch-base-unit`
+
+Change the base unit of measurement for an item (e.g. `kg` to `g`). Provide the conversion factor.
+
+```bash
+hisaabo item switch-base-unit item_xxxxxxxxxx --new-unit g --factor 1000
+```
+
+#### `hisaabo item rename-unit`
+
+Rename a unit on an item without changing any quantities (e.g. rename `pcs` to `pieces`):
+
+```bash
+hisaabo item rename-unit item_xxxxxxxxxx --from pcs --to pieces
+```
+
 ---
 
 ### `hisaabo payment`
@@ -345,6 +498,40 @@ hisaabo payment create \
 
 ```bash
 hisaabo payment delete pay_xxxxxxxxxx
+```
+
+#### `hisaabo payment unpaid-invoices`
+
+List invoices that still have an outstanding balance — useful before recording a payment to see what to allocate:
+
+```bash
+hisaabo payment unpaid-invoices
+hisaabo payment unpaid-invoices --party "Sharma Traders" --json
+```
+
+#### `hisaabo payment untracked`
+
+Payments that were recorded but have not been linked to any invoice:
+
+```bash
+hisaabo payment untracked
+hisaabo payment untracked --json
+```
+
+#### `hisaabo payment default-account`
+
+Show the bank account that is currently set as the default for incoming payments:
+
+```bash
+hisaabo payment default-account
+```
+
+#### `hisaabo payment assign-account`
+
+Assign a bank account to an existing payment record:
+
+```bash
+hisaabo payment assign-account --payment pay_xxxxxxxxxx --account account_xxxxxxxxxx
 ```
 
 ---
@@ -609,6 +796,237 @@ hisaabo store orders --status pending
 hisaabo store orders --from 2026-03-01 --json
 ```
 
+#### `hisaabo store order confirm`
+
+Mark a pending store order as confirmed and begin fulfillment:
+
+```bash
+hisaabo store order confirm order_xxxxxxxxxx
+```
+
+#### `hisaabo store order cancel`
+
+Cancel a store order:
+
+```bash
+hisaabo store order cancel order_xxxxxxxxxx --reason "Out of stock"
+```
+
+#### `hisaabo store check-slug`
+
+Check whether a URL slug is available before updating your store URL:
+
+```bash
+hisaabo store check-slug my-store-name
+```
+
+#### `hisaabo store items`
+
+List items currently shown in your online store:
+
+```bash
+hisaabo store items
+hisaabo store items --json
+```
+
+#### `hisaabo store items toggle`
+
+Bulk enable or disable items in the store without editing each one individually:
+
+```bash
+# Enable multiple items
+hisaabo store items toggle --enable item_aaa item_bbb item_ccc
+
+# Disable multiple items
+hisaabo store items toggle --disable item_ddd item_eee
+```
+
+---
+
+### `hisaabo tenant`
+
+Manage the tenant (organisation) that owns your businesses. Most users operate within a single tenant and never need these commands. They are most relevant to agency operators who manage multiple tenants.
+
+#### `hisaabo tenant list`
+
+```bash
+hisaabo tenant list
+hisaabo tenant list --json
+```
+
+#### `hisaabo tenant select`
+
+Switch the active tenant. All subsequent commands operate in the context of the selected tenant.
+
+```bash
+hisaabo tenant select tenant_xxxxxxxxxx
+```
+
+#### `hisaabo tenant members`
+
+List members of the current tenant:
+
+```bash
+hisaabo tenant members
+hisaabo tenant members --json
+```
+
+#### `hisaabo tenant invite`
+
+Invite a new member by email:
+
+```bash
+hisaabo tenant invite --email colleague@example.com --role member
+```
+
+Available roles: `owner`, `admin`, `member`.
+
+#### `hisaabo tenant remove`
+
+Remove a member from the tenant:
+
+```bash
+hisaabo tenant remove user_xxxxxxxxxx
+```
+
+#### `hisaabo tenant role`
+
+Update a member's role:
+
+```bash
+hisaabo tenant role user_xxxxxxxxxx --role admin
+```
+
+---
+
+### Document types
+
+Beyond standard invoices, Hisaabo supports six additional document types. Each type has the same five operations: `list`, `get`, `create`, `status`, and `delete`.
+
+#### Quotation
+
+```bash
+hisaabo quotation list
+hisaabo quotation list --party "Gupta Enterprises" --json
+hisaabo quotation get quot_xxxxxxxxxx
+hisaabo quotation create \
+  --party "Mehta & Sons" \
+  --item "Basmati Rice 25kg" --quantity 50 --unit bag --price 1250 \
+  --valid-until 2026-04-30
+hisaabo quotation status quot_xxxxxxxxxx accepted
+hisaabo quotation delete quot_xxxxxxxxxx
+```
+
+#### Credit Note
+
+```bash
+hisaabo credit-note list
+hisaabo credit-note get cn_xxxxxxxxxx
+hisaabo credit-note create --party "Sharma Traders" --invoice BB-12948 --reason "Goods returned"
+hisaabo credit-note status cn_xxxxxxxxxx issued
+hisaabo credit-note delete cn_xxxxxxxxxx
+```
+
+#### Debit Note
+
+```bash
+hisaabo debit-note list
+hisaabo debit-note get dn_xxxxxxxxxx
+hisaabo debit-note create --party "Vinod & Sons" --invoice BB-12900 --reason "Short supply"
+hisaabo debit-note status dn_xxxxxxxxxx issued
+hisaabo debit-note delete dn_xxxxxxxxxx
+```
+
+#### Delivery Challan
+
+```bash
+hisaabo challan list
+hisaabo challan get dc_xxxxxxxxxx
+hisaabo challan create \
+  --party "Gupta Enterprises" \
+  --item "Mustard Oil 15L" --quantity 10 --unit can
+hisaabo challan status dc_xxxxxxxxxx delivered
+hisaabo challan delete dc_xxxxxxxxxx
+```
+
+#### Proforma Invoice
+
+```bash
+hisaabo proforma list
+hisaabo proforma get pf_xxxxxxxxxx
+hisaabo proforma create \
+  --party "Mehta & Sons" \
+  --item "Toor Dal 50kg" --quantity 5 --unit bag --price 4200
+hisaabo proforma status pf_xxxxxxxxxx approved
+hisaabo proforma delete pf_xxxxxxxxxx
+```
+
+#### Sales Return
+
+```bash
+hisaabo sales-return list
+hisaabo sales-return get sr_xxxxxxxxxx
+hisaabo sales-return create --party "Sharma Traders" --invoice BB-12948
+hisaabo sales-return status sr_xxxxxxxxxx processed
+hisaabo sales-return delete sr_xxxxxxxxxx
+```
+
+#### Purchase Return
+
+```bash
+hisaabo purchase-return list
+hisaabo purchase-return get pr_xxxxxxxxxx
+hisaabo purchase-return create --party "Vinod & Sons" --invoice BB-12900
+hisaabo purchase-return status pr_xxxxxxxxxx processed
+hisaabo purchase-return delete pr_xxxxxxxxxx
+```
+
+#### Convert a document
+
+Convert one document type to another. The most common use case is converting a delivery challan into a tax invoice after goods are delivered.
+
+```bash
+# Convert a delivery challan to a sale invoice
+hisaabo document convert \
+  --from dc_xxxxxxxxxx \
+  --from-type delivery_challan \
+  --to-type invoice
+```
+
+The `--skip-stock-adjustment` flag is available when converting a challan to an invoice to avoid double-deducting stock that was already deducted when the challan was created.
+
+---
+
+### `hisaabo api-key`
+
+Generate and manage API keys for automation scripts, CI/CD pipelines, and third-party integrations.
+
+#### `hisaabo api-key list`
+
+```bash
+hisaabo api-key list
+hisaabo api-key list --json
+```
+
+Shows key name, creation date, expiry date, and last-used timestamp. The key secret is only shown once at creation time.
+
+#### `hisaabo api-key create`
+
+```bash
+hisaabo api-key create --name "CI Pipeline" --expires 2027-04-01
+hisaabo api-key create --name "Read-only export script"
+```
+
+Copy the returned key immediately — it is not shown again.
+
+#### `hisaabo api-key revoke`
+
+```bash
+hisaabo api-key revoke apikey_xxxxxxxxxx
+```
+
+Revoked keys stop working instantly.
+
 ---
 
 ### Global flags
@@ -832,13 +1250,27 @@ export const hisaaboCLI = {
   name: "hisaabo_cli",
   description:
     "Run a hisaabo CLI command and return the JSON output. " +
-    "Available subcommands: dashboard, invoice list/get/create/pdf/delete, " +
-    "party list/get/create/delete, item list/get/create/delete/stock, " +
-    "payment list/create/delete, expense list/create/delete, " +
+    "Available subcommands: dashboard, " +
+    "invoice list/get/create/update/pdf/delete, " +
+    "party list/get/create/delete/ledger/ledger-report/stats/top-items/merge, " +
+    "item list/get/create/delete/stock/stock-history/stock-movements/low-stock-count/price-history/sales-stats/variants/merge/switch-base-unit/rename-unit, " +
+    "payment list/create/delete/unpaid-invoices/untracked/default-account/assign-account, " +
+    "expense list/create/delete, " +
     "gst r1/r3b, shipment list/get/create/update, " +
     "bank list/get/create/transfer/transactions, " +
     "report daybook/outstanding/tax-summary/item-sales/stock, " +
-    "target list/create/my, import parties/items, store settings/orders",
+    "target list/create/my, import parties/items, " +
+    "store settings/orders/order-confirm/order-cancel/check-slug/items/items-toggle, " +
+    "tenant list/select/members/invite/remove/role, " +
+    "quotation list/get/create/status/delete, " +
+    "credit-note list/get/create/status/delete, " +
+    "debit-note list/get/create/status/delete, " +
+    "challan list/get/create/status/delete, " +
+    "proforma list/get/create/status/delete, " +
+    "sales-return list/get/create/status/delete, " +
+    "purchase-return list/get/create/status/delete, " +
+    "document convert, " +
+    "api-key list/create/revoke",
   parameters: {
     type: "object",
     properties: {
