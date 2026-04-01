@@ -7,7 +7,7 @@ import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
 import { Modal } from "@/components/ui/Modal";
-import { Listbox } from "@/components/ui/Listbox";
+import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 
@@ -389,16 +389,14 @@ function RootLayout() {
           </span>
         </div>
 
-        {/* Business switcher — only shown when multiple businesses */}
-        {businesses && businesses.length > 1 && (
-          <div className="px-3 py-2 border-b border-border-light shrink-0">
-            <Listbox
-              value={currentBusinessId ?? businesses[0].id}
-              onChange={handleBusinessSwitch}
-              options={businesses.map((b) => ({ value: b.id, label: b.name }))}
-              placeholder="Select business"
-            />
-          </div>
+        {/* Business switcher */}
+        {businesses && businesses.length > 0 && (
+          <BusinessSwitcher
+            businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
+            activeBusinessId={currentBusinessId ?? businesses[0].id}
+            onSwitch={handleBusinessSwitch}
+            onCreateNew={() => navigate({ to: "/settings" })}
+          />
         )}
 
         {/* Nav sections */}
@@ -473,18 +471,6 @@ function RootLayout() {
 
           {/* User info — pushed to the right */}
           <div className="ml-auto flex items-center gap-3 min-w-0">
-            {/* Business name */}
-            {activeBusiness && (
-              <span className="hidden sm:block text-xs text-text-tertiary truncate max-w-[140px]">
-                {activeBusiness.name}
-              </span>
-            )}
-
-            {/* Divider */}
-            {activeBusiness && (
-              <span className="hidden sm:block w-px h-4 bg-border-light shrink-0" aria-hidden="true" />
-            )}
-
             {/* Avatar + name + role */}
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-6 h-6 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
