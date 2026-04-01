@@ -990,6 +990,54 @@ Get the business's financial summary: total sales, purchases, expenses, receivab
 
 ---
 
+### Automated Invoices
+
+#### `automated_invoice_list`
+
+List recurring invoice templates. Filterable by status (`active`, `paused`, `completed`, `expired`). Paginated.
+
+#### `automated_invoice_get`
+
+Get full details of a recurring template including line items, schedule, and run counts.
+
+#### `automated_invoice_create`
+
+Create a new recurring invoice template. Required: `party_id`, `name`, `type` (sale/purchase), `frequency`, `line_items` (JSON array), `start_date`. Optional: `end_date`, `max_runs`, `notes`, `custom_interval_days` (when frequency=custom).
+
+#### `automated_invoice_update`
+
+Update an existing template. All fields optional except `template_id`.
+
+#### `automated_invoice_delete`
+
+Permanently delete a template and all execution history.
+
+#### `automated_invoice_pause`
+
+Pause an active template. No invoices will be auto-generated until resumed.
+
+#### `automated_invoice_resume`
+
+Resume a paused template. Next run date is recalculated from now.
+
+#### `automated_invoice_run_now`
+
+Manually trigger immediate invoice generation from a template.
+
+#### `automated_invoice_history`
+
+Get paginated execution history for a template. Shows each run's status (success/failed/skipped_limit), generated invoice number, and timestamp.
+
+#### `automated_invoice_plan_usage`
+
+Check how many automated runs have been used this month (free plan: 5/month).
+
+#### `automated_invoice_suggestions`
+
+Get AI-detected recurring billing patterns based on the last 12 months of invoices. Returns parties with regular intervals, suggested frequency, and median amount.
+
+---
+
 ### Shipments
 
 #### `shipment_list`
@@ -1508,6 +1556,50 @@ Change the role of an existing tenant member. Requires admin or owner role.
   user_id: string;
   role: "admin" | "seller_manager" | "seller" | "accountant";
 }
+```
+
+---
+
+### Business
+
+List and create businesses. These tools operate at the account level — they are not scoped to the active `HISAABO_BUSINESS_ID`. Use them when building agents that manage multiple businesses or that onboard new ones.
+
+#### `business_list`
+
+List all businesses associated with the authenticated account.
+
+**Input:** `{}` (no parameters)
+
+**Output:** Array of business objects, each containing `id`, `name`, `gstin`, `currency`, and `financialYearStart`.
+
+#### `business_create`
+
+Create a new business under the authenticated account.
+
+**Input:**
+```typescript
+{
+  name: string;              // business display name
+  gstin?: string;            // 15-character GST Identification Number
+  address?: string;          // registered address
+  city?: string;
+  state?: string;
+  pincode?: string;
+  phone?: string;
+  email?: string;
+  financialYearStart?: string; // "april" (default) or "january"
+}
+```
+
+**Output:** The newly created business object including its `id`. Pass this `id` as `HISAABO_BUSINESS_ID` to operate on the new business in subsequent tool calls.
+
+**Creating a second business via conversation:**
+```
+You: "I want to set up a second business — Sharma Exports Pvt Ltd, GSTIN 27AABCS1234A1Z9"
+Claude: "Done. Sharma Exports Pvt Ltd has been created (ID: biz_xxxxx).
+         To operate on this business, update HISAABO_BUSINESS_ID in your
+         MCP config and restart the server, or ask me to pass the business
+         ID directly in any tool call."
 ```
 
 ---

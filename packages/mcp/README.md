@@ -190,6 +190,22 @@ Ask Claude: *"What is my business's total outstanding receivables?"*
 | `bank_account_transactions` | List transactions for an account |
 | `bank_account_summary` | Account balance and cash flow summary |
 
+### Automated Invoices
+
+| Tool | What it does |
+|---|---|
+| `automated_invoice_list` | List recurring invoice templates |
+| `automated_invoice_get` | Get template details with line items |
+| `automated_invoice_create` | Create a new recurring template |
+| `automated_invoice_update` | Modify an existing template |
+| `automated_invoice_delete` | Remove a template |
+| `automated_invoice_pause` | Pause automatic generation |
+| `automated_invoice_resume` | Resume a paused template |
+| `automated_invoice_run_now` | Manually trigger invoice generation |
+| `automated_invoice_history` | View execution history |
+| `automated_invoice_plan_usage` | Check monthly run quota |
+| `automated_invoice_suggestions` | Get AI-detected recurring patterns |
+
 ### Store
 
 | Tool | What it does |
@@ -219,6 +235,13 @@ Ask Claude: *"What is my business's total outstanding receivables?"*
 | `import_items` | Bulk-import items from CSV or JSON |
 | `import_invoices` | Bulk-import historical invoices (migration) |
 | `import_payments` | Bulk-import historical payment records |
+
+### Business
+
+| Tool | What it does |
+|---|---|
+| `business_list` | List all businesses associated with the authenticated account |
+| `business_create` | Create a new business under the authenticated account |
 
 ### Tenant / Team Management
 

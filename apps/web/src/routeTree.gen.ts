@@ -26,6 +26,7 @@ import { Route as ExpensesRouteImport } from './routes/expenses'
 import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
 import { Route as CreditNotesRouteImport } from './routes/credit-notes'
 import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
+import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoices'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
@@ -115,6 +116,11 @@ const CashAndBankRoute = CashAndBankRouteImport.update({
   path: '/cash-and-bank',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AutomatedInvoicesRoute = AutomatedInvoicesRouteImport.update({
+  id: '/automated-invoices',
+  path: '/automated-invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -133,6 +139,7 @@ const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/automated-invoices': typeof AutomatedInvoicesRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
@@ -155,6 +162,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/automated-invoices': typeof AutomatedInvoicesRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
@@ -178,6 +186,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/automated-invoices': typeof AutomatedInvoicesRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
@@ -202,6 +211,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/automated-invoices'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
@@ -224,6 +234,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/automated-invoices'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
@@ -246,6 +257,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/automated-invoices'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
@@ -269,6 +281,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AutomatedInvoicesRoute: typeof AutomatedInvoicesRoute
   CashAndBankRoute: typeof CashAndBankRoute
   CreditNotesRoute: typeof CreditNotesRoute
   DeliveryChallansRoute: typeof DeliveryChallansRoute
@@ -411,6 +424,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CashAndBankRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/automated-invoices': {
+      id: '/automated-invoices'
+      path: '/automated-invoices'
+      fullPath: '/automated-invoices'
+      preLoaderRoute: typeof AutomatedInvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -437,6 +457,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AutomatedInvoicesRoute: AutomatedInvoicesRoute,
   CashAndBankRoute: CashAndBankRoute,
   CreditNotesRoute: CreditNotesRoute,
   DeliveryChallansRoute: DeliveryChallansRoute,

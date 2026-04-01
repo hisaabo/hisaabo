@@ -16,6 +16,7 @@ import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
+import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
 
 const app = new Hono();
 
@@ -1291,11 +1292,13 @@ const port = parseInt(process.env.PORT || "3000", 10);
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Hisaabo API running on http://localhost:${info.port}`);
   console.log(`  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
+  startRecurringScheduler();
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────
 function shutdown(signal: string) {
   console.log(`\n[${signal}] Shutting down...`);
+  stopRecurringScheduler();
   server.close(() => {
     console.log("[shutdown] HTTP server closed");
     process.exit(0);

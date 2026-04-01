@@ -25,6 +25,7 @@ const ALL_ITEMS: MenuItem[] = [
   { label: "Proforma Invoices", icon: "document-text-outline", route: "/(more)/proforma-invoices" },
   { label: "Sales Returns", icon: "return-down-back-outline", route: "/(more)/sales-returns" },
   { label: "Store Orders", icon: "storefront-outline", route: "/(more)/store-orders" },
+  { label: "Automated Invoices", icon: "repeat-outline", route: "/(more)/automated-invoices" },
   { label: "GST Returns", icon: "pie-chart-outline", route: "/(more)/gst" },
   { label: "Shipments", icon: "boat-outline", route: "/(more)/shipments" },
   { label: "Business Reports", icon: "bar-chart-outline", route: "/(more)/reports" },

@@ -381,6 +381,60 @@ export const paymentSummaryInputSchema = z.object({
   bankAccountId: z.string().uuid().optional(),
 });
 
+// ── Recurring Invoices ────────────────────────────────────────
+
+export const recurringFrequencies = ["weekly", "biweekly", "monthly", "quarterly", "half_yearly", "yearly", "custom"] as const;
+export type RecurringFrequency = (typeof recurringFrequencies)[number];
+
+export const recurringTemplateStatuses = ["active", "paused", "completed", "expired"] as const;
+export type RecurringTemplateStatus = (typeof recurringTemplateStatuses)[number];
+
+export const recurringLineItemSchema = z.object({
+  itemId: z.string().uuid().optional(),
+  description: z.string().min(1).max(500),
+  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
+  unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  selectedUnit: z.string().nullish(),
+  conversionFactor: z.string().nullish(),
+  variantId: z.string().uuid().nullish(),
+});
+
+export const createRecurringInvoiceSchema = z.object({
+  partyId: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  type: z.enum(invoiceTypes),
+  frequency: z.enum(recurringFrequencies),
+  customIntervalDays: z.number().int().min(1).max(365).optional(),
+  lineItems: z.array(recurringLineItemSchema).min(1),
+  notes: z.string().max(2000).optional(),
+  termsAndConditions: z.string().max(2000).optional(),
+  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  charges: z.array(invoiceChargeSchema).optional(),
+  startDate: z.string().datetime(),
+  endDate: z.string().datetime().optional(),
+  maxRuns: z.number().int().min(1).optional(),
+}).refine((d) => {
+  if (d.frequency === "custom" && !d.customIntervalDays) return false;
+  return true;
+}, { message: "customIntervalDays is required when frequency is 'custom'", path: ["customIntervalDays"] });
+
+export const updateRecurringInvoiceSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  partyId: z.string().uuid().optional(),
+  type: z.enum(invoiceTypes).optional(),
+  frequency: z.enum(recurringFrequencies).optional(),
+  customIntervalDays: z.number().int().min(1).max(365).optional(),
+  lineItems: z.array(recurringLineItemSchema).min(1).optional(),
+  notes: z.string().max(2000).optional(),
+  termsAndConditions: z.string().max(2000).optional(),
+  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  charges: z.array(invoiceChargeSchema).optional(),
+  endDate: z.string().datetime().optional(),
+  maxRuns: z.number().int().min(1).optional().nullable(),
+});
+
 // ── API Keys ───────────────────────────────────────────────────
 
 export const createApiKeySchema = z.object({
