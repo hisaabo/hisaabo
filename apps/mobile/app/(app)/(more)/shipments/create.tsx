@@ -345,6 +345,7 @@ export default function CreateShipmentScreen() {
           {/* Dates */}
           <Text style={styles.sectionLabel}>Shipment Date</Text>
           <DatePickerField
+            label="Shipment Date"
             value={shipmentDate ?? new Date()}
             onChange={setShipmentDate}
           />
@@ -352,6 +353,7 @@ export default function CreateShipmentScreen() {
           <Text style={styles.sectionLabel}>Estimated Delivery (Optional)</Text>
           {estimatedDelivery && (
             <DatePickerField
+              label="Estimated Delivery"
               value={estimatedDelivery}
               onChange={setEstimatedDelivery}
             />

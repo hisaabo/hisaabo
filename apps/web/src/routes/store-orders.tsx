@@ -479,38 +479,43 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
       </SlideOver>
 
       {/* Cancel confirm dialog */}
-      <ConfirmDialog
-        open={cancelOpen}
-        title="Cancel Order"
-        description={`Cancel order ${o?.orderNumber ?? ""}? This action cannot be undone.`}
-        confirmLabel="Cancel Order"
-        variant="danger"
-        loading={cancelOrder.isPending}
-        onConfirm={() =>
-          orderId &&
-          cancelOrder.mutate({
-            orderId,
-            reason: cancelReason.trim() || undefined,
-          })
-        }
-        onCancel={() => {
-          setCancelOpen(false);
-          setCancelReason("");
-        }}
-      >
-        <div className="mt-3">
-          <label className="block text-xs font-medium text-text-secondary mb-1">
-            Reason (optional)
-          </label>
-          <textarea
-            value={cancelReason}
-            onChange={(e) => setCancelReason(e.target.value)}
-            rows={2}
-            placeholder="e.g. Customer requested cancellation"
-            className="w-full text-sm border border-border-light rounded-lg px-2.5 py-2 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500 resize-none"
-          />
+      {cancelOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="card max-w-sm w-full mx-4 p-6">
+            <p className="text-sm font-semibold text-text-primary">Cancel Order</p>
+            <p className="text-sm text-text-secondary mt-1">
+              Cancel order {o?.orderNumber ?? ""}? This action cannot be undone.
+            </p>
+            <div className="mt-3">
+              <label className="block text-xs font-medium text-text-secondary mb-1">
+                Reason (optional)
+              </label>
+              <textarea
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                rows={2}
+                placeholder="e.g. Customer requested cancellation"
+                className="w-full text-sm border border-border-light rounded-lg px-2.5 py-2 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                className="btn-ghost"
+                onClick={() => { setCancelOpen(false); setCancelReason(""); }}
+              >
+                Keep Order
+              </button>
+              <button
+                className="btn-danger"
+                disabled={cancelOrder.isPending}
+                onClick={() => orderId && cancelOrder.mutate({ orderId, reason: cancelReason.trim() || undefined })}
+              >
+                {cancelOrder.isPending ? "Cancelling..." : "Cancel Order"}
+              </button>
+            </div>
+          </div>
         </div>
-      </ConfirmDialog>
+      )}
     </>
   );
 }
