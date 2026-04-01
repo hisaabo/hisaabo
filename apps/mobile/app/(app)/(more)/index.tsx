@@ -26,6 +26,7 @@ const ALL_ITEMS: MenuItem[] = [
   { label: "Sales Returns", icon: "return-down-back-outline", route: "/(more)/sales-returns" },
   { label: "Store Orders", icon: "storefront-outline", route: "/(more)/store-orders" },
   { label: "GST Returns", icon: "pie-chart-outline", route: "/(more)/gst" },
+  { label: "Shipments", icon: "boat-outline", route: "/(more)/shipments" },
   { label: "Business Reports", icon: "bar-chart-outline", route: "/(more)/reports" },
   { label: "Settings", icon: "settings-outline", route: "/(more)/settings" },
 ];

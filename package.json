@@ -11,12 +11,13 @@
     "db:push": "pnpm --filter @hisaabo/db db:push",
     "db:reset": "pnpm --filter @hisaabo/db db:reset",
     "db:studio": "pnpm --filter @hisaabo/db studio",
-    "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore ./packages ./apps",
+    "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore --ignore-pattern '**/target/**' ./packages ./apps",
     "typecheck": "turbo typecheck",
     "test": "turbo test --concurrency 1",
     "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
     "test:web": "pnpm --filter @hisaabo/web test",
-    "test:mobile": "pnpm --filter @hisaabo/mobile test"
+    "test:mobile": "pnpm --filter @hisaabo/mobile test",
+    "release": "bash scripts/release.sh"
   },
   "devDependencies": {
     "oxlint": "^1.56.0",

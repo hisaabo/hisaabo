@@ -20,6 +20,9 @@ import { registerReportTools } from "./tools/reports.js";
 import { registerStoreTools } from "./tools/store.js";
 import { registerTargetTools } from "./tools/target.js";
 import { registerImportTools } from "./tools/import.js";
+import { registerTenantTools } from "./tools/tenant.js";
+import { registerDocumentTools } from "./tools/document.js";
+import { registerApiKeyTools } from "./tools/apiKey.js";
 import { registerResources } from "./resources/index.js";
 
 export function registerTools(server: McpServer, client: HisaaboClient): void {
@@ -49,6 +52,15 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
 
   // Data import
   registerImportTools(server, client);
+
+  // Organization management
+  registerTenantTools(server, client);
+
+  // Document types (quotation, credit note, etc.) and conversion
+  registerDocumentTools(server, client);
+
+  // API key management
+  registerApiKeyTools(server, client);
 
   // Read-only context resources
   registerResources(server, client);

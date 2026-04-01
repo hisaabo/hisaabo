@@ -108,6 +108,7 @@ function AuditTrailCard() {
 export function AccountTab() {
   const { data: session } = trpc.auth.me.useQuery();
   const [showLogout, setShowLogout] = useState(false);
+  const [showLogoutAll, setShowLogoutAll] = useState(false);
   const utils = trpc.useUtils();
 
   // Name editing state
@@ -143,6 +144,17 @@ export function AccountTab() {
     },
     onError: (err) => {
       toast.error("Logout failed", err.message);
+    },
+  });
+
+  const logoutAllMutation = trpc.auth.logoutAll.useMutation({
+    onSuccess: () => {
+      toast.info("Logged out from all devices");
+      utils.auth.me.invalidate();
+      window.location.href = "/login";
+    },
+    onError: (err) => {
+      toast.error("Failed to log out from all devices", err.message);
     },
   });
 
@@ -252,6 +264,24 @@ export function AccountTab() {
         </div>
       </div>
 
+      {/* Sign out everywhere */}
+      <div className="card px-6 py-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Sign out everywhere</h3>
+            <p className="text-sm text-text-tertiary mt-0.5">
+              Log out from all devices and sessions
+            </p>
+          </div>
+          <button
+            className="btn-ghost text-orange-600 hover:text-orange-700"
+            onClick={() => setShowLogoutAll(true)}
+          >
+            Log out all
+          </button>
+        </div>
+      </div>
+
       <ConfirmDialog
         open={showLogout}
         title="Log out?"
@@ -261,6 +291,17 @@ export function AccountTab() {
         loading={logoutMutation.isPending}
         onConfirm={() => logoutMutation.mutate()}
         onCancel={() => setShowLogout(false)}
+      />
+
+      <ConfirmDialog
+        open={showLogoutAll}
+        title="Log out from all devices?"
+        description="You will be signed out from every device and session. You'll need to log in again on each device."
+        confirmLabel="Log out all"
+        variant="danger"
+        loading={logoutAllMutation.isPending}
+        onConfirm={() => logoutAllMutation.mutate()}
+        onCancel={() => setShowLogoutAll(false)}
       />
     </div>
   );

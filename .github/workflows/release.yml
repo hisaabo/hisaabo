@@ -241,7 +241,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Hisaabo ${{ github.ref_name }}"
-          releaseBody: "See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          releaseBody: "Desktop builds for ${{ github.ref_name }}. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."
           releaseDraft: true
           prerelease: false
 
@@ -309,11 +309,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @hisaabo/cli build
-
-      - name: Set version from tag
-        working-directory: packages/cli
-        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
-
       - run: pnpm --filter @hisaabo/cli publish --no-git-checks --access public --provenance
 
   # ── MCP (npm publish) ──────────────────────────────────────────
@@ -339,11 +334,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @hisaabo/mcp build
-
-      - name: Set version from tag
-        working-directory: packages/mcp
-        run: npm version ${{ github.ref_name }} --no-git-tag-version --allow-same-version
-
       - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public --provenance
 
   # ── Release Notes ──────────────────────────────────────────────

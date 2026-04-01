@@ -2,12 +2,16 @@
  * Party tools — manage customers and suppliers.
  *
  * Tools registered:
- *   party_list    — search parties with filter/sort options
- *   party_create  — create a new customer or supplier
- *   party_get     — get party details including outstanding balance
- *   party_ledger  — get full transaction ledger for a party
- *   party_update  — update an existing party's details
- *   party_delete  — delete a party record
+ *   party_list         — search parties with filter/sort options
+ *   party_create       — create a new customer or supplier
+ *   party_get          — get party details including outstanding balance
+ *   party_ledger       — get full transaction ledger for a party
+ *   party_update       — update an existing party's details
+ *   party_delete       — delete a party record
+ *   party_ledger_report — detailed aggregated ledger with date range
+ *   party_get_stats    — get invoice and payment counts for a party
+ *   party_top_items    — get the top items transacted with a party
+ *   party_merge        — merge two party records into one
  */
 
 import { z } from "zod";
@@ -259,6 +263,103 @@ export function registerPartyTools(server: McpServer, client: HisaaboClient) {
         content: [{
           type: "text" as const,
           text: JSON.stringify(ledger, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_ledger_report",
+    [
+      "Get a detailed aggregated ledger report for a party with date range filtering.",
+      "Returns party details, chronological entries (invoices and payments) with running balance, and a closing summary.",
+      "Suitable for generating account statements to share with customers or suppliers.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID."),
+      from_date: z.string().datetime().optional()
+        .describe("Start date for entries (ISO 8601). Omit for all-time."),
+      to_date: z.string().datetime().optional()
+        .describe("End date for entries (ISO 8601)."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.party.ledgerReport(input.party_id, {
+        fromDate: input.from_date,
+        toDate: input.to_date,
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_get_stats",
+    [
+      "Get aggregate statistics for a party — total invoice count and total payment count.",
+      "Use this to quickly understand the transaction volume with a customer or supplier.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID from party_list."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.party.getStats(input.party_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_top_items",
+    [
+      "Get the top 5 items most frequently transacted with a specific party.",
+      "Returns item name, total quantity sold/purchased, total amount, and invoice count.",
+      "Useful for understanding what a customer typically buys or what a supplier typically sells.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID from party_list."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.party.topItems(input.party_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "party_merge",
+    [
+      "Merge two party records into one — moves all invoices and payments from the source party to the target, then deletes the source.",
+      "Opening balances are combined. Missing fields on the target are filled from the source.",
+      "Requires admin role. This action cannot be undone — verify before merging.",
+      "Use this to deduplicate parties that were created twice with slightly different names.",
+    ].join(" "),
+    {
+      source_id: z.string().uuid()
+        .describe("UUID of the party to merge FROM (will be deleted after merging)."),
+      target_id: z.string().uuid()
+        .describe("UUID of the party to merge INTO (will be kept). All invoices/payments will be reassigned here."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.party.merge(input.source_id, input.target_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     })

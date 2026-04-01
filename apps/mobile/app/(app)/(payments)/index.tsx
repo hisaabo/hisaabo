@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -15,6 +18,10 @@ import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
+
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -38,6 +45,79 @@ function ModeBadge({ mode }: { mode: string }) {
 }
 
 const PAGE_SIZE = 20;
+
+function UntrackedBanner() {
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: countData } = trpc.payment.untrackedPayments.useQuery(
+    { page: 1, limit: 1 },
+    { staleTime: 60_000 }
+  );
+
+  const { data: fullData } = trpc.payment.untrackedPayments.useQuery(
+    { page: 1, limit: 100 },
+    { enabled: expanded, staleTime: 60_000 }
+  );
+
+  const count = countData?.total ?? 0;
+
+  if (count === 0) return null;
+
+  const handleToggle = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded((v) => !v);
+  };
+
+  const payments = fullData?.data ?? [];
+
+  return (
+    <View style={bannerStyles.wrapper}>
+      <TouchableOpacity
+        style={bannerStyles.header}
+        onPress={handleToggle}
+        activeOpacity={0.8}
+      >
+        <View style={bannerStyles.headerLeft}>
+          <Ionicons name="alert-circle-outline" size={18} color={colors.warning} />
+          <Text style={bannerStyles.headerText}>
+            {count} untracked {count === 1 ? "payment" : "payments"} — not linked to a bank account
+          </Text>
+        </View>
+        <Ionicons
+          name={expanded ? "chevron-up" : "chevron-down"}
+          size={16}
+          color={colors.warning}
+        />
+      </TouchableOpacity>
+
+      {expanded && (
+        <View style={bannerStyles.list}>
+          {payments.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              style={bannerStyles.row}
+              onPress={() => router.push(`/(more)/payments/${item.id}` as never)}
+              activeOpacity={0.7}
+            >
+              <View style={bannerStyles.rowLeft}>
+                <Text style={bannerStyles.rowNumber}>{item.paymentNumber}</Text>
+                <Text style={bannerStyles.rowParty} numberOfLines={1}>{item.partyName}</Text>
+              </View>
+              <View style={bannerStyles.rowRight}>
+                <Text style={bannerStyles.rowAmount}>{formatCurrency(item.amount)}</Text>
+                <Text style={bannerStyles.rowDate}>
+                  {item.paymentDate ? formatDateShort(item.paymentDate) : "—"}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={14} color={colors.warning} style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
 
 export default function PaymentsScreen() {
   const router = useRouter();
@@ -96,6 +176,7 @@ export default function PaymentsScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           keyboardDismissMode="on-drag"
+          ListHeaderComponent={<UntrackedBanner />}
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -192,4 +273,73 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   badgeText: { fontSize: 11, fontWeight: "600", textTransform: "capitalize" },
+});
+
+const bannerStyles = StyleSheet.create({
+  wrapper: {
+    backgroundColor: colors.warningBg,
+    borderWidth: 1,
+    borderColor: colors.warning + "55",
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: "hidden",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
+  headerText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.warning,
+    flex: 1,
+  },
+  list: {
+    borderTopWidth: 1,
+    borderTopColor: colors.warning + "33",
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.warning + "22",
+  },
+  rowLeft: {
+    flex: 1,
+    gap: 2,
+  },
+  rowNumber: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  rowParty: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  rowRight: {
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  rowAmount: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.warning,
+  },
+  rowDate: {
+    fontSize: 11,
+    color: colors.textMuted,
+  },
 });

@@ -2,29 +2,36 @@
 /**
  * Feature Parity Scanner
  *
- * Two modes of operation:
+ * Auto-detects tRPC usage across all platforms by scanning source code.
+ * A small exceptions file (parity-exceptions.yaml) lists procedures that are
+ * intentionally absent from specific platforms. Everything else is derived
+ * from the source — no manual maintenance matrix required.
  *
- * 1. tRPC Coverage Analysis (--scan)
- *    Scans each platform's source for `trpc.<router>.<procedure>` calls and
- *    compares them. Outputs which procedures web uses that mobile does not.
+ * Modes:
  *
- * 2. Matrix Validation (--validate)
- *    Checks the feature-parity.yaml against the actual codebase:
- *    - Every tRPC procedure defined in packages/api must appear in at least one
- *      feature entry's `api` list.
- *    - Every feature marked `implemented` on web should not be `not-started`
- *      on mobile (warns about potential gaps).
+ *   --scan
+ *     Scan all platforms, compare against each other, apply exceptions, and
+ *     report gaps. Exits 1 if any true gaps exist (web has a procedure that
+ *     mobile does not, and it is not listed in parity-exceptions.yaml).
  *
- * 3. Changed Files Check (--changed <files...>)
- *    Given a list of changed file paths (from a PR), outputs warnings if:
- *    - A new procedure was added to the API but no parity matrix entry exists.
- *    - A web feature was changed but the mobile equivalent is `not-started`.
+ *   --validate
+ *     Verify that every entry in parity-exceptions.yaml refers to a procedure
+ *     that actually exists in the API, and that the platform assignment makes
+ *     sense. Exits 1 on hard errors.
+ *
+ *   --changed <files...>
+ *     Given a list of changed file paths (from a PR diff), check whether any
+ *     new web procedures are absent from mobile and not in exceptions. Exits 1
+ *     if true gaps are introduced.
+ *
+ *   --report
+ *     Print a markdown summary of platform coverage.
  *
  * Usage:
  *   npx tsx scripts/check-parity.ts --scan
  *   npx tsx scripts/check-parity.ts --validate
- *   npx tsx scripts/check-parity.ts --changed apps/web/src/routes/invoices.tsx packages/api/src/routers/invoice.ts
- *   npx tsx scripts/check-parity.ts --report          # Generate markdown summary
+ *   npx tsx scripts/check-parity.ts --changed apps/web/src/foo.tsx packages/api/src/routers/foo.ts
+ *   npx tsx scripts/check-parity.ts --report
  */
 
 import * as fs from "node:fs";
@@ -36,130 +43,63 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 
 // ---------------------------------------------------------------------------
-// YAML parser (minimal -- avoids requiring a dependency)
-// We only need to parse the feature-parity.yaml which has a known structure.
+// Types
 // ---------------------------------------------------------------------------
 
-interface Feature {
-  id: string;
-  name: string;
-  category: string;
-  api: string[];
-  platforms: Record<string, string>;
-  notes?: string;
+interface Exceptions {
+  schemaVersion: string;
+  mobile: Set<string>;
+  // Extend here when cli/mcp exceptions are needed.
 }
 
-function parseParityYaml(filePath: string): Feature[] {
+// ---------------------------------------------------------------------------
+// Exceptions file parser (minimal YAML, known structure)
+// ---------------------------------------------------------------------------
+
+function parseExceptions(filePath: string): Exceptions {
+  const result: Exceptions = { schemaVersion: "2.0", mobile: new Set() };
+  if (!fs.existsSync(filePath)) return result;
+
   const content = fs.readFileSync(filePath, "utf-8");
-  const features: Feature[] = [];
-  let current: Partial<Feature> | null = null;
-  let inPlatforms = false;
-  let inApi = false;
-  let apiItems: string[] = [];
+  let inMobileNotApplicable = false;
+  let indentLevel = 0;
 
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trimEnd();
     const trimmed = line.trim();
 
-    // Skip comments and empty lines
-    if (trimmed.startsWith("#") || trimmed === "" || trimmed.startsWith("schema_version")) continue;
-    if (trimmed === "features:") continue;
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
 
-    // New feature entry
-    if (trimmed.startsWith("- id:")) {
-      // Save previous
-      if (current?.id) {
-        if (inApi) current.api = apiItems;
-        features.push(current as Feature);
+    if (trimmed.startsWith("schema_version:")) {
+      result.schemaVersion = trimmed.split(":")[1].trim().replace(/["']/g, "");
+      continue;
+    }
+
+    // Detect the "mobile:" key under "not-applicable:"
+    if (trimmed === "not-applicable:") {
+      inMobileNotApplicable = true;
+      indentLevel = line.length - trimmed.length;
+      continue;
+    }
+
+    if (inMobileNotApplicable) {
+      const currentIndent = line.length - line.trimStart().length;
+      if (trimmed.startsWith("- ") && currentIndent > indentLevel) {
+        result.mobile.add(trimmed.slice(2).trim());
+      } else if (!trimmed.startsWith("- ") && currentIndent <= indentLevel && trimmed !== "") {
+        inMobileNotApplicable = false;
       }
-      current = {
-        id: trimmed.replace("- id:", "").trim(),
-        name: "",
-        category: "",
-        api: [],
-        platforms: {},
-      };
-      inPlatforms = false;
-      inApi = false;
-      apiItems = [];
-      continue;
-    }
-
-    if (!current) continue;
-
-    // Handle inline api: [a, b, c] format
-    const apiInlineMatch = trimmed.match(/^api:\s*\[(.+)\]$/);
-    if (apiInlineMatch) {
-      current.api = apiInlineMatch[1].split(",").map((s) =>
-        s.trim().replace(/^["']|["']$/g, "")
-      );
-      inApi = false;
-      inPlatforms = false;
-      continue;
-    }
-
-    // Handle multiline api:
-    if (trimmed === "api:") {
-      inApi = true;
-      inPlatforms = false;
-      apiItems = [];
-      continue;
-    }
-
-    if (inApi && trimmed.startsWith("- ")) {
-      apiItems.push(trimmed.replace(/^- /, "").replace(/^["']|["']$/g, ""));
-      continue;
-    }
-
-    if (inApi && !trimmed.startsWith("- ")) {
-      current.api = apiItems;
-      inApi = false;
-    }
-
-    if (trimmed === "platforms:") {
-      inPlatforms = true;
-      inApi = false;
-      continue;
-    }
-
-    if (inPlatforms) {
-      const platformMatch = trimmed.match(/^(\w+):\s*(.+)$/);
-      if (platformMatch) {
-        const [, platform, statusRaw] = platformMatch;
-        // Don't match "name:", "category:", "notes:" etc as platforms
-        if (["web", "mobile", "store", "desktop"].includes(platform)) {
-          current.platforms[platform] = statusRaw.replace(/#.*$/, "").trim();
-          continue;
-        }
-      }
-      inPlatforms = false;
-    }
-
-    // Simple key: value fields
-    const kvMatch = trimmed.match(/^(\w+):\s*(.+)$/);
-    if (kvMatch) {
-      const [, key, value] = kvMatch;
-      const cleanValue = value.replace(/^["']|["']$/g, "").replace(/#.*$/, "").trim();
-      if (key === "name") current.name = cleanValue;
-      else if (key === "category") current.category = cleanValue;
-      else if (key === "notes") current.notes = cleanValue;
     }
   }
 
-  // Save last entry
-  if (current?.id) {
-    if (inApi) current.api = apiItems;
-    features.push(current as Feature);
-  }
-
-  return features;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
-// tRPC Usage Scanner
+// tRPC usage scanner — trpc.router.procedure pattern (web / mobile / desktop)
 // ---------------------------------------------------------------------------
 
-function scanTrpcUsage(dir: string): Set<string> {
+function scanTrpcDotPattern(dir: string): Set<string> {
   const procedures = new Set<string>();
   if (!fs.existsSync(dir)) return procedures;
 
@@ -167,13 +107,11 @@ function scanTrpcUsage(dir: string): Set<string> {
     for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === ".next" || entry.name === "dist") continue;
+        if (["node_modules", ".next", "dist", ".expo", "android", "ios"].includes(entry.name)) continue;
         walk(full);
       } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
         const content = fs.readFileSync(full, "utf-8");
-        // Match trpc.<router>.<procedure>.useQuery/useMutation etc
-        const matches = content.matchAll(/trpc\.(\w+)\.(\w+)\./g);
-        for (const m of matches) {
+        for (const m of content.matchAll(/trpc\.(\w+)\.(\w+)\./g)) {
           procedures.add(`${m[1]}.${m[2]}`);
         }
       }
@@ -185,18 +123,45 @@ function scanTrpcUsage(dir: string): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
-// API Procedure Extractor
+// tRPC usage scanner — string-based pattern used by CLI and MCP clients
+// Matches: .query("router.procedure") or .mutate("router.procedure")
+// ---------------------------------------------------------------------------
+
+function scanTrpcStringPattern(dir: string): Set<string> {
+  const procedures = new Set<string>();
+  if (!fs.existsSync(dir)) return procedures;
+
+  function walk(d: string) {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (["node_modules", "dist"].includes(entry.name)) continue;
+        walk(full);
+      } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
+        const content = fs.readFileSync(full, "utf-8");
+        // .query("router.procedure") / .query<T>("router.procedure") / .mutate(...)
+        for (const m of content.matchAll(/\.(query|mutate)(?:<[^>]*>)?\(["'](\w+\.\w+)["']/g)) {
+          procedures.add(m[2]);
+        }
+      }
+    }
+  }
+
+  walk(dir);
+  return procedures;
+}
+
+// ---------------------------------------------------------------------------
+// API procedure extractor (unchanged from original — already works well)
 // ---------------------------------------------------------------------------
 
 function extractApiProcedures(): Map<string, string[]> {
   const routersDir = path.join(ROOT, "packages/api/src/routers");
   const routerFile = path.join(ROOT, "packages/api/src/router.ts");
 
-  // Parse router.ts to get the namespace mapping
   const routerContent = fs.readFileSync(routerFile, "utf-8");
   const namespaceMap = new Map<string, string>();
-  const nsMatches = routerContent.matchAll(/(\w+):\s*(\w+Router)/g);
-  for (const m of nsMatches) {
+  for (const m of routerContent.matchAll(/(\w+):\s*(\w+Router)/g)) {
     namespaceMap.set(m[2], m[1]); // e.g. authRouter -> auth
   }
 
@@ -206,39 +171,25 @@ function extractApiProcedures(): Map<string, string[]> {
     if (!file.endsWith(".ts")) continue;
     const content = fs.readFileSync(path.join(routersDir, file), "utf-8");
 
-    // Find all procedure definitions
     const procMatches = content.matchAll(
       /^\s+(\w+):\s*(?:public|protected|tenant|viewer|member|admin)Procedure/gm
     );
-
     const procs: string[] = [];
     for (const m of procMatches) {
       procs.push(m[1]);
     }
 
-    // For document.ts, handle specially:
-    // - Factory-generated routers (quotation, creditNote, etc.) get factory procs
-    // - The documentRouter itself gets the directly-defined procedures (e.g. convert)
     if (file === "document.ts") {
       const factoryProcs = ["list", "getById", "create", "updateStatus", "delete"];
-      const allExports = [...content.matchAll(/export const (\w+Router)/g)];
-      for (const m of allExports) {
+      for (const m of [...content.matchAll(/export const (\w+Router)/g)]) {
         const routerName = m[1];
         const namespace = namespaceMap.get(routerName);
         if (!namespace) continue;
-
-        if (namespace === "document") {
-          // The documentRouter has directly-defined procedures (e.g. convert)
-          procedures.set(namespace, procs);
-        } else {
-          // Factory-generated routers get the standard CRUD procedures
-          procedures.set(namespace, [...factoryProcs]);
-        }
+        procedures.set(namespace, namespace === "document" ? procs : [...factoryProcs]);
       }
-      continue; // Skip the generic export matching below
+      continue;
     }
 
-    // Determine namespace from the export name
     const exportMatch = content.match(/export const (\w+Router)/);
     if (exportMatch) {
       const namespace = namespaceMap.get(exportMatch[1]);
@@ -252,111 +203,188 @@ function extractApiProcedures(): Map<string, string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function allApiProcedureNames(apiProcs: Map<string, string[]>): Set<string> {
+  const out = new Set<string>();
+  for (const [ns, procs] of apiProcs) {
+    for (const p of procs) out.add(`${ns}.${p}`);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Scan all platforms and return usage sets
+// ---------------------------------------------------------------------------
+
+interface PlatformUsage {
+  web: Set<string>;
+  mobile: Set<string>;
+  cli: Set<string>;
+  mcp: Set<string>;
+}
+
+function scanAllPlatforms(): PlatformUsage {
+  return {
+    web: scanTrpcDotPattern(path.join(ROOT, "apps/web/src")),
+    mobile: scanTrpcDotPattern(path.join(ROOT, "apps/mobile")),
+    cli: scanTrpcStringPattern(path.join(ROOT, "packages/cli/src")),
+    mcp: scanTrpcStringPattern(path.join(ROOT, "packages/mcp/src")),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
 function cmdScan() {
   console.log("=== tRPC Coverage Analysis ===\n");
 
-  const webUsage = scanTrpcUsage(path.join(ROOT, "apps/web/src"));
-  const mobileUsage = scanTrpcUsage(path.join(ROOT, "apps/mobile"));
+  const usage = scanAllPlatforms();
+  const exceptions = parseExceptions(path.join(ROOT, "parity-exceptions.yaml"));
+  const apiProcs = extractApiProcedures();
+  const allApi = allApiProcedureNames(apiProcs);
 
-  const webOnly = [...webUsage].filter((p) => !mobileUsage.has(p)).sort();
-  const mobileOnly = [...mobileUsage].filter((p) => !webUsage.has(p)).sort();
-  const shared = [...webUsage].filter((p) => mobileUsage.has(p)).sort();
+  // --- Web vs Mobile gap analysis ---
+  const webOnly = [...usage.web].filter((p) => !usage.mobile.has(p)).sort();
+  const mobileOnly = [...usage.mobile].filter((p) => !usage.web.has(p)).sort();
+  const shared = [...usage.web].filter((p) => usage.mobile.has(p)).sort();
 
-  console.log(`Web uses ${webUsage.size} tRPC procedures`);
-  console.log(`Mobile uses ${mobileUsage.size} tRPC procedures`);
-  console.log(`Shared: ${shared.length} procedures\n`);
+  const excluded = webOnly.filter((p) => exceptions.mobile.has(p));
+  const trueGaps = webOnly.filter((p) => !exceptions.mobile.has(p));
 
-  if (webOnly.length > 0) {
-    console.log(`--- Web-only (${webOnly.length}) --- Mobile is missing these:`);
-    for (const p of webOnly) {
-      console.log(`  - ${p}`);
-    }
+  // --- Unimplemented (in API but used nowhere) ---
+  const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
+  const unimplemented = [...allApi].filter((p) => !usedAnywhere.has(p)).sort();
+
+  // --- Print stats ---
+  console.log("Platform procedure counts:");
+  console.log(`  Web:    ${usage.web.size}`);
+  console.log(`  Mobile: ${usage.mobile.size}`);
+  console.log(`  CLI:    ${usage.cli.size === 0 ? "0 (package not present or no usage)" : usage.cli.size}`);
+  console.log(`  MCP:    ${usage.mcp.size === 0 ? "0 (package not present or no usage)" : usage.mcp.size}`);
+  console.log(`  API:    ${allApi.size} procedures defined`);
+  console.log();
+
+  console.log(`Web + Mobile shared: ${shared.length} procedures`);
+  console.log();
+
+  if (excluded.length > 0) {
+    console.log(`--- Intentionally excluded from mobile (parity-exceptions.yaml): ${excluded.length} ---`);
+    for (const p of excluded) console.log(`  [skip] ${p}`);
     console.log();
+  }
+
+  if (trueGaps.length > 0) {
+    console.log(`--- TRUE PARITY GAPS (web has it, mobile does not, not in exceptions): ${trueGaps.length} ---`);
+    for (const p of trueGaps) console.log(`  [GAP]  ${p}`);
+    console.log();
+  } else {
+    console.log("--- True parity gaps: 0 (all web procedures are on mobile or in exceptions) ---\n");
   }
 
   if (mobileOnly.length > 0) {
-    console.log(`--- Mobile-only (${mobileOnly.length}) --- Web is missing these:`);
-    for (const p of mobileOnly) {
-      console.log(`  - ${p}`);
-    }
+    console.log(`--- Mobile-only (${mobileOnly.length}) ---`);
+    for (const p of mobileOnly) console.log(`  [mob]  ${p}`);
     console.log();
   }
 
-  // Coverage percentage
-  const totalUnique = new Set([...webUsage, ...mobileUsage]).size;
-  const coveragePercent = ((shared.length / totalUnique) * 100).toFixed(1);
-  console.log(`\nOverall parity: ${coveragePercent}% (${shared.length}/${totalUnique} procedures used on both)\n`);
+  if (usage.cli.size > 0) {
+    const cliOnly = [...usage.cli].filter((p) => !usage.web.has(p) && !usage.mobile.has(p)).sort();
+    if (cliOnly.length > 0) {
+      console.log(`--- CLI-only (${cliOnly.length}) ---`);
+      for (const p of cliOnly) console.log(`  [cli]  ${p}`);
+      console.log();
+    }
+  }
 
-  // Exit code for CI
-  if (webOnly.length > 0) {
-    process.exitCode = 0; // Non-blocking -- just informational
+  if (usage.mcp.size > 0) {
+    const mcpOnly = [...usage.mcp].filter((p) => !usage.web.has(p) && !usage.mobile.has(p)).sort();
+    if (mcpOnly.length > 0) {
+      console.log(`--- MCP-only (${mcpOnly.length}) ---`);
+      for (const p of mcpOnly) console.log(`  [mcp]  ${p}`);
+      console.log();
+    }
+  }
+
+  if (unimplemented.length > 0) {
+    console.log(`--- Unimplemented (in API, used on no platform): ${unimplemented.length} ---`);
+    for (const p of unimplemented) console.log(`  [api]  ${p}`);
+    console.log();
+  }
+
+  // --- Parity percentages ---
+  const totalUnique = new Set([...usage.web, ...usage.mobile]).size;
+  const rawPct = totalUnique > 0 ? ((shared.length / totalUnique) * 100).toFixed(1) : "100.0";
+  console.log(`Raw web/mobile parity: ${rawPct}% (${shared.length}/${totalUnique})`);
+
+  const applicable = [...usage.web].filter((p) => !exceptions.mobile.has(p));
+  const applicableShared = applicable.filter((p) => usage.mobile.has(p));
+  const adjPct = applicable.length > 0
+    ? ((applicableShared.length / applicable.length) * 100).toFixed(1)
+    : "100.0";
+  console.log(`Adjusted parity (excl. not-applicable): ${adjPct}% (${applicableShared.length}/${applicable.length})\n`);
+
+  // Exit 1 when true gaps exist — CI should block.
+  if (trueGaps.length > 0) {
+    process.exitCode = 1;
   }
 }
 
 function cmdValidate() {
-  console.log("=== Feature Parity Matrix Validation ===\n");
+  console.log("=== Exceptions File Validation ===\n");
 
-  const yamlPath = path.join(ROOT, "feature-parity.yaml");
-  if (!fs.existsSync(yamlPath)) {
-    console.error("ERROR: feature-parity.yaml not found at repo root");
+  const exceptionsPath = path.join(ROOT, "parity-exceptions.yaml");
+  if (!fs.existsSync(exceptionsPath)) {
+    console.error("ERROR: parity-exceptions.yaml not found at repo root");
     process.exitCode = 1;
     return;
   }
 
-  const features = parseParityYaml(yamlPath);
-  const apiProcedures = extractApiProcedures();
+  const exceptions = parseExceptions(exceptionsPath);
+  const apiProcs = extractApiProcedures();
+  const allApi = allApiProcedureNames(apiProcs);
 
-  let warnings = 0;
   let errors = 0;
+  let warnings = 0;
 
-  // 1. Check that every API procedure appears in some feature's api list
-  const allTrackedProcedures = new Set<string>();
-  for (const f of features) {
-    for (const proc of f.api) {
-      // Skip REST endpoints
-      if (proc.startsWith("GET ") || proc.startsWith("POST ")) continue;
-      allTrackedProcedures.add(proc);
+  // 1. Every exception must reference a real API procedure.
+  console.log("Checking that exceptions reference real API procedures...");
+  for (const proc of exceptions.mobile) {
+    if (!allApi.has(proc)) {
+      console.log(`  ERROR: ${proc} is in parity-exceptions.yaml but does not exist in the API`);
+      errors++;
     }
   }
 
-  console.log("Checking API procedure coverage...");
-  for (const [namespace, procs] of apiProcedures) {
-    for (const proc of procs) {
-      const fullName = `${namespace}.${proc}`;
-      if (!allTrackedProcedures.has(fullName)) {
-        console.log(`  WARNING: ${fullName} is not tracked in any feature entry`);
-        warnings++;
-      }
-    }
-  }
+  if (errors === 0) console.log("  All exceptions reference valid API procedures.");
 
-  // 2. Check for parity gaps: web=implemented, mobile=not-started
-  console.log("\nChecking parity gaps (web=implemented, mobile=not-started)...");
-  for (const f of features) {
-    const webStatus = f.platforms.web;
-    const mobileStatus = f.platforms.mobile;
-
-    if (webStatus === "implemented" && mobileStatus === "not-started") {
-      console.log(`  GAP: ${f.id} (${f.name}) -- web is implemented, mobile is not-started`);
+  // 2. Scan web usage and check for stale exceptions (procedure no longer used on web).
+  console.log("\nChecking for stale exceptions (procedure excluded but web no longer uses it)...");
+  const webUsage = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
+  for (const proc of exceptions.mobile) {
+    if (!webUsage.has(proc)) {
+      console.log(`  WARNING: ${proc} is in exceptions but web does not use it — may be stale`);
       warnings++;
     }
   }
+  if (warnings === 0) console.log("  No stale exceptions detected.");
 
-  // 3. Check for features with no platform having implemented status
-  console.log("\nChecking for unimplemented features...");
-  for (const f of features) {
-    const anyImplemented = Object.values(f.platforms).some(
-      (s) => s === "implemented" || s === "partial" || s === "placeholder"
-    );
-    if (!anyImplemented) {
-      console.log(`  INFO: ${f.id} (${f.name}) -- not implemented on any platform`);
+  // 3. Check for procedures in API not used anywhere (informational).
+  console.log("\nChecking for API procedures not used on any platform...");
+  const usage = scanAllPlatforms();
+  const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
+  let unused = 0;
+  for (const proc of allApi) {
+    if (!usedAnywhere.has(proc)) {
+      console.log(`  INFO: ${proc} is defined in API but used on no platform`);
+      unused++;
     }
   }
+  if (unused === 0) console.log("  All API procedures are used on at least one platform.");
 
-  console.log(`\n--- Summary: ${features.length} features, ${warnings} warnings, ${errors} errors ---`);
+  console.log(`\n--- Summary: ${exceptions.mobile.size} mobile exceptions, ${warnings} warnings, ${errors} errors ---`);
 
   if (errors > 0) process.exitCode = 1;
 }
@@ -364,167 +392,124 @@ function cmdValidate() {
 function cmdChanged(changedFiles: string[]) {
   console.log("=== Changed Files Parity Check ===\n");
 
-  const yamlPath = path.join(ROOT, "feature-parity.yaml");
-  if (!fs.existsSync(yamlPath)) {
-    console.log("SKIP: feature-parity.yaml not found");
+  const touchesWeb = changedFiles.some((f) => f.startsWith("apps/web/"));
+  const touchesMobile = changedFiles.some((f) => f.startsWith("apps/mobile/"));
+  const touchesApi = changedFiles.some((f) => f.includes("packages/api/src/routers/"));
+  const touchesExceptions = changedFiles.some((f) => f.includes("parity-exceptions.yaml"));
+
+  if (!touchesWeb && !touchesApi) {
+    console.log("No web or API files changed — skipping parity check.");
     return;
   }
 
-  const features = parseParityYaml(yamlPath);
-  const warnings: string[] = [];
+  const exceptions = parseExceptions(path.join(ROOT, "parity-exceptions.yaml"));
+  const webUsage = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
+  const mobileUsage = scanTrpcDotPattern(path.join(ROOT, "apps/mobile"));
 
-  const touchesApi = changedFiles.some((f) => f.includes("packages/api/src/routers/"));
-  const touchesWeb = changedFiles.some((f) => f.startsWith("apps/web/"));
-  const touchesMobile = changedFiles.some((f) => f.startsWith("apps/mobile/"));
-  const touchesParity = changedFiles.some((f) => f.includes("feature-parity.yaml"));
+  const trueGaps = [...webUsage]
+    .filter((p) => !mobileUsage.has(p) && !exceptions.mobile.has(p))
+    .sort();
 
-  // If API routers changed but parity file was not updated
-  if (touchesApi && !touchesParity) {
-    warnings.push(
-      "WARNING: API router files changed but feature-parity.yaml was not updated. " +
-      "If you added a new procedure, add it to the parity matrix."
+  if (touchesApi && !touchesExceptions && !touchesMobile) {
+    console.log(
+      "NOTE: API routers changed but parity-exceptions.yaml was not updated.\n" +
+      "      If you added a new procedure that is intentionally desktop-only, add it to parity-exceptions.yaml."
     );
+    console.log();
   }
 
-  // If web app changed, find matching features and check mobile status
-  if (touchesWeb && !touchesMobile) {
-    const webFiles = changedFiles.filter((f) => f.startsWith("apps/web/"));
-    for (const f of webFiles) {
-      // Try to identify which features this file relates to
-      for (const feature of features) {
-        const webStatus = feature.platforms.web;
-        const mobileStatus = feature.platforms.mobile;
-
-        if (webStatus === "implemented" && mobileStatus === "not-started") {
-          // Check if the file path seems related to this feature's category
-          const lowerPath = f.toLowerCase();
-          const lowerCategory = feature.category.toLowerCase();
-          const lowerName = feature.name.toLowerCase();
-
-          if (
-            lowerPath.includes(lowerCategory.split(" ")[0]) ||
-            lowerPath.includes(feature.id.split(".")[0])
-          ) {
-            warnings.push(
-              `PARITY GAP: ${feature.id} (${feature.name}) is implemented on web but not-started on mobile. ` +
-              `File changed: ${f}`
-            );
-          }
-        }
-      }
-    }
-  }
-
-  if (warnings.length === 0) {
-    console.log("No parity issues detected for changed files.");
+  if (trueGaps.length === 0) {
+    console.log("No parity gaps detected — web and mobile are in sync (or all gaps are in exceptions).");
   } else {
-    for (const w of warnings) {
-      console.log(`  ${w}`);
-    }
+    console.log(`TRUE PARITY GAPS (${trueGaps.length}) — web has these procedures, mobile does not:\n`);
+    for (const p of trueGaps) console.log(`  [GAP] ${p}`);
+    console.log(
+      "\nFor each gap, either:\n" +
+      "  a) implement it on mobile, or\n" +
+      "  b) add it to parity-exceptions.yaml with a justification comment."
+    );
+    process.exitCode = 1;
   }
 
-  console.log(`\n${warnings.length} warning(s)`);
+  console.log(`\n${trueGaps.length} gap(s) found`);
 }
 
 function cmdReport() {
-  const yamlPath = path.join(ROOT, "feature-parity.yaml");
-  if (!fs.existsSync(yamlPath)) {
-    console.error("ERROR: feature-parity.yaml not found");
-    process.exitCode = 1;
-    return;
-  }
+  const usage = scanAllPlatforms();
+  const exceptions = parseExceptions(path.join(ROOT, "parity-exceptions.yaml"));
+  const apiProcs = extractApiProcedures();
+  const allApi = allApiProcedureNames(apiProcs);
 
-  const features = parseParityYaml(yamlPath);
-  const webUsage = scanTrpcUsage(path.join(ROOT, "apps/web/src"));
-  const mobileUsage = scanTrpcUsage(path.join(ROOT, "apps/mobile"));
+  const shared = [...usage.web].filter((p) => usage.mobile.has(p));
+  const trueGaps = [...usage.web]
+    .filter((p) => !usage.mobile.has(p) && !exceptions.mobile.has(p))
+    .sort();
+  const excluded = [...usage.web]
+    .filter((p) => !usage.mobile.has(p) && exceptions.mobile.has(p))
+    .sort();
+  const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
+  const unimplemented = [...allApi].filter((p) => !usedAnywhere.has(p)).sort();
 
-  // Group by category
-  const byCategory = new Map<string, Feature[]>();
-  for (const f of features) {
-    const list = byCategory.get(f.category) || [];
-    list.push(f);
-    byCategory.set(f.category, list);
-  }
-
-  const statusEmoji: Record<string, string> = {
-    implemented: "done",
-    partial: "partial",
-    planned: "planned",
-    "not-started": "missing",
-    "not-applicable": "n/a",
-    placeholder: "stub",
-  };
+  const applicable = [...usage.web].filter((p) => !exceptions.mobile.has(p));
+  const applicableShared = applicable.filter((p) => usage.mobile.has(p));
+  const adjPct = applicable.length > 0
+    ? ((applicableShared.length / applicable.length) * 100).toFixed(1)
+    : "100.0";
 
   const lines: string[] = [];
   lines.push("# Feature Parity Report");
   lines.push("");
   lines.push(`Generated: ${new Date().toISOString().split("T")[0]}`);
   lines.push("");
-
-  // Summary counts
-  let webImpl = 0, mobileImpl = 0, storeImpl = 0;
-  let total = features.length;
-  for (const f of features) {
-    if (f.platforms.web === "implemented") webImpl++;
-    if (f.platforms.mobile === "implemented") mobileImpl++;
-    if (f.platforms.store === "implemented") storeImpl++;
-  }
-
-  lines.push("## Summary");
+  lines.push("## Platform Coverage");
   lines.push("");
-  lines.push(`| Platform | Implemented | Total | Coverage |`);
-  lines.push(`|----------|-------------|-------|----------|`);
-  lines.push(`| Web      | ${webImpl} | ${total} | ${((webImpl / total) * 100).toFixed(0)}% |`);
-  lines.push(`| Mobile   | ${mobileImpl} | ${total} | ${((mobileImpl / total) * 100).toFixed(0)}% |`);
-  lines.push(`| Store    | ${storeImpl} | ${total} | ${((storeImpl / total) * 100).toFixed(0)}% |`);
+  lines.push("| Platform | Procedures Used | Notes |");
+  lines.push("|----------|----------------|-------|");
+  lines.push(`| Web      | ${usage.web.size} | auto-detected from apps/web/src |`);
+  lines.push(`| Mobile   | ${usage.mobile.size} | auto-detected from apps/mobile |`);
+  lines.push(`| CLI      | ${usage.cli.size} | auto-detected from packages/cli/src |`);
+  lines.push(`| MCP      | ${usage.mcp.size} | auto-detected from packages/mcp/src |`);
+  lines.push(`| API      | ${allApi.size} | total procedures defined |`);
   lines.push("");
-
-  // tRPC coverage
-  const shared = [...webUsage].filter((p) => mobileUsage.has(p));
-  const totalUnique = new Set([...webUsage, ...mobileUsage]).size;
-  lines.push(`**tRPC procedure parity**: ${shared.length}/${totalUnique} (${((shared.length / totalUnique) * 100).toFixed(0)}%)`);
+  lines.push("## Web / Mobile Parity");
+  lines.push("");
+  lines.push(`- **Shared**: ${shared.length} procedures`);
+  lines.push(`- **Adjusted parity**: ${adjPct}% (${applicableShared.length}/${applicable.length} applicable procedures)`);
+  lines.push(`- **Excluded (not-applicable)**: ${excluded.length} procedures`);
+  lines.push(`- **True gaps**: ${trueGaps.length} procedures`);
+  lines.push(`- **Unimplemented** (in API, used nowhere): ${unimplemented.length} procedures`);
   lines.push("");
 
-  // Per-category breakdown
-  lines.push("## By Category");
-  lines.push("");
-
-  for (const [category, feats] of byCategory) {
-    lines.push(`### ${category}`);
+  if (trueGaps.length > 0) {
+    lines.push("## True Parity Gaps");
     lines.push("");
-    lines.push("| Feature | Web | Mobile | Store |");
-    lines.push("|---------|-----|--------|-------|");
-    for (const f of feats) {
-      lines.push(
-        `| ${f.name} | ${statusEmoji[f.platforms.web] || f.platforms.web} | ${statusEmoji[f.platforms.mobile] || f.platforms.mobile} | ${statusEmoji[f.platforms.store] || f.platforms.store} |`
-      );
-    }
+    lines.push("Web has these procedures; mobile does not and they are not in exceptions:");
+    lines.push("");
+    for (const p of trueGaps) lines.push(`- \`${p}\``);
     lines.push("");
   }
 
-  // Mobile gaps section
-  const gaps = features.filter(
-    (f) =>
-      f.platforms.web === "implemented" &&
-      (f.platforms.mobile === "not-started" || f.platforms.mobile === "placeholder")
-  );
+  if (excluded.length > 0) {
+    lines.push("## Intentional Exclusions (mobile)");
+    lines.push("");
+    for (const p of excluded) lines.push(`- \`${p}\``);
+    lines.push("");
+  }
 
-  if (gaps.length > 0) {
-    lines.push("## Mobile Parity Gaps");
+  if (unimplemented.length > 0) {
+    lines.push("## Unimplemented API Procedures");
     lines.push("");
-    lines.push("Features implemented on web but not on mobile:");
+    lines.push("Defined in API but not used on any platform:");
     lines.push("");
-    for (const g of gaps) {
-      const status = g.platforms.mobile === "placeholder" ? "(placeholder)" : "";
-      lines.push(`- **${g.name}** (${g.category}) ${status}`);
-    }
+    for (const p of unimplemented) lines.push(`- \`${p}\``);
+    lines.push("");
   }
 
   console.log(lines.join("\n"));
 }
 
 // ---------------------------------------------------------------------------
-// CLI
+// CLI entry point
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
@@ -545,10 +530,10 @@ switch (command) {
     break;
   default:
     console.log(`Usage:
-  npx tsx scripts/check-parity.ts --scan       Scan tRPC usage across platforms
-  npx tsx scripts/check-parity.ts --validate   Validate parity matrix against API
-  npx tsx scripts/check-parity.ts --changed <files...>  Check changed files for parity gaps
-  npx tsx scripts/check-parity.ts --report     Generate markdown parity report
+  npx tsx scripts/check-parity.ts --scan                       Auto-scan all platforms, report gaps (exits 1 if gaps found)
+  npx tsx scripts/check-parity.ts --validate                   Validate parity-exceptions.yaml against API
+  npx tsx scripts/check-parity.ts --changed <files...>         Check changed files for new parity gaps (exits 1 if gaps found)
+  npx tsx scripts/check-parity.ts --report                     Generate markdown parity report
 `);
     break;
 }

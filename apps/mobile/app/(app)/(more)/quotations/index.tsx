@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
+import { haptic } from "../../../../src/lib/haptics";
 import {
   StatusBadge,
   FAB,
@@ -51,6 +52,16 @@ export default function QuotationsScreen() {
   const { data, isLoading, isError, refetch, isRefetching } =
     trpc.quotation.list.useQuery(queryInput);
 
+  const deleteMutation = trpc.quotation.delete.useMutation({
+    onSuccess: () => { utils.quotation.list.invalidate(); haptic.success(); },
+    onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
+  });
+
+  const updateStatusMutation = trpc.quotation.updateStatus.useMutation({
+    onSuccess: () => { utils.quotation.list.invalidate(); haptic.success(); },
+    onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
+  });
+
   const convertMutation = trpc.document.convert.useMutation({
     onSuccess: (result) => {
       utils.quotation.list.invalidate();
@@ -82,6 +93,24 @@ export default function QuotationsScreen() {
       setPage((p) => p + 1);
     }
   }, [hasMore, isLoading]);
+
+  const handleDelete = useCallback((id: string, num: string) => {
+    Alert.alert("Delete", `Delete ${num}? This cannot be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => deleteMutation.mutate({ id }) },
+    ]);
+  }, [deleteMutation]);
+
+  const handleMarkSent = useCallback((id: string) => {
+    updateStatusMutation.mutate({ id, status: "sent" });
+  }, [updateStatusMutation]);
+
+  const handleCancel = useCallback((id: string, num: string) => {
+    Alert.alert("Cancel", `Cancel ${num}?`, [
+      { text: "Keep", style: "cancel" },
+      { text: "Cancel", style: "destructive", onPress: () => updateStatusMutation.mutate({ id, status: "cancelled" }) },
+    ]);
+  }, [updateStatusMutation]);
 
   const handleConvert = useCallback(
     (id: string, num: string) => {
@@ -162,33 +191,55 @@ export default function QuotationsScreen() {
   );
 
   const renderItem = ({ item }: { item: typeof docs[0] }) => (
-    <PressableRow style={styles.docRow} onPress={() => {}}>
-      <View style={styles.docLeft}>
-        <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
-        <Text style={styles.partyName} numberOfLines={1}>
-          {item.partyName}
-        </Text>
-        <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
-      </View>
-      <View style={styles.docRight}>
-        <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
-        <StatusBadge status={item.status} />
-        {item.status !== "cancelled" && (
-          <TouchableOpacity
-            style={styles.convertBtn}
-            onPress={() => handleConvert(item.id, item.invoiceNumber)}
-            activeOpacity={0.7}
-            disabled={convertMutation.isPending}
-          >
-            {convertMutation.isPending ? (
-              <ActivityIndicator size={10} color={colors.brand} />
-            ) : (
-              <Text style={styles.convertBtnText}>To Invoice</Text>
-            )}
+    <View style={styles.docCard}>
+      <PressableRow style={styles.docRow} onPress={() => {}}>
+        <View style={styles.docLeft}>
+          <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
+          <Text style={styles.partyName} numberOfLines={1}>
+            {item.partyName}
+          </Text>
+          <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
+        </View>
+        <View style={styles.docRight}>
+          <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
+          <StatusBadge status={item.status} />
+          {item.status !== "cancelled" && (
+            <TouchableOpacity
+              style={styles.convertBtn}
+              onPress={() => handleConvert(item.id, item.invoiceNumber)}
+              activeOpacity={0.7}
+              disabled={convertMutation.isPending}
+            >
+              {convertMutation.isPending ? (
+                <ActivityIndicator size={10} color={colors.brand} />
+              ) : (
+                <Text style={styles.convertBtnText}>To Invoice</Text>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      </PressableRow>
+      {item.status === "draft" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleMarkSent(item.id)}>
+            <Ionicons name="send-outline" size={13} color={colors.info || "#3b82f6"} />
+            <Text style={[styles.actionBtnText, { color: colors.info || "#3b82f6" }]}>Mark Sent</Text>
           </TouchableOpacity>
-        )}
-      </View>
-    </PressableRow>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item.id, item.invoiceNumber)}>
+            <Ionicons name="trash-outline" size={13} color={colors.danger} />
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {item.status === "sent" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => handleCancel(item.id, item.invoiceNumber)}>
+            <Ionicons name="close-circle-outline" size={13} color={colors.danger} />
+            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 
   const ListEmpty = isError ? (
@@ -275,16 +326,19 @@ const styles = StyleSheet.create({
   statusFilterText: { fontSize: 12, fontWeight: "600", color: colors.textMuted },
   statusFilterTextActive: { color: colors.textPrimary },
   countText: { fontSize: 12, color: colors.textMuted, paddingHorizontal: 16, marginBottom: 8 },
-  docRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  docCard: {
     backgroundColor: colors.surface,
     marginHorizontal: 16,
     marginBottom: 8,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: "hidden",
+  },
+  docRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
@@ -303,6 +357,9 @@ const styles = StyleSheet.create({
     borderColor: colors.brand + "40",
   },
   convertBtnText: { fontSize: 10, fontWeight: "700", color: colors.brand },
+  actionRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: colors.border },
+  actionBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 9 },
+  actionBtnText: { fontSize: 12, fontWeight: "600" },
   loadMoreBtn: {
     marginHorizontal: 16,
     marginTop: 4,

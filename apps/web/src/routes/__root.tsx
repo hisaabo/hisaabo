@@ -7,7 +7,7 @@ import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
 import { Modal } from "@/components/ui/Modal";
-import { Listbox } from "@/components/ui/Listbox";
+import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 
@@ -58,6 +58,7 @@ const navSections = [
       { to: "/credit-notes", label: "Credit Notes", icon: CreditNoteIcon },
       { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon },
       { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon },
+      { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon },
     ],
   },
   {
@@ -86,6 +87,12 @@ const navSections = [
     items: [
       { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
       { to: "/reports", label: "Reports", icon: ReportsIcon },
+    ],
+  },
+  {
+    label: "ACCOUNT",
+    items: [
+      { to: "/settings", label: "Settings", icon: SettingsIcon },
     ],
   },
 ] as const;
@@ -174,6 +181,14 @@ function RootLayout() {
     onSuccess: () => {
       utils.auth.me.invalidate();
       queryClient.invalidateQueries();
+    },
+  });
+
+  const logoutMutation = trpc.auth.logout.useMutation({
+    onSuccess: () => {
+      setBusinessId(null);
+      queryClient.clear();
+      navigate({ to: "/login" });
     },
   });
 
@@ -331,8 +346,8 @@ function RootLayout() {
     .join("")
     .toUpperCase();
 
-  const hasMultipleTenants = (tenantList?.length ?? 0) > 1;
-  const tenantName = session.tenantName ?? "Organization";
+  const _hasMultipleTenants = (tenantList?.length ?? 0) > 1;
+  const _tenantName = session.tenantName ?? "Organization";
 
   function handleBusinessSwitch(id: string) {
     setBusinessId(id);
@@ -374,36 +389,14 @@ function RootLayout() {
           </span>
         </div>
 
-        {/* Tenant name */}
-        <div className="px-4 py-2 border-b border-border-light shrink-0">
-          <button
-            onClick={() => hasMultipleTenants && setShowTenantPicker(true)}
-            className={cn(
-              "text-[11px] font-semibold uppercase tracking-widest text-text-tertiary transition-colors w-full text-left truncate",
-              hasMultipleTenants
-                ? "hover:text-text-secondary cursor-pointer"
-                : "cursor-default",
-            )}
-            disabled={!hasMultipleTenants}
-            aria-label={hasMultipleTenants ? "Switch organization" : undefined}
-          >
-            {tenantName}
-            {hasMultipleTenants && (
-              <span className="ml-1 text-text-tertiary">▾</span>
-            )}
-          </button>
-        </div>
-
-        {/* Business switcher — only shown if multiple businesses */}
-        {businesses && businesses.length > 1 && (
-          <div className="px-3 py-2 border-b border-border-light shrink-0">
-            <Listbox
-              value={currentBusinessId ?? businesses[0].id}
-              onChange={handleBusinessSwitch}
-              options={businesses.map((b) => ({ value: b.id, label: b.name }))}
-              placeholder="Select business"
-            />
-          </div>
+        {/* Business switcher */}
+        {businesses && businesses.length > 0 && (
+          <BusinessSwitcher
+            businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
+            activeBusinessId={currentBusinessId ?? businesses[0].id}
+            onSwitch={handleBusinessSwitch}
+            onCreateNew={() => navigate({ to: "/settings" })}
+          />
         )}
 
         {/* Nav sections */}
@@ -447,51 +440,16 @@ function RootLayout() {
           })}
         </nav>
 
-        {/* Bottom: Settings + User card */}
-        <div className="shrink-0 border-t border-border-light">
-          <div className="pt-1 pb-1">
-            <Link
-              to="/settings"
-              className="flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors"
-              activeProps={{
-                className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors bg-brand-600/10 text-brand-700 font-medium",
-              }}
-              inactiveProps={{
-                className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
-              }}
-            >
-              <SettingsIcon />
-              Settings
-            </Link>
-          </div>
-
-          {/* User card */}
-          <div className="px-3 py-3">
-            <div className="flex items-center gap-2.5 px-2">
-              <div className="w-7 h-7 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[11px] font-semibold shrink-0">
-                {initials}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-medium truncate text-text-primary">
-                  {displayName}
-                </p>
-                <p className="text-[11px] truncate text-text-tertiary">
-                  {session.user.email}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
       </aside>
 
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden bg-surface-1 md:ml-0">
         {/* Top bar */}
-        <div className="h-14 border-b border-border-light flex items-center justify-between px-4 md:px-6 shrink-0 bg-surface-0">
+        <div className="h-14 border-b border-border-light flex items-center gap-2 px-4 md:px-6 shrink-0 bg-surface-0">
           {/* Hamburger — mobile only */}
           <button
             type="button"
-            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors"
+            className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors shrink-0"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open navigation menu"
           >
@@ -499,17 +457,50 @@ function RootLayout() {
               <path d="M2 4.5h14M2 9h14M2 13.5h14" />
             </svg>
           </button>
-          <div className="md:hidden" /> {/* spacer on mobile so flex justify-between works */}
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
+
+          {/* Theme + shortcuts */}
+          <ThemeToggle />
+          <button
+            onClick={() => setShowShortcuts(true)}
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            <span className="font-mono text-xs">?</span>
+          </button>
+
+          {/* User info — pushed to the right */}
+          <div className="ml-auto flex items-center gap-3 min-w-0">
+            {/* Avatar + name + role */}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
+                {initials}
+              </div>
+              <span className="hidden sm:block text-sm font-medium text-text-primary truncate max-w-[120px]">
+                {displayName}
+              </span>
+              {session.role && (
+                <span className="hidden sm:block shrink-0">
+                  <RoleBadge role={session.role} />
+                </span>
+              )}
+            </div>
+
+            {/* Logout */}
             <button
-              onClick={() => setShowShortcuts(true)}
-              className="flex items-center justify-center w-8 h-8 rounded-lg text-sm text-text-tertiary hover:bg-surface-1 transition-colors border border-border-light"
-              aria-label="Keyboard shortcuts"
-              title="Keyboard shortcuts (?)"
+              onClick={() => logoutMutation.mutate()}
+              disabled={logoutMutation.isPending}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+              aria-label="Sign out"
+              title="Sign out"
             >
-              <span className="font-mono text-xs">?</span>
+              <LogoutIcon />
             </button>
+
+            {/* Version */}
+            <span className="hidden md:block text-[10px] text-text-tertiary/50 select-none shrink-0">
+              v{__APP_VERSION__}
+            </span>
           </div>
         </div>
 
@@ -567,6 +558,34 @@ function ThemeToggle() {
     >
       {icons[theme]}
     </button>
+  );
+}
+
+// ── Role Badge ────────────────────────────────────────────────
+
+const roleStyles: Record<string, string> = {
+  owner: "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300",
+  admin: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  member: "bg-surface-2 text-text-secondary",
+  seller: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  accountant: "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+};
+
+const roleLabels: Record<string, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+  seller: "Seller",
+  accountant: "Accountant",
+};
+
+function RoleBadge({ role }: { role: string }) {
+  const style = roleStyles[role] ?? "bg-surface-2 text-text-secondary";
+  const label = roleLabels[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+  return (
+    <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 leading-none", style)}>
+      {label}
+    </span>
   );
 }
 
@@ -801,6 +820,17 @@ function SettingsIcon() {
   );
 }
 
+function StoreOrdersIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 2.5h13l-1.5 6h-10z" />
+      <circle cx="5.5" cy="13" r="1.2" />
+      <circle cx="10.5" cy="13" r="1.2" />
+      <path d="M5.5 11.8V9.5M10.5 11.8V9.5" />
+    </svg>
+  )
+}
+
 function SunIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -823,6 +853,16 @@ function MonitorIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" />
       <path d="M5.5 14h5M8 11.5v2.5" />
+    </svg>
+  );
+}
+
+function LogoutIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3" />
+      <path d="M11 11l3-3-3-3" />
+      <path d="M14 8H6" />
     </svg>
   );
 }

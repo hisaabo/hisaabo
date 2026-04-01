@@ -70,11 +70,15 @@ const badgeStyles = StyleSheet.create({
   },
 });
 
+type ChangeRoleTarget = { userId: string; currentRole: string; displayName: string } | null;
+
 export default function TeamScreen() {
   const router = useRouter();
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("seller");
+  const [changeRoleTarget, setChangeRoleTarget] = useState<ChangeRoleTarget>(null);
+  const [pendingRole, setPendingRole] = useState("");
 
   const utils = trpc.useUtils();
 
@@ -101,6 +105,16 @@ export default function TeamScreen() {
     },
   });
 
+  const updateRoleMutation = trpc.tenant.updateMemberRole.useMutation({
+    onSuccess: () => {
+      utils.tenant.members.invalidate();
+      setChangeRoleTarget(null);
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message || "Failed to update role.");
+    },
+  });
+
   const removeMutation = trpc.tenant.removeMember.useMutation({
     onSuccess: () => {
       utils.tenant.members.invalidate();
@@ -120,6 +134,34 @@ export default function TeamScreen() {
           text: "Remove",
           style: "destructive",
           onPress: () => removeMutation.mutate({ userId }),
+        },
+      ]
+    );
+  };
+
+  const handleOpenRoleModal = (userId: string, currentRole: string, displayName: string) => {
+    setPendingRole(currentRole);
+    setChangeRoleTarget({ userId, currentRole, displayName });
+  };
+
+  const handleConfirmRoleChange = () => {
+    if (!changeRoleTarget || pendingRole === changeRoleTarget.currentRole) {
+      setChangeRoleTarget(null);
+      return;
+    }
+    const newLabel = ROLE_LABELS[pendingRole] ?? pendingRole;
+    Alert.alert(
+      "Change Role",
+      `Change ${changeRoleTarget.displayName}'s role to "${newLabel}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Confirm",
+          onPress: () =>
+            updateRoleMutation.mutate({
+              userId: changeRoleTarget.userId,
+              role: pendingRole as any,
+            }),
         },
       ]
     );
@@ -204,7 +246,18 @@ export default function TeamScreen() {
                       {m.userEmail}
                     </Text>
                     <View style={styles.memberRoleRow}>
-                      <RoleBadge role={m.role} />
+                      {canManage && !isOwner && !isMe ? (
+                        <TouchableOpacity
+                          onPress={() => handleOpenRoleModal(m.userId, m.role, displayName)}
+                          activeOpacity={0.7}
+                          style={styles.roleBadgeBtn}
+                        >
+                          <RoleBadge role={m.role} />
+                          <Ionicons name="chevron-down" size={11} color={colors.textMuted} style={{ marginLeft: 3 }} />
+                        </TouchableOpacity>
+                      ) : (
+                        <RoleBadge role={m.role} />
+                      )}
                     </View>
                   </View>
                   {canManage && !isOwner && !isMe && (
@@ -242,6 +295,67 @@ export default function TeamScreen() {
           </TouchableOpacity>
         )}
       </ScrollView>
+
+      {/* Change Role Modal */}
+      <Modal
+        visible={!!changeRoleTarget}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setChangeRoleTarget(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Role</Text>
+              <TouchableOpacity
+                onPress={() => setChangeRoleTarget(null)}
+                style={styles.modalClose}
+              >
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            {changeRoleTarget ? (
+              <Text style={styles.roleChangeSubtitle}>
+                Select a new role for{" "}
+                <Text style={{ color: colors.textPrimary, fontWeight: "700" }}>
+                  {changeRoleTarget.displayName}
+                </Text>
+              </Text>
+            ) : null}
+
+            <View style={styles.roleGrid}>
+              {INVITE_ROLES.map((r) => (
+                <TouchableOpacity
+                  key={r.key}
+                  style={[styles.rolePill, pendingRole === r.key && styles.rolePillActive]}
+                  onPress={() => setPendingRole(r.key)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.rolePillText, pendingRole === r.key && styles.rolePillTextActive]}>
+                    {r.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.inviteSubmitBtn,
+                (updateRoleMutation.isPending || pendingRole === changeRoleTarget?.currentRole) && { opacity: 0.5 },
+              ]}
+              onPress={handleConfirmRoleChange}
+              disabled={updateRoleMutation.isPending || pendingRole === changeRoleTarget?.currentRole}
+              activeOpacity={0.8}
+            >
+              {updateRoleMutation.isPending ? (
+                <ActivityIndicator color={colors.textPrimary} size="small" />
+              ) : (
+                <Text style={styles.inviteSubmitBtnText}>Save Role</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Invite Modal */}
       <Modal
@@ -394,6 +508,10 @@ const styles = StyleSheet.create({
   memberRoleRow: {
     flexDirection: "row",
   },
+  roleBadgeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   removeBtn: {
     width: 36,
     height: 36,
@@ -425,6 +543,11 @@ const styles = StyleSheet.create({
     color: colors.brand,
     fontSize: 15,
     fontWeight: "600",
+  },
+  roleChangeSubtitle: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginBottom: 16,
   },
   // Modal
   modalOverlay: {

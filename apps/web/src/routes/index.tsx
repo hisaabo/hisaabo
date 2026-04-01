@@ -18,6 +18,8 @@ import { formatCurrency, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PillTabs } from "@/components/ui/Tabs";
+import { DateRangeBar } from "@/components/ui/DateRangeBar";
+import { useDateRange, getGranularity } from "@/hooks/useDateRange";
 
 // ─── Milestone banner ─────────────────────────────────────────────────────────
 
@@ -361,56 +363,7 @@ function TargetsWidget({ targets }: { targets: TargetProgress[] }) {
   );
 }
 
-// ─── Period helpers ───────────────────────────────────────────────────────────
-
-const PERIODS = [
-  { id: "this-month", label: "This Month" },
-  { id: "this-quarter", label: "This Quarter" },
-  { id: "this-fy", label: "This FY" },
-  { id: "last-fy", label: "Last FY" },
-  { id: "all", label: "All Time" },
-] as const;
-
-type PeriodId = (typeof PERIODS)[number]["id"];
-
-function getPeriodDates(period: PeriodId): { from?: string; to?: string } {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth(); // 0-indexed
-
-  switch (period) {
-    case "this-month": {
-      const start = new Date(year, month, 1);
-      const end = new Date(year, month + 1, 0, 23, 59, 59);
-      return { from: start.toISOString(), to: end.toISOString() };
-    }
-    case "this-quarter": {
-      const qStart = Math.floor(month / 3) * 3;
-      return {
-        from: new Date(year, qStart, 1).toISOString(),
-        to: new Date(year, qStart + 3, 0, 23, 59, 59).toISOString(),
-      };
-    }
-    case "this-fy": {
-      // Indian FY: April 1 – March 31
-      const fyYear = month < 3 ? year - 1 : year;
-      return {
-        from: new Date(fyYear, 3, 1).toISOString(),
-        to: new Date(fyYear + 1, 2, 31, 23, 59, 59).toISOString(),
-      };
-    }
-    case "last-fy": {
-      const fyYear = month < 3 ? year - 2 : year - 1;
-      return {
-        from: new Date(fyYear, 3, 1).toISOString(),
-        to: new Date(fyYear + 1, 2, 31, 23, 59, 59).toISOString(),
-      };
-    }
-    case "all":
-    default:
-      return {};
-  }
-}
+// ─── Period helpers removed — now handled by useDateRange hook ───────────────
 
 // ─── Tooltip style ────────────────────────────────────────────────────────────
 
@@ -488,42 +441,47 @@ function ChartCard({
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
 
-function SalesTrendChart({ fromDate, toDate }: { fromDate?: string; toDate?: string }) {
-  // For "all time" (no dates), fetch 24 months of history
+function formatPeriodLabel(period: string, granularity: "week" | "month" | "fy"): string {
+  if (granularity === "week") {
+    const start = new Date(period);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+    return `${fmt(start)}-${fmt(end)}`;
+  }
+  if (granularity === "fy") {
+    const year = parseInt(period);
+    return `FY ${String(year).slice(-2)}-${String(year + 1).slice(-2)}`;
+  }
+  // month — show "Apr 24", "Mar 25" etc.
+  return new Date(period).toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+}
+
+function SalesTrendChart({
+  fromDate,
+  toDate,
+  granularity,
+}: {
+  fromDate?: string;
+  toDate?: string;
+  granularity: "week" | "month" | "fy";
+}) {
   const { data: raw } = trpc.dashboard.salesTrend.useQuery({
-    months: fromDate ? 12 : 24,
     fromDate,
     toDate,
+    granularity,
   }, { placeholderData: keepPreviousData });
 
-  // If data spans > 12 months, aggregate by FY (Apr-Mar) instead of monthly
-  const data = (() => {
-    if (!raw || raw.length === 0) return undefined;
+  const mapped = raw?.map((r) => ({
+    label: formatPeriodLabel(r.period, granularity),
+    invoiced: parseFloat(r.invoiced),
+    collected: parseFloat(r.collected),
+  }));
 
-    if (raw.length > 12) {
-      // Aggregate by financial year
-      const fyMap = new Map<string, { invoiced: number; collected: number }>();
-      for (const r of raw) {
-        const d = new Date(r.month);
-        const m = d.getMonth();
-        const fyStart = m < 3 ? d.getFullYear() - 1 : d.getFullYear();
-        const label = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`;
-        const existing = fyMap.get(label) || { invoiced: 0, collected: 0 };
-        existing.invoiced += parseFloat(r.invoiced);
-        existing.collected += parseFloat(r.collected);
-        fyMap.set(label, existing);
-      }
-      return [...fyMap.entries()].map(([month, v]) => ({ month, ...v }));
-    }
+  // Show empty state when there are no rows OR all values are zero
+  const hasData = mapped && mapped.some((d) => d.invoiced > 0 || d.collected > 0);
 
-    return raw.map((r) => ({
-      month: new Date(r.month).toLocaleString("en-IN", { month: "short", year: "2-digit" }),
-      invoiced: parseFloat(r.invoiced),
-      collected: parseFloat(r.collected),
-    }));
-  })();
-
-  if (!data || data.length === 0) {
+  if (!hasData) {
     return (
       <ChartCard title="Sales & Collections" responsive={false}>
         <ChartEmpty />
@@ -533,10 +491,10 @@ function SalesTrendChart({ fromDate, toDate }: { fromDate?: string; toDate?: str
 
   return (
     <ChartCard title="Sales & Collections">
-      <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+      <BarChart data={mapped} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
         <XAxis
-          dataKey="month"
+          dataKey="label"
           tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
           axisLine={false}
           tickLine={false}
@@ -1102,23 +1060,11 @@ function MonthlyComparisonWidget() {
   );
 }
 
-// ─── Period selector ──────────────────────────────────────────────────────────
-
-const PERIOD_TABS = PERIODS.map((p) => ({ value: p.id, label: p.label }));
-
 // ─── Summary cards ────────────────────────────────────────────────────────────
-
-const PERIOD_LABELS: Record<PeriodId, string> = {
-  "this-month": "This Month",
-  "this-quarter": "This Quarter",
-  "this-fy": "This Financial Year",
-  "last-fy": "Last Financial Year",
-  "all": "All Time",
-};
 
 function SummaryCards({
   data,
-  period,
+  periodLabel,
 }: {
   data: {
     totalSales: string;
@@ -1129,7 +1075,7 @@ function SummaryCards({
     totalExpenses: string;
     fyStart: string;
   };
-  period: PeriodId;
+  periodLabel: string;
 }) {
   const cards = [
     { label: "Sales", value: data.totalSales, color: "text-emerald-600" },
@@ -1142,7 +1088,7 @@ function SummaryCards({
 
   return (
     <div className="mb-6">
-      <p className="text-[11px] font-medium text-text-tertiary mb-2">{PERIOD_LABELS[period]} — Receivable & Payable are current totals</p>
+      <p className="text-[11px] font-medium text-text-tertiary mb-2">{periodLabel} — Receivable & Payable are current totals</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {cards.map((c) => (
           <div key={c.label} className="card px-4 py-3">
@@ -1179,13 +1125,33 @@ function PageSkeleton() {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-function DashboardPage() {
-  const [period, setPeriod] = useState<PeriodId>("this-fy");
-  const [isPending, startTransition] = useTransition();
-  const { from, to } = getPeriodDates(period);
+const PRESET_LABELS: Record<string, string> = {
+  "this-month": "This Month",
+  "last-month": "Last Month",
+  "last-30": "Last 30 Days",
+  "this-fy": "This Financial Year",
+  "last-fy": "Last Financial Year",
+  "custom": "Custom Range",
+  "all": "All Time",
+};
 
-  function handlePeriodChange(p: PeriodId) {
-    startTransition(() => setPeriod(p));
+function DashboardPage() {
+  const [isPending, startTransition] = useTransition();
+  const {
+    preset,
+    setPreset,
+    fromDate: from,
+    toDate: to,
+    customFrom,
+    customTo,
+    setCustomRange,
+  } = useDateRange("dashboard", "this-fy");
+
+  const granularity = getGranularity(preset);
+  const periodLabel = PRESET_LABELS[preset] ?? "Custom Range";
+
+  function handlePresetChange(p: Parameters<typeof setPreset>[0]) {
+    startTransition(() => setPreset(p));
   }
 
   const { data, isLoading } = trpc.dashboard.summary.useQuery(
@@ -1265,7 +1231,13 @@ function DashboardPage() {
         title="Dashboard"
         actions={
           <div className="flex items-center gap-3">
-            <PillTabs tabs={PERIOD_TABS} value={period} onChange={(v) => handlePeriodChange(v as PeriodId)} size="sm" />
+            <DateRangeBar
+              preset={preset}
+              onPresetChange={handlePresetChange}
+              customFrom={customFrom}
+              customTo={customTo}
+              onCustomChange={setCustomRange}
+            />
             <Link to="/invoices" className="btn-primary">
               + New Invoice
             </Link>
@@ -1283,7 +1255,7 @@ function DashboardPage() {
         <TargetsWidget targets={myTargets} />
       )}
 
-      <SummaryCards data={data} period={period} />
+      <SummaryCards data={data} periodLabel={periodLabel} />
 
       {/* Profit indicator cards */}
       <div className="grid grid-cols-2 gap-3 mb-4">
@@ -1329,7 +1301,7 @@ function DashboardPage() {
 
       {/* Charts grid — all charts respect the selected period */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SalesTrendChart fromDate={from} toDate={to} />
+        <SalesTrendChart fromDate={from} toDate={to} granularity={granularity} />
         <InvoiceStatusChart fromDate={from} toDate={to} />
         <TopSellingChart fromDate={from} toDate={to} />
         <TopCustomersChart fromDate={from} toDate={to} />

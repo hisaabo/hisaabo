@@ -23,7 +23,7 @@ import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
 
-type LedgerTab = "ledger" | "topItems";
+type LedgerTab = "ledger" | "topItems" | "report";
 
 interface MergeTargetParty {
   id: string;
@@ -40,6 +40,11 @@ export default function PartyDetailScreen() {
   const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
   const [ledgerTo, setLedgerTo] = useState<Date | null>(null);
   const [showDateFilter, setShowDateFilter] = useState(false);
+
+  // Report tab state
+  const [reportFrom, setReportFrom] = useState<Date | null>(null);
+  const [reportTo, setReportTo] = useState<Date | null>(null);
+  const [showReportDateFilter, setShowReportDateFilter] = useState(false);
 
   // Merge modal state
   const [showMergeModal, setShowMergeModal] = useState(false);
@@ -73,6 +78,19 @@ export default function PartyDetailScreen() {
     trpc.party.topItems.useQuery(
       { partyId: id ?? "" },
       { enabled: !!id && activeTab === "topItems" }
+    );
+
+  const reportInput: { partyId: string; limit: number; fromDate?: string; toDate?: string } = {
+    partyId: id ?? "",
+    limit: 1000,
+  };
+  if (reportFrom) reportInput.fromDate = new Date(reportFrom.getFullYear(), reportFrom.getMonth(), reportFrom.getDate()).toISOString();
+  if (reportTo) reportInput.toDate = new Date(reportTo.getFullYear(), reportTo.getMonth(), reportTo.getDate(), 23, 59, 59, 999).toISOString();
+
+  const { data: reportData, isLoading: reportLoading } =
+    trpc.party.ledgerReport.useQuery(
+      reportInput,
+      { enabled: !!id && activeTab === "report" }
     );
 
   const utils = trpc.useUtils();
@@ -395,6 +413,20 @@ export default function PartyDetailScreen() {
                 Top Items
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "report" && styles.tabActive]}
+              onPress={() => setActiveTab("report")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "report" && styles.tabTextActive,
+                ]}
+              >
+                Report
+              </Text>
+            </TouchableOpacity>
           </View>
           {activeTab === "ledger" && (
             <View style={styles.ledgerActions}>
@@ -418,6 +450,21 @@ export default function PartyDetailScreen() {
               </TouchableOpacity>
             </View>
           )}
+          {activeTab === "report" && (
+            <View style={styles.ledgerActions}>
+              <TouchableOpacity
+                style={styles.ledgerActionBtn}
+                onPress={() => setShowReportDateFilter(!showReportDateFilter)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={16}
+                  color={showReportDateFilter ? colors.brand : colors.textMuted}
+                />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
         {activeTab === "ledger" && showDateFilter && (
           <View style={styles.dateFilterRow}>
@@ -434,6 +481,25 @@ export default function PartyDetailScreen() {
                 value={ledgerTo ?? new Date()}
                 onChange={setLedgerTo}
                 minimumDate={ledgerFrom ?? undefined}
+              />
+            </View>
+          </View>
+        )}
+        {activeTab === "report" && showReportDateFilter && (
+          <View style={styles.dateFilterRow}>
+            <View style={styles.dateField}>
+              <DatePickerField
+                label="From"
+                value={reportFrom ?? new Date()}
+                onChange={setReportFrom}
+              />
+            </View>
+            <View style={styles.dateField}>
+              <DatePickerField
+                label="To"
+                value={reportTo ?? new Date()}
+                onChange={setReportTo}
+                minimumDate={reportFrom ?? undefined}
               />
             </View>
           </View>
@@ -551,6 +617,125 @@ export default function PartyDetailScreen() {
               <View style={styles.emptyTab}>
                 <Ionicons name="cube-outline" size={40} color={colors.border} />
                 <Text style={styles.emptyTabText}>No items sold yet</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Report Tab */}
+        {activeTab === "report" && (
+          <View style={styles.tabContent}>
+            {reportLoading ? (
+              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
+            ) : reportData ? (
+              <>
+                {/* Party Info Card */}
+                <View style={[styles.card, { marginTop: 8 }]}>
+                  <Text style={styles.reportPartyName}>{reportData.party.name}</Text>
+                  {reportData.party.gstin && (
+                    <Text style={styles.reportPartyMeta}>GSTIN: {reportData.party.gstin}</Text>
+                  )}
+                  {(reportData.party.city || reportData.party.state) && (
+                    <Text style={styles.reportPartyMeta}>
+                      {[reportData.party.city, reportData.party.state].filter(Boolean).join(", ")}
+                    </Text>
+                  )}
+                </View>
+
+                {/* Opening Balance Row */}
+                <View style={styles.ledgerOpeningRow}>
+                  <Text style={styles.ledgerOpeningLabel}>Opening Balance</Text>
+                  <Text style={styles.ledgerOpeningValue}>
+                    {formatCurrency(parseFloat(reportData.party.openingBalance || "0"))}
+                  </Text>
+                </View>
+
+                {/* Column Headers */}
+                <View style={styles.reportColHeader}>
+                  <Text style={[styles.reportColText, { flex: 1.4 }]}>Date / Ref</Text>
+                  <Text style={[styles.reportColText, styles.reportColRight]}>Debit</Text>
+                  <Text style={[styles.reportColText, styles.reportColRight]}>Credit</Text>
+                  <Text style={[styles.reportColText, styles.reportColRight]}>Balance</Text>
+                </View>
+
+                {/* Entry Rows */}
+                {reportData.entries.map((entry, idx) => {
+                  const bal = parseFloat(entry.runningBalance);
+                  const balPositive = bal >= 0;
+                  return (
+                    <View key={`${entry.documentId}-${idx}`} style={styles.reportEntryRow}>
+                      <View style={styles.reportEntryLeft}>
+                        <View
+                          style={[
+                            styles.ledgerTypeIcon,
+                            entry.type === "payment"
+                              ? styles.ledgerTypeIconPayment
+                              : styles.ledgerTypeIconInvoice,
+                          ]}
+                        >
+                          <Ionicons
+                            name={entry.type === "payment" ? "cash-outline" : "receipt-outline"}
+                            size={13}
+                            color={entry.type === "payment" ? colors.success : colors.brand}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.reportEntryRef} numberOfLines={1}>
+                            {entry.number}
+                          </Text>
+                          <Text style={styles.reportEntryDate}>{formatDate(entry.date)}</Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.reportEntryAmount, styles.reportColRight, { color: parseFloat(entry.debit) > 0 ? colors.success : colors.textMuted }]}>
+                        {parseFloat(entry.debit) > 0 ? formatCurrency(entry.debit) : "-"}
+                      </Text>
+                      <Text style={[styles.reportEntryAmount, styles.reportColRight, { color: parseFloat(entry.credit) > 0 ? colors.danger : colors.textMuted }]}>
+                        {parseFloat(entry.credit) > 0 ? formatCurrency(entry.credit) : "-"}
+                      </Text>
+                      <Text style={[styles.reportEntryAmount, styles.reportColRight, balPositive ? styles.balanceGreen : styles.balanceRed]}>
+                        {formatCurrency(Math.abs(bal))}
+                      </Text>
+                    </View>
+                  );
+                })}
+
+                {/* Summary Card */}
+                {(() => {
+                  const closing = parseFloat(reportData.summary.closingBalance);
+                  const closingPositive = closing >= 0;
+                  return (
+                    <View style={styles.reportSummaryCard}>
+                      <View style={styles.reportSummaryRow}>
+                        <Text style={styles.reportSummaryLabel}>Total Debit</Text>
+                        <Text style={[styles.reportSummaryValue, { color: colors.success }]}>
+                          {formatCurrency(reportData.summary.totalDebit)}
+                        </Text>
+                      </View>
+                      <View style={styles.reportSummaryRow}>
+                        <Text style={styles.reportSummaryLabel}>Total Credit</Text>
+                        <Text style={[styles.reportSummaryValue, { color: colors.danger }]}>
+                          {formatCurrency(reportData.summary.totalCredit)}
+                        </Text>
+                      </View>
+                      <View style={[styles.reportSummaryRow, styles.reportSummaryClosingRow]}>
+                        <View>
+                          <Text style={styles.reportSummaryLabel}>Closing Balance</Text>
+                          <Text style={styles.reportSummaryDirection}>
+                            {closingPositive ? "You will receive" : "You will pay"}
+                          </Text>
+                        </View>
+                        <Text style={[styles.reportSummaryClosing, closingPositive ? styles.balanceGreen : styles.balanceRed]}>
+                          {formatCurrency(Math.abs(closing))}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </>
+            ) : (
+              <View style={styles.emptyTab}>
+                <Ionicons name="bar-chart-outline" size={40} color={colors.border} />
+                <Text style={styles.emptyTabText}>No report data</Text>
               </View>
             )}
           </View>
@@ -1330,5 +1515,109 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 15,
     fontWeight: "700",
+  },
+
+  // Report tab styles
+  reportPartyName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  reportPartyMeta: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  reportColHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    marginTop: 4,
+  },
+  reportColText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  reportColRight: {
+    width: 70,
+    textAlign: "right",
+  },
+  reportEntryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surface,
+    gap: 4,
+  },
+  reportEntryLeft: {
+    flex: 1.4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  reportEntryRef: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  reportEntryDate: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  reportEntryAmount: {
+    fontSize: 12,
+    fontWeight: "600",
+    width: 70,
+  },
+  reportSummaryCard: {
+    marginHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 8,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 10,
+  },
+  reportSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  reportSummaryLabel: {
+    fontSize: 13,
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  reportSummaryValue: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  reportSummaryClosingRow: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    marginTop: 2,
+  },
+  reportSummaryDirection: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  reportSummaryClosing: {
+    fontSize: 20,
+    fontWeight: "800",
   },
 });

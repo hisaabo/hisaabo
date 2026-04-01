@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StoreOrdersRouteImport } from './routes/store-orders'
 import { Route as ShipmentsRouteImport } from './routes/shipments'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SalesReturnsRouteImport } from './routes/sales-returns'
@@ -29,6 +30,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
 
+const StoreOrdersRoute = StoreOrdersRouteImport.update({
+  id: '/store-orders',
+  path: '/store-orders',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShipmentsRoute = ShipmentsRouteImport.update({
   id: '/shipments',
   path: '/shipments',
@@ -143,6 +149,7 @@ export interface FileRoutesByFullPath {
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
   '/shipments': typeof ShipmentsRoute
+  '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -164,6 +171,7 @@ export interface FileRoutesByTo {
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
   '/shipments': typeof ShipmentsRoute
+  '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -186,6 +194,7 @@ export interface FileRoutesById {
   '/sales-returns': typeof SalesReturnsRoute
   '/settings': typeof SettingsRoute
   '/shipments': typeof ShipmentsRoute
+  '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
   '/auth/verify': typeof AuthVerifyRoute
 }
@@ -209,6 +218,7 @@ export interface FileRouteTypes {
     | '/sales-returns'
     | '/settings'
     | '/shipments'
+    | '/store-orders'
     | '/auth/complete-profile'
     | '/auth/verify'
   fileRoutesByTo: FileRoutesByTo
@@ -230,6 +240,7 @@ export interface FileRouteTypes {
     | '/sales-returns'
     | '/settings'
     | '/shipments'
+    | '/store-orders'
     | '/auth/complete-profile'
     | '/auth/verify'
   id:
@@ -251,6 +262,7 @@ export interface FileRouteTypes {
     | '/sales-returns'
     | '/settings'
     | '/shipments'
+    | '/store-orders'
     | '/auth/complete-profile'
     | '/auth/verify'
   fileRoutesById: FileRoutesById
@@ -273,12 +285,20 @@ export interface RootRouteChildren {
   SalesReturnsRoute: typeof SalesReturnsRoute
   SettingsRoute: typeof SettingsRoute
   ShipmentsRoute: typeof ShipmentsRoute
+  StoreOrdersRoute: typeof StoreOrdersRoute
   AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
   AuthVerifyRoute: typeof AuthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/store-orders': {
+      id: '/store-orders'
+      path: '/store-orders'
+      fullPath: '/store-orders'
+      preLoaderRoute: typeof StoreOrdersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/shipments': {
       id: '/shipments'
       path: '/shipments'
@@ -433,6 +453,7 @@ const rootRouteChildren: RootRouteChildren = {
   SalesReturnsRoute: SalesReturnsRoute,
   SettingsRoute: SettingsRoute,
   ShipmentsRoute: ShipmentsRoute,
+  StoreOrdersRoute: StoreOrdersRoute,
   AuthCompleteProfileRoute: AuthCompleteProfileRoute,
   AuthVerifyRoute: AuthVerifyRoute,
 }

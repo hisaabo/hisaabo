@@ -5,6 +5,7 @@
  *   invoice_list          — search and filter invoices with pagination
  *   invoice_create        — create a new sale invoice or purchase bill
  *   invoice_get           — fetch full invoice details (line items, payments, balance)
+ *   invoice_update        — edit an existing invoice (line items, dates, notes)
  *   invoice_update_status — change invoice status (mark sent, cancel, etc.)
  *   invoice_pdf_url       — get a URL to download/view the PDF (A4 or thermal)
  *   invoice_delete        — soft-delete an invoice (admin or seller_manager within 2 hours)
@@ -167,6 +168,75 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const invoice = await client.invoice.get(input.invoice_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(invoice, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "invoice_update",
+    [
+      "Edit an existing invoice — update line items, dates, notes, or discount.",
+      "Only provide the fields you want to change. Omitted fields are not modified.",
+      "Warning: updating a paid invoice recalculates totals and may affect payment status.",
+      "Note: changing the party is not supported after creation.",
+    ].join(" "),
+    {
+      invoice_id: z.string().uuid()
+        .describe("Invoice UUID to update."),
+      line_items: z.array(z.object({
+        description: z.string().min(1).max(500)
+          .describe("Product or service name/description."),
+        quantity: z.string().regex(/^\d+(\.\d{1,3})?$/)
+          .describe("Quantity as decimal string."),
+        unit_price: z.string().regex(/^\d+(\.\d{1,2})?$/)
+          .describe("Price per unit as decimal string."),
+        tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
+          .describe("GST/tax rate percentage."),
+        discount_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
+          .describe("Line-level discount percentage."),
+        item_id: z.string().uuid().optional()
+          .describe("Inventory item UUID (optional)."),
+      })).optional()
+        .describe("Replace all line items. Provide the full updated list."),
+      invoice_date: z.string().datetime().optional()
+        .describe("Updated invoice date (ISO 8601)."),
+      due_date: z.string().datetime().optional()
+        .describe("Updated payment due date (ISO 8601)."),
+      notes: z.string().max(2000).optional()
+        .describe("Updated notes shown on the invoice."),
+      terms_and_conditions: z.string().max(2000).optional()
+        .describe("Updated terms and conditions text."),
+      invoice_discount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated invoice-level discount value."),
+      invoice_discount_type: z.enum(["amount", "percent"]).optional()
+        .describe("Whether invoice_discount is a flat amount or percentage."),
+      round_off: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional()
+        .describe("Updated round-off adjustment."),
+    },
+    wrapTool(async (input) => {
+      const { invoice_id, ...fields } = input;
+      const invoice = await client.invoice.update(invoice_id, {
+        invoiceDate: fields.invoice_date,
+        dueDate: fields.due_date,
+        notes: fields.notes,
+        termsAndConditions: fields.terms_and_conditions,
+        invoiceDiscount: fields.invoice_discount,
+        invoiceDiscountType: fields.invoice_discount_type,
+        roundOff: fields.round_off,
+        lineItems: fields.line_items?.map((li) => ({
+          description: li.description,
+          quantity: li.quantity,
+          unitPrice: li.unit_price,
+          taxPercent: li.tax_percent,
+          discountPercent: li.discount_percent,
+          itemId: li.item_id,
+        })),
+      } as any);
       return {
         content: [{
           type: "text" as const,

@@ -16,6 +16,8 @@
  */
 
 import type { Context } from "../../context.js";
+import type { TenantDatabase } from "@hisaabo/db";
+import type { AppAbility } from "../../lib/permissions.js";
 
 /**
  * Options for building a fake tRPC context.
@@ -28,6 +30,20 @@ export interface TestContextOptions {
   tenantId?: string;
   /** The active business ID (maps to a business row in the tenant DB). */
   businessId?: string;
+  /**
+   * Pre-provisioned tenant database instance. When supplied, the context
+   * carries this db directly so tests can avoid the tenant pool lookup.
+   * Only consumed by integration tests that build context manually — the
+   * tRPC middleware chain ignores this field and calls getTenantDb() itself.
+   */
+  db?: TenantDatabase;
+  /**
+   * Pre-built CASL ability instance. When supplied, authorizedProcedure
+   * tests can skip the membership query and use this ability directly.
+   * Only meaningful when used with createTestContext() + manual ctx override;
+   * the withPermissions() middleware ignores this field.
+   */
+  ability?: AppAbility;
 }
 
 /**
@@ -52,13 +68,29 @@ export function createTestContext(opts: TestContextOptions = {}): Context {
 
   const resHeaders = new Headers();
 
-  return {
+  // Base context that satisfies the Context type contract
+  const base: Context = {
     user: opts.user ?? null,
     tenantId: opts.tenantId ?? null,
     businessId: opts.businessId && opts.user ? opts.businessId : null,
     req,
     resHeaders,
   };
+
+  // Attach optional test-only extensions. These are not part of the Context
+  // type but are used by integration test helpers that manually inspect the
+  // context after construction (e.g. for asserting db or ability values).
+  // We cast to any-extended type here so TypeScript doesn't complain about
+  // extra properties — the tRPC middleware chain is unaffected.
+  const extended = base as typeof base & {
+    db?: TenantDatabase;
+    ability?: AppAbility;
+  };
+
+  if (opts.db !== undefined) extended.db = opts.db;
+  if (opts.ability !== undefined) extended.ability = opts.ability;
+
+  return extended;
 }
 
 /**

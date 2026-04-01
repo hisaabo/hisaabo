@@ -3,6 +3,7 @@
 > Free, open-source invoicing and business management for Indian businesses. GST-compliant. Multi-platform.
 
 [![CI](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)

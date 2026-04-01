@@ -157,6 +157,18 @@ export class HisaaboClient {
       me() {
         return c.query<AuthUser>("auth.me");
       },
+      completeProfile(input: { name: string }) {
+        return c.mutate<any>("auth.completeProfile", input);
+      },
+      logoutAll() {
+        return c.mutate<any>("auth.logoutAll", {});
+      },
+      register(input: any) {
+        return c.mutate<any>("auth.register", input);
+      },
+      updateName(input: { name: string }) {
+        return c.mutate<any>("auth.updateName", input);
+      },
     };
   }
 
@@ -170,6 +182,15 @@ export class HisaaboClient {
       },
       get() {
         return c.query<BusinessDetail>("business.get");
+      },
+      create(input: any) {
+        return c.mutate<any>("business.create", input);
+      },
+      update(input: any) {
+        return c.mutate<any>("business.update", input);
+      },
+      updateSequenceNumber(input: any) {
+        return c.mutate<any>("business.updateSequenceNumber", input);
       },
     };
   }
@@ -187,6 +208,9 @@ export class HisaaboClient {
       },
       create(input: InvoiceCreateInput) {
         return c.mutate<InvoiceDetail>("invoice.create", input);
+      },
+      update(input: any) {
+        return c.mutate<any>("invoice.update", input);
       },
       updateStatus(id: string, status: InvoiceStatus) {
         return c.mutate<InvoiceSummary>("invoice.updateStatus", { id, status });
@@ -220,6 +244,18 @@ export class HisaaboClient {
       ledger(partyId: string, input?: LedgerInput) {
         return c.query<LedgerResult>("party.ledger", { partyId, ...input });
       },
+      ledgerReport(input: any) {
+        return c.query<any>("party.ledgerReport", input);
+      },
+      getStats(input: any) {
+        return c.query<any>("party.getStats", input);
+      },
+      topItems(input: any) {
+        return c.query<any>("party.topItems", input);
+      },
+      merge(input: any) {
+        return c.mutate<any>("party.merge", input);
+      },
     };
   }
 
@@ -249,6 +285,42 @@ export class HisaaboClient {
       categories() {
         return c.query<string[]>("item.categories");
       },
+      createVariant(input: any) {
+        return c.mutate<any>("item.createVariant", input);
+      },
+      updateVariant(input: any) {
+        return c.mutate<any>("item.updateVariant", input);
+      },
+      deleteVariant(input: any) {
+        return c.mutate<any>("item.deleteVariant", input);
+      },
+      listVariants(input: any) {
+        return c.query<any>("item.listVariants", input);
+      },
+      merge(input: any) {
+        return c.mutate<any>("item.merge", input);
+      },
+      switchBaseUnit(input: any) {
+        return c.mutate<any>("item.switchBaseUnit", input);
+      },
+      renameUnit(input: any) {
+        return c.mutate<any>("item.renameUnit", input);
+      },
+      stockAdjustmentHistory(input: any) {
+        return c.query<any>("item.stockAdjustmentHistory", input);
+      },
+      lowStockCount() {
+        return c.query<any>("item.lowStockCount");
+      },
+      priceHistory(input: any) {
+        return c.query<any>("item.priceHistory", input);
+      },
+      salesStats(input: any) {
+        return c.query<any>("item.salesStats", input);
+      },
+      stockMovements(input: any) {
+        return c.query<any>("item.stockMovements", input);
+      },
     };
   }
 
@@ -271,6 +343,18 @@ export class HisaaboClient {
       },
       delete(id: string) {
         return c.mutate<{ success: boolean }>("payment.delete", { id });
+      },
+      unpaidInvoices(input: any) {
+        return c.query<any>("payment.unpaidInvoices", input);
+      },
+      untrackedPayments(input: any) {
+        return c.query<any>("payment.untrackedPayments", input);
+      },
+      defaultAccount(input?: any) {
+        return c.query<any>("payment.defaultAccount", input);
+      },
+      assignAccount(input: any) {
+        return c.mutate<any>("payment.assignAccount", input);
       },
     };
   }
@@ -430,6 +514,21 @@ export class HisaaboClient {
       updateOrder(input: { orderId: string; status: "preparing" | "ready" | "delivered" }) {
         return c.mutate<{ success: boolean; status: string }>("store.updateOrderStatus", input);
       },
+      confirmOrder(input: any) {
+        return c.mutate<any>("store.confirmOrder", input);
+      },
+      cancelOrder(input: any) {
+        return c.mutate<any>("store.cancelOrder", input);
+      },
+      checkSlug(input: any) {
+        return c.query<any>("store.checkSlug", input);
+      },
+      listStoreItems(input: any) {
+        return c.query<any>("store.listStoreItems", input);
+      },
+      bulkToggleItems(input: any) {
+        return c.mutate<any>("store.bulkToggleItems", input);
+      },
     };
   }
 
@@ -455,6 +554,221 @@ export class HisaaboClient {
       },
       myTargets() {
         return c.query<TargetWithProgress[]>("target.myTargets");
+      },
+    };
+  }
+
+  // ── Tenant ───────────────────────────────────────────────────
+
+  get tenant() {
+    const c = this;
+    return {
+      list() {
+        return c.query<any>("tenant.list");
+      },
+      select(input: any) {
+        return c.mutate<any>("tenant.select", input);
+      },
+      members() {
+        return c.query<any>("tenant.members");
+      },
+      inviteMember(input: any) {
+        return c.mutate<any>("tenant.inviteMember", input);
+      },
+      removeMember(input: any) {
+        return c.mutate<any>("tenant.removeMember", input);
+      },
+      updateMemberRole(input: any) {
+        return c.mutate<any>("tenant.updateMemberRole", input);
+      },
+    };
+  }
+
+  // ── Document ──────────────────────────────────────────────────
+
+  get document() {
+    const c = this;
+    return {
+      convert(input: any) {
+        return c.mutate<any>("document.convert", input);
+      },
+    };
+  }
+
+  // ── Quotation ─────────────────────────────────────────────────
+
+  get quotation() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("quotation.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("quotation.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("quotation.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("quotation.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("quotation.delete", input);
+      },
+    };
+  }
+
+  // ── Credit Note ───────────────────────────────────────────────
+
+  get creditNote() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("creditNote.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("creditNote.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("creditNote.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("creditNote.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("creditNote.delete", input);
+      },
+    };
+  }
+
+  // ── Debit Note ────────────────────────────────────────────────
+
+  get debitNote() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("debitNote.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("debitNote.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("debitNote.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("debitNote.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("debitNote.delete", input);
+      },
+    };
+  }
+
+  // ── Delivery Challan ──────────────────────────────────────────
+
+  get deliveryChallan() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("deliveryChallan.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("deliveryChallan.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("deliveryChallan.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("deliveryChallan.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("deliveryChallan.delete", input);
+      },
+    };
+  }
+
+  // ── Proforma ──────────────────────────────────────────────────
+
+  get proforma() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("proforma.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("proforma.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("proforma.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("proforma.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("proforma.delete", input);
+      },
+    };
+  }
+
+  // ── Sales Return ──────────────────────────────────────────────
+
+  get salesReturn() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("salesReturn.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("salesReturn.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("salesReturn.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("salesReturn.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("salesReturn.delete", input);
+      },
+    };
+  }
+
+  // ── Purchase Return ───────────────────────────────────────────
+
+  get purchaseReturn() {
+    const c = this;
+    return {
+      list(input: any) {
+        return c.query<any>("purchaseReturn.list", input);
+      },
+      getById(input: any) {
+        return c.query<any>("purchaseReturn.getById", input);
+      },
+      create(input: any) {
+        return c.mutate<any>("purchaseReturn.create", input);
+      },
+      updateStatus(input: any) {
+        return c.mutate<any>("purchaseReturn.updateStatus", input);
+      },
+      delete(input: any) {
+        return c.mutate<any>("purchaseReturn.delete", input);
+      },
+    };
+  }
+
+  // ── API Key ───────────────────────────────────────────────────
+
+  get apiKey() {
+    const c = this;
+    return {
+      list() {
+        return c.query<any>("apiKey.list");
+      },
+      create(input: any) {
+        return c.mutate<any>("apiKey.create", input);
+      },
+      revoke(input: any) {
+        return c.mutate<any>("apiKey.revoke", input);
       },
     };
   }

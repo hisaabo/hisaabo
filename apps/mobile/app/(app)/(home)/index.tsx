@@ -6,6 +6,7 @@ import { useState, useMemo, useEffect } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { useBiometricStore } from "../../../src/stores/biometric";
+import { useBusinessSwitcherContext } from "../../../src/contexts/BusinessSwitcherContext";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { StatusBadge, Skeleton } from "../../../src/components/ui";
@@ -41,6 +42,7 @@ function getPeriodDates(period: Period): { fromDate?: string; toDate?: string } 
 export default function DashboardScreen() {
   const router = useRouter();
   const { businessName } = useBusinessStore();
+  const { openSwitcher } = useBusinessSwitcherContext();
   const [period, setPeriod] = useState<Period>("month");
   const dates = useMemo(() => getPeriodDates(period), [period]);
 
@@ -79,7 +81,14 @@ export default function DashboardScreen() {
         <View style={s.header}>
           <View>
             <Text style={s.greeting}>Good day,</Text>
-            <Text style={s.businessName}>{businessName || "My Business"}</Text>
+            <TouchableOpacity
+              style={s.businessNameRow}
+              onPress={openSwitcher}
+              activeOpacity={0.7}
+            >
+              <Text style={s.businessName} numberOfLines={1}>{businessName || "My Business"}</Text>
+              <Ionicons name="chevron-expand-outline" size={16} color={colors.textMuted} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -186,7 +195,8 @@ const s = StyleSheet.create({
   scroll: { paddingHorizontal: 16, paddingBottom: 32 },
   header: { paddingTop: 16, marginBottom: 16 },
   greeting: { fontSize: 13, color: colors.textMuted },
-  businessName: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, letterSpacing: -0.5, marginTop: 2 },
+  businessNameRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 },
+  businessName: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, letterSpacing: -0.5 },
   pillRow: { flexDirection: "row", gap: 8, marginBottom: 20 },
   pill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, minHeight: 36, justifyContent: "center" },
   pillActive: { backgroundColor: "rgba(99, 102, 241, 0.15)", borderColor: colors.brand },
