@@ -345,8 +345,8 @@ function RootLayout() {
     .join("")
     .toUpperCase();
 
-  const hasMultipleTenants = (tenantList?.length ?? 0) > 1;
-  const tenantName = session.tenantName ?? "Organization";
+  const _hasMultipleTenants = (tenantList?.length ?? 0) > 1;
+  const _tenantName = session.tenantName ?? "Organization";
 
   function handleBusinessSwitch(id: string) {
     setBusinessId(id);

@@ -479,7 +479,7 @@ function SalesTrendChart({
   }));
 
   // Show empty state when there are no rows OR all values are zero
-  const hasData = mapped && mapped.length > 0 && mapped.some((d) => d.invoiced > 0 || d.collected > 0);
+  const hasData = mapped && mapped.some((d) => d.invoiced > 0 || d.collected > 0);
 
   if (!hasData) {
     return (

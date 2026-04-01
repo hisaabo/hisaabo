@@ -32,7 +32,57 @@ jobs:
         run: pnpm typecheck
 
       - name: Lint
-        run: pnpm lint
+        run: pnpm exec oxlint --deny-warnings --ignore-path .gitignore --ignore-pattern '**/target/**' ./packages ./apps
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: typecheck-lint
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: hisaabo_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d hisaabo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+
+    env:
+      TEST_DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+      DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push schema to test DB
+        run: pnpm db:push
+
+      - name: Run tests with coverage
+        run: pnpm test -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: false
 
   build:
     name: Build
@@ -60,7 +110,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: typecheck-lint
-    # Only test Docker build on PRs (actual push happens in deploy-api)
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
