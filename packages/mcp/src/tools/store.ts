@@ -7,6 +7,8 @@
  *   store_orders          — list customer orders from the store
  *   store_order_get       — get full details of a store order
  *   store_order_update    — update order status (preparing/ready/delivered)
+ *   store_confirm_order   — confirm a pending store order and activate its invoice
+ *   store_cancel_order    — cancel an order (any status except delivered/already cancelled)
  */
 
 import { z } from "zod";
@@ -153,7 +155,7 @@ export function registerStoreTools(server: McpServer, client: HisaaboClient) {
       "Update a confirmed store order's status to 'preparing', 'ready', or 'delivered'.",
       "Orders must be confirmed first (status='confirmed') before they can be updated.",
       "Use 'preparing' when the order is being packed, 'ready' when ready for pickup/delivery, 'delivered' when handed to customer.",
-      "To confirm a pending order or cancel an order, use the Hisaabo web app — those actions also update the linked invoice.",
+      "To confirm a pending order or cancel an order, use store_confirm_order or store_cancel_order.",
     ].join(" "),
     {
       order_id: z.string().uuid()
@@ -166,6 +168,53 @@ export function registerStoreTools(server: McpServer, client: HisaaboClient) {
         orderId: input.order_id,
         status: input.status,
       });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "store_confirm_order",
+    [
+      "Confirm a pending store order, activating it for fulfillment.",
+      "This moves the order from 'pending' to 'confirmed' status.",
+      "If a draft invoice was linked to the order, it is automatically updated to 'sent'.",
+      "Only pending orders can be confirmed — use store_orders with status='pending' to find orders awaiting confirmation.",
+    ].join(" "),
+    {
+      order_id: z.string().uuid()
+        .describe("Store order UUID to confirm (must have status='pending')."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.store.confirmOrder(input.order_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "store_cancel_order",
+    [
+      "Cancel a store order. Can be applied to any order that is not already delivered or cancelled.",
+      "The linked invoice (if any) is also cancelled automatically.",
+      "Optionally provide a cancellation reason for the audit trail.",
+    ].join(" "),
+    {
+      order_id: z.string().uuid()
+        .describe("Store order UUID to cancel."),
+      reason: z.string().max(500).optional()
+        .describe("Optional reason for cancellation, e.g. 'Customer requested cancellation', 'Out of stock'."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.store.cancelOrder(input.order_id, input.reason);
       return {
         content: [{
           type: "text" as const,

@@ -2,11 +2,14 @@
  * Payment tools — record and query payments.
  *
  * Tools registered:
- *   payment_create  — record a payment received from a customer or made to a supplier
- *   payment_list    — list payments with filtering
- *   payment_get     — get full payment details including linked invoices
- *   payment_update  — update an existing payment record
- *   payment_delete  — soft-delete a payment
+ *   payment_create            — record a payment received from a customer or made to a supplier
+ *   payment_list              — list payments with filtering
+ *   payment_get               — get full payment details including linked invoices
+ *   payment_update            — update an existing payment record
+ *   payment_delete            — soft-delete a payment
+ *   payment_unpaid_invoices   — list unpaid invoices for a party
+ *   payment_untracked         — list payments not linked to a bank account
+ *   payment_default_account   — get the recommended bank account for recording a payment
  */
 
 import { z } from "zod";
@@ -215,6 +218,90 @@ export function registerPaymentTools(server: McpServer, client: HisaaboClient) {
         content: [{
           type: "text" as const,
           text: JSON.stringify(withPaginationMeta(result), null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_unpaid_invoices",
+    [
+      "List all unpaid or partially-paid invoices for a specific party.",
+      "Returns invoices with status 'sent', 'partial', or 'overdue' — excludes paid and cancelled.",
+      "Each result includes the remaining balance (totalAmount - amountPaid).",
+      "Use this before recording a payment to find which invoices to allocate it against.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid()
+        .describe("Party UUID to find unpaid invoices for."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.payment.unpaidInvoices(input.party_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_untracked",
+    [
+      "List payments that have not been linked to a bank account.",
+      "These are payments recorded without specifying which cash/bank account received the money.",
+      "Use this to find payments that need to be assigned to a bank account for accurate cash flow tracking.",
+      "Filter by mode (cash, upi, bank) or date range to narrow results.",
+    ].join(" "),
+    {
+      search: z.string().max(200).optional()
+        .describe("Search by payment number or party name."),
+      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).optional()
+        .describe("Filter by payment mode."),
+      from_date: z.string().datetime().optional()
+        .describe("Start date (ISO 8601)."),
+      to_date: z.string().datetime().optional()
+        .describe("End date (ISO 8601)."),
+      page: z.number().int().min(1).default(1)
+        .describe("Page number for pagination."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.payment.untrackedPayments({
+        search: input.search,
+        mode: input.mode,
+        fromDate: input.from_date,
+        toDate: input.to_date,
+        page: input.page,
+        limit: MAX_PAGE_SIZE,
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(withPaginationMeta(result as any), null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "payment_default_account",
+    [
+      "Get the recommended bank/cash account to use when recording a payment.",
+      "Priority: most recently used account for this party → most common recent account → business default account.",
+      "Optionally provide party_id to get a party-specific recommendation.",
+      "Use this to pre-fill the bank account field in payment_create.",
+    ].join(" "),
+    {
+      party_id: z.string().uuid().optional()
+        .describe("Party UUID to get a party-specific account recommendation (optional)."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.payment.defaultAccount(input.party_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     })

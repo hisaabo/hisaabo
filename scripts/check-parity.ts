@@ -127,7 +127,7 @@ function parseParityYaml(filePath: string): Feature[] {
       if (platformMatch) {
         const [, platform, statusRaw] = platformMatch;
         // Don't match "name:", "category:", "notes:" etc as platforms
-        if (["web", "mobile", "store", "desktop"].includes(platform)) {
+        if (["web", "mobile", "store", "desktop", "cli", "mcp"].includes(platform)) {
           current.platforms[platform] = statusRaw.replace(/#.*$/, "").trim();
           continue;
         }
@@ -261,20 +261,51 @@ function cmdScan() {
   const webUsage = scanTrpcUsage(path.join(ROOT, "apps/web/src"));
   const mobileUsage = scanTrpcUsage(path.join(ROOT, "apps/mobile"));
 
+  // Load feature-parity.yaml to determine intentionally excluded procedures
+  const yamlPath = path.join(ROOT, "feature-parity.yaml");
+  const notApplicableMobile = new Set<string>();
+  if (fs.existsSync(yamlPath)) {
+    const features = parseParityYaml(yamlPath);
+    for (const f of features) {
+      if (f.platforms.mobile === "not-applicable") {
+        for (const proc of f.api) {
+          // Skip REST endpoints (they start with GET/POST/PUT/DELETE)
+          if (/^[A-Z]+ /.test(proc)) continue;
+          notApplicableMobile.add(proc);
+        }
+      }
+    }
+  }
+
   const webOnly = [...webUsage].filter((p) => !mobileUsage.has(p)).sort();
   const mobileOnly = [...mobileUsage].filter((p) => !webUsage.has(p)).sort();
   const shared = [...webUsage].filter((p) => mobileUsage.has(p)).sort();
+
+  // Split web-only into intentionally excluded vs genuine gaps
+  const excluded = webOnly.filter((p) => notApplicableMobile.has(p));
+  const trueGaps = webOnly.filter((p) => !notApplicableMobile.has(p));
 
   console.log(`Web uses ${webUsage.size} tRPC procedures`);
   console.log(`Mobile uses ${mobileUsage.size} tRPC procedures`);
   console.log(`Shared: ${shared.length} procedures\n`);
 
-  if (webOnly.length > 0) {
-    console.log(`--- Web-only (${webOnly.length}) --- Mobile is missing these:`);
-    for (const p of webOnly) {
+  if (excluded.length > 0) {
+    console.log(`--- Intentionally excluded from mobile (not-applicable): ${excluded.length} ---`);
+    for (const p of excluded) {
       console.log(`  - ${p}`);
     }
     console.log();
+  }
+
+  if (trueGaps.length > 0) {
+    console.log(`--- True parity gaps (mobile should implement): ${trueGaps.length} ---`);
+    for (const p of trueGaps) {
+      console.log(`  - ${p}`);
+    }
+    console.log();
+  } else {
+    console.log("--- True parity gaps (mobile should implement): 0 ---");
+    console.log("  (none)\n");
   }
 
   if (mobileOnly.length > 0) {
@@ -285,13 +316,22 @@ function cmdScan() {
     console.log();
   }
 
-  // Coverage percentage
+  // Overall raw parity (for reference)
   const totalUnique = new Set([...webUsage, ...mobileUsage]).size;
-  const coveragePercent = ((shared.length / totalUnique) * 100).toFixed(1);
-  console.log(`\nOverall parity: ${coveragePercent}% (${shared.length}/${totalUnique} procedures used on both)\n`);
+  const rawPercent = ((shared.length / totalUnique) * 100).toFixed(1);
+  console.log(`Raw parity (all procedures): ${rawPercent}% (${shared.length}/${totalUnique})`);
+
+  // Adjusted parity: exclude not-applicable procedures from the denominator.
+  // Applicable web procedures = web procedures that are NOT in the not-applicable set.
+  const applicableWebProcs = [...webUsage].filter((p) => !notApplicableMobile.has(p));
+  const applicableShared = applicableWebProcs.filter((p) => mobileUsage.has(p));
+  const adjustedPercent = applicableWebProcs.length > 0
+    ? ((applicableShared.length / applicableWebProcs.length) * 100).toFixed(1)
+    : "100.0";
+  console.log(`Adjusted parity (excluding not-applicable): ${adjustedPercent}% (${applicableShared.length}/${applicableWebProcs.length} applicable procedures)\n`);
 
   // Exit code for CI
-  if (webOnly.length > 0) {
+  if (trueGaps.length > 0) {
     process.exitCode = 0; // Non-blocking -- just informational
   }
 }

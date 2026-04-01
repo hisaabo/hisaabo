@@ -172,6 +172,9 @@ export class HisaaboClient {
       get(id: string) {
         return c.query<InvoiceDetail>("invoice.get", { id });
       },
+      update(id: string, data: Partial<InvoiceCreateInput>) {
+        return c.mutate<InvoiceDetail>("invoice.update", { id, data });
+      },
       updateStatus(id: string, status: InvoiceStatus) {
         return c.mutate<InvoiceSummary>("invoice.updateStatus", { id, status });
       },
@@ -202,6 +205,18 @@ export class HisaaboClient {
       delete(id: string) {
         return c.mutate<{ success: boolean }>("party.delete", { id });
       },
+      ledgerReport(partyId: string, input?: { fromDate?: string; toDate?: string; limit?: number }) {
+        return c.query<unknown>("party.ledgerReport", { partyId, ...input });
+      },
+      getStats(id: string) {
+        return c.query<{ invoiceCount: number; paymentCount: number }>("party.getStats", { id });
+      },
+      topItems(partyId: string) {
+        return c.query<unknown[]>("party.topItems", { partyId });
+      },
+      merge(sourceId: string, targetId: string) {
+        return c.mutate<{ success: boolean; mergedInto: string }>("party.merge", { sourceId, targetId });
+      },
     };
   }
 
@@ -229,6 +244,42 @@ export class HisaaboClient {
       categories() {
         return c.query<string[]>("item.categories");
       },
+      listVariants(itemId: string) {
+        return c.query<unknown[]>("item.listVariants", { itemId });
+      },
+      createVariant(itemId: string, variant: ItemVariantInput) {
+        return c.mutate<unknown>("item.createVariant", { itemId, variant });
+      },
+      updateVariant(variantId: string, data: Partial<ItemVariantInput>) {
+        return c.mutate<unknown>("item.updateVariant", { variantId, data });
+      },
+      deleteVariant(variantId: string) {
+        return c.mutate<{ success: boolean }>("item.deleteVariant", { variantId });
+      },
+      merge(sourceId: string, targetId: string, stockConversionFactor?: number) {
+        return c.mutate<{ success: boolean; mergedInto: string }>("item.merge", { sourceId, targetId, stockConversionFactor: stockConversionFactor ?? 1 });
+      },
+      switchBaseUnit(id: string, newUnit: string, conversionFactor: number) {
+        return c.mutate<unknown>("item.switchBaseUnit", { id, newUnit, conversionFactor });
+      },
+      renameUnit(id: string, oldUnit: string, newUnit: string) {
+        return c.mutate<{ success: boolean }>("item.renameUnit", { id, oldUnit, newUnit });
+      },
+      stockAdjustmentHistory(input: { itemId: string; variantId?: string; page?: number; limit?: number }) {
+        return c.query<PaginatedResult<unknown>>("item.stockAdjustmentHistory", input);
+      },
+      lowStockCount() {
+        return c.query<number>("item.lowStockCount");
+      },
+      priceHistory(id: string) {
+        return c.query<unknown[]>("item.priceHistory", { id });
+      },
+      salesStats(id: string) {
+        return c.query<unknown>("item.salesStats", { id });
+      },
+      stockMovements(id: string) {
+        return c.query<unknown[]>("item.stockMovements", { id });
+      },
     };
   }
 
@@ -249,6 +300,18 @@ export class HisaaboClient {
       },
       delete(id: string) {
         return c.mutate<{ success: boolean }>("payment.delete", { id });
+      },
+      unpaidInvoices(partyId: string) {
+        return c.query<unknown[]>("payment.unpaidInvoices", { partyId });
+      },
+      untrackedPayments(input: { search?: string; mode?: string; fromDate?: string; toDate?: string; page?: number; limit?: number }) {
+        return c.query<PaginatedResult<unknown>>("payment.untrackedPayments", input);
+      },
+      defaultAccount(partyId?: string) {
+        return c.query<unknown>("payment.defaultAccount", partyId ? { partyId } : undefined);
+      },
+      assignAccount(input: { paymentIds?: string[]; allMatching?: boolean; bankAccountId: string; search?: string; mode?: string }) {
+        return c.mutate<{ updated: number }>("payment.assignAccount", input);
       },
     };
   }
@@ -291,6 +354,15 @@ export class HisaaboClient {
       },
       list() {
         return c.query<BusinessSummary[]>("business.list");
+      },
+      create(input: unknown) {
+        return c.mutate<BusinessDetail>("business.create", input);
+      },
+      update(id: string, data: unknown) {
+        return c.mutate<BusinessDetail>("business.update", { id, data });
+      },
+      updateSequenceNumber(input: { businessId: string; documentType: string; newNumber: number }) {
+        return c.mutate<{ success: boolean }>("business.updateSequenceNumber", input);
       },
     };
   }
@@ -406,6 +478,21 @@ export class HisaaboClient {
       updateOrderStatus(input: { orderId: string; status: "preparing" | "ready" | "delivered" }) {
         return c.mutate<{ success: boolean; status: string }>("store.updateOrderStatus", input);
       },
+      confirmOrder(orderId: string) {
+        return c.mutate<{ success: boolean; orderId: string }>("store.confirmOrder", { orderId });
+      },
+      cancelOrder(orderId: string, reason?: string) {
+        return c.mutate<{ success: boolean; orderId: string }>("store.cancelOrder", { orderId, reason });
+      },
+      checkSlug(slug: string) {
+        return c.query<{ available: boolean }>("store.checkSlug", { slug });
+      },
+      listStoreItems(input: { search?: string; category?: string; storeEnabled?: boolean; page?: number; limit?: number }) {
+        return c.query<PaginatedResult<unknown>>("store.listStoreItems", input);
+      },
+      bulkToggleItems(itemIds: string[], storeEnabled: boolean) {
+        return c.mutate<{ updated: number }>("store.bulkToggleItems", { itemIds, storeEnabled });
+      },
     };
   }
 
@@ -447,6 +534,201 @@ export class HisaaboClient {
       },
       importPayments(input: ImportPaymentsInput) {
         return c.mutate<ImportResult>("import.importPayments", input);
+      },
+    };
+  }
+
+  get tenant() {
+    const c = this;
+    return {
+      list() {
+        return c.query<unknown[]>("tenant.list");
+      },
+      select(tenantId: string) {
+        return c.mutate<{ success: boolean }>("tenant.select", { tenantId });
+      },
+      members() {
+        return c.query<unknown[]>("tenant.members");
+      },
+      inviteMember(email: string, role: string) {
+        return c.mutate<{ token: string; expiresAt: Date }>("tenant.inviteMember", { email, role });
+      },
+      removeMember(userId: string) {
+        return c.mutate<{ success: boolean }>("tenant.removeMember", { userId });
+      },
+      updateMemberRole(userId: string, role: string) {
+        return c.mutate<{ success: boolean }>("tenant.updateMemberRole", { userId, role });
+      },
+    };
+  }
+
+  get apiKey() {
+    const c = this;
+    return {
+      list() {
+        return c.query<unknown[]>("apiKey.list");
+      },
+      create(input: { name: string; expiresAt?: string }) {
+        return c.mutate<{ id: string; name: string; key: string; keyPrefix: string; expiresAt: Date | null }>("apiKey.create", input);
+      },
+      revoke(id: string) {
+        return c.mutate<{ success: boolean }>("apiKey.revoke", { id });
+      },
+    };
+  }
+
+  get document() {
+    const c = this;
+    return {
+      convert(input: { sourceId: string; targetType: DocumentType }) {
+        return c.mutate<InvoiceDetail>("document.convert", input);
+      },
+    };
+  }
+
+  get quotation() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("quotation.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("quotation.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("quotation.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("quotation.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("quotation.delete", { id });
+      },
+    };
+  }
+
+  get creditNote() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("creditNote.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("creditNote.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("creditNote.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("creditNote.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("creditNote.delete", { id });
+      },
+    };
+  }
+
+  get debitNote() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("debitNote.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("debitNote.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("debitNote.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("debitNote.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("debitNote.delete", { id });
+      },
+    };
+  }
+
+  get deliveryChallan() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("deliveryChallan.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("deliveryChallan.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("deliveryChallan.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("deliveryChallan.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("deliveryChallan.delete", { id });
+      },
+    };
+  }
+
+  get proforma() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("proforma.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("proforma.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("proforma.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("proforma.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("proforma.delete", { id });
+      },
+    };
+  }
+
+  get salesReturn() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("salesReturn.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("salesReturn.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("salesReturn.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("salesReturn.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("salesReturn.delete", { id });
+      },
+    };
+  }
+
+  get purchaseReturn() {
+    const c = this;
+    return {
+      list(input: DocumentListInput) {
+        return c.query<PaginatedResult<InvoiceSummary>>("purchaseReturn.list", input);
+      },
+      getById(id: string) {
+        return c.query<InvoiceDetail | null>("purchaseReturn.getById", { id });
+      },
+      create(input: InvoiceCreateInput) {
+        return c.mutate<InvoiceDetail>("purchaseReturn.create", input);
+      },
+      updateStatus(id: string, status: string) {
+        return c.mutate<InvoiceSummary>("purchaseReturn.updateStatus", { id, status });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("purchaseReturn.delete", { id });
       },
     };
   }
@@ -1312,4 +1594,28 @@ export interface ImportPaymentsInput {
   source?: string;
   paidInvoiceNumbers?: string[];
   payments: ImportPaymentRecord[];
+}
+
+// ── Item variant types ─────────────────────────────────────────
+
+export interface ItemVariantInput {
+  attributeValues: Record<string, string>;
+  sku?: string;
+  salePrice?: string;
+  purchasePrice?: string;
+  stockQuantity?: string;
+  lowStockAlert?: string;
+}
+
+// ── Document list input ────────────────────────────────────────
+
+export interface DocumentListInput {
+  type?: "sale" | "purchase" | null;
+  status?: string | null;
+  partyId?: string | null;
+  fromDate?: string | null;
+  toDate?: string | null;
+  search?: string | null;
+  page?: number;
+  limit?: number;
 }
