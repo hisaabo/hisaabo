@@ -20,7 +20,7 @@ import {
   documentRouter,
 } from "./routers/document.js";
 import { bankAccountRouter } from "./routers/bankAccount.js";
-import { importRouter } from "./routers/import.js";
+import { importRouter } from "./routers/import/index.js";
 import { storeRouter } from "./routers/store.js";
 import { targetRouter } from "./routers/target.js";
 import { reportsRouter } from "./routers/reports.js";
