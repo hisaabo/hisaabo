@@ -6,6 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -41,7 +42,7 @@ export const invoiceRouter = router({
       if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
       if (input.search) {
-        const term = `%${input.search}%`;
+        const term = `%${escapeLike(input.search)}%`;
         conditions.push(
           sql`(${invoices.invoiceNumber} ILIKE ${term} OR EXISTS (
             SELECT 1 FROM ${parties} WHERE ${parties.id} = ${invoices.partyId} AND ${parties.name} ILIKE ${term}

@@ -6,6 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 
 export const partyRouter = router({
@@ -50,7 +51,7 @@ export const partyRouter = router({
         )`);
       }
 
-      if (input.search) conditions.push(ilike(parties.name, `%${input.search}%`));
+      if (input.search) conditions.push(ilike(parties.name, `%${escapeLike(input.search)}%`));
       if (input.category) conditions.push(eq(parties.category, input.category));
 
       const offset = (input.page - 1) * input.limit;

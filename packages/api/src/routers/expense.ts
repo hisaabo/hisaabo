@@ -5,6 +5,7 @@ import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createExpenseSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 // Map payment mode to the bank account type(s) to search for.
 // Returns null when no bank debit should be created.
@@ -36,8 +37,8 @@ export const expenseRouter = router({
       if (input.search) {
         conditions.push(
           or(
-            ilike(expenses.description, `%${input.search}%`),
-            ilike(expenses.category, `%${input.search}%`)
+            ilike(expenses.description, `%${escapeLike(input.search)}%`),
+            ilike(expenses.category, `%${escapeLike(input.search)}%`)
           )!
         );
       }

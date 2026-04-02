@@ -5,6 +5,7 @@ import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemMo
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 export const itemRouter = router({
   list: viewerProcedure
@@ -20,7 +21,7 @@ export const itemRouter = router({
       requireCan(ctx.ability, "read", "Item");
       const conditions = [eq(items.businessId, ctx.businessId)];
       if (input.search) {
-        conditions.push(ilike(items.name, `%${input.search}%`));
+        conditions.push(ilike(items.name, `%${escapeLike(input.search)}%`));
       }
       if (input.lowStock) {
         conditions.push(

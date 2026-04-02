@@ -5,6 +5,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
+import { escapeLike } from "./lib/escape-like.js";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -647,7 +648,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
     eq(items.storeEnabled, true),
   ];
   if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
-  if (search) conditions.push(sql`${items.name} ILIKE ${"%" + search + "%"}`);
+  if (search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(search) + "%"}`);
 
   // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
   const [catalog, [{ total }]] = await Promise.all([

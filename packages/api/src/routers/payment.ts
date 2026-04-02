@@ -6,6 +6,7 @@ import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } fro
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -26,8 +27,8 @@ export const paymentRouter = router({
       if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
       if (input.search) {
         conditions.push(
-          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
-            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          sql`(${payments.paymentNumber} ILIKE ${'%' + escapeLike(input.search) + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + escapeLike(input.search) + '%'}
           ))`
         );
       }
@@ -678,8 +679,8 @@ export const paymentRouter = router({
       ];
       if (input.search) {
         conditions.push(
-          sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
-            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+          sql`(${payments.paymentNumber} ILIKE ${'%' + escapeLike(input.search) + '%'} OR EXISTS (
+            SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + escapeLike(input.search) + '%'}
           ))`
         );
       }
@@ -748,8 +749,8 @@ export const paymentRouter = router({
           ];
           if (input.search) {
             matchConditions.push(
-              sql`(${payments.paymentNumber} ILIKE ${'%' + input.search + '%'} OR EXISTS (
-                SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + input.search + '%'}
+              sql`(${payments.paymentNumber} ILIKE ${'%' + escapeLike(input.search) + '%'} OR EXISTS (
+                SELECT 1 FROM ${parties} p WHERE p.id = ${payments.partyId} AND p.name ILIKE ${'%' + escapeLike(input.search) + '%'}
               ))`
             );
           }
