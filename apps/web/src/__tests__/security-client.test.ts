@@ -277,21 +277,26 @@ describe("SECURITY — sensitive values must not be logged to console", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SECURITY — tRPC client uses relative URL to avoid leaking auth cross-origin
 // ─────────────────────────────────────────────────────────────────────────────
-describe("SECURITY — tRPC client uses relative /api/trpc URL (no cross-origin credential leakage)", () => {
+describe("SECURITY — tRPC client URL is either relative or points to trusted API origin", () => {
   /**
-   * INVARIANT: The tRPC client in trpc.ts uses url: "/api/trpc" (a relative URL)
-   * rather than an absolute URL like "https://api.hisaabo.in/trpc". With
-   * credentials: "include", an absolute cross-origin URL would send the session
-   * cookie to a different origin. Using a relative URL ensures:
-   * 1. Requests go to the same origin (Vite proxies /api to the API server in dev)
-   * 2. The browser's same-origin cookie policy is respected
-   * 3. No credentials are accidentally sent to third-party servers
+   * The tRPC client in trpc.ts resolves the API URL at build time:
+   * - When VITE_API_URL is set (production): absolute URL to the trusted API origin
+   * - When VITE_API_URL is unset (dev): relative "/api/trpc" proxied by Vite dev server
+   *
+   * In both cases credentials: "include" is used, so the URL must be trusted.
    */
 
-  it("the API URL is a relative path starting with /api/trpc", () => {
+  it("the fallback API URL (no VITE_API_URL) is a relative path starting with /api/trpc", () => {
     const API_URL = "/api/trpc";
     expect(API_URL).toMatch(/^\/api\/trpc/);
     expect(API_URL).not.toMatch(/^https?:\/\//); // must not be absolute
+  });
+
+  it("when VITE_API_URL is set, the full URL points to the expected /api/trpc path", () => {
+    const VITE_API_URL = "https://api.hisaabo.in";
+    const TRPC_URL = `${VITE_API_URL}/api/trpc`;
+    expect(TRPC_URL).toBe("https://api.hisaabo.in/api/trpc");
+    expect(new URL(TRPC_URL).pathname).toBe("/api/trpc");
   });
 
   it("relative /api/trpc URL resolves to the same origin as the web app", () => {

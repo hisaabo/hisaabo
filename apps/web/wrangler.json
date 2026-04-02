@@ -21,6 +21,6 @@
     }
   },
   "redirects": [
-    { "source": "/api/:path*", "destination": "https://api.yourdomain.com/api/:path*", "status": 200 }
+    { "source": "/api/:path*", "destination": "https://api.hisaabo.in/api/:path*", "status": 200 }
   ]
 }
