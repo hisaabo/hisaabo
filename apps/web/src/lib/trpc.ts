@@ -34,6 +34,10 @@ function commonOptions() {
   };
 }
 
+const TRPC_URL = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api/trpc`
+  : "/api/trpc";
+
 export function createTRPCClient() {
   return trpc.createClient({
     links: [
@@ -41,8 +45,8 @@ export function createTRPCClient() {
       // when large mutation responses get combined with background query responses
       splitLink({
         condition: (op) => op.type === "mutation",
-        true: httpLink({ url: "/api/trpc", ...commonOptions() }),
-        false: httpBatchLink({ url: "/api/trpc", ...commonOptions() }),
+        true: httpLink({ url: TRPC_URL, ...commonOptions() }),
+        false: httpBatchLink({ url: TRPC_URL, ...commonOptions() }),
       }),
     ],
   });
