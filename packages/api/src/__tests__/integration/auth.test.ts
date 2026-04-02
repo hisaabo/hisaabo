@@ -21,7 +21,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
-import { users, sessions } from "@hisaabo/db";
+import { createHash } from "node:crypto";
+import { users, sessions, tenantMembers, magicLinkTokens } from "@hisaabo/db";
 import {
   createUser,
   createTenant,
@@ -430,6 +431,87 @@ describe("auth.logout", () => {
     const caller = unauthCaller();
     await expect(caller.auth.logout()).rejects.toMatchObject({
       code: "UNAUTHORIZED",
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// auth.verifyMagicLink — transaction isolation regression test
+//
+// Regression: assignTenantToNewUser() used controlDb directly instead of the
+// parent transaction's tx. The user row (inserted by tx) was invisible to
+// tenant_members insert (using controlDb) → FK violation on user_id.
+// Fix: pass tx through to getOrCreateDefaultTenant / assignTenantToNewUser.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.verifyMagicLink", () => {
+  const db = getControlDb();
+
+  it("creates a new user AND tenant membership atomically — no FK violation", async () => {
+    const caller = unauthCaller();
+    const email = "magic-link-new@vyapar.in";
+    const rawToken = "test-magic-token-" + Date.now();
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    const result = await caller.auth.verifyMagicLink({ token: rawToken });
+
+    expect(result.user.email).toBe(email);
+    expect(result.isNewUser).toBe(true);
+    expect(result.needsProfile).toBe(true);
+    expect(typeof result.sessionToken).toBe("string");
+
+    const [dbUser] = await db.select().from(users)
+      .where(eq(users.email, email)).limit(1);
+    expect(dbUser).toBeDefined();
+
+    const memberships = await db.select().from(tenantMembers)
+      .where(eq(tenantMembers.userId, dbUser!.id));
+    expect(memberships.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns existing user for repeated magic link verify — no duplicate", async () => {
+    const caller = unauthCaller();
+    const email = "magic-link-existing@vyapar.in";
+
+    await caller.auth.register({
+      email,
+      name: "Existing User",
+      password: "SecurePass1!",
+      confirmPassword: "SecurePass1!",
+    });
+
+    const rawToken = "test-magic-existing-" + Date.now();
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    const result = await caller.auth.verifyMagicLink({ token: rawToken });
+    expect(result.user.email).toBe(email);
+    expect(result.isNewUser).toBe(false);
+  });
+
+  it("rejects expired magic link token", async () => {
+    const caller = unauthCaller();
+    const rawToken = "test-magic-expired-" + Date.now();
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+
+    await db.insert(magicLinkTokens).values({
+      email: "expired@vyapar.in",
+      tokenHash,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    await expect(caller.auth.verifyMagicLink({ token: rawToken })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
     });
   });
 });

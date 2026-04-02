@@ -174,7 +174,7 @@ export default function CreateBusinessScreen() {
           <Text style={styles.sectionLabel}>Business Info</Text>
 
           <Field
-            label="Business Name *"
+            label="Business Name"
             value={form.name}
             onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
             placeholder="Your business name"
@@ -192,7 +192,7 @@ export default function CreateBusinessScreen() {
           />
           <Field
             ref={phoneRef}
-            label="Phone *"
+            label="Phone"
             value={form.phone}
             onChangeText={(v) => setForm((f) => ({ ...f, phone: v }))}
             placeholder="+91 9999999999"
@@ -246,7 +246,7 @@ export default function CreateBusinessScreen() {
           />
           <Field
             ref={panRef}
-            label="PAN *"
+            label="PAN"
             value={form.pan}
             onChangeText={(v) => setForm((f) => ({ ...f, pan: v.toUpperCase() }))}
             placeholder="AAAAA0000A"
@@ -261,7 +261,7 @@ export default function CreateBusinessScreen() {
 
           <Field
             ref={addressRef}
-            label="Street Address *"
+            label="Street Address"
             value={form.address}
             onChangeText={(v) => setForm((f) => ({ ...f, address: v }))}
             placeholder="Building, Street, Area"

@@ -10,14 +10,13 @@ declare global {
         el: HTMLElement,
         opts: {
           sitekey: string;
-          size: "invisible" | "normal" | "flexible" | "compact";
+          size: "normal" | "flexible" | "compact";
           callback: (token: string) => void;
           "error-callback"?: () => void;
           "expired-callback"?: () => void;
           theme?: "light" | "dark" | "auto";
         },
       ) => string;
-      execute: (widgetId: string) => void;
       reset: (widgetId: string) => void;
       remove: (widgetId: string) => void;
     };
@@ -534,11 +533,10 @@ function LoginPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
 
-  // ── Turnstile (invisible CAPTCHA) ─────────────────────────────
+  // ── Turnstile (visible CAPTCHA widget) ────────────────────────
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
-  // Resolves the pending execute() promise with the fresh token
-  const turnstileResolveRef = useRef<((token: string) => void) | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (!turnstileContainerRef.current) return;
@@ -549,32 +547,23 @@ function LoginPage() {
 
     function mount() {
       if (!turnstileContainerRef.current || !window.turnstile) return;
-      // Guard against double-render (React StrictMode)
       if (turnstileWidgetIdRef.current !== null) return;
       turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
         sitekey,
-        size: "invisible",
-        callback: (token: string) => {
-          // Resolve the pending execute() promise if one is waiting
-          if (turnstileResolveRef.current) {
-            turnstileResolveRef.current(token);
-            turnstileResolveRef.current = null;
-          }
-        },
+        size: "normal",
+        theme: "auto",
+        callback: (token: string) => setTurnstileToken(token),
         "error-callback": () => {
           setError("Verification failed. Please refresh and try again.");
-          turnstileResolveRef.current = null;
+          setTurnstileToken(null);
         },
-        "expired-callback": () => {
-          turnstileResolveRef.current = null;
-        },
+        "expired-callback": () => setTurnstileToken(null),
       });
     }
 
     if (window.turnstile) {
       mount();
     } else {
-      // Script loads async — poll until ready
       const interval = setInterval(() => {
         if (window.turnstile) {
           clearInterval(interval);
@@ -592,25 +581,12 @@ function LoginPage() {
     };
   }, []);
 
-  /**
-   * Triggers an invisible Turnstile challenge and waits for the token.
-   * Returns the token string, or null if TURNSTILE_SECRET_KEY is absent (dev mode).
-   */
-  function executeTurnstile(): Promise<string | null> {
-    if (!window.turnstile || turnstileWidgetIdRef.current === null) {
-      // Turnstile not loaded (e.g. blocked by ad-blocker) — let server decide
-      return Promise.resolve(null);
+  /** Reset the widget after a form submission so it can be used again. */
+  function resetTurnstile() {
+    setTurnstileToken(null);
+    if (window.turnstile && turnstileWidgetIdRef.current !== null) {
+      window.turnstile.reset(turnstileWidgetIdRef.current);
     }
-    return new Promise<string>((resolve) => {
-      turnstileResolveRef.current = resolve;
-      window.turnstile!.execute(turnstileWidgetIdRef.current!);
-    }).then((token) => {
-      // Reset so the widget can be used again for the next submission
-      if (window.turnstile && turnstileWidgetIdRef.current !== null) {
-        window.turnstile.reset(turnstileWidgetIdRef.current);
-      }
-      return token;
-    });
   }
 
   const loginMutation = trpc.auth.login.useMutation({
@@ -659,11 +635,11 @@ function LoginPage() {
   const isPending =
     loginMutation.isPending || registerMutation.isPending || magicLinkMutation.isPending;
 
-  async function handleMagicLink(e: React.FormEvent) {
+  function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    const turnstileToken = await executeTurnstile();
     magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
+    resetTurnstile();
   }
 
   function handlePasswordLogin(e: React.FormEvent) {
@@ -672,21 +648,21 @@ function LoginPage() {
     loginMutation.mutate({ email, password });
   }
 
-  async function handleRegister(e: React.FormEvent) {
+  function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     if (password !== confirmPassword) {
       setError("Passwords don't match");
       return;
     }
-    const turnstileToken = await executeTurnstile();
     registerMutation.mutate({ email, password, confirmPassword, name, ...(turnstileToken ? { turnstileToken } : {}) });
+    resetTurnstile();
   }
 
-  async function handleResend() {
+  function handleResend() {
     if (cooldown > 0) return;
-    const turnstileToken = await executeTurnstile();
     magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
+    resetTurnstile();
     setCooldown(60);
   }
 
@@ -1105,8 +1081,8 @@ function LoginPage() {
         </div>
       </div>
 
-      {/* Hidden Turnstile container — invisible widget needs a DOM node */}
-      <div ref={turnstileContainerRef} style={{ display: "none" }} aria-hidden="true" />
+      {/* Turnstile CAPTCHA widget — renders visibly above submit buttons */}
+      <div ref={turnstileContainerRef} className="flex justify-center my-4" />
     </>
   );
 }

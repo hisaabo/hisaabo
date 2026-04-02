@@ -41,8 +41,10 @@ function getClientIpFromRequest(req: Request): string | null {
 
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
-async function getOrCreateDefaultTenant(userId: string): Promise<string> {
-  return await controlDb.transaction(async (tx) => {
+type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
+
+async function getOrCreateDefaultTenant(userId: string, parentTx?: ControlTx): Promise<string> {
+  const run = async (tx: ControlTx) => {
     let [existing] = await tx
       .select({ id: tenants.id })
       .from(tenants)
@@ -71,7 +73,8 @@ async function getOrCreateDefaultTenant(userId: string): Promise<string> {
     });
 
     return existing.id;
-  });
+  };
+  return parentTx ? run(parentTx) : controlDb.transaction(run);
 }
 
 // ── Shared helper: create session + resolve tenant ─────────────
@@ -111,13 +114,14 @@ function getSessionIdFromContext(ctx: { req: Request }): string | null {
 }
 
 // ── Shared helper: auto-create tenant for a new user ───────────
-async function assignTenantToNewUser(userId: string, displayName: string): Promise<void> {
+async function assignTenantToNewUser(userId: string, displayName: string, parentTx?: ControlTx): Promise<void> {
   if (process.env.MULTI_TENANT === "true") {
+    const db = parentTx ?? controlDb;
     const tenantName = `${displayName}'s Organization`;
     const slug = generateSlug(tenantName);
 
     // 1. Create the tenant row (DB config columns start null)
-    const [tenant] = await controlDb.insert(tenants).values({
+    const [tenant] = await db.insert(tenants).values({
       name: tenantName,
       slug,
     }).returning({ id: tenants.id });
@@ -130,12 +134,12 @@ async function assignTenantToNewUser(userId: string, displayName: string): Promi
       dbConfig = await provisionTenantDatabase(tenant.id, slug);
     } catch (err) {
       // Roll back the orphaned tenant row so a retry can succeed cleanly
-      await controlDb.delete(tenants).where(eq(tenants.id, tenant.id));
+      await db.delete(tenants).where(eq(tenants.id, tenant.id));
       throw err;
     }
 
     // 3. Persist the DB connection details onto the tenant row
-    await controlDb.update(tenants)
+    await db.update(tenants)
       .set({
         dbName: dbConfig.dbName,
         dbHost: dbConfig.dbHost,
@@ -147,14 +151,14 @@ async function assignTenantToNewUser(userId: string, displayName: string): Promi
       .where(eq(tenants.id, tenant.id));
 
     // 4. Create the owner membership
-    await controlDb.insert(tenantMembers).values({
+    await db.insert(tenantMembers).values({
       tenantId: tenant.id,
       userId,
       role: "owner",
       acceptedAt: new Date(),
     });
   } else {
-    await getOrCreateDefaultTenant(userId);
+    await getOrCreateDefaultTenant(userId, parentTx);
   }
 }
 
@@ -185,8 +189,6 @@ export const authRouter = router({
     // Insert user, assign tenant (has its own inner tx), and create session in
     // one outer transaction. This prevents a crash between user-insert and
     // session-insert from leaving a registered-but-unloggable account.
-    // Note: assignTenantToNewUser uses controlDb.transaction internally which
-    // Drizzle composes via savepoints in this nested context.
     const { user, sessionToken } = await controlDb.transaction(async (tx) => {
       const [user] = await tx.insert(users).values({
         email: input.email,
@@ -194,7 +196,7 @@ export const authRouter = router({
         passwordHash,
       }).returning({ id: users.id, email: users.email, name: users.name });
 
-      await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0]);
+      await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0], tx);
 
       const sessionId = nanoid(64);
       const memberships = await tx
@@ -326,8 +328,6 @@ export const authRouter = router({
 
     // Wrap user upsert + session creation in a transaction so a crash between
     // them never leaves a created user without a usable session.
-    // assignTenantToNewUser uses its own controlDb.transaction internally;
-    // Drizzle composes these via savepoints when called inside an outer tx.
     let isNewUser = false;
 
     const { user, sessionToken } = await controlDb.transaction(async (tx) => {
@@ -346,7 +346,7 @@ export const authRouter = router({
         }).returning({ id: users.id, email: users.email, name: users.name });
         user = newUser;
 
-        await assignTenantToNewUser(user.id, email.split("@")[0]);
+        await assignTenantToNewUser(user.id, email.split("@")[0], tx);
       } else {
         // Mark email as verified for existing users
         await tx.update(users)
