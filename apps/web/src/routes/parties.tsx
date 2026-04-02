@@ -680,7 +680,7 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                           className="cursor-pointer"
                           onClick={() => {
                             onClose();
-                            navigate({ to: "/invoices" });
+                            navigate({ to: "/invoices", search: { invoice: inv.id } });
                           }}
                         >
                           <td className="font-mono text-[13px] text-brand-600 hover:underline">
