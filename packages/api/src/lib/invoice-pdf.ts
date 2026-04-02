@@ -658,8 +658,9 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
         }
         const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
         if (balance > 0) {
+          const label = data.upiPayUrl ? "Scan or tap to pay" : "Scan to pay";
           doc.fontSize(6).fillColor(cMuted).font("NotoSans")
-            .text(`Scan to pay ${fmt(balance)}`, qrX, qrYPos + qrSize + 2,
+            .text(`${label} ${fmt(balance)}`, qrX, qrYPos + qrSize + 2,
               { width: qrSize, align: "center" });
         }
       } catch {
@@ -1068,8 +1069,9 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
         }
         const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
         if (balance > 0) {
+          const label = data.upiPayUrl ? "Scan or tap to pay" : "Scan to pay";
           doc.fontSize(5.5).fillColor(cMuted).font("NotoSans")
-            .text(`Scan to pay ${fmt(balance)}`, qrColX, sec5StartY + qrSize + 2,
+            .text(`${label} ${fmt(balance)}`, qrColX, sec5StartY + qrSize + 2,
               { width: qrSize, align: "center" });
         }
       } catch {

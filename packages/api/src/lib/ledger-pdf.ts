@@ -233,8 +233,9 @@ function generateLedgerPDFDoc(doc: InstanceType<typeof PDFDocument>, data: Ledge
       if (data.upiPayUrl) {
         doc.link(margin, y, qrSize, qrSize, data.upiPayUrl);
       }
+      const label = data.upiPayUrl ? "Scan or tap to pay" : "Scan to pay";
       doc.fontSize(7).fillColor(colorMuted).font("NotoSans")
-        .text(`Scan to pay ${fmt(data.summary.closingBalance)}`, margin, y + qrSize + 2,
+        .text(`${label} ${fmt(data.summary.closingBalance)}`, margin, y + qrSize + 2,
           { width: qrSize, align: "center" });
       y += qrSize + 16;
     } catch {
