@@ -1,4 +1,4 @@
-import { createRootRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { createRootRoute, Link, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
 import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -199,6 +199,7 @@ function RootLayout() {
   });
 
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   useTheme();
   const [showPalette, setShowPalette] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -269,11 +270,10 @@ function RootLayout() {
   const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change"];
   useEffect(() => {
     if (sessionLoading || sessionFetching) return;
-    const path = typeof window !== "undefined" ? window.location.pathname : "";
 
     // Priority 1: Not authenticated → login
     if (!session?.user) {
-      if (!publicPaths.some((p) => path.startsWith(p))) {
+      if (!publicPaths.some((p) => pathname.startsWith(p))) {
         navigate({ to: "/login" });
       }
       return;
@@ -281,7 +281,7 @@ function RootLayout() {
 
     // Priority 2: No name → complete profile
     if ((session as any)?.needsProfile) {
-      if (path !== "/auth/complete-profile") {
+      if (pathname !== "/auth/complete-profile") {
         navigate({ to: "/auth/complete-profile" });
       }
       return;
@@ -289,12 +289,12 @@ function RootLayout() {
 
     // Priority 3: Authenticated with name but no business → settings
     if (session?.tenantId && businesses !== undefined && businesses.length === 0) {
-      if (path !== "/settings") {
+      if (pathname !== "/settings") {
         navigate({ to: "/settings" });
       }
       return;
     }
-  }, [sessionLoading, sessionFetching, session, businesses, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionLoading, sessionFetching, session, businesses, navigate, pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select single tenant
   const shouldAutoSelectTenant = !!(session?.user && !session?.tenantId && tenantList?.length === 1 && !selectTenantMutation.isPending && !selectTenantMutation.isSuccess);
@@ -322,8 +322,7 @@ function RootLayout() {
 
   // Not authenticated
   if (!session?.user) {
-    const path = typeof window !== "undefined" ? window.location.pathname : "";
-    const isPublic = publicPaths.some((p) => path.startsWith(p));
+    const isPublic = publicPaths.some((p) => pathname.startsWith(p));
     if (!isPublic) return null; // redirect in flight
     return <Outlet />;
   }

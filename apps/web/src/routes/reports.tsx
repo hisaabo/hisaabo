@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
+import { Combobox } from "@/components/ui/Combobox";
 import { useDateRange } from "@/hooks/useDateRange";
 
 export const Route = createFileRoute("/reports")({
@@ -1517,16 +1518,17 @@ function StockSummaryReport() {
       {/* Filters + Export */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {categories.length > 0 && (
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="text-xs border border-border rounded-lg px-3 py-1.5 bg-surface text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
-          >
-            <option value="">All Categories</option>
-            {categories.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
+          <div className="w-48">
+            <Combobox
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              options={[
+                { value: "", label: "All Categories" },
+                ...categories.map((cat) => ({ value: cat, label: cat })),
+              ]}
+              placeholder="Filter category…"
+            />
+          </div>
         )}
         <button
           onClick={() => setShowZeroStock((v) => !v)}
@@ -2327,7 +2329,7 @@ function ItemSalesReport({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className="text-text-secondary text-[13px] tabular-nums">
-                        {row.soldQty}
+                        {parseFloat(parseFloat(row.soldQty).toFixed(2))}
                         {row.unit ? ` ${row.unit}` : ""}
                       </span>
                     </td>
@@ -2794,15 +2796,52 @@ function CashFlowReport() {
   );
 }
 
+// ── Sticky-period hint (shows once per session on first tab switch) ──
+
+const HINT_SESSION_KEY = "hisaabo_reports_sticky_hint_shown";
+
+function StickyPeriodHint({ visible }: { visible: boolean }) {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setShow(true);
+    const timer = setTimeout(() => setShow(false), 3500);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
+  if (!show) return null;
+
+  return (
+    <div className="animate-hint-lifecycle text-[11px] text-text-tertiary py-1 flex items-center gap-1.5">
+      <svg className="w-3 h-3 text-brand-600 dark:text-brand-400 shrink-0" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={2}>
+        <circle cx="8" cy="8" r="6" />
+        <path strokeLinecap="round" d="M8 5.5V8.5M8 10.5h.005" />
+      </svg>
+      <span>Tip: Your date range stays the same across all reports</span>
+    </div>
+  );
+}
+
 // ── Main Reports Page ────────────────────────────────────────────
 
 function ReportsPage() {
   const [activeReport, setActiveReport] = useState<ReportId>(
     () => (localStorage.getItem("hisaabo_reports_tab") as ReportId) || "daybook"
   );
+  const [showStickyHint, setShowStickyHint] = useState(false);
+  const hasInteracted = useRef(false);
+
   const selectReport = (id: ReportId) => {
     setActiveReport(id);
     localStorage.setItem("hisaabo_reports_tab", id);
+
+    // Show sticky-period hint on first tab switch (once per session)
+    if (!hasInteracted.current && !sessionStorage.getItem(HINT_SESSION_KEY)) {
+      hasInteracted.current = true;
+      sessionStorage.setItem(HINT_SESSION_KEY, "1");
+      setShowStickyHint(true);
+    }
   };
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -2927,6 +2966,8 @@ function ReportsPage() {
               customTo={customTo}
               onCustomChange={setCustomRange}
             />
+
+            <StickyPeriodHint visible={showStickyHint} />
 
             {/* Party selector for Party Statement */}
             {activeReport === "party-statement" && (
