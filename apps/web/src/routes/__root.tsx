@@ -81,7 +81,6 @@ const navSections = [
       { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
       { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
       { to: "/shipments", label: "Shipments", icon: ShipmentsIcon },
-      { to: "/automated-invoices", label: "Automated Invoices", icon: AutomatedInvoiceIcon },
     ],
   },
   {

@@ -171,6 +171,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd apps/desktop/src-tauri && cat tauri.conf.json | jq --arg v "$VERSION" '.version = $v' > tmp.json && mv tmp.json tauri.conf.json
+
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -210,6 +215,11 @@ jobs:
           java-version: 21
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd apps/mobile && cat app.json | jq --arg v "$VERSION" '.expo.version = $v' > tmp.json && mv tmp.json app.json
 
       - name: Expo prebuild
         working-directory: apps/mobile
