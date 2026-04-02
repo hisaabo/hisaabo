@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -24,38 +24,59 @@ export default function ItemsScreen() {
   const [itemType, setItemType] = useState<ItemTypeFilter>(null);
   const [lowStock, setLowStock] = useState(false);
   const [page, setPage] = useState(1);
+  const [allItems, setAllItems] = useState<NonNullable<typeof data>["data"]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } = trpc.item.list.useQuery({
-    search: search || undefined,
-    itemType: itemType || undefined,
-    lowStock: lowStock || undefined,
-    page,
-    limit: 20,
-  });
+  const { data, isLoading, isFetching, refetch } = trpc.item.list.useQuery(
+    {
+      search: search || undefined,
+      itemType: itemType || undefined,
+      lowStock: lowStock || undefined,
+      page,
+      limit: 20,
+    },
+    { placeholderData: (prev) => prev }
+  );
 
-  const items = data?.data ?? [];
   const total = data?.total ?? 0;
+
+  // Accumulate pages — reset on page 1, append on subsequent pages
+  useEffect(() => {
+    if (data?.data) {
+      setAllItems((prev) => {
+        if (page === 1) return data.data;
+        const existingIds = new Set(prev.map((i) => i.id));
+        const newItems = data.data.filter((i) => !existingIds.has(i.id));
+        return [...prev, ...newItems];
+      });
+    }
+  }, [data?.data, page]);
+
+  // Reset accumulation when filters change
+  useEffect(() => {
+    setPage(1);
+    setAllItems([]);
+  }, [search, itemType, lowStock]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setPage(1);
+    setAllItems([]);
     await refetch();
     setRefreshing(false);
   }, [refetch]);
 
   const handleSearch = (text: string) => {
     setSearch(text);
-    setPage(1);
   };
 
   const loadMore = () => {
-    if (items.length < total && !isLoading) {
+    if (!isFetching && data && allItems.length < total) {
       setPage((p) => p + 1);
     }
   };
 
-  const isLowStock = (item: (typeof items)[0]) => {
+  const isLowStock = (item: (typeof allItems)[0]) => {
     if (item.itemMode === "variants") return false;
     if (!item.lowStockAlert) return false;
     return (
@@ -64,7 +85,7 @@ export default function ItemsScreen() {
     );
   };
 
-  const renderItem = ({ item }: { item: (typeof items)[0] }) => {
+  const renderItem = ({ item }: { item: (typeof allItems)[0] }) => {
     const itemLowStock = isLowStock(item);
     const isVariant = item.itemMode === "variants";
     const isAltUnit = item.itemMode === "alt_units";
@@ -158,7 +179,7 @@ export default function ItemsScreen() {
   };
 
   const renderFooter = () => {
-    if (page === 1 || items.length >= total) return null;
+    if (!isFetching || allItems.length === 0) return null;
     return (
       <View style={styles.footer}>
         <ActivityIndicator color={colors.brand} />
@@ -191,7 +212,6 @@ export default function ItemsScreen() {
           ]}
           onPress={() => {
             setItemType(null);
-            setPage(1);
           }}
           activeOpacity={0.7}
         >
@@ -211,7 +231,6 @@ export default function ItemsScreen() {
           ]}
           onPress={() => {
             setItemType("product");
-            setPage(1);
           }}
           activeOpacity={0.7}
         >
@@ -236,7 +255,6 @@ export default function ItemsScreen() {
           ]}
           onPress={() => {
             setItemType("service");
-            setPage(1);
           }}
           activeOpacity={0.7}
         >
@@ -264,7 +282,6 @@ export default function ItemsScreen() {
           ]}
           onPress={() => {
             setLowStock((v) => !v);
-            setPage(1);
           }}
           activeOpacity={0.7}
         >
@@ -285,20 +302,20 @@ export default function ItemsScreen() {
       </View>
 
       {/* Item List */}
-      {isLoading && page === 1 ? (
+      {isLoading && page === 1 && allItems.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
-          data={items}
+          data={allItems}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={renderFooter}
           onEndReached={loadMore}
           onEndReachedThreshold={0.3}
-          contentContainerStyle={[items.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
+          contentContainerStyle={[allItems.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

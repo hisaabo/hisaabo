@@ -167,19 +167,69 @@ function extractApiProcedures(): Map<string, string[]> {
 
   const procedures = new Map<string, string[]>();
 
-  for (const file of fs.readdirSync(routersDir)) {
-    if (!file.endsWith(".ts")) continue;
-    const content = fs.readFileSync(path.join(routersDir, file), "utf-8");
+  // Collect all .ts files in a directory recursively
+  function collectTsFiles(dir: string): string[] {
+    const results: string[] = [];
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (fs.statSync(full).isDirectory()) {
+        results.push(...collectTsFiles(full));
+      } else if (entry.endsWith(".ts")) {
+        results.push(full);
+      }
+    }
+    return results;
+  }
 
-    const procMatches = content.matchAll(
-      /^\s+(\w+):\s*(?:public|protected|tenant|viewer|member|admin)Procedure/gm
-    );
+  // Extract procedure names from file content — handles both styles:
+  //   key: adminProcedure   (inline in router file)
+  //   export const name = adminProcedure   (separate procedure file)
+  function extractProcs(content: string): string[] {
     const procs: string[] = [];
-    for (const m of procMatches) {
+    for (const m of content.matchAll(
+      /^\s+(\w+):\s*(?:public|protected|tenant|viewer|member|admin)Procedure/gm
+    )) {
       procs.push(m[1]);
     }
+    for (const m of content.matchAll(
+      /export const (\w+)\s*=\s*(?:public|protected|tenant|viewer|member|admin)Procedure/gm
+    )) {
+      procs.push(m[1]);
+    }
+    return procs;
+  }
 
-    if (file === "document.ts") {
+  for (const entry of fs.readdirSync(routersDir)) {
+    const fullPath = path.join(routersDir, entry);
+
+    // Directory-based router module (e.g. import/)
+    if (fs.statSync(fullPath).isDirectory()) {
+      const indexFile = path.join(fullPath, "index.ts");
+      if (!fs.existsSync(indexFile)) continue;
+
+      const indexContent = fs.readFileSync(indexFile, "utf-8");
+      const exportMatch = indexContent.match(/export const (\w+Router)/);
+      if (!exportMatch) continue;
+
+      const namespace = namespaceMap.get(exportMatch[1]);
+      if (!namespace) continue;
+
+      // Scan all .ts files in the directory tree for procedure definitions
+      const procs: string[] = [];
+      for (const tsFile of collectTsFiles(fullPath)) {
+        const content = fs.readFileSync(tsFile, "utf-8");
+        procs.push(...extractProcs(content));
+      }
+      procedures.set(namespace, procs);
+      continue;
+    }
+
+    if (!entry.endsWith(".ts")) continue;
+    const content = fs.readFileSync(fullPath, "utf-8");
+
+    const procs = extractProcs(content);
+
+    if (entry === "document.ts") {
       const factoryProcs = ["list", "getById", "create", "updateStatus", "delete"];
       for (const m of [...content.matchAll(/export const (\w+Router)/g)]) {
         const routerName = m[1];

@@ -1,10 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -41,6 +42,7 @@ export default function InvoicesScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [allInvoices, setAllInvoices] = useState<NonNullable<typeof data>["data"]>([]);
 
   const queryInput = {
     type: invoiceType,
@@ -51,35 +53,49 @@ export default function InvoicesScreen() {
     documentType: "invoice" as const,
   };
 
-  const { data, isLoading, isError, refetch, isRefetching } =
-    trpc.invoice.list.useQuery(queryInput);
+  const { data, isLoading, isFetching, isError, refetch, isRefetching } =
+    trpc.invoice.list.useQuery(queryInput, { placeholderData: (prev) => prev });
 
-  const invoices = data?.data ?? [];
   const total = data?.total ?? 0;
-  const hasMore = total > page * PAGE_SIZE;
+  const hasMore = allInvoices.length < total;
+
+  // Accumulate pages — reset on page 1, append on subsequent pages
+  useEffect(() => {
+    if (data?.data) {
+      setAllInvoices((prev) => {
+        if (page === 1) return data.data;
+        const existingIds = new Set(prev.map((inv) => inv.id));
+        const newItems = data.data.filter((inv) => !existingIds.has(inv.id));
+        return [...prev, ...newItems];
+      });
+    }
+  }, [data?.data, page]);
+
+  // Reset accumulation when filters change
+  useEffect(() => {
+    setPage(1);
+    setAllInvoices([]);
+  }, [invoiceType, statusFilter, search]);
 
   const handleTypeToggle = useCallback((type: InvoiceType) => {
     setInvoiceType(type);
-    setPage(1);
     setStatusFilter("all");
     setSearch("");
   }, []);
 
   const handleStatusFilter = useCallback((status: StatusFilter) => {
     setStatusFilter(status);
-    setPage(1);
   }, []);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearch(text);
-    setPage(1);
   }, []);
 
   const handleLoadMore = useCallback(() => {
-    if (hasMore && !isLoading) {
+    if (hasMore && !isFetching) {
       setPage((p) => p + 1);
     }
-  }, [hasMore, isLoading]);
+  }, [hasMore, isFetching]);
 
   const ListHeader = (
     <View style={styles.listHeader}>
@@ -153,7 +169,7 @@ export default function InvoicesScreen() {
     </View>
   );
 
-  const renderItem = ({ item }: { item: typeof invoices[0] }) => (
+  const renderItem = ({ item }: { item: typeof allInvoices[0] }) => (
     <PressableRow
       style={styles.invoiceRow}
       onPress={() => router.push(`/(invoices)/${item.id}` as never)}
@@ -182,12 +198,15 @@ export default function InvoicesScreen() {
     />
   );
 
-  const ListFooter =
-    hasMore ? (
-      <TouchableOpacity style={styles.loadMoreBtn} onPress={handleLoadMore}>
-        <Text style={styles.loadMoreText}>Load more</Text>
-      </TouchableOpacity>
-    ) : null;
+  const ListFooter = isFetching && allInvoices.length > 0 ? (
+    <View style={styles.loadingFooter}>
+      <ActivityIndicator color={colors.brand} />
+    </View>
+  ) : hasMore ? (
+    <TouchableOpacity style={styles.loadMoreBtn} onPress={handleLoadMore}>
+      <Text style={styles.loadMoreText}>Load more</Text>
+    </TouchableOpacity>
+  ) : null;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -196,7 +215,7 @@ export default function InvoicesScreen() {
       </View>
 
       <FlatList
-        data={invoices}
+        data={allInvoices}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         ListHeaderComponent={ListHeader}
@@ -348,5 +367,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: colors.brand,
+  },
+  loadingFooter: {
+    paddingVertical: 20,
+    alignItems: "center",
   },
 });

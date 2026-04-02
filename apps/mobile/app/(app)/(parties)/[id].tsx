@@ -524,58 +524,119 @@ export default function PartyDetailScreen() {
                     {formatCurrency(parseFloat(ledgerData.openingBalance || "0"))}
                   </Text>
                 </View>
-                {ledgerData.data.map((entry, idx) => (
-                  <View key={`${entry.documentId}-${idx}`} style={styles.ledgerRow}>
-                    <View style={styles.ledgerIconCol}>
-                      <View
-                        style={[
-                          styles.ledgerTypeIcon,
-                          entry.type === "invoice" || entry.type === "purchase"
-                            ? styles.ledgerTypeIconInvoice
-                            : styles.ledgerTypeIconPayment,
-                        ]}
-                      >
-                        <Ionicons
-                          name={
-                            entry.type === "payment"
-                              ? "cash-outline"
-                              : "receipt-outline"
-                          }
-                          size={14}
-                          color={
-                            entry.type === "payment" ? colors.success : colors.brand
-                          }
-                        />
+                {ledgerData.data.map((entry, idx) => {
+                  const isTappable = entry.type === "invoice" || entry.type === "payment";
+                  const handleLedgerRowPress = () => {
+                    if (entry.type === "invoice") {
+                      haptic.light();
+                      router.push(`/(invoices)/${entry.documentId}`);
+                    } else if (entry.type === "payment") {
+                      haptic.light();
+                      router.push(`/(more)/payments/${entry.documentId}`);
+                    }
+                  };
+                  return isTappable ? (
+                    <TouchableOpacity
+                      key={`${entry.documentId}-${idx}`}
+                      style={styles.ledgerRow}
+                      onPress={handleLedgerRowPress}
+                      activeOpacity={0.6}
+                    >
+                      <View style={styles.ledgerIconCol}>
+                        <View
+                          style={[
+                            styles.ledgerTypeIcon,
+                            entry.type === "invoice" || entry.type === "purchase"
+                              ? styles.ledgerTypeIconInvoice
+                              : styles.ledgerTypeIconPayment,
+                          ]}
+                        >
+                          <Ionicons
+                            name={
+                              entry.type === "payment"
+                                ? "cash-outline"
+                                : "receipt-outline"
+                            }
+                            size={14}
+                            color={
+                              entry.type === "payment" ? colors.success : colors.brand
+                            }
+                          />
+                        </View>
+                      </View>
+                      <View style={styles.ledgerMiddle}>
+                        <Text style={styles.ledgerDocNumber}>
+                          {entry.documentNumber}
+                        </Text>
+                        <Text style={styles.ledgerDate}>
+                          {formatDate(entry.date)}
+                        </Text>
+                        {entry.status && (
+                          <Text style={styles.ledgerStatus}>{entry.status}</Text>
+                        )}
+                      </View>
+                      <View style={styles.ledgerRight}>
+                        {parseFloat(entry.debit) > 0 && (
+                          <Text style={styles.ledgerDebit}>
+                            +{formatCurrency(entry.debit)}
+                          </Text>
+                        )}
+                        {parseFloat(entry.credit) > 0 && (
+                          <Text style={styles.ledgerCredit}>
+                            -{formatCurrency(entry.credit)}
+                          </Text>
+                        )}
+                        <Text style={styles.ledgerBalance}>
+                          {formatCurrency(parseFloat(entry.runningBalance))}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} style={styles.ledgerChevron} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View key={`${entry.documentId}-${idx}`} style={styles.ledgerRow}>
+                      <View style={styles.ledgerIconCol}>
+                        <View
+                          style={[
+                            styles.ledgerTypeIcon,
+                            styles.ledgerTypeIconInvoice,
+                          ]}
+                        >
+                          <Ionicons
+                            name="receipt-outline"
+                            size={14}
+                            color={colors.brand}
+                          />
+                        </View>
+                      </View>
+                      <View style={styles.ledgerMiddle}>
+                        <Text style={styles.ledgerDocNumber}>
+                          {entry.documentNumber}
+                        </Text>
+                        <Text style={styles.ledgerDate}>
+                          {formatDate(entry.date)}
+                        </Text>
+                        {entry.status && (
+                          <Text style={styles.ledgerStatus}>{entry.status}</Text>
+                        )}
+                      </View>
+                      <View style={styles.ledgerRight}>
+                        {parseFloat(entry.debit) > 0 && (
+                          <Text style={styles.ledgerDebit}>
+                            +{formatCurrency(entry.debit)}
+                          </Text>
+                        )}
+                        {parseFloat(entry.credit) > 0 && (
+                          <Text style={styles.ledgerCredit}>
+                            -{formatCurrency(entry.credit)}
+                          </Text>
+                        )}
+                        <Text style={styles.ledgerBalance}>
+                          {formatCurrency(parseFloat(entry.runningBalance))}
+                        </Text>
                       </View>
                     </View>
-                    <View style={styles.ledgerMiddle}>
-                      <Text style={styles.ledgerDocNumber}>
-                        {entry.documentNumber}
-                      </Text>
-                      <Text style={styles.ledgerDate}>
-                        {formatDate(entry.date)}
-                      </Text>
-                      {entry.status && (
-                        <Text style={styles.ledgerStatus}>{entry.status}</Text>
-                      )}
-                    </View>
-                    <View style={styles.ledgerRight}>
-                      {parseFloat(entry.debit) > 0 && (
-                        <Text style={styles.ledgerDebit}>
-                          +{formatCurrency(entry.debit)}
-                        </Text>
-                      )}
-                      {parseFloat(entry.credit) > 0 && (
-                        <Text style={styles.ledgerCredit}>
-                          -{formatCurrency(entry.credit)}
-                        </Text>
-                      )}
-                      <Text style={styles.ledgerBalance}>
-                        {formatCurrency(parseFloat(entry.runningBalance))}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
+                  );
+                })}
               </>
             ) : (
               <View style={styles.emptyTab}>
@@ -1273,6 +1334,9 @@ const styles = StyleSheet.create({
   ledgerBalance: {
     fontSize: 12,
     color: colors.textMuted,
+  },
+  ledgerChevron: {
+    marginLeft: 4,
   },
   topItemRow: {
     flexDirection: "row",

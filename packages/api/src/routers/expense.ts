@@ -19,18 +19,6 @@ function modeToAccountTypes(mode: string): Array<"cash" | "savings" | "current" 
   }
 }
 
-// Map payment mode to the bank account type(s) to search for.
-// Returns null when no bank debit should be created.
-function modeToAccountTypes(mode: string): Array<"cash" | "savings" | "current" | "upi"> | null {
-  switch (mode) {
-    case "cash":    return ["cash"];
-    case "bank":    return ["savings", "current"];
-    case "upi":     return ["upi"];
-    case "cheque":  return ["savings", "current"];
-    default:        return null; // "other" and unknown modes — skip
-  }
-}
-
 export const expenseRouter = router({
   list: viewerProcedure
     .input(z.object({
