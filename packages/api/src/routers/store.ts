@@ -5,6 +5,7 @@ import { paginationSchema } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 // ── Validators ─────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ export const storeRouter = router({
       const conditions = [eq(items.businessId, ctx.businessId)];
 
       if (input.search) {
-        conditions.push(ilike(items.name, `%${input.search}%`));
+        conditions.push(ilike(items.name, `%${escapeLike(input.search)}%`));
       }
       if (input.category) {
         conditions.push(eq(items.category, input.category));
@@ -275,7 +276,7 @@ export const storeRouter = router({
       if (input.fromDate) conditions.push(gte(storeOrders.createdAt, new Date(input.fromDate)));
       if (input.toDate) conditions.push(lte(storeOrders.createdAt, new Date(input.toDate)));
       if (input.search) {
-        const term = `%${input.search}%`;
+        const term = `%${escapeLike(input.search)}%`;
         conditions.push(or(
           ilike(storeOrders.customerName, term),
           ilike(storeOrders.customerPhone, term),

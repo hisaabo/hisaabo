@@ -19,6 +19,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import {
   loginSchema,
   registerSchema,
@@ -30,69 +32,126 @@ import {
   createPaymentSchema,
   createApiKeySchema,
 } from "@hisaabo/shared";
+import { escapeLike } from "../lib/escape-like.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECURITY — ILIKE wildcard injection (Finding #7) — KNOWN GAP
+// SECURITY — ILIKE wildcard injection (Finding #7) — FIXED
 // ─────────────────────────────────────────────────────────────────────────────
-describe("SECURITY — ILIKE wildcard injection: document current behaviour (Finding #7)", () => {
+describe("SECURITY — ILIKE metacharacters are escaped via escapeLike()", () => {
   /**
-   * KNOWN GAP (Finding #7): The search endpoints in store.ts and other routers
-   * construct ILIKE patterns as `%${input.search}%` without escaping `%` and `_`
-   * metacharacters in the user-supplied search string.
-   *
-   * This means a user searching for "100%" would actually match every item
-   * (because "%" is a wildcard in ILIKE), and searching for "_" would match any
-   * single character. This is a low-severity information disclosure issue in most
-   * contexts, but can cause performance problems (full-table scan) in adversarial
-   * input scenarios.
-   *
-   * INVARIANT TO ENFORCE: The tests below document the CURRENT behaviour so that
-   * any future fix (escaping % and _ before interpolation) would update these
-   * tests to reflect the secured behaviour. This creates a clear audit trail.
-   *
-   * A future fix would escape the pattern like:
-   *   input.search.replace(/%/g, "\\%").replace(/_/g, "\\_")
-   * and pass `ESCAPE '\'` to the ILIKE clause.
+   * All search endpoints now pass user input through escapeLike() before
+   * building ILIKE patterns. This neutralises %, _, and \ so they match
+   * literally instead of acting as SQL wildcards.
    */
 
-  function buildIlikePattern(userInput: string): string {
-    // Current unescaped behaviour in store.ts and other routers:
-    return `%${userInput}%`;
+  it("% in search input is escaped to \\%", () => {
+    expect(escapeLike("100%")).toBe("100\\%");
+    expect(`%${escapeLike("100%")}%`).toBe("%100\\%%");
+  });
+
+  it("_ in search input is escaped to \\_", () => {
+    expect(escapeLike("Dal_Flour")).toBe("Dal\\_Flour");
+    expect(`%${escapeLike("Dal_Flour")}%`).toBe("%Dal\\_Flour%");
+  });
+
+  it("\\ in search input is escaped to \\\\", () => {
+    expect(escapeLike("back\\slash")).toBe("back\\\\slash");
+  });
+
+  it("multiple metacharacters in one string are all escaped", () => {
+    expect(escapeLike("100%_test\\")).toBe("100\\%\\_test\\\\");
+  });
+
+  it("normal search input passes through unchanged", () => {
+    expect(escapeLike("Basmati Rice")).toBe("Basmati Rice");
+  });
+
+  it("empty string passes through unchanged", () => {
+    expect(escapeLike("")).toBe("");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY — Codebase guard: every ILIKE pattern must use escapeLike()
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SECURITY — every ILIKE search pattern in source uses escapeLike()", () => {
+  /**
+   * This test scans all .ts source files (routers + server.ts + lib) and
+   * ensures that any line constructing an ILIKE pattern with user input
+   * goes through escapeLike(). If a new search endpoint is added without
+   * escapeLike(), this test fails — preventing regression.
+   *
+   * The rule: if a line contains `ILIKE` or `ilike(` AND also contains
+   * a `%` pattern interpolation, then `escapeLike` must appear on that
+   * line or within 2 lines above it (for multi-line patterns where the
+   * term variable is built separately).
+   */
+
+  function collectTsFiles(dir: string): string[] {
+    const results: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        if (entry !== "__tests__" && entry !== "node_modules") {
+          results.push(...collectTsFiles(full));
+        }
+      } else if (entry.endsWith(".ts")) {
+        results.push(full);
+      }
+    }
+    return results;
   }
 
-  function buildEscapedIlikePattern(userInput: string): string {
-    // What the fix would look like:
-    const escaped = userInput.replace(/%/g, "\\%").replace(/_/g, "\\_");
-    return `%${escaped}%`;
-  }
+  const srcDir = path.resolve(__dirname, "..");
+  const sourceFiles = collectTsFiles(srcDir);
 
-  it("KNOWN GAP: % in search input produces a pattern that acts as a wildcard (unescaped)", () => {
-    // "100%" as a search term becomes "%%100%%", which matches everything.
-    // This documents the current behaviour, not the desired behaviour.
-    const pattern = buildIlikePattern("100%");
-    expect(pattern).toBe("%100%%"); // unescaped: contains literal % that is also a wildcard
-    // The % in "100%" is NOT escaped — this is the gap
-    expect(pattern).toContain("100%"); // the literal % is still there, unescaped
+  // Patterns that indicate a LIKE clause with interpolated user input
+  const likePatternRegex = /ILIKE\s+\$\{|ilike\([^)]*`%\$\{|ILIKE\s+\$\{?\s*['"]%/;
+
+  it("all source files with ILIKE patterns import escapeLike", () => {
+    const violations: string[] = [];
+
+    for (const filePath of sourceFiles) {
+      const content = readFileSync(filePath, "utf-8");
+      const lines = content.split("\n");
+
+      // Skip files that don't use ILIKE at all
+      if (!content.includes("ILIKE") && !content.includes("ilike(")) continue;
+
+      // Check: if file has ILIKE patterns, it must import escapeLike
+      const hasLikeWithInterpolation = likePatternRegex.test(content);
+      const importsEscapeLike = content.includes("escapeLike");
+
+      if (hasLikeWithInterpolation && !importsEscapeLike) {
+        const rel = path.relative(srcDir, filePath);
+        violations.push(`${rel} uses ILIKE with interpolation but does not import escapeLike`);
+      }
+    }
+
+    expect(violations).toEqual([]);
   });
 
-  it("KNOWN GAP: _ in search input acts as single-char wildcard (unescaped)", () => {
-    const pattern = buildIlikePattern("Dal_Flour");
-    expect(pattern).toBe("%Dal_Flour%"); // _ is an ILIKE wildcard, not a literal underscore
-  });
+  it("no ILIKE term variable is built without escapeLike", () => {
+    const violations: string[] = [];
+    // Catches: `%${input.search}%` or `%${search}%` or '%' + input.search
+    // without escapeLike on the same line
+    const termBuild = /%\$\{(?!escapeLike)[^}]*search[^}]*\}%|['"]%['"]\s*\+\s*(?!escapeLike)\w/;
 
-  it("FUTURE FIX: escaped pattern treats % literally (post-fix expected behaviour)", () => {
-    const pattern = buildEscapedIlikePattern("100%");
-    expect(pattern).toBe("%100\\%%"); // \ escapes the literal %
-  });
+    for (const filePath of sourceFiles) {
+      const content = readFileSync(filePath, "utf-8");
+      const lines = content.split("\n");
 
-  it("FUTURE FIX: escaped pattern treats _ literally", () => {
-    const pattern = buildEscapedIlikePattern("Dal_Flour");
-    expect(pattern).toBe("%Dal\\_Flour%");
-  });
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Only check lines that build a LIKE term pattern
+        if (termBuild.test(line) && !line.includes("escapeLike")) {
+          const rel = path.relative(srcDir, filePath);
+          violations.push(`${rel}:${i + 1}: ${line.trim()}`);
+        }
+      }
+    }
 
-  it("normal search input (no wildcards) produces same pattern with or without escaping", () => {
-    const input = "Basmati Rice";
-    expect(buildIlikePattern(input)).toBe(buildEscapedIlikePattern(input));
+    expect(violations).toEqual([]);
   });
 });
 
