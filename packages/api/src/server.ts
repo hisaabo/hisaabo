@@ -119,7 +119,7 @@ setInterval(() => {
 // HTTPS endpoint that redirects to upi:// deep link.
 // Used in PDF QR codes — PDF viewers won't open upi:// directly
 // but will open https:// links which then redirect to the UPI app.
-app.get("/pay/upi", (c) => {
+app.get("/pay/upi", async (c) => {
   const pa = c.req.query("pa");
   const pn = c.req.query("pn");
   const am = c.req.query("am");
@@ -128,28 +128,49 @@ app.get("/pay/upi", (c) => {
 
   const upiUrl = `upi://pay?pa=${encodeURIComponent(pa)}&pn=${encodeURIComponent(pn || "")}&am=${encodeURIComponent(am)}&cu=INR&tn=${encodeURIComponent(tn || "")}`;
 
-  // Return an HTML page that auto-redirects to the UPI deep link
-  // and shows a fallback for desktop users
+  // Generate QR code for desktop view
+  const qrDataUrl = await QRCode.toDataURL(upiUrl, { width: 280, margin: 2 });
+
+  // Responsive page: mobile auto-redirects to UPI app, desktop shows QR to scan
   return c.html(`<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pay ${pn || ""}</title>
-<meta http-equiv="refresh" content="0;url=${upiUrl}">
+<title>Pay ${pn || pa} \u20B9${am}</title>
 <style>
-  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa;color:#333}
-  .card{text-align:center;padding:2rem;max-width:360px}
-  .amount{font-size:2rem;font-weight:700;margin:.5rem 0}
-  .to{color:#666;margin-bottom:1.5rem}
-  a{display:inline-block;background:#5046e5;color:#fff;padding:.75rem 2rem;border-radius:8px;text-decoration:none;font-weight:600}
-  .hint{margin-top:1.5rem;font-size:.85rem;color:#999}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8f9fa;color:#1a1a2e;padding:1rem}
+  .card{text-align:center;max-width:380px;width:100%;background:#fff;border-radius:16px;padding:2rem 1.5rem;box-shadow:0 2px 16px rgba(0,0,0,0.06)}
+  .icon{width:48px;height:48px;margin:0 auto 1rem;background:#eef2ff;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .icon svg{width:24px;height:24px;color:#5046e5}
+  .to{font-size:.9rem;color:#666;margin-bottom:.25rem}
+  .amount{font-size:2.25rem;font-weight:700;color:#1a1a2e;margin-bottom:1.5rem;letter-spacing:-0.02em}
+  .pay-btn{display:inline-block;background:#5046e5;color:#fff;padding:.875rem 2.5rem;border-radius:10px;text-decoration:none;font-weight:600;font-size:1rem;transition:background .15s}
+  .pay-btn:active{background:#3d35c4}
+  .qr{margin:1.5rem auto 0;padding:1rem;background:#fff;border-radius:12px;border:1px solid #eee;display:inline-block}
+  .qr img{display:block;width:200px;height:200px}
+  .scan-text{margin-top:.75rem;font-size:.8rem;color:#999}
+  .mobile-only{display:none}
+  .desktop-only{display:block}
+  @media(max-width:768px){
+    .mobile-only{display:block}
+    .desktop-only{display:none}
+  }
 </style>
 </head><body>
 <div class="card">
+  <div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4"/></svg></div>
+  <div class="to">Pay ${pn || pa}</div>
   <div class="amount">\u20B9${am}</div>
-  <div class="to">to ${pn || pa}</div>
-  <a href="${upiUrl}">Pay with UPI</a>
-  <p class="hint">On desktop? Scan the QR code on the invoice with your phone.</p>
+
+  <div class="mobile-only">
+    <a class="pay-btn" href="${upiUrl}">Pay with UPI</a>
+  </div>
+
+  <div class="desktop-only">
+    <div class="qr"><img src="${qrDataUrl}" alt="UPI QR Code" width="200" height="200"></div>
+    <p class="scan-text">Scan with any UPI app to pay</p>
+  </div>
 </div>
 </body></html>`);
 });
