@@ -23,7 +23,7 @@ import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
 const invoicesSearchSchema = z.object({
-  invoice: z.string().uuid().optional(),
+  id: z.string().uuid().optional(),
   create: z.string().optional(),
 });
 
@@ -681,7 +681,7 @@ function InvoiceDetailPanel({
                         className="cursor-pointer hover:bg-surface-1 transition-colors"
                         onClick={() => {
                           onClose();
-                          navigate({ to: "/payments", search: { highlight: pmt.id } });
+                          navigate({ to: "/payments", search: { id: pmt.id } });
                         }}
                       >
                         <td className="px-3 py-2">
@@ -764,13 +764,13 @@ function InvoicesPage() {
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
 
-  // Open the invoice detail panel when navigated here with ?invoice=<id>
-  const { invoice: invoiceFromSearch } = useSearch({ from: "/invoices" });
+  // Open the invoice detail panel when navigated here with ?id=<invoiceId>
+  const { id: idFromSearch } = useSearch({ from: "/invoices" });
   useEffect(() => {
-    if (invoiceFromSearch) {
-      setSelectedInvoiceId(invoiceFromSearch);
+    if (idFromSearch) {
+      setSelectedInvoiceId(idFromSearch);
     }
-  }, [invoiceFromSearch]);
+  }, [idFromSearch]);
 
   const debouncedSearch = useDebounce(search, 300);
 
