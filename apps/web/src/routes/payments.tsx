@@ -469,10 +469,23 @@ function PaymentsPage() {
               </tbody>
             </table>
             {list.loadingMore && (
-              <div className="flex items-center justify-center py-3 border-t border-border-light">
-                <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
-                <span className="ml-2 text-xs text-text-tertiary">Loading more...</span>
+              <div className="border-t border-border-light">
+                <div className="flex items-center gap-3 px-4 py-3 animate-pulse">
+                  <div className="h-3 bg-surface-2 rounded w-32" />
+                  <div className="h-3 bg-surface-2 rounded w-20" />
+                  <div className="h-3 bg-surface-2 rounded w-24" />
+                  <div className="h-3 bg-surface-2 rounded w-16 ml-auto" />
+                </div>
               </div>
+            )}
+            {list.hasMore && !list.loadingMore && (
+              <button
+                type="button"
+                onClick={list.loadMore}
+                className="w-full py-2.5 text-xs text-brand-600 hover:text-brand-700 hover:bg-brand-50 dark:hover:bg-brand-950/20 border-t border-border-light transition-colors"
+              >
+                Load more
+              </button>
             )}
             {!list.hasMore && list.items.length > PAYMENTS_PAGE_SIZE && (
               <div className="py-2 text-center text-xs text-text-tertiary border-t border-border-light">

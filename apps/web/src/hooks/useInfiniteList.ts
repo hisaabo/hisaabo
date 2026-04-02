@@ -32,6 +32,10 @@ interface UseInfiniteListReturn<T> {
   onScroll: () => void;
   /** Optimistically remove an item by ID (e.g., after delete) */
   removeItem: (id: string) => void;
+  /** Manually trigger loading the next page (keyboard/button fallback) */
+  loadMore: () => void;
+  /** Number of new items loaded in the last batch (for aria-live) */
+  lastBatchSize: number;
 }
 
 export function useInfiniteList<T extends { id: string }>({
@@ -44,25 +48,59 @@ export function useInfiniteList<T extends { id: string }>({
   resetDeps,
 }: UseInfiniteListOptions<T>): UseInfiniteListReturn<T> {
   const [allItems, setAllItems] = useState<T[]>([]);
+  const [lastBatchSize, setLastBatchSize] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredRef = useRef(false);
+  const pageRef = useRef(page);
   const storageKey = `hisaabo-scroll-${key}`;
+
+  pageRef.current = page;
 
   // Reset on filter change
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setAllItems([]);
+    setLastBatchSize(0);
     restoredRef.current = false;
     sessionStorage.removeItem(storageKey);
   }, resetDeps);
 
-  // Accumulate pages
+  // Accumulate pages — NEVER replace accumulated items when page > 1.
+  // When page === 1 and we already have accumulated items from pages > 1,
+  // this is a cache invalidation refetch — merge updates into existing items
+  // instead of replacing everything (which causes scroll-to-top).
   useEffect(() => {
     if (!data) return;
+
     setAllItems((prev) => {
-      if (page === 1) return data;
+      if (page === 1 && prev.length === 0) {
+        // Initial load — just set the data
+        setLastBatchSize(data.length);
+        return data;
+      }
+
+      if (page === 1 && prev.length > 0) {
+        // Cache invalidation refetch of page 1 while we have accumulated items.
+        // Merge: update existing items in-place, prepend genuinely new ones.
+        const prevMap = new Map(prev.map((item) => [item.id, item]));
+        const merged = [...prev];
+
+        for (const item of data) {
+          if (prevMap.has(item.id)) {
+            // Update existing item in place (e.g., status change)
+            const idx = merged.findIndex((m) => m.id === item.id);
+            if (idx >= 0) merged[idx] = item;
+          }
+          // Don't prepend new page-1 items during invalidation —
+          // they'll appear on next full refresh
+        }
+        return merged;
+      }
+
+      // page > 1: append new items, dedup by id
       const existingIds = new Set(prev.map((item) => item.id));
       const newItems = data.filter((item) => !existingIds.has(item.id));
+      setLastBatchSize(newItems.length);
       return [...prev, ...newItems];
     });
   }, [data, page]);
@@ -84,7 +122,6 @@ export function useInfiniteList<T extends { id: string }>({
         });
         restoredRef.current = true;
       } else if (!isFetching) {
-        // Need to load more pages to reach the saved position
         onLoadMore();
       }
     } else {
@@ -126,6 +163,13 @@ export function useInfiniteList<T extends { id: string }>({
     setAllItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
+  // Manual load-more (keyboard/button accessible fallback)
+  const loadMore = useCallback(() => {
+    if (!isFetchingRef.current && hasMoreRef.current) {
+      onLoadMore();
+    }
+  }, [onLoadMore]);
+
   return {
     items: allItems,
     total,
@@ -134,5 +178,7 @@ export function useInfiniteList<T extends { id: string }>({
     scrollRef: scrollRef as React.RefObject<HTMLDivElement>,
     onScroll,
     removeItem,
+    loadMore,
+    lastBatchSize,
   };
 }
