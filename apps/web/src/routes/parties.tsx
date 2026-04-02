@@ -680,7 +680,7 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                           className="cursor-pointer"
                           onClick={() => {
                             onClose();
-                            navigate({ to: "/invoices" });
+                            navigate({ to: "/invoices", search: { id: inv.id } });
                           }}
                         >
                           <td className="font-mono text-[13px] text-brand-600 hover:underline">
@@ -733,7 +733,7 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                       <tr
                         key={pmt.id}
                         className="cursor-pointer hover:bg-surface-1 transition-colors"
-                        onClick={() => navigate({ to: "/payments", search: { highlight: pmt.id } })}
+                        onClick={() => navigate({ to: "/payments", search: { id: pmt.id } })}
                       >
                         <td className="text-text-secondary whitespace-nowrap">
                           {formatDate(pmt.paymentDate)}

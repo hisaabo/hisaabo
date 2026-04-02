@@ -1,5 +1,6 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState, useEffect, useCallback } from "react";
+import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
@@ -21,7 +22,13 @@ import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
+const invoicesSearchSchema = z.object({
+  id: z.string().uuid().optional(),
+  create: z.string().optional(),
+});
+
 export const Route = createFileRoute("/invoices")({
+  validateSearch: (search) => invoicesSearchSchema.parse(search),
   component: InvoicesPage,
 });
 
@@ -674,7 +681,7 @@ function InvoiceDetailPanel({
                         className="cursor-pointer hover:bg-surface-1 transition-colors"
                         onClick={() => {
                           onClose();
-                          navigate({ to: "/payments", search: { selected: pmt.id } });
+                          navigate({ to: "/payments", search: { id: pmt.id } });
                         }}
                       >
                         <td className="px-3 py-2">
@@ -756,6 +763,14 @@ function InvoicesPage() {
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
+
+  // Open the invoice detail panel when navigated here with ?id=<invoiceId>
+  const { id: idFromSearch } = useSearch({ from: "/invoices" });
+  useEffect(() => {
+    if (idFromSearch) {
+      setSelectedInvoiceId(idFromSearch);
+    }
+  }, [idFromSearch]);
 
   const debouncedSearch = useDebounce(search, 300);
 

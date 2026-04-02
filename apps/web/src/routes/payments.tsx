@@ -1,5 +1,6 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { z } from "zod";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
@@ -17,7 +18,12 @@ import { SearchInput } from "@/components/ui/SearchInput";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
+const paymentsSearchSchema = z.object({
+  id: z.string().uuid().optional(),
+});
+
 export const Route = createFileRoute("/payments")({
+  validateSearch: (search) => paymentsSearchSchema.parse(search),
   component: PaymentsPage,
 });
 
@@ -257,6 +263,14 @@ function PaymentsPage() {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("payments", "this-month");
+
+  // Open the payment detail panel when navigated here with ?id=<paymentId>
+  const { id: idFromSearch } = useSearch({ from: "/payments" });
+  useEffect(() => {
+    if (idFromSearch) {
+      setSelectedPaymentId(idFromSearch);
+    }
+  }, [idFromSearch]);
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -652,7 +666,7 @@ function PaymentDetailPanel({
                         className="cursor-pointer hover:bg-surface-1 transition-colors"
                         onClick={() => {
                           onClose();
-                          navigate({ to: "/invoices", search: { selected: inv.invoiceId } });
+                          navigate({ to: "/invoices", search: { id: inv.invoiceId } });
                         }}
                       >
                         <td className="px-3 py-2.5">
