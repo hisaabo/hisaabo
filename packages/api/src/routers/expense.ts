@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, ilike, or, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
@@ -80,7 +80,7 @@ export const expenseRouter = router({
           .where(
             and(
               eq(bankAccounts.businessId, ctx.businessId),
-              sql`${bankAccounts.accountType} = ANY(${accountTypes}::bank_account_type[])`
+              inArray(bankAccounts.accountType, accountTypes)
             )
           )
           .orderBy(
