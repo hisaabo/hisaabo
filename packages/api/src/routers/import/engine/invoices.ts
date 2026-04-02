@@ -79,8 +79,7 @@ export async function runInvoicesImport(
       invoiceNumber: inv.invoiceNumber,
       invoiceDate: inv.invoiceDate,
       dueDate: inv.dueDate ?? null,
-      // Status starts as "sent" — payment allocation will update to paid/partial
-      status: "sent" as const,
+      status: (money.toNumber(inv.totalAmount) === 0 ? "paid" : "sent") as "paid" | "sent",
       subtotal: inv.subtotal,
       taxAmount: inv.taxAmount,
       discountAmount: inv.discountAmount,
@@ -90,8 +89,7 @@ export async function runInvoicesImport(
         : "0",
       roundOff: "0",
       totalAmount: inv.totalAmount,
-      // amountPaid starts at 0 — built up by payment import allocation
-      amountPaid: "0",
+      amountPaid: money.toNumber(inv.totalAmount) === 0 ? inv.totalAmount : "0",
       notes: inv.notes || null,
       createdByUserId: user.id,
       createdByName: inv.createdByName || user.name,
