@@ -190,7 +190,7 @@ Ask Claude: *"What is my business's total outstanding receivables?"*
 | `bank_account_transactions` | List transactions for an account |
 | `bank_account_summary` | Account balance and cash flow summary |
 
-### Automated Invoices
+### Recurring Invoices
 
 | Tool | What it does |
 |---|---|

@@ -183,7 +183,7 @@ hisaabo whoami
 | `target my` | Show your target progress |
 | `target create` | Set a new sales target (daily, weekly, monthly, quarterly) |
 
-### Automated Invoices
+### Recurring Invoices
 
 | Command | Description |
 |---|---|

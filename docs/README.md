@@ -136,7 +136,7 @@ The carrier key is derived from the stored string by lowercasing and replacing s
 
 When `status` is updated to `"delivered"` and no explicit `actualDelivery` timestamp is provided, the server sets `actualDelivery` to the current time automatically.
 
-### Recurring Invoices (Automated Invoices)
+### Recurring Invoices
 
 Automated invoice generation from recurring templates. Templates define a party, line items (JSONB), frequency, and optional end date/max runs. An in-process scheduler (60s tick in `server.ts`) generates invoices for due templates.
 
