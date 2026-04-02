@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -123,27 +123,47 @@ export default function PaymentsScreen() {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [allPayments, setAllPayments] = useState<NonNullable<typeof data>["data"]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } = trpc.payment.list.useQuery({
-    page,
-    limit: PAGE_SIZE,
-    search: search.length > 0 ? search : undefined,
-  });
+  const { data, isLoading, isFetching, refetch } = trpc.payment.list.useQuery(
+    {
+      page,
+      limit: PAGE_SIZE,
+      search: search.length > 0 ? search : undefined,
+    },
+    { placeholderData: (prev) => prev }
+  );
+
+  // Accumulate pages — reset on page 1, append on subsequent pages
+  useEffect(() => {
+    if (data?.data) {
+      setAllPayments((prev) => {
+        if (page === 1) return data.data;
+        const existingIds = new Set(prev.map((p) => p.id));
+        const newItems = data.data.filter((p) => !existingIds.has(p.id));
+        return [...prev, ...newItems];
+      });
+    }
+  }, [data?.data, page]);
+
+  // Reset accumulation when search changes
+  useEffect(() => {
+    setPage(1);
+    setAllPayments([]);
+  }, [search]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setPage(1);
+    setAllPayments([]);
     await refetch();
     setIsRefreshing(false);
   }, [refetch]);
 
   const handleSearch = useCallback((text: string) => {
     setSearch(text);
-    setPage(1);
   }, []);
-
-  const payments = data?.data ?? [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -166,13 +186,13 @@ export default function PaymentsScreen() {
       </View>
 
       {/* List */}
-      {isLoading && !data ? (
+      {isLoading && page === 1 && allPayments.length === 0 ? (
         <View style={styles.centered}>
           <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
-          data={payments}
+          data={allPayments}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           keyboardDismissMode="on-drag"
@@ -213,11 +233,18 @@ export default function PaymentsScreen() {
             </PressableRow>
           )}
           onEndReached={() => {
-            if (data && page * PAGE_SIZE < data.total) {
+            if (!isFetching && data && allPayments.length < data.total) {
               setPage((p) => p + 1);
             }
           }}
           onEndReachedThreshold={0.4}
+          ListFooterComponent={
+            isFetching && allPayments.length > 0 ? (
+              <View style={styles.footer}>
+                <ActivityIndicator color={colors.brand} />
+              </View>
+            ) : null
+          }
         />
       )}
 
@@ -273,6 +300,10 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   badgeText: { fontSize: 11, fontWeight: "600", textTransform: "capitalize" },
+  footer: {
+    paddingVertical: 20,
+    alignItems: "center",
+  },
 });
 
 const bannerStyles = StyleSheet.create({

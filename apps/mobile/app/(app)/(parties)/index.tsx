@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -22,44 +22,64 @@ export default function PartiesScreen() {
   const [activeTab, setActiveTab] = useState<PartyType>("customer");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [allParties, setAllParties] = useState<NonNullable<typeof data>["data"]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } =
-    trpc.party.list.useQuery({
-      type: activeTab,
-      search: search || undefined,
-      page,
-      limit: 20,
-    });
+  const { data, isLoading, isFetching, refetch } =
+    trpc.party.list.useQuery(
+      {
+        type: activeTab,
+        search: search || undefined,
+        page,
+        limit: 20,
+      },
+      { placeholderData: (prev) => prev }
+    );
 
-  const parties = data?.data ?? [];
   const total = data?.total ?? 0;
+
+  // Accumulate pages — reset on page 1, append on subsequent pages
+  useEffect(() => {
+    if (data?.data) {
+      setAllParties((prev) => {
+        if (page === 1) return data.data;
+        const existingIds = new Set(prev.map((p) => p.id));
+        const newItems = data.data.filter((p) => !existingIds.has(p.id));
+        return [...prev, ...newItems];
+      });
+    }
+  }, [data?.data, page]);
+
+  // Reset accumulation when filters change
+  useEffect(() => {
+    setPage(1);
+    setAllParties([]);
+  }, [activeTab, search]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setPage(1);
+    setAllParties([]);
     await refetch();
     setRefreshing(false);
   }, [refetch]);
 
   const handleTabChange = (tab: PartyType) => {
     setActiveTab(tab);
-    setPage(1);
     setSearch("");
   };
 
   const handleSearch = (text: string) => {
     setSearch(text);
-    setPage(1);
   };
 
   const loadMore = () => {
-    if (parties.length < total && !isLoading) {
+    if (!isFetching && data && allParties.length < total) {
       setPage((p) => p + 1);
     }
   };
 
-  const renderItem = ({ item }: { item: (typeof parties)[0] }) => {
+  const renderItem = ({ item }: { item: (typeof allParties)[0] }) => {
     const balance = parseFloat(item.openingBalance || "0");
     const isReceivable = balance >= 0;
 
@@ -114,7 +134,7 @@ export default function PartiesScreen() {
   };
 
   const renderFooter = () => {
-    if (!isLoading || parties.length === 0) return null;
+    if (!isFetching || allParties.length === 0) return null;
     return (
       <View style={styles.footer}>
         <ActivityIndicator color={colors.brand} />
@@ -177,20 +197,20 @@ export default function PartiesScreen() {
       </View>
 
       {/* Party List */}
-      {isLoading && page === 1 ? (
+      {isLoading && page === 1 && allParties.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
         <FlatList
-          data={parties}
+          data={allParties}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={renderFooter}
           onEndReached={loadMore}
           onEndReachedThreshold={0.3}
-          contentContainerStyle={[parties.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
+          contentContainerStyle={[allParties.length === 0 ? styles.listEmpty : undefined, { paddingBottom: 100 }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
