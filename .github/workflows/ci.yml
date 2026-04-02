@@ -77,7 +77,7 @@ jobs:
         run: pnpm db:push
 
       - name: Run tests with coverage
-        run: pnpm test -- --coverage
+        run: pnpm exec turbo test --concurrency 1 -- --coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
