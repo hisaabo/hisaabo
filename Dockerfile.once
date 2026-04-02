@@ -199,9 +199,9 @@ DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
 cd /app
 
 # Start API — connects to PG via Unix socket
-echo "[api] Starting Hisaabo API on port ${PORT:-3000}..."
+echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
 exec env DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  node packages/api/dist/server.js
+  npx tsx packages/api/dist/server.js
 APIRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
 
@@ -260,12 +260,12 @@ LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
 # ── Environment ──────────────────────────────────────────────
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=80
 ENV HISAABO_VERSION=${VERSION}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
-# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, TURNSTILE_SECRET_KEY
+# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
 
-EXPOSE 3000
+EXPOSE 80
 
 ENTRYPOINT ["/init"]

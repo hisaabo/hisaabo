@@ -15,4 +15,4 @@ cd /app
 
 # ── Start the API server ───────────────────────────────────────
 echo "[entrypoint] Starting Hisaabo API server on port ${PORT:-3000}..."
-exec node packages/api/dist/server.js
+exec npx tsx packages/api/dist/server.js

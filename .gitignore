@@ -3,6 +3,7 @@ dist/
 .turbo/
 .env
 .env.local
+.env.prod
 *.log
 
 # Database (keep migration files — they're deployment artifacts)
