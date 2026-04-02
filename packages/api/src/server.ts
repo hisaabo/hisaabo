@@ -115,6 +115,45 @@ setInterval(() => {
 }, 5 * 60_000).unref();
 
 // ── Health check ───────────────────────────────────────────────
+// ── UPI payment redirect ──────────────────────────────────────
+// HTTPS endpoint that redirects to upi:// deep link.
+// Used in PDF QR codes — PDF viewers won't open upi:// directly
+// but will open https:// links which then redirect to the UPI app.
+app.get("/pay/upi", (c) => {
+  const pa = c.req.query("pa");
+  const pn = c.req.query("pn");
+  const am = c.req.query("am");
+  const tn = c.req.query("tn");
+  if (!pa || !am) return c.text("Missing payment parameters", 400);
+
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(pa)}&pn=${encodeURIComponent(pn || "")}&am=${encodeURIComponent(am)}&cu=INR&tn=${encodeURIComponent(tn || "")}`;
+
+  // Return an HTML page that auto-redirects to the UPI deep link
+  // and shows a fallback for desktop users
+  return c.html(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pay ${pn || ""}</title>
+<meta http-equiv="refresh" content="0;url=${upiUrl}">
+<style>
+  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa;color:#333}
+  .card{text-align:center;padding:2rem;max-width:360px}
+  .amount{font-size:2rem;font-weight:700;margin:.5rem 0}
+  .to{color:#666;margin-bottom:1.5rem}
+  a{display:inline-block;background:#5046e5;color:#fff;padding:.75rem 2rem;border-radius:8px;text-decoration:none;font-weight:600}
+  .hint{margin-top:1.5rem;font-size:.85rem;color:#999}
+</style>
+</head><body>
+<div class="card">
+  <div class="amount">\u20B9${am}</div>
+  <div class="to">to ${pn || pa}</div>
+  <a href="${upiUrl}">Pay with UPI</a>
+  <p class="hint">On desktop? Scan the QR code on the invoice with your phone.</p>
+</div>
+</body></html>`);
+});
+
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 // ONCE health check — lenient during PG handover (rolling deploy)
 app.get("/up", async (c) => {
@@ -243,8 +282,12 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   if (upiId && invoice.type === "sale") {
     const balance = parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid);
     if (balance > 0) {
-      upiPayUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
-      upiQrDataUrl = await QRCode.toDataURL(upiPayUrl, { width: 200, margin: 1 });
+      // QR encodes the raw upi:// deep link (scanned by phone cameras)
+      const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+      upiQrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 200, margin: 1 });
+      // Clickable link uses HTTPS redirect (PDF viewers won't open upi:// directly)
+      const apiBase = new URL(c.req.url).origin;
+      upiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
     }
   }
 
@@ -438,8 +481,10 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     const ledgerUpiAccount = ledgerBankAccounts.find(a => a.accountType === "upi");
     const ledgerUpiId = ledgerUpiAccount?.accountNumber;
     if (ledgerUpiId) {
-      ledgerUpiPayUrl = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
-      ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiPayUrl, { width: 200, margin: 1 });
+      const ledgerUpiDeepLink = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
+      ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiDeepLink, { width: 200, margin: 1 });
+      const apiBase = new URL(c.req.url).origin;
+      ledgerUpiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
     }
   }
 
