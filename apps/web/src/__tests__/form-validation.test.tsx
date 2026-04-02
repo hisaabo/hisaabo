@@ -14,7 +14,7 @@
  * Forms covered:
  *   - BusinessForm (settings)
  *   - Expense form (expenses page)
- *   - Automated Invoice form (automated-invoices page)
+ *   - Recurring Invoice form (automated-invoices page)
  *   - Bank Account form (cash-and-bank page)
  */
 

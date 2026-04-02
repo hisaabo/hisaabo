@@ -141,7 +141,7 @@ describe("useInfiniteList — cache invalidation (scroll stability)", () => {
     // Should still have 10 items (NOT reset to 5)
     expect(result.current.items).toHaveLength(10);
     // The updated item should be merged in-place
-    expect(result.current.items[0].name).toBe("Updated Item 1");
+    expect((result.current.items[0] as any).name).toBe("Updated Item 1");
     // Page 2 items still present
     expect(result.current.items[5].id).toBe("item-6");
   });

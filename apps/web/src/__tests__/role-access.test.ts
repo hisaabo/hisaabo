@@ -189,7 +189,7 @@ const ALL_NAV_ITEMS = [
   "Delivery Challans",
   "Proforma Invoices",
   "Store Orders",
-  "Automated Invoices",
+  "Recurring Invoices",
   // CONTACTS
   "Parties",
   // INVENTORY
@@ -235,7 +235,7 @@ const NAV_PERMISSION_MAP: NavItemPermission[] = [
   { navItem: "Delivery Challans", resource: "Invoice", action: "read" },
   { navItem: "Proforma Invoices", resource: "Invoice", action: "read" },
   { navItem: "Store Orders", resource: "Store", action: "read" },
-  { navItem: "Automated Invoices", resource: "RecurringInvoice", action: "read" },
+  { navItem: "Recurring Invoices", resource: "RecurringInvoice", action: "read" },
   // Contacts
   { navItem: "Parties", resource: "Party", action: "read" },
   // Inventory
@@ -258,7 +258,7 @@ const NAV_CONTRACT: Record<string, { visible: NavItem[]; hidden: NavItem[] }> = 
   superadmin: {
     visible: [
       "Dashboard", "Invoices", "Quotations", "Sales Returns", "Credit Notes",
-      "Delivery Challans", "Proforma Invoices", "Store Orders", "Automated Invoices",
+      "Delivery Challans", "Proforma Invoices", "Store Orders", "Recurring Invoices",
       "Parties", "Items", "Payments", "Cash & Bank", "Expenses", "Shipments",
       "GST Returns", "Reports", "Settings",
     ],
@@ -267,7 +267,7 @@ const NAV_CONTRACT: Record<string, { visible: NavItem[]; hidden: NavItem[] }> = 
   admin: {
     visible: [
       "Dashboard", "Invoices", "Quotations", "Sales Returns", "Credit Notes",
-      "Delivery Challans", "Proforma Invoices", "Store Orders", "Automated Invoices",
+      "Delivery Challans", "Proforma Invoices", "Store Orders", "Recurring Invoices",
       "Parties", "Items", "Payments", "Cash & Bank", "Expenses", "Shipments",
       "GST Returns", "Reports", "Settings",
     ],
@@ -276,7 +276,7 @@ const NAV_CONTRACT: Record<string, { visible: NavItem[]; hidden: NavItem[] }> = 
   seller_manager: {
     visible: [
       "Dashboard", "Invoices", "Quotations", "Sales Returns", "Credit Notes",
-      "Delivery Challans", "Proforma Invoices", "Store Orders", "Automated Invoices",
+      "Delivery Challans", "Proforma Invoices", "Store Orders", "Recurring Invoices",
       "Parties", "Items", "Payments", "Cash & Bank", "Expenses",
       "Shipments", "Reports",
     ],
@@ -285,7 +285,7 @@ const NAV_CONTRACT: Record<string, { visible: NavItem[]; hidden: NavItem[] }> = 
   seller: {
     visible: [
       "Dashboard", "Invoices", "Quotations", "Sales Returns", "Credit Notes",
-      "Delivery Challans", "Proforma Invoices", "Store Orders", "Automated Invoices",
+      "Delivery Challans", "Proforma Invoices", "Store Orders", "Recurring Invoices",
       "Parties", "Items", "Payments", "Shipments",
     ],
     hidden: ["Cash & Bank", "Expenses", "GST Returns", "Reports", "Settings"],
@@ -293,7 +293,7 @@ const NAV_CONTRACT: Record<string, { visible: NavItem[]; hidden: NavItem[] }> = 
   accountant: {
     visible: [
       "Dashboard", "Invoices", "Quotations", "Sales Returns", "Credit Notes",
-      "Delivery Challans", "Proforma Invoices", "Store Orders", "Automated Invoices",
+      "Delivery Challans", "Proforma Invoices", "Store Orders", "Recurring Invoices",
       "Parties", "Items", "Payments", "Cash & Bank", "Expenses", "Shipments",
       "GST Returns", "Reports",
     ],
@@ -355,7 +355,7 @@ const ACTION_CONTRACTS: ActionContract[] = [
   { role: "seller",          page: "cash-and-bank", resource: "BankAccount", canCreate: false, canEdit: false, canDelete: false },
   { role: "accountant",      page: "cash-and-bank", resource: "BankAccount", canCreate: true,  canEdit: true,  canDelete: true  },
 
-  // Recurring / Automated Invoices
+  // Recurring / Recurring Invoices
   { role: "superadmin",      page: "automated-invoices", resource: "RecurringInvoice", canCreate: true,  canEdit: true,  canDelete: true  },
   { role: "admin",           page: "automated-invoices", resource: "RecurringInvoice", canCreate: true,  canEdit: true,  canDelete: true  },
   { role: "seller_manager",  page: "automated-invoices", resource: "RecurringInvoice", canCreate: true,  canEdit: true,  canDelete: true  },

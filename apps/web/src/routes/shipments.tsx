@@ -472,6 +472,8 @@ function ShipmentsPage() {
     status: (status || undefined) as ShipmentStatus | undefined,
     page,
     limit: PAGE_SIZE,
+  }, {
+    placeholderData: (prev) => prev,
   });
 
   const list = useInfiniteList({

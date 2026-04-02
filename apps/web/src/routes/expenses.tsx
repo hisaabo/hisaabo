@@ -107,6 +107,8 @@ function ExpensesPage() {
     category: categoryFilter || undefined,
     fromDate: dateRange.fromDate,
     toDate: dateRange.toDate,
+  }, {
+    placeholderData: (prev) => prev,
   });
 
   const list = useInfiniteList({

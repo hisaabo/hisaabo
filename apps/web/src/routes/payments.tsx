@@ -271,6 +271,8 @@ function PaymentsPage() {
     search: debouncedSearch || undefined,
     fromDate: dateRange.fromDate,
     toDate: dateRange.toDate,
+  }, {
+    placeholderData: (prev) => prev,
   });
 
   const list = useInfiniteList({

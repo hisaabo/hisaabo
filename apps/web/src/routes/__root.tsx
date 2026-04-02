@@ -59,7 +59,7 @@ const navSections = [
       { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon },
       { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon },
       { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon },
-      { to: "/automated-invoices", label: "Automated Invoices", icon: AutomatedInvoiceIcon },
+      { to: "/automated-invoices", label: "Recurring Invoices", icon: AutomatedInvoiceIcon },
     ],
   },
   {

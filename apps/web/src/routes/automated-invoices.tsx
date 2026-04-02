@@ -413,7 +413,7 @@ function AutomatedInvoicesPage() {
   return (
     <div>
       <PageHeader
-        title="Automated Invoices"
+        title="Recurring Invoices"
         description="Manage recurring invoice templates"
         actions={
           <button className="btn-primary" onClick={openAdd}>

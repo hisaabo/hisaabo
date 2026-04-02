@@ -85,7 +85,7 @@ export default function AutomatedInvoicesScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.title}>Automated Invoices</Text>
+        <Text style={styles.title}>Recurring Invoices</Text>
         <View style={{ width: 40 }} />
       </View>
 

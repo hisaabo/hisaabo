@@ -779,6 +779,10 @@ function InvoicesPage() {
     sortDir,
     page,
     limit: PAGE_SIZE,
+  }, {
+    // Keep previous page data visible while next page loads —
+    // prevents flash-to-empty that causes scroll position to reset.
+    placeholderData: (prev) => prev,
   });
 
   const list = useInfiniteList({
