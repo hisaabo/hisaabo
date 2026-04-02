@@ -332,6 +332,7 @@ const PARTY_DETAIL_TABS = [
   { value: "overview", label: "Overview" },
   { value: "ledger", label: "Ledger" },
   { value: "invoices", label: "Invoices" },
+  { value: "payments", label: "Payments" },
   { value: "top-items", label: "Top Items" },
 ];
 
@@ -350,6 +351,11 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
   const { data: invoiceList } = trpc.invoice.list.useQuery(
     { partyId, page: 1, limit: 20 },
     { enabled: tab === "invoices" }
+  );
+
+  const { data: paymentList } = trpc.payment.list.useQuery(
+    { partyId, page: 1, limit: 30 },
+    { enabled: tab === "payments" }
   );
 
   const { data: topItems } = trpc.party.topItems.useQuery(
@@ -701,6 +707,58 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                     Showing {invoiceList.data.length} of {invoiceList.total}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Payments ────────────────────────────────────── */}
+        {tab === "payments" && (
+          <div className="space-y-3">
+            {!paymentList?.data?.length ? (
+              <p className="text-sm text-text-tertiary text-center py-6">No payments recorded</p>
+            ) : (
+              <div className="rounded-xl border border-border-light overflow-hidden">
+                <table className="data-table w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Number</th>
+                      <th>Mode</th>
+                      <th className="text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentList.data.map((pmt: any) => (
+                      <tr
+                        key={pmt.id}
+                        className="cursor-pointer hover:bg-surface-1 transition-colors"
+                        onClick={() => navigate({ to: "/payments", search: { highlight: pmt.id } })}
+                      >
+                        <td className="text-text-secondary whitespace-nowrap">
+                          {formatDate(pmt.paymentDate)}
+                        </td>
+                        <td className="font-mono text-[13px] text-text-secondary">
+                          {pmt.paymentNumber || "—"}
+                        </td>
+                        <td>
+                          <span className={cn(
+                            "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium",
+                            pmt.mode === "cash" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                              : pmt.mode === "upi" ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-400"
+                              : pmt.mode === "bank" ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                              : "bg-surface-2 text-text-secondary"
+                          )}>
+                            {pmt.mode === "upi" ? "UPI" : pmt.mode?.charAt(0).toUpperCase() + pmt.mode?.slice(1)}
+                          </span>
+                        </td>
+                        <td className="text-right tabular-nums font-medium whitespace-nowrap">
+                          {formatCurrency(pmt.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

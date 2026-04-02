@@ -358,8 +358,8 @@ describe("auth.me", () => {
     expect(result.user!.email).toBe("me.test@vyapar.in");
     expect(result.tenantId).toBe(meTenant.id);
     expect(result.tenantName).toBe("Me Test Org");
-    // Owner maps to "superadmin" via mapDbRole
-    expect(result.role).toBe("superadmin");
+    // me returns the raw DB role; mapDbRole is applied in the permission middleware
+    expect(result.role).toBe("owner");
   });
 
   it("returns null user and null tenant for an unauthenticated request — no session present", async () => {

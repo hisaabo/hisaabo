@@ -59,6 +59,7 @@ const navSections = [
       { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon },
       { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon },
       { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon },
+      { to: "/automated-invoices", label: "Recurring Invoices", icon: AutomatedInvoiceIcon },
     ],
   },
   {
@@ -389,16 +390,6 @@ function RootLayout() {
           </span>
         </div>
 
-        {/* Business switcher */}
-        {businesses && businesses.length > 0 && (
-          <BusinessSwitcher
-            businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
-            activeBusinessId={currentBusinessId ?? businesses[0].id}
-            onSwitch={handleBusinessSwitch}
-            onCreateNew={() => navigate({ to: "/settings" })}
-          />
-        )}
-
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2" onClick={() => setSidebarOpen(false)}>
           {navSections.map((section) => {
@@ -440,6 +431,12 @@ function RootLayout() {
           })}
         </nav>
 
+        {/* Version — sticky bottom */}
+        <div className="shrink-0 px-4 py-2 border-t border-border-light">
+          <span className="text-[10px] text-text-tertiary/50 select-none">
+            v{__APP_VERSION__}
+          </span>
+        </div>
       </aside>
 
       {/* Main content */}
@@ -469,8 +466,18 @@ function RootLayout() {
             <span className="font-mono text-xs">?</span>
           </button>
 
-          {/* User info — pushed to the right */}
+          {/* Business switcher + User info — pushed to the right */}
           <div className="ml-auto flex items-center gap-3 min-w-0">
+            {/* Business switcher */}
+            {businesses && businesses.length > 0 && (
+              <BusinessSwitcher
+                businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
+                activeBusinessId={currentBusinessId ?? businesses[0].id}
+                onSwitch={handleBusinessSwitch}
+                onCreateNew={() => navigate({ to: "/settings" })}
+              />
+            )}
+
             {/* Avatar + name + role */}
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-6 h-6 rounded-full bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
@@ -496,11 +503,6 @@ function RootLayout() {
             >
               <LogoutIcon />
             </button>
-
-            {/* Version */}
-            <span className="hidden md:block text-[10px] text-text-tertiary/50 select-none shrink-0">
-              v{__APP_VERSION__}
-            </span>
           </div>
         </div>
 
@@ -798,6 +800,17 @@ function ShipmentsIcon() {
       <circle cx="3.5" cy="13" r="1.2" />
       <circle cx="11.5" cy="13" r="1.2" />
       <path d="M3.5 5.5V3a1 1 0 011-1h3a1 1 0 011 1v2.5" />
+    </svg>
+  );
+}
+
+function AutomatedInvoiceIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="1.5" width="8" height="11" rx="1" />
+      <path d="M5 5h2M5 7.5h2" />
+      <path d="M12.5 7.5a3 3 0 11-1-2.2" />
+      <path d="M11.5 3v2.3h2.3" />
     </svg>
   );
 }

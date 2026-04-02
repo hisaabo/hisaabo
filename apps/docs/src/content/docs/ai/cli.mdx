@@ -63,20 +63,29 @@ export HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
 export HISAABO_BUSINESS_ID=your-business-uuid
 ```
 
-### Switch business
+### Business creation and switching
 
-If your account manages multiple businesses:
+Create a new business or switch between existing ones:
 
 ```bash
+# List all businesses on your account
+hisaabo business list
+
+# Create a new business (interactive prompts for name, GSTIN, address)
+hisaabo business create
+
+# Switch the active business (interactive picker — arrow keys + Enter)
 hisaabo switch
-# Renders an interactive picker — select with arrow keys and Enter
-```
 
-Or non-interactively:
-
-```bash
+# Switch non-interactively
 hisaabo switch <business-id>
 ```
+
+Switching updates the stored `businessId` in `~/.config/hisaabo/config.json`. All subsequent commands operate on the newly selected business. To override the active business for a single command without switching, pass `--business <id>`.
+
+**Web app:** Tap the business name in the sidebar to open a popover that lists all your businesses and includes a "Create New Business" option. Selecting a business reloads all data for that context.
+
+**Mobile app:** Tap the business name on the home dashboard to open a bottom sheet with the same business list and create option.
 
 ### Register and profile management
 
@@ -585,6 +594,76 @@ Get GSTR-3B summary (monthly return):
 hisaabo gst r3b --month 3 --year 2026
 hisaabo gst r3b --month 3 --year 2026 --csv --output /var/gst-reports/
 ```
+
+---
+
+### `hisaabo automated-invoice`
+
+Manage recurring invoice templates that auto-generate invoices on a schedule.
+
+#### `hisaabo automated-invoice list`
+
+```bash
+hisaabo automated-invoice list [--status active|paused|completed|expired] [--json]
+```
+
+Lists all recurring invoice templates with name, party, frequency, status, next run date, and run count.
+
+#### `hisaabo automated-invoice get`
+
+```bash
+hisaabo automated-invoice get <template-id> [--json]
+```
+
+Shows full template details including line items and execution history.
+
+#### `hisaabo automated-invoice create`
+
+```bash
+hisaabo automated-invoice create \
+  --name "Monthly Rent to Gupta Ji" \
+  --party-id <uuid> \
+  --type sale \
+  --frequency monthly \
+  --start-date 2026-04-01T00:00:00Z \
+  --line-items '[{"description":"Office Rent","quantity":"1","unitPrice":"25000.00","taxPercent":"18"}]' \
+  [--end-date 2027-03-31T00:00:00Z] \
+  [--max-runs 12] \
+  [--notes "Annual rent agreement"] \
+  [--json]
+```
+
+#### `hisaabo automated-invoice pause`
+
+```bash
+hisaabo automated-invoice pause <template-id> [--json]
+```
+
+Pauses an active template. No invoices will be generated until resumed.
+
+#### `hisaabo automated-invoice resume`
+
+```bash
+hisaabo automated-invoice resume <template-id> [--json]
+```
+
+Resumes a paused template. Next run date is recalculated from now.
+
+#### `hisaabo automated-invoice run-now`
+
+```bash
+hisaabo automated-invoice run-now <template-id> [--json]
+```
+
+Manually trigger immediate invoice generation from a template.
+
+#### `hisaabo automated-invoice delete`
+
+```bash
+hisaabo automated-invoice delete <template-id> [-y] [--json]
+```
+
+Permanently deletes a template and all its execution history.
 
 ---
 

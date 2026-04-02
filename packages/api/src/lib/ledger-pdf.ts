@@ -31,6 +31,9 @@ export interface LedgerPDFData {
     totalCredit: string;
     closingBalance: string;
   };
+  // UPI payment QR — shown when closing balance is receivable
+  upiQrDataUrl?: string;
+  upiPayUrl?: string;
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -219,7 +222,28 @@ function generateLedgerPDFDoc(doc: InstanceType<typeof PDFDocument>, data: Ledge
   doc.text(fmt(data.summary.totalDebit),  col.debit.x  + 4, y + 7, { width: col.debit.w  - 4, align: "right" });
   doc.text(fmt(data.summary.totalCredit), col.credit.x + 4, y + 7, { width: col.credit.w - 4, align: "right" });
   doc.text(fmt(data.summary.closingBalance), col.bal.x + 2, y + 7, { width: col.bal.w - 2, align: "right" });
-  y += cbRowH + 20;
+  y += cbRowH + 12;
+
+  // ── UPI QR code (if receivable balance exists) ────────────────
+  if (data.upiQrDataUrl && parseFloat(data.summary.closingBalance) > 0) {
+    const qrSize = 72;
+    try {
+      const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
+      doc.image(qrBuffer, margin, y, { width: qrSize, height: qrSize });
+      if (data.upiPayUrl) {
+        doc.link(margin, y, qrSize, qrSize, data.upiPayUrl);
+      }
+      const label = data.upiPayUrl ? "Scan or tap to pay" : "Scan to pay";
+      doc.fontSize(7).fillColor(colorMuted).font("NotoSans")
+        .text(`${label} ${fmt(data.summary.closingBalance)}`, margin, y + qrSize + 2,
+          { width: qrSize, align: "center" });
+      y += qrSize + 16;
+    } catch {
+      // skip QR if image decoding fails
+    }
+  }
+
+  y += 8;
 
   // ── Footer ────────────────────────────────────────────────────
   doc.fontSize(7).fillColor(colorMuted).font("NotoSans")

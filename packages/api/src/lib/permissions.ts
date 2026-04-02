@@ -9,7 +9,7 @@ export type Resource =
   | "Invoice" | "Payment" | "Party" | "Item" | "Expense"
   | "BankAccount" | "BankTransaction"
   | "Business" | "Team" | "Import" | "Report" | "GstReport"
-  | "Store" | "SalesTarget"
+  | "Store" | "SalesTarget" | "RecurringInvoice"
   | "all";
 
 export type AppAbility = PureAbility<[Action, Resource]>;
@@ -63,6 +63,11 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       // Sales targets: read own targets + manage targets for their team
       can("read", "SalesTarget");
       can("manage", "SalesTarget");
+      // Recurring invoices: full CRUD
+      can("create", "RecurringInvoice");
+      can("read", "RecurringInvoice");
+      can("update", "RecurringInvoice");
+      can("delete", "RecurringInvoice");
       break;
 
     case "seller":
@@ -85,6 +90,8 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("read", "Store");
       // Sales targets: read (myTargets is self-scoped, list filtered by admin)
       can("read", "SalesTarget");
+      // Recurring invoices: read only
+      can("read", "RecurringInvoice");
       break;
 
     case "accountant":
@@ -107,6 +114,8 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("read", "Business");
       // Store: read only (view orders for reconciliation)
       can("read", "Store");
+      // Recurring invoices: read only
+      can("read", "RecurringInvoice");
       break;
 
     default:

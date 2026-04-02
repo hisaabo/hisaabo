@@ -152,7 +152,6 @@ function StatusTimeline({ current }: { current: OrderStatus }) {
         {TIMELINE_STEPS.map((step, idx) => {
           const isDone = idx < currentIndex;
           const isActive = idx === currentIndex;
-          const isPending = idx > currentIndex;
           return (
             <div key={step.status} className="flex-1 flex flex-col items-center">
               <div className="relative flex items-center w-full">

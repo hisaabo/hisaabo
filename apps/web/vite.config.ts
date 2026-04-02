@@ -9,9 +9,10 @@ const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "ut
 
 function getVersion(): string {
   // CI sets this from the git tag; fallback to git describe, then package.json
-  if (process.env.VITE_APP_VERSION) return process.env.VITE_APP_VERSION;
+  // Always strip leading "v" — the display template adds its own "v" prefix
+  if (process.env.VITE_APP_VERSION) return process.env.VITE_APP_VERSION.replace(/^v/, "");
   try {
-    return execSync("git describe --tags --abbrev=0", { encoding: "utf-8" }).trim();
+    return execSync("git describe --tags --abbrev=0", { encoding: "utf-8" }).trim().replace(/^v/, "");
   } catch {
     return pkg.version;
   }

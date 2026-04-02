@@ -36,13 +36,13 @@ jobs:
       - name: Get changed files
         id: changed
         run: |
-          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
+          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} > /tmp/changed-files.txt
+          FILES=$(cat /tmp/changed-files.txt | tr '\n' ' ')
 
-          echo "touches_api=$(echo "$FILES" | grep -c 'packages/api/src/routers/' || true)" >> $GITHUB_OUTPUT
-          echo "touches_web=$(echo "$FILES" | grep -c 'apps/web/' || true)" >> $GITHUB_OUTPUT
-          echo "touches_mobile=$(echo "$FILES" | grep -c 'apps/mobile/' || true)" >> $GITHUB_OUTPUT
-          echo "touches_exceptions=$(echo "$FILES" | grep -c 'parity-exceptions.yaml' || true)" >> $GITHUB_OUTPUT
+          echo "touches_api=$(grep -c 'packages/api/src/routers/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
+          echo "touches_web=$(grep -c 'apps/web/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
+          echo "touches_mobile=$(grep -c 'apps/mobile/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
+          echo "touches_exceptions=$(grep -c 'parity-exceptions.yaml' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
 
       - name: Validate exceptions file
         id: validate
@@ -72,7 +72,8 @@ jobs:
         id: changed_check
         run: |
           set +e
-          OUTPUT=$(npx tsx scripts/check-parity.ts --changed ${{ steps.changed.outputs.files }} 2>&1)
+          # Read files from temp file to avoid bash issues with parentheses in Expo paths
+          OUTPUT=$(xargs npx tsx scripts/check-parity.ts --changed < /tmp/changed-files.txt 2>&1)
           echo "$OUTPUT"
           echo "output<<EOF" >> $GITHUB_OUTPUT
           echo "$OUTPUT" >> $GITHUB_OUTPUT

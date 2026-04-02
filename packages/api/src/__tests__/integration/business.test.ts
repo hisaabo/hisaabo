@@ -156,8 +156,8 @@ describe("business.create", () => {
     const cashAccount = cashAccounts.find((a) => a.accountType === "cash");
     expect(cashAccount).toBeDefined();
     expect(cashAccount!.accountName).toBe("Cash");
-    expect(cashAccount!.openingBalance).toBe("0");
-    expect(cashAccount!.currentBalance).toBe("0");
+    expect(cashAccount!.openingBalance).toBe("0.00");
+    expect(cashAccount!.currentBalance).toBe("0.00");
   });
 
   it("seller cannot create a business — FORBIDDEN due to insufficient tenant admin role", async () => {

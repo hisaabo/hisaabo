@@ -136,6 +136,34 @@ The carrier key is derived from the stored string by lowercasing and replacing s
 
 When `status` is updated to `"delivered"` and no explicit `actualDelivery` timestamp is provided, the server sets `actualDelivery` to the current time automatically.
 
+### Recurring Invoices
+
+Automated invoice generation from recurring templates. Templates define a party, line items (JSONB), frequency, and optional end date/max runs. An in-process scheduler (60s tick in `server.ts`) generates invoices for due templates.
+
+**Schema**: `recurring_invoice_templates` (template config) + `recurring_invoice_runs` (execution history).
+
+**Router**: `recurringInvoice` — 12 endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `list` | Paginated templates, filterable by status |
+| `getById` | Full template details including line items |
+| `create` | New recurring template |
+| `update` | Modify template config |
+| `delete` | Remove template and all runs |
+| `pause` | Pause an active template |
+| `resume` | Resume a paused template (recalculates next run date) |
+| `runNow` | Manually trigger invoice generation |
+| `executionHistory` | Paginated run log for a template |
+| `planUsage` | Monthly run count + template count |
+| `suggestions` | AI-detected recurring patterns (parties with 3+ invoices at regular intervals, CV < 0.5) |
+
+**Frequencies**: weekly, biweekly, monthly, quarterly, half_yearly, yearly, custom (N days).
+
+**Plan limits**: Free plan allows 5 successful runs/month/business. Exceeded runs are recorded as `skipped_limit`.
+
+**Suggestions engine**: Analyzes last 2 months of invoices, detects median interval + coefficient of variation for top 20 parties. Returns suggested frequency, median amount, and invoice count.
+
 ### Import
 
 A `import` tRPC router powering the MyBillBook import wizard (`ImportWizard.tsx`). All four endpoints operate under `businessProcedure` and accept CSV/JSON payloads parsed client-side.
@@ -153,6 +181,10 @@ Unmapped unit codes are collected and returned in the response so no data is sil
 
 `normalizeUnit()` maps 45+ MyBillBook unit codes to Hisaabo's internal unit enum. Unmapped codes are tracked and surfaced to the importer so no data is silently dropped.
 
+### Web App
+
+- Multi-business switching via a sidebar popover — clicking the business name opens a popover listing all businesses and a "Create New Business" option. Selecting a business reloads all data for that context and invalidates cached queries (`BusinessSwitcher.tsx`).
+
 ### Invoice Improvements
 
 - Unit label is shown alongside quantity in both the web UI and generated PDFs.
@@ -161,9 +193,11 @@ Unmapped unit codes are collected and returned in the response so no data is sil
 - Party pre-fill when creating a repeat invoice from a party's record (OPT-01).
 - Select All / Clear All controls in the payment panel (OPT-02).
 - Payment button is conditionally shown based on invoice status (OPT-06).
+- **Clickable UPI QR codes** in invoice and ledger PDFs — clicking the QR code opens the UPI payment app with the amount pre-filled. Uses the remaining balance for partially paid invoices and the closing balance for ledger reports. Built on the `upi://pay` deep link scheme.
 
 ### Mobile App
 
+- Multi-business switching via a bottom sheet on the home dashboard — tap the business name to see all businesses and a "Create New Business" option. Switching invalidates cached data and reloads for the selected business (`BusinessSwitcherSheet.tsx`, `BusinessSwitcherContext`).
 - Variant and alt-unit selection in the mobile invoice creation flow (G-08).
 - Inline party creation directly from the invoice screen (OPT-03).
 - Due date auto-populated from the selected party's credit terms (OPT-04).

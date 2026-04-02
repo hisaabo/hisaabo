@@ -1,5 +1,5 @@
 /**
- * Tests for packages/api/src/lib/permissions.ts
+ * EXHAUSTIVE PERMISSION MATRIX TESTS
  *
  * WHY THIS FILE EXISTS:
  * The permissions module implements Role-Based Access Control (RBAC) using the
@@ -8,9 +8,12 @@
  * - An accountant gaining create access means unauthorized invoices can be issued.
  * - An unknown role receiving any permissions is a privilege escalation path.
  *
- * These tests document the EXACT permission matrix for every role. They serve
- * as both unit tests and a living specification that contributors must update
- * whenever roles are changed.
+ * These tests document the EXACT permission matrix for every role x every
+ * resource x every action. They serve as both unit tests and a living
+ * specification that contributors must update whenever roles are changed.
+ *
+ * COVERAGE: 5 roles x 15 resources x 5 actions = 375 permission checks,
+ * plus unknown/empty role denial, mapDbRole, and requireCan tests.
  *
  * AUDIT REFERENCE: Role permission matrix must match SECURITY_AUDIT.md findings.
  */
@@ -20,264 +23,456 @@ import { defineAbilityFor, mapDbRole, requireCan } from "../lib/permissions.js";
 import type { Action, Resource } from "../lib/permissions.js";
 import { TRPCError } from "@trpc/server";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Shared constants — the full set of concrete resources and actions
+// ---------------------------------------------------------------------------
+const ALL_RESOURCES: Resource[] = [
+  "Invoice", "Payment", "Party", "Item", "Expense",
+  "BankAccount", "BankTransaction",
+  "Business", "Team", "Import", "Report", "GstReport",
+  "Store", "SalesTarget", "RecurringInvoice",
+];
+
+const ALL_ACTIONS: Action[] = ["create", "read", "update", "delete", "manage"];
+
+// ═══════════════════════════════════════════════════════════════════════════
 // defineAbilityFor — builds CASL ability objects per role
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
 describe("defineAbilityFor — builds CASL ability for each role", () => {
 
-  // ── superadmin ──────────────────────────────────────────────────────────────
-  describe("superadmin role — can manage all resources", () => {
-    const ability = defineAbilityFor({ userId: "user-1", role: "superadmin" });
+  // ── superadmin ──────────────────────────────────────────────────────────
+  describe("superadmin role — unrestricted access via manage:all", () => {
+    const ability = defineAbilityFor({ userId: "u-sa", role: "superadmin" });
 
-    it("can create invoices", () => {
-      expect(ability.can("create", "Invoice")).toBe(true);
-    });
-
-    it("can delete invoices", () => {
-      expect(ability.can("delete", "Invoice")).toBe(true);
-    });
-
-    it("can manage team members", () => {
-      expect(ability.can("manage", "Team")).toBe(true);
-    });
-
-    it("can access GST reports", () => {
-      expect(ability.can("read", "GstReport")).toBe(true);
+    // superadmin has `manage` on `all`, which grants every action on every resource.
+    it.each(
+      ALL_RESOURCES.flatMap((r) => ALL_ACTIONS.map((a) => [a, r] as [Action, Resource]))
+    )("can %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(true);
     });
   });
 
-  // ── admin ───────────────────────────────────────────────────────────────────
-  describe("admin role — can manage all resources (same as superadmin for permissions)", () => {
-    const ability = defineAbilityFor({ userId: "user-2", role: "admin" });
+  // ── admin ───────────────────────────────────────────────────────────────
+  describe("admin role — unrestricted access via manage:all (superadmin demotion guard is endpoint-level)", () => {
+    const ability = defineAbilityFor({ userId: "u-ad", role: "admin" });
 
-    it("can create invoices", () => {
-      expect(ability.can("create", "Invoice")).toBe(true);
-    });
-
-    it("can delete invoices", () => {
-      expect(ability.can("delete", "Invoice")).toBe(true);
-    });
-
-    it("can manage team members", () => {
-      expect(ability.can("manage", "Team")).toBe(true);
+    // admin has the same CASL grant as superadmin (manage:all).
+    // The distinction between admin and superadmin is enforced in team
+    // management endpoint logic, not in CASL rules.
+    it.each(
+      ALL_RESOURCES.flatMap((r) => ALL_ACTIONS.map((a) => [a, r] as [Action, Resource]))
+    )("can %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(true);
     });
   });
 
-  // ── seller ───────────────────────────────────────────────────────────────────
-  describe("seller role — limited to creating sales and reading data", () => {
-    const ability = defineAbilityFor({ userId: "user-3", role: "seller" });
+  // ── seller_manager ─────────────────────────────────────────────────────
+  describe("seller_manager role — sales leadership with catalog management", () => {
+    const ability = defineAbilityFor({ userId: "u-sm", role: "seller_manager" });
 
-    it("can create invoices", () => {
-      // Sellers are the front-line staff who generate invoices.
-      expect(ability.can("create", "Invoice")).toBe(true);
+    // ---- Allowed permissions ----
+    // Derived from the switch case in permissions.ts:
+    //   Invoice:           create, read, update, delete
+    //   Party:             create, read, update
+    //   Item:              create, read, update
+    //   Payment:           create, read, update
+    //   Expense:           read
+    //   BankAccount:       read
+    //   BankTransaction:   read
+    //   Business:          read
+    //   Report:            read
+    //   Store:             create, read, update
+    //   SalesTarget:       read, manage (manage grants all 5 actions via CASL)
+    //   RecurringInvoice:  create, read, update, delete
+    //
+    // Note: can("manage", "SalesTarget") in CASL grants create/read/update/delete/manage on SalesTarget.
+
+    const CAN: [Action, Resource][] = [
+      // Invoice — full CRUD (delete constraint is API-level)
+      ["create", "Invoice"],
+      ["read",   "Invoice"],
+      ["update", "Invoice"],
+      ["delete", "Invoice"],
+      // Party — CRU, no delete
+      ["create", "Party"],
+      ["read",   "Party"],
+      ["update", "Party"],
+      // Item — CRU, no delete (prevents catalog destruction)
+      ["create", "Item"],
+      ["read",   "Item"],
+      ["update", "Item"],
+      // Payment — CRU (edit constraint is API-level: own + <2hrs)
+      ["create", "Payment"],
+      ["read",   "Payment"],
+      ["update", "Payment"],
+      // Expense — read only
+      ["read", "Expense"],
+      // BankAccount — read only
+      ["read", "BankAccount"],
+      // BankTransaction — read only
+      ["read", "BankTransaction"],
+      // Business — read only
+      ["read", "Business"],
+      // Report — read only
+      ["read", "Report"],
+      // Store — CRU (toggle items, confirm orders)
+      ["create", "Store"],
+      ["read",   "Store"],
+      ["update", "Store"],
+      // SalesTarget — manage grants all actions
+      ["create", "SalesTarget"],
+      ["read",   "SalesTarget"],
+      ["update", "SalesTarget"],
+      ["delete", "SalesTarget"],
+      ["manage", "SalesTarget"],
+      // RecurringInvoice — full CRUD
+      ["create", "RecurringInvoice"],
+      ["read",   "RecurringInvoice"],
+      ["update", "RecurringInvoice"],
+      ["delete", "RecurringInvoice"],
+    ];
+
+    it.each(CAN)("can %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(true);
     });
 
-    it("can read invoices", () => {
-      expect(ability.can("read", "Invoice")).toBe(true);
-    });
+    // ---- Denied permissions ----
+    // Everything else is denied. Build the explicit list by subtracting CAN from the full matrix.
+    const canSet = new Set(CAN.map(([a, r]) => `${a}:${r}`));
+    const CANNOT: [Action, Resource][] = ALL_RESOURCES.flatMap((r) =>
+      ALL_ACTIONS
+        .filter((a) => !canSet.has(`${a}:${r}`))
+        .map((a) => [a, r] as [Action, Resource])
+    );
 
-    it("CANNOT delete invoices — audit finding: sellers must not destroy records", () => {
-      // SECURITY: Allowing sellers to delete invoices would let them cover up sales.
-      expect(ability.can("delete", "Invoice")).toBe(false);
-    });
-
-    it("CANNOT create items — sellers should not modify the product catalog", () => {
-      expect(ability.can("create", "Item")).toBe(false);
-    });
-
-    it("CANNOT access reports — financial reports are restricted to managers", () => {
-      // SECURITY: Sellers should not see revenue reports or competitor pricing data.
-      expect(ability.can("read", "Report")).toBe(false);
-    });
-
-    it("CANNOT create expenses", () => {
-      expect(ability.can("create", "Expense")).toBe(false);
-    });
-
-    it("CANNOT manage bank accounts", () => {
-      expect(ability.can("manage", "BankAccount")).toBe(false);
-    });
-
-    it("can create parties (needed to onboard new customers at point of sale)", () => {
-      expect(ability.can("create", "Party")).toBe(true);
-    });
-
-    it("can create payments (to record cash collected from customers)", () => {
-      expect(ability.can("create", "Payment")).toBe(true);
-    });
-
-    it("can read items (to build invoices from the product catalog)", () => {
-      expect(ability.can("read", "Item")).toBe(true);
-    });
-  });
-
-  // ── seller_manager ─────────────────────────────────────────────────────────
-  describe("seller_manager role — all seller permissions plus delete (with time constraints)", () => {
-    const ability = defineAbilityFor({ userId: "user-4", role: "seller_manager" });
-
-    it("can delete invoices (API enforces the 2-hour constraint at endpoint level)", () => {
-      // CASL grants the permission; the time constraint is enforced in the invoice router.
-      expect(ability.can("delete", "Invoice")).toBe(true);
-    });
-
-    it("can create and update items (manages the product catalog)", () => {
-      expect(ability.can("create", "Item")).toBe(true);
-      expect(ability.can("update", "Item")).toBe(true);
-    });
-
-    it("CANNOT delete items (prevents accidental catalog destruction)", () => {
-      expect(ability.can("delete", "Item")).toBe(false);
-    });
-
-    it("can read reports (view sales performance)", () => {
-      expect(ability.can("read", "Report")).toBe(true);
-    });
-
-    it("CANNOT access GST reports (financial compliance is accountant territory)", () => {
-      expect(ability.can("read", "GstReport")).toBe(false);
-    });
-
-    it("CANNOT manage bank accounts", () => {
-      expect(ability.can("manage", "BankAccount")).toBe(false);
-    });
-  });
-
-  // ── accountant ─────────────────────────────────────────────────────────────
-  describe("accountant role — full financial access, no invoice creation", () => {
-    const ability = defineAbilityFor({ userId: "user-5", role: "accountant" });
-
-    it("CANNOT create invoices — accountants reconcile, they do not sell", () => {
-      // SECURITY: An accountant creating invoices could generate fraudulent documents.
-      expect(ability.can("create", "Invoice")).toBe(false);
-    });
-
-    it("can read invoices (needed for reconciliation)", () => {
-      expect(ability.can("read", "Invoice")).toBe(true);
-    });
-
-    it("can manage bank accounts", () => {
-      expect(ability.can("manage", "BankAccount")).toBe(true);
-    });
-
-    it("can create and delete expenses", () => {
-      expect(ability.can("create", "Expense")).toBe(true);
-      expect(ability.can("delete", "Expense")).toBe(true);
-    });
-
-    it("can access GST reports", () => {
-      expect(ability.can("read", "GstReport")).toBe(true);
-    });
-
-    it("can access financial reports", () => {
-      expect(ability.can("read", "Report")).toBe(true);
-    });
-
-    it("CANNOT delete invoices", () => {
-      expect(ability.can("delete", "Invoice")).toBe(false);
-    });
-
-    it("CANNOT manage team members", () => {
-      expect(ability.can("manage", "Team")).toBe(false);
+    it.each(CANNOT)("cannot %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(false);
     });
   });
 
-  // ── unknown/invalid role ───────────────────────────────────────────────────
-  describe("unknown role — deny-by-default: zero permissions", () => {
-    // SECURITY AUDIT FINDING: Unknown roles must not inherit any permissions.
-    // An attacker who somehow injects an unrecognized role string should get nothing.
-    const unknownAbility = defineAbilityFor({ userId: "user-6", role: "unknown_role" });
-    const emptyStringAbility = defineAbilityFor({ userId: "user-7", role: "" });
+  // ── seller ──────────────────────────────────────────────────────────────
+  describe("seller role — front-line sales staff, strictly limited", () => {
+    const ability = defineAbilityFor({ userId: "u-se", role: "seller" });
 
-    const testResources: Resource[] = ["Invoice", "Payment", "Party", "Item", "Expense", "Report"];
-    const testActions: Action[] = ["create", "read", "update", "delete"];
+    // ---- Allowed permissions ----
+    // From switch case:
+    //   Invoice:           create, read, update (own + <2hrs enforced at API level)
+    //   Party:             create, read
+    //   Item:              read
+    //   Payment:           create, read, update (own + <2hrs enforced at API level)
+    //   Business:          read
+    //   Store:             read
+    //   SalesTarget:       read
+    //   RecurringInvoice:  read
 
-    it("grants zero permissions for an unknown role string", () => {
-      for (const resource of testResources) {
-        for (const action of testActions) {
-          expect(unknownAbility.can(action, resource)).toBe(false);
-        }
-      }
+    const CAN: [Action, Resource][] = [
+      // Invoice — create, read, update (no delete: sellers must not destroy records)
+      ["create", "Invoice"],
+      ["read",   "Invoice"],
+      ["update", "Invoice"],
+      // Party — create + read (onboard new customers at point of sale)
+      ["create", "Party"],
+      ["read",   "Party"],
+      // Item — read only (browse the product catalog)
+      ["read", "Item"],
+      // Payment — create, read, update (record cash collected)
+      ["create", "Payment"],
+      ["read",   "Payment"],
+      ["update", "Payment"],
+      // Business — read only
+      ["read", "Business"],
+      // Store — read only (view orders)
+      ["read", "Store"],
+      // SalesTarget — read only (view own targets)
+      ["read", "SalesTarget"],
+      // RecurringInvoice — read only
+      ["read", "RecurringInvoice"],
+    ];
+
+    it.each(CAN)("can %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(true);
     });
 
-    it("grants zero permissions for an empty string role", () => {
-      for (const resource of testResources) {
-        for (const action of testActions) {
-          expect(emptyStringAbility.can(action, resource)).toBe(false);
-        }
-      }
+    // ---- Denied permissions ----
+    const canSet = new Set(CAN.map(([a, r]) => `${a}:${r}`));
+    const CANNOT: [Action, Resource][] = ALL_RESOURCES.flatMap((r) =>
+      ALL_ACTIONS
+        .filter((a) => !canSet.has(`${a}:${r}`))
+        .map((a) => [a, r] as [Action, Resource])
+    );
+
+    it.each(CANNOT)("cannot %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(false);
+    });
+  });
+
+  // ── accountant ──────────────────────────────────────────────────────────
+  describe("accountant role — full financial access, read-only on non-financial", () => {
+    const ability = defineAbilityFor({ userId: "u-ac", role: "accountant" });
+
+    // ---- Allowed permissions ----
+    // From switch case:
+    //   Payment:           create, read, update
+    //   Expense:           create, read, update, delete
+    //   BankAccount:       manage (grants all 5 actions)
+    //   BankTransaction:   manage (grants all 5 actions)
+    //   Report:            read
+    //   GstReport:         read
+    //   Invoice:           read
+    //   Party:             read
+    //   Item:              read
+    //   Business:          read
+    //   Store:             read
+    //   RecurringInvoice:  read
+
+    const CAN: [Action, Resource][] = [
+      // Payment — CRU (no delete)
+      ["create", "Payment"],
+      ["read",   "Payment"],
+      ["update", "Payment"],
+      // Expense — full CRUD
+      ["create", "Expense"],
+      ["read",   "Expense"],
+      ["update", "Expense"],
+      ["delete", "Expense"],
+      // BankAccount — manage grants all actions
+      ["create", "BankAccount"],
+      ["read",   "BankAccount"],
+      ["update", "BankAccount"],
+      ["delete", "BankAccount"],
+      ["manage", "BankAccount"],
+      // BankTransaction — manage grants all actions
+      ["create", "BankTransaction"],
+      ["read",   "BankTransaction"],
+      ["update", "BankTransaction"],
+      ["delete", "BankTransaction"],
+      ["manage", "BankTransaction"],
+      // Report — read only
+      ["read", "Report"],
+      // GstReport — read only
+      ["read", "GstReport"],
+      // Invoice — read only (reconciliation)
+      ["read", "Invoice"],
+      // Party — read only
+      ["read", "Party"],
+      // Item — read only
+      ["read", "Item"],
+      // Business — read only
+      ["read", "Business"],
+      // Store — read only (order reconciliation)
+      ["read", "Store"],
+      // RecurringInvoice — read only
+      ["read", "RecurringInvoice"],
+    ];
+
+    it.each(CAN)("can %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(true);
+    });
+
+    // ---- Denied permissions ----
+    const canSet = new Set(CAN.map(([a, r]) => `${a}:${r}`));
+    const CANNOT: [Action, Resource][] = ALL_RESOURCES.flatMap((r) =>
+      ALL_ACTIONS
+        .filter((a) => !canSet.has(`${a}:${r}`))
+        .map((a) => [a, r] as [Action, Resource])
+    );
+
+    it.each(CANNOT)("cannot %s %s", (action, resource) => {
+      expect(ability.can(action, resource)).toBe(false);
+    });
+  });
+
+  // ── unknown / empty role ───────────────────────────────────────────────
+  describe("unknown role — deny-by-default: ZERO permissions on all resources", () => {
+    // SECURITY: An attacker who injects an unrecognized role string must get nothing.
+    const unknownAbility  = defineAbilityFor({ userId: "u-unk", role: "unknown_role" });
+    const emptyAbility    = defineAbilityFor({ userId: "u-emp", role: "" });
+    const sqlInjAbility   = defineAbilityFor({ userId: "u-sql", role: "'; DROP TABLE users;--" });
+
+    const ALL_PAIRS: [Action, Resource][] = ALL_RESOURCES.flatMap((r) =>
+      ALL_ACTIONS.map((a) => [a, r] as [Action, Resource])
+    );
+
+    describe("unknown role string", () => {
+      it.each(ALL_PAIRS)("cannot %s %s", (action, resource) => {
+        expect(unknownAbility.can(action, resource)).toBe(false);
+      });
+    });
+
+    describe("empty string role", () => {
+      it.each(ALL_PAIRS)("cannot %s %s", (action, resource) => {
+        expect(emptyAbility.can(action, resource)).toBe(false);
+      });
+    });
+
+    describe("adversarial role string", () => {
+      it.each(ALL_PAIRS)("cannot %s %s", (action, resource) => {
+        expect(sqlInjAbility.can(action, resource)).toBe(false);
+      });
     });
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
 // mapDbRole — maps legacy DB enum values to permission roles
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
 describe("mapDbRole — maps legacy DB enum values to permission role strings", () => {
-  it("maps 'owner' to 'superadmin' (legacy alias)", () => {
-    // The first registered user gets the 'owner' DB role — map to max permissions.
-    expect(mapDbRole("owner")).toBe("superadmin");
+
+  // ---- Legacy aliases ----
+  it.each([
+    ["owner",   "superadmin"],
+    ["member",  "seller"],
+    ["viewer",  "accountant"],
+  ] as [string, string][])("maps legacy '%s' to '%s'", (dbRole, expected) => {
+    expect(mapDbRole(dbRole)).toBe(expected);
   });
 
-  it("maps 'admin' to 'admin'", () => {
-    expect(mapDbRole("admin")).toBe("admin");
+  // ---- Identity pass-through for current roles ----
+  it.each([
+    ["superadmin",     "superadmin"],
+    ["admin",          "admin"],
+    ["seller_manager", "seller_manager"],
+    ["seller",         "seller"],
+    ["accountant",     "accountant"],
+  ] as [string, string][])("passes through current role '%s' unchanged", (dbRole, expected) => {
+    expect(mapDbRole(dbRole)).toBe(expected);
   });
 
-  it("maps 'member' to 'seller' (legacy: general staff member = seller)", () => {
-    // Most existing multi-user setups use 'member' for shop floor staff.
-    expect(mapDbRole("member")).toBe("seller");
-  });
-
-  it("maps 'viewer' to 'accountant' (legacy: read-only user = accountant)", () => {
-    expect(mapDbRole("viewer")).toBe("accountant");
-  });
-
-  it("maps new CASL role names to themselves (passthrough)", () => {
-    expect(mapDbRole("superadmin")).toBe("superadmin");
-    expect(mapDbRole("seller_manager")).toBe("seller_manager");
-    expect(mapDbRole("seller")).toBe("seller");
-    expect(mapDbRole("accountant")).toBe("accountant");
-  });
-
-  it("maps unknown DB role values to an empty string (no permissions)", () => {
-    // SECURITY: Unrecognized DB roles must not silently elevate to any permission.
-    // The empty string maps to the default case in defineAbilityFor (zero perms).
-    expect(mapDbRole("some_future_role_not_in_mapping")).toBe("");
-    expect(mapDbRole("")).toBe("");
+  // ---- Unknown values → empty string (zero permissions) ----
+  it.each([
+    "",
+    "root",
+    "some_future_role",
+    "ADMIN",                    // case-sensitive — uppercase is unknown
+    "superAdmin",               // camelCase is unknown
+    "'; DROP TABLE users;--",   // adversarial input
+  ])("maps unknown value '%s' to empty string", (dbRole) => {
+    expect(mapDbRole(dbRole)).toBe("");
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// requireCan — the CASL enforcement helper used in all routers
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// requireCan — the CASL enforcement helper used in all tRPC routers
+// ═══════════════════════════════════════════════════════════════════════════
 describe("requireCan — throws FORBIDDEN TRPCError when permission is denied", () => {
-  it("does not throw when the ability grants the permission", () => {
+
+  it("does not throw when the ability grants the requested permission", () => {
     const ability = defineAbilityFor({ userId: "u1", role: "superadmin" });
-    // Should not throw:
     expect(() => requireCan(ability, "delete", "Invoice")).not.toThrow();
   });
 
-  it("throws FORBIDDEN TRPCError when the ability denies the permission", () => {
-    // A seller trying to delete an invoice should result in a FORBIDDEN error.
-    const ability = defineAbilityFor({ userId: "u2", role: "seller" });
-    let caught: unknown;
+  it("does not throw for a role-specific grant (accountant can read GstReport)", () => {
+    const ability = defineAbilityFor({ userId: "u2", role: "accountant" });
+    expect(() => requireCan(ability, "read", "GstReport")).not.toThrow();
+  });
+
+  it("throws TRPCError with code FORBIDDEN when the ability denies the permission", () => {
+    const ability = defineAbilityFor({ userId: "u3", role: "seller" });
+    expect(() => requireCan(ability, "delete", "Invoice")).toThrowError();
     try {
       requireCan(ability, "delete", "Invoice");
     } catch (e) {
-      caught = e;
+      expect(e).toBeInstanceOf(TRPCError);
+      expect((e as TRPCError).code).toBe("FORBIDDEN");
     }
-    expect(caught).toBeInstanceOf(TRPCError);
-    expect((caught as TRPCError).code).toBe("FORBIDDEN");
   });
 
-  it("includes the action and resource in the error message", () => {
-    const ability = defineAbilityFor({ userId: "u3", role: "accountant" });
-    let message = "";
+  it("includes the action and resource in the error message for debuggability", () => {
+    const ability = defineAbilityFor({ userId: "u4", role: "accountant" });
     try {
       requireCan(ability, "create", "Invoice");
     } catch (e) {
-      message = (e as TRPCError).message;
+      const msg = (e as TRPCError).message;
+      expect(msg).toContain("create");
+      expect(msg).toContain("Invoice");
     }
-    expect(message).toContain("create");
-    expect(message).toContain("Invoice");
+  });
+
+  it("throws for unknown role attempting any action", () => {
+    const ability = defineAbilityFor({ userId: "u5", role: "" });
+    expect(() => requireCan(ability, "read", "Invoice")).toThrowError();
+    try {
+      requireCan(ability, "read", "Invoice");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TRPCError);
+      expect((e as TRPCError).code).toBe("FORBIDDEN");
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cross-cutting security properties
+// ═══════════════════════════════════════════════════════════════════════════
+describe("cross-cutting security properties", () => {
+
+  it("only superadmin and admin can manage Team", () => {
+    const roles = ["superadmin", "admin", "seller_manager", "seller", "accountant"];
+    for (const role of roles) {
+      const ability = defineAbilityFor({ userId: "u-cc", role });
+      if (role === "superadmin" || role === "admin") {
+        expect(ability.can("manage", "Team")).toBe(true);
+      } else {
+        expect(ability.can("manage", "Team")).toBe(false);
+      }
+    }
+  });
+
+  it("only superadmin and admin can access Import", () => {
+    const roles = ["superadmin", "admin", "seller_manager", "seller", "accountant"];
+    for (const role of roles) {
+      const ability = defineAbilityFor({ userId: "u-cc", role });
+      const allowed = role === "superadmin" || role === "admin";
+      for (const action of ALL_ACTIONS) {
+        expect(ability.can(action, "Import")).toBe(allowed);
+      }
+    }
+  });
+
+  it("only accountant (and superadmin/admin) can read GstReport", () => {
+    const expectations: Record<string, boolean> = {
+      superadmin: true,
+      admin: true,
+      seller_manager: false,
+      seller: false,
+      accountant: true,
+    };
+    for (const [role, expected] of Object.entries(expectations)) {
+      const ability = defineAbilityFor({ userId: "u-cc", role });
+      expect(ability.can("read", "GstReport")).toBe(expected);
+    }
+  });
+
+  it("no non-admin role can delete Party or Item", () => {
+    for (const role of ["seller_manager", "seller", "accountant"]) {
+      const ability = defineAbilityFor({ userId: "u-cc", role });
+      expect(ability.can("delete", "Party")).toBe(false);
+      expect(ability.can("delete", "Item")).toBe(false);
+    }
+  });
+
+  it("seller cannot escalate to manage on any resource", () => {
+    const ability = defineAbilityFor({ userId: "u-cc", role: "seller" });
+    for (const resource of ALL_RESOURCES) {
+      expect(ability.can("manage", resource)).toBe(false);
+    }
+  });
+
+  it("mapDbRole followed by defineAbilityFor produces correct abilities for legacy roles", () => {
+    // owner → superadmin → manage all
+    const ownerAbility = defineAbilityFor({ userId: "u-legacy", role: mapDbRole("owner") });
+    expect(ownerAbility.can("manage", "Team")).toBe(true);
+    expect(ownerAbility.can("delete", "Invoice")).toBe(true);
+
+    // member → seller → limited
+    const memberAbility = defineAbilityFor({ userId: "u-legacy", role: mapDbRole("member") });
+    expect(memberAbility.can("create", "Invoice")).toBe(true);
+    expect(memberAbility.can("delete", "Invoice")).toBe(false);
+    expect(memberAbility.can("manage", "Team")).toBe(false);
+
+    // viewer → accountant → financial
+    const viewerAbility = defineAbilityFor({ userId: "u-legacy", role: mapDbRole("viewer") });
+    expect(viewerAbility.can("manage", "BankAccount")).toBe(true);
+    expect(viewerAbility.can("create", "Invoice")).toBe(false);
+    expect(viewerAbility.can("read", "GstReport")).toBe(true);
   });
 });

@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
+import { TurnstileModal } from "@/components/ui/TurnstileModal";
 
-/* ─── Cloudflare Turnstile window type ───────────────────────────────────── */
+/* ─── Turnstile type (declared in TurnstileModal) ──────────────────────── */
 declare global {
   interface Window {
     turnstile?: {
@@ -533,60 +534,24 @@ function LoginPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
 
-  // ── Turnstile (visible CAPTCHA widget) ────────────────────────
-  const turnstileContainerRef = useRef<HTMLDivElement>(null);
-  const turnstileWidgetIdRef = useRef<string | null>(null);
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  // ── Turnstile modal (bot protection) ──────────────────────────
+  // Form handlers save a pending action and open the modal.
+  // On Turnstile success, the pending action fires with the token.
+  const [showTurnstile, setShowTurnstile] = useState(false);
+  const pendingActionRef = useRef<((token: string) => void) | null>(null);
 
-  useEffect(() => {
-    if (!turnstileContainerRef.current) return;
-
-    const sitekey =
-      (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA"; // Cloudflare test key — always passes in dev
-
-    function mount() {
-      if (!turnstileContainerRef.current || !window.turnstile) return;
-      if (turnstileWidgetIdRef.current !== null) return;
-      turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
-        sitekey,
-        size: "normal",
-        theme: "auto",
-        callback: (token: string) => setTurnstileToken(token),
-        "error-callback": () => {
-          setError("Verification failed. Please refresh and try again.");
-          setTurnstileToken(null);
-        },
-        "expired-callback": () => setTurnstileToken(null),
-      });
+  const handleTurnstileVerified = useCallback((token: string) => {
+    setShowTurnstile(false);
+    if (pendingActionRef.current) {
+      pendingActionRef.current(token);
+      pendingActionRef.current = null;
     }
-
-    if (window.turnstile) {
-      mount();
-    } else {
-      const interval = setInterval(() => {
-        if (window.turnstile) {
-          clearInterval(interval);
-          mount();
-        }
-      }, 100);
-      return () => clearInterval(interval);
-    }
-
-    return () => {
-      if (window.turnstile && turnstileWidgetIdRef.current !== null) {
-        window.turnstile.remove(turnstileWidgetIdRef.current);
-        turnstileWidgetIdRef.current = null;
-      }
-    };
   }, []);
 
-  /** Reset the widget after a form submission so it can be used again. */
-  function resetTurnstile() {
-    setTurnstileToken(null);
-    if (window.turnstile && turnstileWidgetIdRef.current !== null) {
-      window.turnstile.reset(turnstileWidgetIdRef.current);
-    }
+  /** Wraps a form submission: opens the Turnstile modal, then fires the action with the token. */
+  function withTurnstile(action: (token: string) => void) {
+    pendingActionRef.current = action;
+    setShowTurnstile(true);
   }
 
   const loginMutation = trpc.auth.login.useMutation({
@@ -638,8 +603,9 @@ function LoginPage() {
   function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
-    resetTurnstile();
+    withTurnstile((token) => {
+      magicLinkMutation.mutate({ email, turnstileToken: token });
+    });
   }
 
   function handlePasswordLogin(e: React.FormEvent) {
@@ -655,15 +621,17 @@ function LoginPage() {
       setError("Passwords don't match");
       return;
     }
-    registerMutation.mutate({ email, password, confirmPassword, name, ...(turnstileToken ? { turnstileToken } : {}) });
-    resetTurnstile();
+    withTurnstile((token) => {
+      registerMutation.mutate({ email, password, confirmPassword, name, turnstileToken: token });
+    });
   }
 
   function handleResend() {
     if (cooldown > 0) return;
-    magicLinkMutation.mutate({ email, ...(turnstileToken ? { turnstileToken } : {}) });
-    resetTurnstile();
-    setCooldown(60);
+    withTurnstile((token) => {
+      magicLinkMutation.mutate({ email, turnstileToken: token });
+      setCooldown(60);
+    });
   }
 
   function switchMode(next: AuthMode) {
@@ -1081,8 +1049,15 @@ function LoginPage() {
         </div>
       </div>
 
-      {/* Turnstile CAPTCHA widget — renders visibly above submit buttons */}
-      <div ref={turnstileContainerRef} className="flex justify-center my-4" />
+      {/* Turnstile bot protection modal */}
+      <TurnstileModal
+        open={showTurnstile}
+        onVerified={handleTurnstileVerified}
+        onClose={() => {
+          setShowTurnstile(false);
+          pendingActionRef.current = null;
+        }}
+      />
     </>
   );
 }

@@ -16,8 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       api: ${{ steps.filter.outputs.api }}
-      web: ${{ steps.filter.outputs.web }}
-      store: ${{ steps.filter.outputs.store }}
       mobile: ${{ steps.filter.outputs.mobile }}
       desktop: ${{ steps.filter.outputs.desktop }}
       cli: ${{ steps.filter.outputs.cli }}
@@ -123,66 +121,8 @@ jobs:
           cache-from: type=gha,scope=once
           cache-to: type=gha,mode=max,scope=once
 
-  # ── Web SPA (Cloudflare Pages) ─────────────────────────────────
-  web:
-    name: Deploy Web
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @hisaabo/web build
-        env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          packageManager: npm
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/web/dist --project-name=hisaabo-web --commit-hash=${{ github.sha }}
-
-  # ── Store SPA (Cloudflare Pages) ───────────────────────────────
-  store:
-    name: Deploy Store
-    needs: changes
-    if: needs.changes.outputs.store == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @hisaabo/store build
-        env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          packageManager: npm
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/store/dist --project-name=hisaabo-store --commit-hash=${{ github.sha }}
+  # ── Web & Store deploy to Cloudflare Pages on push to main ─────
+  # (handled by deploy-web.yml and deploy-store.yml — no need to duplicate here)
 
   # ── Desktop (Tauri — Windows, macOS, Linux) ────────────────────
   desktop:
@@ -231,6 +171,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd apps/desktop/src-tauri && cat tauri.conf.json | jq --arg v "$VERSION" '.version = $v' > tmp.json && mv tmp.json tauri.conf.json
+
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -271,6 +216,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd apps/mobile && cat app.json | jq --arg v "$VERSION" '.expo.version = $v' > tmp.json && mv tmp.json app.json
+
       - name: Expo prebuild
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --clean
@@ -308,6 +258,12 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd packages/cli && npm version "$VERSION" --no-git-tag-version
+
       - run: pnpm --filter @hisaabo/cli build
       - run: pnpm --filter @hisaabo/cli publish --no-git-checks --access public --provenance
 
@@ -333,13 +289,19 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Set version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd packages/mcp && npm version "$VERSION" --no-git-tag-version
+
       - run: pnpm --filter @hisaabo/mcp build
       - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public --provenance
 
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:
     name: Publish Release Notes
-    needs: [changes, docker, web, store, desktop, mobile, cli, mcp]
+    needs: [changes, docker, desktop, mobile, cli, mcp]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -353,15 +315,11 @@ jobs:
         id: notes
         env:
           API: ${{ needs.changes.outputs.api }}
-          WEB: ${{ needs.changes.outputs.web }}
-          STORE: ${{ needs.changes.outputs.store }}
           MOBILE: ${{ needs.changes.outputs.mobile }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           CLI: ${{ needs.changes.outputs.cli }}
           MCP: ${{ needs.changes.outputs.mcp }}
           DOCKER_RESULT: ${{ needs.docker.result }}
-          WEB_RESULT: ${{ needs.web.result }}
-          STORE_RESULT: ${{ needs.store.result }}
           MOBILE_RESULT: ${{ needs.mobile.result }}
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           CLI_RESULT: ${{ needs.cli.result }}
@@ -396,8 +354,8 @@ jobs:
           | Component | Status | Build |
           |---|---|---|
           $(status "$API" "$DOCKER_RESULT" "API (Docker)")
-          $(status "$WEB" "$WEB_RESULT" "Web App")
-          $(status "$STORE" "$STORE_RESULT" "Online Store")
+          | Web App | Deployed on merge | :white_check_mark: |
+          | Online Store | Deployed on merge | :white_check_mark: |
           $(status "$MOBILE" "$MOBILE_RESULT" "Android APK")
           $(status "$DESKTOP" "$DESKTOP_RESULT" "Desktop (Win/Mac/Linux)")
           $(status "$CLI" "$CLI_RESULT" "CLI (@hisaabo/cli)")

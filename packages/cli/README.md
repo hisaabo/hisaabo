@@ -183,6 +183,18 @@ hisaabo whoami
 | `target my` | Show your target progress |
 | `target create` | Set a new sales target (daily, weekly, monthly, quarterly) |
 
+### Recurring Invoices
+
+| Command | Description |
+|---|---|
+| `automated-invoice list` | List recurring invoice templates |
+| `automated-invoice get <id>` | Get template details |
+| `automated-invoice create` | Create a new recurring template |
+| `automated-invoice pause <id>` | Pause an active template |
+| `automated-invoice resume <id>` | Resume a paused template |
+| `automated-invoice run-now <id>` | Manually trigger invoice generation |
+| `automated-invoice delete <id>` | Delete a template |
+
 ### Store
 
 | Command | Description |
@@ -403,14 +415,25 @@ Most commands accept these flags:
 
 ## Multi-Business Support
 
-If you manage multiple businesses under one account, switch between them:
+If you manage multiple businesses under one account, create and switch between them from the CLI:
 
 ```bash
+# List all businesses on your account
 hisaabo business list
+
+# Create a new business
+hisaabo business create
+
+# Switch the active business (interactive picker)
 hisaabo switch
+
+# Switch non-interactively
+hisaabo switch <business-id>
 ```
 
-All subsequent commands operate on the active business. The `dashboard`, `invoice`, `party`, and every other command scopes data to whichever business is currently selected.
+All subsequent commands operate on the active business. The `dashboard`, `invoice`, `party`, and every other command scopes data to whichever business is currently selected. Switching resets all cached data so you always see numbers for the correct business.
+
+**Web and mobile UI:** Business switching is also available without the CLI. In the web app, tap the business name in the sidebar to open a popover listing all your businesses plus a "Create New Business" option. On mobile, tap the business name on the home dashboard to open a bottom sheet with the same options.
 
 ---
 

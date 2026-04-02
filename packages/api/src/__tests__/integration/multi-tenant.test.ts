@@ -229,15 +229,10 @@ describe("Cross-tenant isolation — party listing is scoped to the caller's bus
 
   it("Suresh CANNOT use an Acme businessId while holding a Beta tenant context — FORBIDDEN (business not found)", async () => {
     // Suresh is on Beta tenant, but the businessId passed belongs to Acme.
-    // The hasBusinessAccess middleware queries for the business in ctx.db (Beta tenant DB).
-    // In self-hosted mode both schemas share the same DB; the middleware verifies
-    // the business exists. The business DOES exist in the DB (it belongs to Acme),
-    // so the middleware passes — but the data returned is scoped by businessId in each
-    // query's WHERE clause, meaning Acme parties will not appear in a Beta context.
-    //
-    // More critically: in cloud multi-tenant mode (separate DBs), the business would
-    // not be found at all (it lives in Acme's DB, not Beta's). We test the self-hosted
-    // path here. The critical invariant is that party.list always filters by businessId.
+    // The hasBusinessAccess middleware verifies that the business creator is a
+    // member of the caller's tenant. In self-hosted mode (shared DB), this
+    // prevents cross-tenant access: business1 was created by Ramesh, who is
+    // NOT a member of tenant2 (Beta), so the middleware rejects the request.
     const caller = callerFor({
       userId: world.suresh.id,
       email: world.suresh.email,
@@ -246,15 +241,13 @@ describe("Cross-tenant isolation — party listing is scoped to the caller's bus
       businessId: world.business1.id, // Acme businessId in Beta context
     });
 
-    // party.list filters by ctx.businessId, so even if middleware passes,
-    // no Acme parties appear in Beta context (they're filtered by businessId)
-    const result = await caller.party.list({ page: 1, limit: 50 });
-
-    // Acme party must not appear — it belongs to business1, but the businesses
-    // table is shared in self-hosted mode. The key is the WHERE clause on businessId.
-    // party1 belongs to business1 (Acme), so it should not appear in business2 (Beta) context.
-    const acmeParty = result.data.find((p) => p.id === world.party1.id);
-    expect(acmeParty).toBeUndefined();
+    // The middleware must reject this at the boundary — no data should leak.
+    await expect(
+      caller.party.list({ page: 1, limit: 50 })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Business not found",
+    });
   });
 });
 

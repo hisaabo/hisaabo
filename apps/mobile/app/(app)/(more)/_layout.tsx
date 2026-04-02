@@ -21,6 +21,7 @@ export default function MoreLayout() {
       <Stack.Screen name="store-orders" options={{ headerShown: false }} />
       <Stack.Screen name="reports" options={{ headerShown: false }} />
       <Stack.Screen name="shipments" options={{ headerShown: false }} />
+      <Stack.Screen name="automated-invoices" options={{ headerShown: false }} />
     </Stack>
   );
 }

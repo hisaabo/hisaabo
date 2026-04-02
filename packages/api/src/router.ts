@@ -26,6 +26,7 @@ import { targetRouter } from "./routers/target.js";
 import { reportsRouter } from "./routers/reports.js";
 import { shipmentRouter } from "./routers/shipment.js";
 import { apiKeyRouter } from "./routers/apiKey.js";
+import { recurringInvoiceRouter } from "./routers/recurringInvoice.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -53,6 +54,7 @@ export const appRouter = router({
   reports: reportsRouter,
   shipment: shipmentRouter,
   apiKey: apiKeyRouter,
+  recurringInvoice: recurringInvoiceRouter,
 });
 
 export type AppRouter = typeof appRouter;

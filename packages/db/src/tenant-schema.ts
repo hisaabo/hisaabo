@@ -14,6 +14,9 @@ export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation",
 export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card"]);
 export const bankTransactionTypeEnum = pgEnum("bank_transaction_type", ["deposit", "withdrawal", "transfer"]);
 export const gstRegistrationTypeEnum = pgEnum("gst_registration_type", ["regular", "composition", "unregistered"]);
+export const recurringFrequencyEnum = pgEnum("recurring_frequency", ["weekly", "biweekly", "monthly", "quarterly", "half_yearly", "yearly", "custom"]);
+export const recurringTemplateStatusEnum = pgEnum("recurring_template_status", ["active", "paused", "completed", "expired"]);
+export const recurringRunStatusEnum = pgEnum("recurring_run_status", ["success", "failed", "skipped_limit"]);
 
 // ── Business ───────────────────────────────────────────────────
 
@@ -506,6 +509,64 @@ export const storeOrders = pgTable("store_orders", {
   uniqueIndex("store_orders_number_idx").on(t.businessId, t.orderNumber),
 ]);
 
+// ── Recurring Invoice Templates ────────────────────────────────
+
+export const recurringInvoiceTemplates = pgTable("recurring_invoice_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  partyId: uuid("party_id").notNull().references(() => parties.id, { onDelete: "restrict" }),
+  name: text("name").notNull(),
+  type: invoiceTypeEnum("type").notNull(),
+  frequency: recurringFrequencyEnum("frequency").notNull(),
+  customIntervalDays: integer("custom_interval_days"), // only when frequency = 'custom'
+  lineItems: jsonb("line_items").$type<Array<{
+    itemId?: string;
+    description: string;
+    quantity: string;
+    unitPrice: string;
+    taxPercent: string;
+    discountPercent: string;
+    selectedUnit?: string | null;
+    conversionFactor?: string | null;
+    variantId?: string | null;
+  }>>().notNull(),
+  notes: text("notes"),
+  termsAndConditions: text("terms_and_conditions"),
+  additionalCharges: numeric("additional_charges", { precision: 15, scale: 2 }).default("0").notNull(),
+  charges: jsonb("charges").$type<Array<{ label: string; amount: string }>>(),
+  status: recurringTemplateStatusEnum("status").default("active").notNull(),
+  startDate: timestamp("start_date", { withTimezone: true }).notNull(),
+  endDate: timestamp("end_date", { withTimezone: true }),
+  nextRunDate: timestamp("next_run_date", { withTimezone: true }).notNull(),
+  lastRunDate: timestamp("last_run_date", { withTimezone: true }),
+  totalRuns: integer("total_runs").default(0).notNull(),
+  maxRuns: integer("max_runs"), // null = unlimited
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("recurring_tpl_business_idx").on(t.businessId),
+  index("recurring_tpl_party_idx").on(t.partyId),
+  index("recurring_tpl_status_idx").on(t.businessId, t.status),
+  index("recurring_tpl_next_run_idx").on(t.status, t.nextRunDate),
+]);
+
+// ── Recurring Invoice Runs (execution history) ────────────────
+
+export const recurringInvoiceRuns = pgTable("recurring_invoice_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  templateId: uuid("template_id").notNull().references(() => recurringInvoiceTemplates.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  status: recurringRunStatusEnum("status").notNull(),
+  errorMessage: text("error_message"),
+  executedAt: timestamp("executed_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("recurring_run_template_idx").on(t.templateId),
+  index("recurring_run_business_idx").on(t.businessId),
+  index("recurring_run_executed_idx").on(t.businessId, t.executedAt),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({
@@ -517,6 +578,7 @@ export const businessesRelations = relations(businesses, ({ many }) => ({
   bankAccounts: many(bankAccounts),
   storeOrders: many(storeOrders),
   salesTargets: many(salesTargets),
+  recurringInvoiceTemplates: many(recurringInvoiceTemplates),
 }));
 
 export const partiesRelations = relations(parties, ({ one, many }) => ({
@@ -595,4 +657,16 @@ export const shipmentEventsRelations = relations(shipmentEvents, ({ one }) => ({
 export const salesTargetsRelations = relations(salesTargets, ({ one }) => ({
   business: one(businesses, { fields: [salesTargets.businessId], references: [businesses.id] }),
   item: one(items, { fields: [salesTargets.itemId], references: [items.id] }),
+}));
+
+export const recurringInvoiceTemplatesRelations = relations(recurringInvoiceTemplates, ({ one, many }) => ({
+  business: one(businesses, { fields: [recurringInvoiceTemplates.businessId], references: [businesses.id] }),
+  party: one(parties, { fields: [recurringInvoiceTemplates.partyId], references: [parties.id] }),
+  runs: many(recurringInvoiceRuns),
+}));
+
+export const recurringInvoiceRunsRelations = relations(recurringInvoiceRuns, ({ one }) => ({
+  template: one(recurringInvoiceTemplates, { fields: [recurringInvoiceRuns.templateId], references: [recurringInvoiceTemplates.id] }),
+  business: one(businesses, { fields: [recurringInvoiceRuns.businessId], references: [businesses.id] }),
+  invoice: one(invoices, { fields: [recurringInvoiceRuns.invoiceId], references: [invoices.id] }),
 }));

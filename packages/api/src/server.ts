@@ -16,6 +16,7 @@ import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
+import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
 
 const app = new Hono();
 
@@ -114,6 +115,66 @@ setInterval(() => {
 }, 5 * 60_000).unref();
 
 // ── Health check ───────────────────────────────────────────────
+// ── UPI payment redirect ──────────────────────────────────────
+// HTTPS endpoint that redirects to upi:// deep link.
+// Used in PDF QR codes — PDF viewers won't open upi:// directly
+// but will open https:// links which then redirect to the UPI app.
+app.get("/pay/upi", async (c) => {
+  const pa = c.req.query("pa");
+  const pn = c.req.query("pn");
+  const am = c.req.query("am");
+  const tn = c.req.query("tn");
+  if (!pa || !am) return c.text("Missing payment parameters", 400);
+
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(pa)}&pn=${encodeURIComponent(pn || "")}&am=${encodeURIComponent(am)}&cu=INR&tn=${encodeURIComponent(tn || "")}`;
+
+  // Generate QR code for desktop view
+  const qrDataUrl = await QRCode.toDataURL(upiUrl, { width: 280, margin: 2 });
+
+  // Responsive page: mobile auto-redirects to UPI app, desktop shows QR to scan
+  return c.html(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pay ${pn || pa} \u20B9${am}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8f9fa;color:#1a1a2e;padding:1rem}
+  .card{text-align:center;max-width:380px;width:100%;background:#fff;border-radius:16px;padding:2rem 1.5rem;box-shadow:0 2px 16px rgba(0,0,0,0.06)}
+  .icon{width:48px;height:48px;margin:0 auto 1rem;background:#eef2ff;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .icon svg{width:24px;height:24px;color:#5046e5}
+  .to{font-size:.9rem;color:#666;margin-bottom:.25rem}
+  .amount{font-size:2.25rem;font-weight:700;color:#1a1a2e;margin-bottom:1.5rem;letter-spacing:-0.02em}
+  .pay-btn{display:inline-block;background:#5046e5;color:#fff;padding:.875rem 2.5rem;border-radius:10px;text-decoration:none;font-weight:600;font-size:1rem;transition:background .15s}
+  .pay-btn:active{background:#3d35c4}
+  .qr{margin:1.5rem auto 0;padding:1rem;background:#fff;border-radius:12px;border:1px solid #eee;display:inline-block}
+  .qr img{display:block;width:200px;height:200px}
+  .scan-text{margin-top:.75rem;font-size:.8rem;color:#999}
+  .mobile-only{display:none}
+  .desktop-only{display:block}
+  @media(max-width:768px){
+    .mobile-only{display:block}
+    .desktop-only{display:none}
+  }
+</style>
+</head><body>
+<div class="card">
+  <div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4"/></svg></div>
+  <div class="to">Pay ${pn || pa}</div>
+  <div class="amount">\u20B9${am}</div>
+
+  <div class="mobile-only">
+    <a class="pay-btn" href="${upiUrl}">Pay with UPI</a>
+  </div>
+
+  <div class="desktop-only">
+    <div class="qr"><img src="${qrDataUrl}" alt="UPI QR Code" width="200" height="200"></div>
+    <p class="scan-text">Scan with any UPI app to pay</p>
+  </div>
+</div>
+</body></html>`);
+});
+
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 // ONCE health check — lenient during PG handover (rolling deploy)
 app.get("/up", async (c) => {
@@ -237,12 +298,17 @@ app.get("/api/invoices/:id/pdf", async (c) => {
 
   // Generate UPI QR code if UPI account exists and invoice is a sale with remaining balance
   let upiQrDataUrl: string | undefined;
+  let upiPayUrl: string | undefined;
   const upiId = upiAccount?.accountNumber; // UPI ID stored in accountNumber for UPI type
   if (upiId && invoice.type === "sale") {
     const balance = parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid);
     if (balance > 0) {
-      const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
-      upiQrDataUrl = await QRCode.toDataURL(upiUrl, { width: 200, margin: 1 });
+      // QR encodes the raw upi:// deep link (scanned by phone cameras)
+      const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+      upiQrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 200, margin: 1 });
+      // Clickable link uses HTTPS redirect (PDF viewers won't open upi:// directly)
+      const apiBase = new URL(c.req.url).origin;
+      upiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
     }
   }
 
@@ -291,6 +357,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     bankName: bankAccount?.bankName || undefined,
     upiId: upiId || undefined,
     upiQrDataUrl,
+    upiPayUrl,
     gstRegistrationType: biz.gstRegistrationType || "unregistered",
     businessStateCode: biz.stateCode || undefined,
     partyStateCode: party.stateCode || undefined,
@@ -426,6 +493,22 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   const totalCredit = money.sum(entries.map(e => e.credit));
   const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
 
+  // Generate UPI QR for ledger if closing balance is receivable
+  let ledgerUpiQrDataUrl: string | undefined;
+  let ledgerUpiPayUrl: string | undefined;
+  if (parseFloat(closingBalance) > 0 && party.type === "customer") {
+    const ledgerBankAccounts = await db.select().from(bankAccounts)
+      .where(eq(bankAccounts.businessId, businessId));
+    const ledgerUpiAccount = ledgerBankAccounts.find(a => a.accountType === "upi");
+    const ledgerUpiId = ledgerUpiAccount?.accountNumber;
+    if (ledgerUpiId) {
+      const ledgerUpiDeepLink = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
+      ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiDeepLink, { width: 200, margin: 1 });
+      const apiBase = new URL(c.req.url).origin;
+      ledgerUpiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
+    }
+  }
+
   const pdfBuffer = await generateLedgerPDF({
     businessName: biz.name,
     partyName: party.name,
@@ -435,6 +518,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     toDate: toParam || null,
     entries: entriesWithBalance,
     summary: { totalDebit, totalCredit, closingBalance },
+    upiQrDataUrl: ledgerUpiQrDataUrl,
+    upiPayUrl: ledgerUpiPayUrl,
   });
 
   const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -1291,11 +1376,13 @@ const port = parseInt(process.env.PORT || "3000", 10);
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Hisaabo API running on http://localhost:${info.port}`);
   console.log(`  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
+  startRecurringScheduler();
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────
 function shutdown(signal: string) {
   console.log(`\n[${signal}] Shutting down...`);
+  stopRecurringScheduler();
   server.close(() => {
     console.log("[shutdown] HTTP server closed");
     process.exit(0);

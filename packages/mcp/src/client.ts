@@ -577,6 +577,45 @@ export class HisaaboClient {
     };
   }
 
+  get automatedInvoice() {
+    const c = this;
+    return {
+      list(input: RecurringInvoiceListInput) {
+        return c.query<PaginatedResult<RecurringInvoiceTemplateSummary>>("recurringInvoice.list", input);
+      },
+      getById(id: string) {
+        return c.query<RecurringInvoiceTemplateDetail>("recurringInvoice.getById", { id });
+      },
+      create(input: RecurringInvoiceCreateInput) {
+        return c.mutate<RecurringInvoiceTemplateDetail>("recurringInvoice.create", input);
+      },
+      update(id: string, data: RecurringInvoiceUpdateInput) {
+        return c.mutate<RecurringInvoiceTemplateDetail>("recurringInvoice.update", { id, data });
+      },
+      delete(id: string) {
+        return c.mutate<{ success: boolean }>("recurringInvoice.delete", { id });
+      },
+      pause(id: string) {
+        return c.mutate<RecurringInvoiceTemplateSummary>("recurringInvoice.pause", { id });
+      },
+      resume(id: string) {
+        return c.mutate<RecurringInvoiceTemplateSummary>("recurringInvoice.resume", { id });
+      },
+      runNow(id: string) {
+        return c.mutate<RecurringInvoiceRunResult>("recurringInvoice.runNow", { id });
+      },
+      executionHistory(templateId: string, page?: number, limit?: number) {
+        return c.query<PaginatedResult<RecurringInvoiceRun>>("recurringInvoice.executionHistory", { templateId, page, limit });
+      },
+      planUsage() {
+        return c.query<RecurringInvoicePlanUsage>("recurringInvoice.planUsage");
+      },
+      suggestions() {
+        return c.query<RecurringInvoiceSuggestion[]>("recurringInvoice.suggestions");
+      },
+    };
+  }
+
   get document() {
     const c = this;
     return {
@@ -1618,4 +1657,110 @@ export interface DocumentListInput {
   search?: string | null;
   page?: number;
   limit?: number;
+}
+
+// ── Recurring / Automated Invoice types ──────────────────────────
+
+export type RecurringInvoiceFrequency =
+  | "weekly" | "biweekly" | "monthly" | "quarterly"
+  | "half_yearly" | "yearly" | "custom";
+
+export type RecurringInvoiceStatus = "active" | "paused" | "completed" | "expired";
+
+export type RecurringInvoiceRunStatus = "success" | "failed" | "skipped_limit";
+
+export interface RecurringInvoiceLineItem {
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  taxPercent?: string;
+  discountPercent?: string;
+}
+
+export interface RecurringInvoiceTemplateSummary {
+  id: string;
+  businessId: string;
+  partyId: string;
+  partyName: string;
+  name: string;
+  type: "sale" | "purchase";
+  frequency: RecurringInvoiceFrequency;
+  customIntervalDays: number | null;
+  status: RecurringInvoiceStatus;
+  startDate: string;
+  endDate: string | null;
+  nextRunDate: string | null;
+  lastRunDate: string | null;
+  totalRuns: number;
+  maxRuns: number | null;
+  createdAt: string;
+}
+
+export interface RecurringInvoiceTemplateDetail extends RecurringInvoiceTemplateSummary {
+  lineItems: RecurringInvoiceLineItem[];
+  notes: string | null;
+}
+
+export interface RecurringInvoiceListInput {
+  status?: RecurringInvoiceStatus;
+  page?: number;
+  limit?: number;
+}
+
+export interface RecurringInvoiceCreateInput {
+  partyId: string;
+  name: string;
+  type: "sale" | "purchase";
+  frequency: RecurringInvoiceFrequency;
+  customIntervalDays?: number;
+  lineItems: RecurringInvoiceLineItem[];
+  startDate: string;
+  endDate?: string;
+  maxRuns?: number;
+  notes?: string;
+}
+
+export interface RecurringInvoiceUpdateInput {
+  name?: string;
+  partyId?: string;
+  type?: "sale" | "purchase";
+  frequency?: RecurringInvoiceFrequency;
+  customIntervalDays?: number;
+  lineItems?: RecurringInvoiceLineItem[];
+  endDate?: string;
+  maxRuns?: number;
+  notes?: string;
+}
+
+export interface RecurringInvoiceRun {
+  id: string;
+  templateId: string;
+  businessId: string;
+  invoiceId: string | null;
+  status: RecurringInvoiceRunStatus;
+  errorMessage: string | null;
+  executedAt: string;
+}
+
+export interface RecurringInvoiceRunResult {
+  run: RecurringInvoiceRun;
+  invoice: InvoiceDetail | null;
+}
+
+export interface RecurringInvoicePlanUsage {
+  used: number;
+  limit: number;
+  remaining: number;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface RecurringInvoiceSuggestion {
+  partyId: string;
+  partyName: string;
+  suggestedFrequency: RecurringInvoiceFrequency;
+  medianIntervalDays: number;
+  invoiceCount: number;
+  suggestedLineItems: RecurringInvoiceLineItem[];
+  confidence: number;
 }

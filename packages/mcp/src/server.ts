@@ -23,6 +23,7 @@ import { registerImportTools } from "./tools/import.js";
 import { registerTenantTools } from "./tools/tenant.js";
 import { registerDocumentTools } from "./tools/document.js";
 import { registerApiKeyTools } from "./tools/apiKey.js";
+import { registerAutomatedInvoiceTools } from "./tools/automatedInvoice.js";
 import { registerResources } from "./resources/index.js";
 
 export function registerTools(server: McpServer, client: HisaaboClient): void {
@@ -61,6 +62,9 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
 
   // API key management
   registerApiKeyTools(server, client);
+
+  // Automated / recurring invoices
+  registerAutomatedInvoiceTools(server, client);
 
   // Read-only context resources
   registerResources(server, client);

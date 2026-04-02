@@ -31,10 +31,28 @@ function isoDatetime(date: Date): string {
   return date.toISOString();
 }
 
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
+/**
+ * Compute the FY start date (same logic as the dashboard router) so that all
+ * relative-date helpers produce dates that fall inside the current FY.
+ *
+ * The business fixture uses financialYearStart = 4 (April).
+ */
+function currentFyStart(): Date {
+  const now = new Date();
+  const fyStartMonth = 3; // 0-indexed April
+  const fyYear = now.getMonth() < fyStartMonth ? now.getFullYear() - 1 : now.getFullYear();
+  return new Date(fyYear, fyStartMonth, 1);
+}
+
+/**
+ * Returns a date N days after the FY start (instead of N days before "today").
+ * This ensures test data always falls inside the current financial year,
+ * regardless of which calendar day the suite runs on.
+ */
+function fyDaysAfter(n: number): Date {
+  const start = currentFyStart();
+  start.setDate(start.getDate() + n);
+  return start;
 }
 
 function monthsAgo(n: number, day = 1): Date {
@@ -54,6 +72,8 @@ beforeAll(async () => {
   const { tenantDb, business1, party1, item1 } = world;
 
   // Sale invoice within the current FY — ₹10,000 + 5% tax = ₹10,500
+  // Use fyDaysAfter() to guarantee the date falls inside the current FY
+  // regardless of when the suite runs (avoids FY-boundary edge case on Apr 1).
   await createInvoiceWithItems(
     tenantDb,
     business1.id,
@@ -71,12 +91,14 @@ beforeAll(async () => {
       type: "sale",
       documentType: "invoice",
       status: "sent",
-      invoiceDate: daysAgo(10),
+      invoiceDate: fyDaysAfter(1),
     },
   );
 
   // An older sale invoice OUTSIDE a narrow date range — used to confirm
-  // receivable is NOT filtered by date
+  // receivable is NOT filtered by date.
+  // Place it early in the FY (day 2) so it falls inside the FY but outside
+  // a narrow "recent" window used by the date-range test below.
   await createInvoiceWithItems(
     tenantDb,
     business1.id,
@@ -94,7 +116,7 @@ beforeAll(async () => {
       type: "sale",
       documentType: "invoice",
       status: "sent", // not paid → still outstanding
-      invoiceDate: daysAgo(200), // well outside any narrow window
+      invoiceDate: fyDaysAfter(2),
     },
   );
 
@@ -115,7 +137,7 @@ beforeAll(async () => {
       type: "purchase",
       documentType: "invoice",
       status: "draft",
-      invoiceDate: daysAgo(5),
+      invoiceDate: fyDaysAfter(3),
     },
   );
 
@@ -123,10 +145,11 @@ beforeAll(async () => {
   await createExpense(tenantDb, business1.id, {
     category: "Office Supplies",
     amount: "1500.00",
-    expenseDate: daysAgo(3),
+    expenseDate: fyDaysAfter(4),
   });
 
   // Multiple sales in business1 for trend/top-customer tests
+  // Place them later in the FY (days 20-22) so they fall in a "recent" window
   for (let i = 0; i < 3; i++) {
     await createInvoiceWithItems(
       tenantDb,
@@ -145,7 +168,7 @@ beforeAll(async () => {
         type: "sale",
         documentType: "invoice",
         status: "sent",
-        invoiceDate: daysAgo(i + 1),
+        invoiceDate: fyDaysAfter(20 + i),
       },
     );
   }
@@ -186,14 +209,16 @@ describe("dashboard.summary", () => {
       businessId: world.business1.id,
     });
 
-    // Very narrow range: last 7 days — the 200-day-old invoice must NOT appear
-    const from = isoDatetime(daysAgo(7));
-    const to = isoDatetime(new Date());
+    // Narrow range: days 15-30 in FY — excludes early invoices (day 1 and day 2)
+    // but includes the batch sales (days 20-22).
+    const from = isoDatetime(fyDaysAfter(15));
+    const to = isoDatetime(fyDaysAfter(30));
 
     const narrowResult = await caller.dashboard.summary({ fromDate: from, toDate: to });
     const fullResult = await caller.dashboard.summary(undefined);
 
-    // The narrow window should report less (or equal) sales than the full FY
+    // The narrow window should report less sales than the full FY because
+    // the FY total includes the sale at day 1 and the "old sale" at day 2.
     expect(parseFloat(narrowResult.totalSales)).toBeLessThan(parseFloat(fullResult.totalSales));
   });
 
@@ -206,10 +231,10 @@ describe("dashboard.summary", () => {
       businessId: world.business1.id,
     });
 
-    // Narrow range that excludes the 200-day-old invoice
+    // Narrow range (days 15-30) that excludes the early "old sale" at day 2
     const narrowResult = await caller.dashboard.summary({
-      fromDate: isoDatetime(daysAgo(7)),
-      toDate: isoDatetime(new Date()),
+      fromDate: isoDatetime(fyDaysAfter(15)),
+      toDate: isoDatetime(fyDaysAfter(30)),
     });
 
     const fullResult = await caller.dashboard.summary(undefined);
