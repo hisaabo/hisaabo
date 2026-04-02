@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { SlideOver } from "@/components/ui/SlideOver";
-import { Combobox } from "@/components/ui/Combobox";
+import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { InputField, TextareaField } from "@/components/ui/FormField";
 
@@ -78,11 +78,6 @@ export function RecordPaymentPanel({
   const utils = trpc.useUtils();
 
   // ── Data fetching ───────────────────────────────────────────────────────────
-
-  const { data: partiesData } = trpc.party.list.useQuery(
-    { page: 1, limit: 100 },
-    { enabled: open }
-  );
 
   const { data: bankAccountsData } = trpc.bankAccount.list.useQuery(
     undefined,
@@ -339,15 +334,6 @@ export function RecordPaymentPanel({
     }
   }
 
-  // ── Party options for Combobox ──────────────────────────────────────────────
-
-  const partyOptions =
-    partiesData?.data.map((p) => ({
-      value: p.id,
-      label: p.name,
-      description: p.type === "customer" ? "Customer" : "Supplier",
-    })) ?? [];
-
   // ── Disclosure: count filled optional fields ────────────────────────────────
 
   const disclosureFilledCount = [referenceNumber, notes].filter(Boolean).length;
@@ -397,14 +383,10 @@ export function RecordPaymentPanel({
     >
       <div className="space-y-5">
         {/* ── Party selector ─────────────────────────────────────────────── */}
-        <Combobox
-          label="Party"
-          required
+        <PartyCombobox
           value={partyId}
           onChange={handlePartyChange}
-          options={partyOptions}
-          placeholder="Search party..."
-          emptyMessage="No parties found"
+          required
         />
 
         {/* ── Unpaid Invoices ─────────────────────────────────────────────── */}

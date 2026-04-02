@@ -4,9 +4,8 @@ import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
-import { Combobox } from "@/components/ui/Combobox";
+import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { useDateRange } from "@/hooks/useDateRange";
-import { useDebounce } from "@/hooks/useDebounce";
 
 export const Route = createFileRoute("/reports")({
   component: ReportsPage,
@@ -2809,16 +2808,10 @@ function ReportsPage() {
 
   // Party statement filter — server-side search so all parties are accessible
   const [partyStatementPartyId, setPartyStatementPartyId] = useState("");
-  const [partySearch, setPartySearch] = useState("");
-  const debouncedPartySearch = useDebounce(partySearch, 300);
 
   const { preset, setPreset, customFrom, customTo, setCustomRange, fromDate, toDate } =
     useDateRange("reports", "this-month");
 
-  const { data: parties, isFetching: partiesFetching } = trpc.party.list.useQuery(
-    { page: 1, limit: 50, search: debouncedPartySearch || undefined },
-    { enabled: activeReport === "party-statement" }
-  );
 
   const currentReport = ALL_REPORTS.find((r) => r.id === activeReport)!;
 
@@ -2851,10 +2844,6 @@ function ReportsPage() {
     }
   }
 
-  const partyOptions = (parties?.data ?? []).map((p) => ({
-    value: p.id,
-    label: p.name,
-  }));
 
   return (
     <div className="flex gap-0 -mx-6 -my-6 min-h-[calc(100vh-56px)]">
@@ -2944,13 +2933,10 @@ function ReportsPage() {
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-xs text-text-tertiary shrink-0">Party:</span>
                 <div className="w-64">
-                  <Combobox
+                  <PartyCombobox
                     value={partyStatementPartyId}
                     onChange={setPartyStatementPartyId}
-                    options={partyOptions}
-                    placeholder="Search parties..."
-                    onQueryChange={setPartySearch}
-                    isLoading={partiesFetching && !!debouncedPartySearch}
+                    label=""
                   />
                 </div>
               </div>

@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, TextareaField } from "@/components/ui/FormField";
 import { Listbox } from "@/components/ui/Listbox";
+import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -170,7 +171,7 @@ function AutomatedInvoicesPage() {
 
   const { data: planUsage } = trpc.recurringInvoice.planUsage.useQuery();
   const { data: suggestions } = trpc.recurringInvoice.suggestions.useQuery();
-  const { data: parties } = trpc.party.list.useQuery({ page: 1, limit: 500 });
+  // Party search handled by PartyCombobox component
   const { data: items } = trpc.item.list.useQuery({ page: 1, limit: 500 });
 
   const utils = trpc.useUtils();
@@ -390,10 +391,6 @@ function AutomatedInvoicesPage() {
 
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
 
-  const partyOptions = (parties?.data ?? []).map((p: any) => ({
-    value: p.id,
-    label: p.name,
-  }));
 
   const itemOptions = (items?.data ?? []).map((i: any) => ({
     value: i.id,
@@ -735,20 +732,12 @@ function AutomatedInvoicesPage() {
           />
 
           {/* Party picker */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-              Party <span className="text-red-500">*</span>
-            </label>
-            <Listbox
-              value={form.partyId}
-              onChange={(val) => setForm((f) => ({ ...f, partyId: val }))}
-              options={partyOptions}
-              placeholder="Select a party..."
-            />
-            {formErrors.partyId && (
-              <p className="mt-1 text-xs text-red-500">{formErrors.partyId}</p>
-            )}
-          </div>
+          <PartyCombobox
+            value={form.partyId}
+            onChange={(val) => setForm((f) => ({ ...f, partyId: val }))}
+            required
+            error={formErrors.partyId}
+          />
 
           {/* Type + Frequency */}
           <div className="grid grid-cols-2 gap-4">
