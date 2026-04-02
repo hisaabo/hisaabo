@@ -12,19 +12,19 @@ function escapeHtml(str: string): string {
 }
 
 interface EmailService {
-  sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void>;
+  sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void>;
   sendInvitation(to: string, inviteUrl: string, businessName: string, inviterName: string | null): Promise<void>;
 }
 
 class ConsoleEmailService implements EmailService {
-  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void> {
+  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
       throw new Error("Email service not configured");
     }
     console.log("");
     console.log("╔══════════════════════════════════════════════════════════╗");
-    console.log(`║  Magic link for ${to.padEnd(40)}║`);
+    console.log(`║  ${isNewUser ? "WELCOME" : "Magic link"} for ${to.padEnd(isNewUser ? 36 : 40)}║`);
     console.log("╠══════════════════════════════════════════════════════════╣");
     console.log(`║  Web:     ${magicLinkUrl}`);
     if (deepLinkUrl) console.log(`║  Desktop: ${deepLinkUrl}`);
@@ -55,11 +55,52 @@ class ResendEmailService implements EmailService {
     private fromAddress: string,
   ) {}
 
-  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string): Promise<void> {
+  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void> {
     // The primary button uses the web URL (works everywhere).
     // If a deep link is available, show it as a secondary option for desktop app users.
     const deepLinkHtml = deepLinkUrl
       ? `<tr><td style="padding: 0 40px;"><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding: 4px 0 0 0; text-align: center;"><p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 20px; color: #6b7280;">Using the desktop app?&nbsp;<a href="${escapeHtml(deepLinkUrl)}" style="color: #4f46e5; text-decoration: underline; font-weight: 500;">Open in Hisaabo</a></p></td></tr></table></td></tr>`
+      : "";
+
+    const subject = isNewUser ? "Welcome to Hisaabo" : "Sign in to Hisaabo";
+    const preheader = isNewUser
+      ? "Your business deserves pakka hisaab. Set up your account and start invoicing in under 2 minutes."
+      : "Sign in to your Hisaabo account. This link expires in 15 minutes.";
+
+    // Welcome email: feature highlights + onboarding CTA
+    // Returning user: simple sign-in CTA
+    const mainContentHtml = isNewUser
+      ? `<!-- Main content — welcome variant -->
+<tr><td style="padding: 28px 40px 0 40px;">
+<h1 style="margin: 0 0 12px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700; color: #111827; text-align: center; line-height: 28px;">Your business deserves pakka hisaab.</h1>
+<p style="margin: 0 0 20px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 24px; color: #4b5563; text-align: center;">Welcome to Hisaabo. You're one click away from professional invoicing that just works. Tap the button below to set up your business profile and send your first invoice today.</p>
+</td></tr>
+
+<!-- Feature highlights -->
+<tr><td style="padding: 0 40px 20px 40px;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f9fafb; border-radius: 10px;">
+<tr><td style="padding: 16px 20px;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr><td style="padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 22px; color: #374151;">&#10003;&ensp;GST-compliant invoices in seconds</td></tr>
+<tr><td style="padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 22px; color: #374151;">&#10003;&ensp;Party ledgers with &#8377; balance tracking</td></tr>
+<tr><td style="padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 22px; color: #374151;">&#10003;&ensp;Record payments, track what's due</td></tr>
+<tr><td style="padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 22px; color: #374151;">&#10003;&ensp;Business reports at a glance</td></tr>
+</table>
+</td></tr>
+</table>
+</td></tr>`
+      : `<!-- Main content — sign-in variant -->
+<tr><td style="padding: 28px 40px 0 40px;">
+<h1 style="margin: 0 0 12px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700; color: #111827; text-align: center; line-height: 28px;">Sign in to your account</h1>
+<p style="margin: 0 0 24px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 24px; color: #4b5563; text-align: center;">Tap the button below to securely sign in. This link is single-use and expires in <strong style="color: #374151;">15 minutes</strong>.</p>
+</td></tr>`;
+
+    const ctaLabel = isNewUser ? "Start My Setup" : "Sign in to Hisaabo";
+    const ctaLabelOutlook = isNewUser ? "Start My Setup" : "Sign in to Hisaabo";
+
+    // Reassurance line for new users only
+    const reassuranceHtml = isNewUser
+      ? `<tr><td style="padding: 12px 40px 0 40px; text-align: center;"><p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #6b7280;">Setup takes under 2 minutes. No payment required &mdash; Hisaabo is free.</p></td></tr>`
       : "";
 
     const res = await fetch("https://api.resend.com/emails", {
@@ -71,7 +112,7 @@ class ResendEmailService implements EmailService {
       body: JSON.stringify({
         from: this.fromAddress,
         to,
-        subject: "Sign in to Hisaabo",
+        subject,
         html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
 <head>
@@ -79,13 +120,13 @@ class ResendEmailService implements EmailService {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="color-scheme" content="light dark" />
 <meta name="supported-color-schemes" content="light dark" />
-<title>Sign in to Hisaabo</title>
+<title>${subject}</title>
 <!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->
 </head>
 <body style="margin: 0; padding: 0; background-color: #f3f4f6; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
 
 <!-- Preheader text (hidden, shows in inbox preview) -->
-<div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #f3f4f6;">Sign in to your Hisaabo account. This link expires in 15 minutes.&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
+<div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #f3f4f6;">${preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
 
 <!-- Outer wrapper table for background -->
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f3f4f6;">
@@ -107,23 +148,21 @@ class ResendEmailService implements EmailService {
 </table>
 </td></tr>
 
-<!-- Main content -->
-<tr><td style="padding: 28px 40px 0 40px;">
-<h1 style="margin: 0 0 12px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700; color: #111827; text-align: center; line-height: 28px;">Sign in to your account</h1>
-<p style="margin: 0 0 24px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 24px; color: #4b5563; text-align: center;">Tap the button below to securely sign in. This link is single-use and expires in <strong style="color: #374151;">15 minutes</strong>.</p>
-</td></tr>
+${mainContentHtml}
 
 <!-- CTA Button -->
 <tr><td style="padding: 0 40px;">
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
 <tr><td style="text-align: center; padding: 4px 0 20px 0;">
-<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${escapeHtml(magicLinkUrl)}" style="height:52px;v-text-anchor:middle;width:320px;" arcsize="15%" fill="t"><v:fill type="gradient" color="#4f46e5" color2="#4338ca" angle="180" /><w:anchorlock/><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:bold;">Sign in to Hisaabo</center></v:roundrect><![endif]-->
+<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${escapeHtml(magicLinkUrl)}" style="height:52px;v-text-anchor:middle;width:320px;" arcsize="15%" fill="t"><v:fill type="gradient" color="#4f46e5" color2="#4338ca" angle="180" /><w:anchorlock/><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:bold;">${ctaLabelOutlook}</center></v:roundrect><![endif]-->
 <!--[if !mso]><!-->
-<a href="${escapeHtml(magicLinkUrl)}" target="_blank" style="display: inline-block; width: 100%; max-width: 320px; padding: 14px 32px; background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%); color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 16px; font-weight: 600; text-decoration: none; text-align: center; border-radius: 10px; box-sizing: border-box; -webkit-text-size-adjust: none; mso-hide: all;">Sign in to Hisaabo</a>
+<a href="${escapeHtml(magicLinkUrl)}" target="_blank" style="display: inline-block; width: 100%; max-width: 320px; padding: 14px 32px; background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%); color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 16px; font-weight: 600; text-decoration: none; text-align: center; border-radius: 10px; box-sizing: border-box; -webkit-text-size-adjust: none; mso-hide: all;">${ctaLabel}</a>
 <!--<![endif]-->
 </td></tr>
 </table>
 </td></tr>
+
+${reassuranceHtml}
 
 <!-- Deep link (optional) -->
 ${deepLinkHtml}

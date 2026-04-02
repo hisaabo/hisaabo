@@ -231,7 +231,7 @@ function extractApiProcedures(): Map<string, string[]> {
 
     if (entry === "document.ts") {
       const factoryProcs = ["list", "getById", "create", "updateStatus", "delete"];
-      for (const m of [...content.matchAll(/export const (\w+Router)/g)]) {
+      for (const m of content.matchAll(/export const (\w+Router)/g)) {
         const routerName = m[1];
         const namespace = namespaceMap.get(routerName);
         if (!namespace) continue;

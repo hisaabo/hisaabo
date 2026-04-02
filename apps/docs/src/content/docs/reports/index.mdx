@@ -1,11 +1,313 @@
 ---
-title: Reports
-description: Financial reports in Hisaabo — dashboard summary, receivables and payables, expense breakdown, and GST reports. All reports are computed from live invoice data.
+title: Business Reports
+description: All 11 business reports in Hisaabo — daybook, sales register, purchase register, outstanding, party statement, stock summary, item-wise sales, payment summary, tax summary, collection metrics, and cash flow forecast.
 sidebar:
   order: 1
 ---
 
-Hisaabo's reports give you an at-a-glance view of your business health. All reports are computed in real time from your invoice, payment, and expense data.
+Hisaabo gives you 11 ready-made reports that cover every aspect of your business finances. All reports pull live data from your invoices, payments, and expenses — no manual data entry needed.
+
+You will find the reports page at **Reports** in the sidebar navigation after selecting a business.
+
+---
+
+## How the reports page works
+
+The reports page has two parts:
+
+1. **Sidebar** (left) -- lists all 11 reports grouped into four categories: Financial, Receivables & Payables, Inventory, and Payments & Tax. Click any report name to open it. On mobile, tap the menu icon at the top-left corner to open the sidebar.
+2. **Report area** (right) -- shows the selected report along with the date range bar at the top.
+
+### Date range bar
+
+Every report shares the same date range bar at the top. You can pick from these presets:
+
+| Preset | What it covers |
+|---|---|
+| **This Month** | 1st of the current month to today |
+| **Last Month** | Full previous calendar month |
+| **Last 30 Days** | Rolling 30-day window ending today |
+| **This FY** | Current Indian financial year (1 April to today) |
+| **Last FY** | Previous full financial year (1 April to 31 March) |
+| **Custom** | Pick any start and end date you want |
+| **All** | No date filter -- shows everything |
+
+The default preset when you first open the reports page is **This Month**.
+
+### Sticky date range
+
+When you pick a date range on one report, that same date range stays in place when you switch to another report. You do not need to re-select dates every time. Hisaabo shows a brief tip the first time you switch reports to let you know about this.
+
+Your selected preset is also saved in your browser. If you close the page and come back later, the same preset will be active.
+
+### CSV export
+
+All tabular reports (Daybook, Sales Register, Purchase Register, Outstanding, Party Statement, Stock Summary, Item-wise Sales, Payment Summary, and Tax Summary) have a **Download CSV** button. Click it to save the current report data as a CSV file. You can open the CSV file in Excel, Google Sheets, or any spreadsheet app for further analysis.
+
+---
+
+## Financial reports
+
+### 1. Daybook
+
+The daybook is a chronological record of every financial transaction in your business for the selected period. Think of it as your daily diary of money coming in and going out.
+
+**What it shows at the top (summary cards):**
+
+| Card | Meaning |
+|---|---|
+| Sales Invoiced | Total value of sale invoices created |
+| Payments Received | Money received from customers |
+| Payments Made | Money paid to suppliers |
+| Purchase Invoiced | Total value of purchase invoices |
+| Expenses | Total expenses recorded |
+| Net Cash Movement | Money in minus money out (positive means you gained cash) |
+
+**The table below** lists every transaction grouped by date. Each entry shows:
+
+- **Type icon** -- blue for invoices, green for payments, amber for expenses
+- **Party or category name** -- who the transaction was with, or which expense category
+- **Reference number** -- invoice or payment number
+- **Mode** -- how the payment was made (cash, UPI, bank transfer, cheque)
+- **Debit column** -- money going out (shown in red)
+- **Credit column** -- money coming in (shown in green)
+
+At the bottom of each day's entries, you see a **Day Total** row summarising that day's debits and credits.
+
+**Filtering:** Use the tabs at the top of the table to filter by transaction type -- All, Invoices, Payments, or Expenses.
+
+### 2. Sales Register
+
+A detailed list of every sale invoice in the selected date range.
+
+**Summary cards at the top:** Subtotal, Total Tax, Total Amount, and Invoice Count.
+
+**Each row in the table shows:**
+
+| Column | What it means |
+|---|---|
+| Date | Invoice date |
+| Invoice # | Your invoice number |
+| Doc Type | Invoice, credit note, debit note, etc. |
+| Customer | Customer name and state |
+| GSTIN | Customer's GST number (if available) |
+| Subtotal | Amount before tax |
+| Discount | Any discount applied |
+| Tax | GST amount |
+| Total | Final invoice amount |
+| Paid | How much has been paid so far |
+| Status | Paid, Partial, Unpaid, Overdue, Draft, or Cancelled |
+
+This report is useful for filing GST returns and for reviewing your sales trends over any period.
+
+### 3. Purchase Register
+
+Same structure as the Sales Register, but for purchase invoices from your suppliers.
+
+**Summary cards:** Subtotal, Total Tax, Total Amount, and Bill Count.
+
+**Each row shows:** Date, Invoice #, Supplier name, Supplier GSTIN, Subtotal, Discount, Tax, Total, Paid amount, and Status.
+
+Use this report to track what you owe to suppliers and to reconcile purchase tax (input credit) for GST.
+
+---
+
+## Receivables & Payables reports
+
+### 4. Outstanding Report
+
+Shows you who owes you money (receivables) and whom you owe money to (payables), broken down by how old the unpaid invoices are.
+
+**Summary cards:** Total Receivable (green) and Total Payable (red).
+
+**Aging buckets:** Outstanding amounts are split into four time bands so you can see which payments are most urgent:
+
+| Column | Meaning |
+|---|---|
+| Current | Due within the last 30 days |
+| 31-60 days | Overdue by 31 to 60 days |
+| 61-90 days | Overdue by 61 to 90 days |
+| 90+ days | Overdue by more than 90 days |
+| Total | Full outstanding amount for that party |
+
+Each party row also shows their phone number for easy follow-up. A **Total** row at the bottom sums up each aging column.
+
+**Filtering:** Toggle between All Parties, Customers only, or Suppliers only using the tabs above the table.
+
+:::tip[Follow up on old dues]
+Pay special attention to the **90+ days** column. If amounts are piling up there, it may be time to call those parties and remind them.
+:::
+
+### 5. Party Statement
+
+A complete ledger for a single customer or supplier, showing every invoice and payment between you and that party in chronological order.
+
+**How to use it:**
+1. Select the **Party Statement** report from the sidebar.
+2. A **Party** selector appears below the date range bar. Search for and select the customer or supplier you want.
+3. The statement loads automatically.
+
+**Party header:** Shows the party's name, type (customer/supplier), GSTIN, phone, and location.
+
+**Summary cards:** Total Debit, Total Credit, and Closing Balance. The closing balance shows **Dr** (they owe you) or **Cr** (you owe them) with colour coding -- red for debit, green for credit.
+
+**The ledger table shows:**
+
+| Column | What it means |
+|---|---|
+| Date | Transaction date |
+| Type | Invoice or Payment |
+| Ref # | Invoice or payment number |
+| Description | Invoice description or payment note |
+| Debit | Amount charged to this party |
+| Credit | Amount received from or paid to this party |
+| Balance | Running balance after each transaction |
+
+This report is commonly shared with parties as an account statement. Download it as CSV and send it via email or WhatsApp.
+
+---
+
+## Inventory reports
+
+### 6. Stock Summary
+
+A snapshot of your current stock levels across all items. This report does not depend on the date range -- it always shows your stock as of right now.
+
+**Summary cards at the top:**
+
+| Card | Meaning |
+|---|---|
+| Total Cost Value | Total stock valued at purchase price |
+| Total Sale Value | Total stock valued at sale price |
+| SKU Count | Number of distinct items/variants tracked |
+| Low Stock | Number of items below their low-stock alert threshold |
+
+**Filters:**
+- **Category dropdown** -- filter items by category (only shows categories that have items in stock)
+- **Show Zero Stock** -- toggle to include items with zero stock (hidden by default)
+
+**The table shows each item with:**
+- Item name (with a yellow **Low** badge if below alert threshold)
+- Category
+- HSN code and unit
+- Current stock quantity
+- Purchase price and sale price
+- Stock value (quantity multiplied by purchase price)
+
+**Variant items:** If an item has variants (for example, a shirt in sizes S, M, L), it appears as a collapsible row. Click the row to expand and see each variant's individual stock, prices, and values. A badge shows the total variant count.
+
+### 7. Item-wise Sales
+
+Shows how much revenue and quantity each item generated in the selected period. Useful for identifying your best-selling products and highest-margin items.
+
+**Summary cards:** Total Revenue and Item Count.
+
+**Each row shows:**
+
+| Column | What it means |
+|---|---|
+| Item | Product or service name |
+| Category | Item category |
+| Qty Sold | Number of units sold (with unit label) |
+| Revenue | Total revenue from this item |
+| Avg Price | Average selling price per unit |
+| Invoices | Number of invoices this item appeared on |
+| Customers | Number of unique customers who bought this item |
+| Margin % | Gross margin percentage (revenue minus estimated cost, divided by revenue) |
+
+**Margin colour coding:** Margins above 30% are shown in green, 10-30% in neutral colour, and below 10% in red.
+
+**Sort options:** Use the **Sort by** dropdown to sort the list by Revenue (default), Quantity, Invoices, or Margin.
+
+**Period comparison:** Click **Compare to previous period** to add a **Change** column showing the percentage change in revenue compared to the equivalent previous period. For example, if you are viewing "This Month," the comparison is against last month. Increases show in green, decreases in red.
+
+---
+
+## Payments & Tax reports
+
+### 8. Payment Summary
+
+An overview of all payments received and made in the selected period, grouped by payment mode.
+
+**Summary cards:**
+
+| Card | Meaning |
+|---|---|
+| Total Received | Money received from customers |
+| Total Made | Money paid to suppliers |
+| Total Expenses | Expenses paid out |
+| Net Cash Movement | Received minus made minus expenses |
+
+**By Payment Mode table:** Shows a breakdown of payments by mode (Cash, UPI, Bank Transfer, Cheque, etc.), with the associated bank account (if applicable), transaction count, and total amount for each mode.
+
+**Payments list:** Below the mode breakdown, you see individual payment records. Each row shows the date, payment number, party name, type (Received or Made), amount, and payment mode.
+
+**Filtering:** Toggle between All, Received only, or Made only using the tabs.
+
+### 9. Tax Summary
+
+Shows your GST tax position for the selected period -- how much tax you collected on sales versus how much tax you paid on purchases.
+
+**Summary cards:**
+
+| Card | Meaning |
+|---|---|
+| Tax Collected (Output) | GST charged on your sales invoices |
+| Tax Paid (Input) | GST paid on your purchase invoices |
+| Net Tax Liability | Output tax minus input tax. Positive means you owe GST; negative means you have input credit |
+
+**Tax breakdown tables:** Separate tables for Sales and Purchases, each grouped by GST rate (0%, 5%, 12%, 18%, 28%). For each rate, you see:
+- Number of invoices
+- Taxable amount (before GST)
+- Tax amount
+- Gross amount (taxable + tax)
+
+**Filtering:** Use the tabs to view Both, Sales only, or Purchases only.
+
+:::note
+For detailed GSTR-1 and GSTR-3B reports formatted for government filing, see [GST Compliance](/gst) and [GSTR-1](/gst/gstr1).
+:::
+
+### 10. Collection Metrics
+
+Measures how efficiently your business collects payments from customers. This is a card-based report (not a table), so it does not have CSV export.
+
+**Two large metric cards:**
+
+- **On-Time Collection Rate** -- percentage of sale invoices that were paid on or before their due date. Colour coded: green for 80%+, amber for 60-79%, red for below 60%.
+- **Days Sales Outstanding (DSO)** -- the average number of days it takes to collect payment after an invoice is created. Lower is better. Green means healthy, amber means caution, red means slow collections.
+
+**Stat cards:** Total Invoices, Paid On Time count, and Paid Late count.
+
+**DSO Details:** Shows the period length, total sales, and average receivable used in the DSO calculation.
+
+:::tip[What is a good DSO?]
+For most Indian small businesses, a DSO under 30 days is healthy. Between 30-45 days is acceptable. Above 45 days means you may want to tighten your payment terms or follow up more actively on overdue invoices.
+:::
+
+### 11. Cash Flow Forecast
+
+Projects your future cash position based on open receivables, due dates, and historical collection patterns. This report does not use the date range bar -- it always looks forward from today.
+
+**Top summary cards:**
+- **Current Bank Balance** -- net cash position across all bank accounts
+- **Avg Daily Expenses** -- your 30-day rolling average of daily expenses
+
+**Forecast table:** Shows projected cash balance at four time points -- Today, +7 Days, +14 Days, and +30 Days. For each period, you see three scenarios:
+
+| Scenario | What it assumes |
+|---|---|
+| **Optimistic** | All due receivables will be collected on time |
+| **Expected** | Based on your historical collection rates |
+| **Conservative** | Assumes slower collection than usual |
+
+A positive forecast is shown in green, negative in red.
+
+**Open Receivables by Due Date:** Shows your unpaid invoices grouped into buckets -- Overdue, Due 0-7 days, Due 8-14 days, Due 15-30 days, Beyond 30 days, and No Due Date. Each bucket shows the total amount and invoice count.
+
+**Historical Collection Rates:** Shows what percentage of your invoices were historically paid within 7 days, 14 days, and 30 days. If you have very few paid invoices, a **Low confidence** warning appears because the forecast may not be reliable yet.
+
+---
 
 ## Dashboard
 
@@ -28,41 +330,9 @@ You can override the financial year default by selecting a custom date range on 
 
 ### Financial year start
 
-By default the financial year starts on **1 April**. If your business uses a calendar year or a different start date, change the `Financial Year Start Month` setting in Settings → Business Profile.
+By default the financial year starts on **1 April**. If your business uses a calendar year or a different start date, change the `Financial Year Start Month` setting in Settings > Business Profile.
 
-## Receivables and payables
-
-**Receivables** — money owed to you by customers:
-
-| Column | Meaning |
-|---|---|
-| Party | Customer name |
-| Total Invoiced | Sum of all unpaid/partial sale invoices |
-| Amount Paid | Total payments received |
-| Outstanding | Amount still owed |
-| Oldest Invoice | Date of the oldest unpaid invoice |
-
-**Payables** — money you owe to suppliers:
-
-Same structure, but for purchase invoices.
-
-Filter by party, date range, or status to narrow down the view.
-
-## Sales report
-
-A breakdown of sales by period, showing total sales, total tax, and total invoices per month.
-
-## Expense report
-
-Total expenses grouped by **category** for a date range you choose. Shows the amount and percentage contribution of each category.
-
-## GST reports
-
-See [GST Compliance Overview](/gst) and [GSTR-1](/gst/gstr1) for detailed documentation on GSTR-1 and GSTR-3B reports.
-
-## Stock report
-
-A snapshot of current stock levels across all items. Useful for physical inventory counts. Filter to show only items below their low-stock alert threshold.
+---
 
 ## Frequently asked questions
 
@@ -75,7 +345,29 @@ Common causes:
 - The date filter. If you have a custom date range set, it applies to the dashboard too. Reset to "This Financial Year" to see the full year.
 
 **Can I export report data to Excel?**
-The dashboard and reports do not have a direct Excel export. For detailed analysis, export invoices or payments from the respective list views as CSV and open them in Excel or Google Sheets.
+
+Yes. All tabular reports have a **Download CSV** button. Click it to save the report as a CSV file, then open it in Excel or Google Sheets. The CSV includes all columns visible in the report.
 
 **The receivables figure looks wrong. Is it including paid invoices?**
+
 No. Receivables only count sale invoices with `status = sent`, `status = partial`, or `status = unfulfilled`. Fully paid invoices (status = `paid`) and cancelled invoices are excluded.
+
+**What does the Net Cash Movement number mean?**
+
+Net Cash Movement = Payments received from customers - Payments made to suppliers - Expenses. A positive number means more money came in than went out during that period. You can see this on both the Daybook and Payment Summary reports.
+
+**Why does the Stock Summary ignore the date range?**
+
+Stock levels are a snapshot of your inventory right now, not a historical figure. Every sale and purchase adjusts stock in real time. The date range bar has no effect on this report.
+
+**How is the margin percentage calculated in Item-wise Sales?**
+
+Margin % = (Revenue - Estimated Cost) / Revenue x 100. The estimated cost is based on the purchase price you set for each item. If you have not set a purchase price, the margin column shows a dash.
+
+**What do the three scenarios mean in Cash Flow Forecast?**
+
+- **Optimistic** assumes all open invoices will be paid on time.
+- **Expected** uses your real collection history to estimate how much you will actually collect.
+- **Conservative** assumes slower-than-usual collection as a worst-case planning number.
+
+If you are new to Hisaabo and have few paid invoices, the forecast will show a **Low confidence** warning because there is not enough payment history to make reliable predictions.
