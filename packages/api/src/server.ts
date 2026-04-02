@@ -238,12 +238,13 @@ app.get("/api/invoices/:id/pdf", async (c) => {
 
   // Generate UPI QR code if UPI account exists and invoice is a sale with remaining balance
   let upiQrDataUrl: string | undefined;
+  let upiPayUrl: string | undefined;
   const upiId = upiAccount?.accountNumber; // UPI ID stored in accountNumber for UPI type
   if (upiId && invoice.type === "sale") {
     const balance = parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid);
     if (balance > 0) {
-      const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
-      upiQrDataUrl = await QRCode.toDataURL(upiUrl, { width: 200, margin: 1 });
+      upiPayUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+      upiQrDataUrl = await QRCode.toDataURL(upiPayUrl, { width: 200, margin: 1 });
     }
   }
 
@@ -292,6 +293,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     bankName: bankAccount?.bankName || undefined,
     upiId: upiId || undefined,
     upiQrDataUrl,
+    upiPayUrl,
     gstRegistrationType: biz.gstRegistrationType || "unregistered",
     businessStateCode: biz.stateCode || undefined,
     partyStateCode: party.stateCode || undefined,
@@ -427,6 +429,20 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   const totalCredit = money.sum(entries.map(e => e.credit));
   const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
 
+  // Generate UPI QR for ledger if closing balance is receivable
+  let ledgerUpiQrDataUrl: string | undefined;
+  let ledgerUpiPayUrl: string | undefined;
+  if (parseFloat(closingBalance) > 0 && party.type === "customer") {
+    const ledgerBankAccounts = await db.select().from(bankAccounts)
+      .where(eq(bankAccounts.businessId, businessId));
+    const ledgerUpiAccount = ledgerBankAccounts.find(a => a.accountType === "upi");
+    const ledgerUpiId = ledgerUpiAccount?.accountNumber;
+    if (ledgerUpiId) {
+      ledgerUpiPayUrl = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
+      ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiPayUrl, { width: 200, margin: 1 });
+    }
+  }
+
   const pdfBuffer = await generateLedgerPDF({
     businessName: biz.name,
     partyName: party.name,
@@ -436,6 +452,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     toDate: toParam || null,
     entries: entriesWithBalance,
     summary: { totalDebit, totalCredit, closingBalance },
+    upiQrDataUrl: ledgerUpiQrDataUrl,
+    upiPayUrl: ledgerUpiPayUrl,
   });
 
   const safePartyName = party.name.replace(/[^a-zA-Z0-9_-]/g, "_");

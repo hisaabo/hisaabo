@@ -66,6 +66,7 @@ export interface InvoicePDFData {
   bankName?: string;
   upiId?: string;        // e.g., "business@upi"
   upiQrDataUrl?: string; // pre-generated QR code as data URL
+  upiPayUrl?: string;    // upi://pay?... deep link — makes QR clickable in PDF
 
   // GST
   gstRegistrationType?: "regular" | "composition" | "unregistered";
@@ -651,6 +652,10 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       try {
         const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
         doc.image(qrBuffer, qrX, qrYPos, { width: qrSize, height: qrSize });
+        // Make the QR code area clickable — opens UPI payment app
+        if (data.upiPayUrl) {
+          doc.link(qrX, qrYPos, qrSize, qrSize, data.upiPayUrl);
+        }
         const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
         if (balance > 0) {
           doc.fontSize(6).fillColor(cMuted).font("NotoSans")
@@ -1057,6 +1062,10 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
       try {
         const qrBuffer = Buffer.from(data.upiQrDataUrl.split(",")[1], "base64");
         doc.image(qrBuffer, qrColX, sec5StartY, { width: qrSize, height: qrSize });
+        // Make the QR code area clickable — opens UPI payment app
+        if (data.upiPayUrl) {
+          doc.link(qrColX, sec5StartY, qrSize, qrSize, data.upiPayUrl);
+        }
         const balance = parseFloat(data.totalAmount) - parseFloat(data.amountPaid);
         if (balance > 0) {
           doc.fontSize(5.5).fillColor(cMuted).font("NotoSans")

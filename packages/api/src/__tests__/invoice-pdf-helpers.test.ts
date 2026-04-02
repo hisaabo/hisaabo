@@ -703,3 +703,84 @@ describe("buildGstBreakdown — rate-wise GST breakdown table for GSTR complianc
     expect(breakdown[0].igst).toBe(0);
   });
 });
+
+// ─── UPI Payment URL Construction ────────────────────────────────────────────
+// These test the UPI deep link format used for clickable QR codes in PDFs.
+// The URL is built in server.ts and passed to the PDF generator.
+
+describe("UPI payment URL format", () => {
+  function buildUpiUrl(opts: {
+    upiId: string;
+    payeeName: string;
+    amount: number;
+    transactionNote: string;
+  }): string {
+    return `upi://pay?pa=${encodeURIComponent(opts.upiId)}&pn=${encodeURIComponent(opts.payeeName)}&am=${opts.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(opts.transactionNote)}`;
+  }
+
+  it("builds a valid UPI deep link with correct parameters", () => {
+    const url = buildUpiUrl({
+      upiId: "gupta@upi",
+      payeeName: "Gupta Traders",
+      amount: 1500.50,
+      transactionNote: "INV-00042",
+    });
+    expect(url).toBe("upi://pay?pa=gupta%40upi&pn=Gupta%20Traders&am=1500.50&cu=INR&tn=INV-00042");
+  });
+
+  it("encodes special characters in payee name", () => {
+    const url = buildUpiUrl({
+      upiId: "business@paytm",
+      payeeName: "Sharma & Sons (P) Ltd",
+      amount: 10000,
+      transactionNote: "INV-00100",
+    });
+    expect(url).toContain("pn=Sharma%20%26%20Sons%20(P)%20Ltd");
+    expect(url).toContain("am=10000.00");
+  });
+
+  it("uses remaining balance for partially paid invoice", () => {
+    const totalAmount = 5000;
+    const amountPaid = 2000;
+    const balance = totalAmount - amountPaid;
+    const url = buildUpiUrl({
+      upiId: "shop@ybl",
+      payeeName: "My Shop",
+      amount: balance,
+      transactionNote: "INV-00200",
+    });
+    expect(url).toContain("am=3000.00");
+  });
+
+  it("uses full amount when nothing is paid", () => {
+    const url = buildUpiUrl({
+      upiId: "biz@upi",
+      payeeName: "Business",
+      amount: 25000,
+      transactionNote: "INV-00001",
+    });
+    expect(url).toContain("am=25000.00");
+  });
+
+  it("formats amount to exactly 2 decimal places", () => {
+    const url = buildUpiUrl({
+      upiId: "test@upi",
+      payeeName: "Test",
+      amount: 99.9,
+      transactionNote: "INV-00003",
+    });
+    expect(url).toContain("am=99.90");
+  });
+
+  it("uses closing balance for ledger QR", () => {
+    const closingBalance = "12450.75";
+    const url = buildUpiUrl({
+      upiId: "shop@upi",
+      payeeName: "My Business",
+      amount: parseFloat(closingBalance),
+      transactionNote: "Outstanding - Gupta Enterprises",
+    });
+    expect(url).toContain("am=12450.75");
+    expect(url).toContain("tn=Outstanding%20-%20Gupta%20Enterprises");
+  });
+});

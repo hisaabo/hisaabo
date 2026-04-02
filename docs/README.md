@@ -193,6 +193,7 @@ Unmapped unit codes are collected and returned in the response so no data is sil
 - Party pre-fill when creating a repeat invoice from a party's record (OPT-01).
 - Select All / Clear All controls in the payment panel (OPT-02).
 - Payment button is conditionally shown based on invoice status (OPT-06).
+- **Clickable UPI QR codes** in invoice and ledger PDFs — clicking the QR code opens the UPI payment app with the amount pre-filled. Uses the remaining balance for partially paid invoices and the closing balance for ledger reports. Built on the `upi://pay` deep link scheme.
 
 ### Mobile App
 
