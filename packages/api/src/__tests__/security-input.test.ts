@@ -113,7 +113,6 @@ describe("SECURITY — every ILIKE search pattern in source uses escapeLike()", 
 
     for (const filePath of sourceFiles) {
       const content = readFileSync(filePath, "utf-8");
-      const lines = content.split("\n");
 
       // Skip files that don't use ILIKE at all
       if (!content.includes("ILIKE") && !content.includes("ilike(")) continue;
