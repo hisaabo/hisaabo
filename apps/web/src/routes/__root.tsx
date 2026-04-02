@@ -40,63 +40,91 @@ function RootError({ error }: { error: Error }) {
   );
 }
 
+// ── Role-based access control ──────────────────────────────────
+
+const ROLE_ABILITIES: Record<string, Set<string>> = {
+  owner: new Set(["*"]),
+  admin: new Set(["*"]),
+  seller_manager: new Set([
+    "Invoice:read", "Invoice:create", "Party:read", "Item:read",
+    "Payment:read", "Store:read", "RecurringInvoice:read", "Business:read",
+  ]),
+  seller: new Set([
+    "Invoice:read", "Invoice:create", "Party:read", "Item:read",
+    "Payment:read", "Store:read", "Business:read", "RecurringInvoice:read",
+  ]),
+  accountant: new Set([
+    "Payment:read", "Expense:read", "BankAccount:read", "Invoice:read",
+    "Party:read", "Item:read", "Store:read", "RecurringInvoice:read",
+    "Report:read", "GstReport:read", "Business:read",
+  ]),
+};
+
+function canAccess(role: string | null | undefined, resource: string, action: string): boolean {
+  if (!role) return true; // graceful degradation while loading
+  const abilities = ROLE_ABILITIES[role];
+  if (!abilities) return true; // unknown role — show all
+  if (abilities.has("*")) return true;
+  return abilities.has(`${resource}:${action}`);
+}
+
 // ── Sidebar nav structure ──────────────────────────────────────
 
 const navSections = [
   {
     label: "OVERVIEW",
     items: [
-      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true },
+      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true, resource: "Business", action: "read" },
     ],
   },
   {
     label: "SALES",
     items: [
-      { to: "/invoices", label: "Invoices", icon: InvoiceIcon },
-      { to: "/quotations", label: "Quotations", icon: QuotationIcon },
-      { to: "/sales-returns", label: "Sales Returns", icon: SalesReturnIcon },
-      { to: "/credit-notes", label: "Credit Notes", icon: CreditNoteIcon },
-      { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon },
-      { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon },
-      { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon },
-      { to: "/automated-invoices", label: "Recurring Invoices", icon: AutomatedInvoiceIcon },
+      { to: "/invoices", label: "Invoices", icon: InvoiceIcon, resource: "Invoice", action: "read" },
+      { to: "/quotations", label: "Quotations", icon: QuotationIcon, resource: "Invoice", action: "read" },
+      { to: "/sales-returns", label: "Sales Returns", icon: SalesReturnIcon, resource: "Invoice", action: "read" },
+      { to: "/credit-notes", label: "Credit Notes", icon: CreditNoteIcon, resource: "Invoice", action: "read" },
+      { to: "/delivery-challans", label: "Delivery Challans", icon: DeliveryIcon, resource: "Invoice", action: "read" },
+      { to: "/proforma-invoices", label: "Proforma Invoices", icon: ProformaIcon, resource: "Invoice", action: "read" },
+      { to: "/store-orders", label: "Store Orders", icon: StoreOrdersIcon, resource: "Store", action: "read" },
+      { to: "/automated-invoices", label: "Recurring Invoices", icon: AutomatedInvoiceIcon, resource: "RecurringInvoice", action: "read" },
     ],
   },
   {
     label: "CONTACTS",
     items: [
-      { to: "/parties", label: "Parties", icon: PartyIcon },
+      { to: "/parties", label: "Parties", icon: PartyIcon, resource: "Party", action: "read" },
     ],
   },
   {
     label: "INVENTORY",
     items: [
-      { to: "/items", label: "Items", icon: ItemIcon },
+      { to: "/items", label: "Items", icon: ItemIcon, resource: "Item", action: "read" },
     ],
   },
   {
     label: "MONEY",
     items: [
-      { to: "/payments", label: "Payments", icon: PaymentIcon },
-      { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon },
-      { to: "/expenses", label: "Expenses", icon: ExpenseIcon },
-      { to: "/shipments", label: "Shipments", icon: ShipmentsIcon },
+      { to: "/payments", label: "Payments", icon: PaymentIcon, resource: "Payment", action: "read" },
+      { to: "/cash-and-bank", label: "Cash & Bank", icon: BankIcon, resource: "BankAccount", action: "read" },
+      { to: "/expenses", label: "Expenses", icon: ExpenseIcon, resource: "Expense", action: "read" },
+      { to: "/shipments", label: "Shipments", icon: ShipmentsIcon, resource: "Invoice", action: "read" },
     ],
   },
   {
     label: "COMPLIANCE",
     items: [
-      { to: "/gst", label: "__REPORTS__", icon: GSTIcon }, // label set dynamically based on GST status
-      { to: "/reports", label: "Reports", icon: ReportsIcon },
+      { to: "/gst", label: "__REPORTS__", icon: GSTIcon, resource: "GstReport", action: "read" }, // label set dynamically based on GST status
+      { to: "/reports", label: "Reports", icon: ReportsIcon, resource: "Report", action: "read" },
     ],
   },
   {
     label: "ACCOUNT",
     items: [
-      { to: "/settings", label: "Settings", icon: SettingsIcon },
+      { to: "/settings", label: "Settings", icon: SettingsIcon, resource: "Business", action: "manage" },
     ],
   },
-] as const;
+];
 
 // ── TenantPicker ───────────────────────────────────────────────
 
@@ -393,16 +421,18 @@ function RootLayout() {
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2" onClick={() => setSidebarOpen(false)}>
           {navSections.map((section) => {
-            const visibleItems = section.items.map((item) => {
-              // Rename reports label based on GST status (always visible)
-              if (item.to === "/gst") {
-                return { ...item, label: (isGstRegistered ? "GST Returns" : "Tax Reports") as typeof item.label };
-              }
-              if (item.to === "/reports") {
-                return { ...item, label: "Business Reports" as typeof item.label };
-              }
-              return item;
-            });
+            const visibleItems = section.items
+              .filter((item) => canAccess(session?.role, item.resource, item.action))
+              .map((item) => {
+                // Rename reports label based on GST status (always visible)
+                if (item.to === "/gst") {
+                  return { ...item, label: isGstRegistered ? "GST Returns" : "Tax Reports" };
+                }
+                if (item.to === "/reports") {
+                  return { ...item, label: "Business Reports" };
+                }
+                return item;
+              });
             if (visibleItems.length === 0) return null;
             return (
               <div key={section.label}>
@@ -420,7 +450,7 @@ function RootLayout() {
                     inactiveProps={{
                       className: "flex items-center gap-2.5 mx-2 px-3 py-[7px] rounded-lg text-[13px] transition-colors text-text-secondary hover:bg-surface-2 hover:text-text-primary",
                     }}
-                    activeOptions={{ exact: "exact" in item ? item.exact : false }}
+                    activeOptions={{ exact: "exact" in item ? (item.exact as boolean) : false }}
                   >
                     <item.icon />
                     {item.label}
