@@ -55,12 +55,6 @@ function fyDaysAfter(n: number): Date {
   return start;
 }
 
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
-
 function monthsAgo(n: number, day = 1): Date {
   const d = new Date();
   d.setDate(day);
