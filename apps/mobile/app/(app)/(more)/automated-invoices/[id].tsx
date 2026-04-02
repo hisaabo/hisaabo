@@ -9,13 +9,12 @@ import {
   Alert,
   TextInput,
   RefreshControl,
-  FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDate, formatDateShort } from "../../../../src/lib/utils";
+import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError } from "../../../../src/components/ui";
@@ -58,7 +57,7 @@ export default function RecurringInvoiceDetailScreen() {
   const [editName, setEditName] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [editMaxRuns, setEditMaxRuns] = useState("");
-  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPage] = useState(1);
 
   const {
     data: template,

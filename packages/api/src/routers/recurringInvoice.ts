@@ -1,8 +1,8 @@
-import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
+import { eq, and, sql, desc, gte } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
-  recurringInvoiceTemplates, recurringInvoiceRuns, parties, invoices, invoiceItems,
+  recurringInvoiceTemplates, recurringInvoiceRuns, parties, invoices,
 } from "@hisaabo/db";
 import {
   createRecurringInvoiceSchema, updateRecurringInvoiceSchema, paginationSchema,

@@ -12,7 +12,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
-  FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -51,10 +50,10 @@ export default function ItemDetailScreen() {
   const [adjustReason, setAdjustReason] = useState("");
 
   // Action menu
-  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [, setActionMenuVisible] = useState(false);
 
   // Variant modal state
-  const [variantModal, setVariantModal] = useState<VariantModalState>({
+  const [, setVariantModal] = useState<VariantModalState>({
     visible: false,
     mode: "create",
     attributeValues: "",
@@ -67,18 +66,16 @@ export default function ItemDetailScreen() {
 
   // Merge modal
   const [mergeModalVisible, setMergeModalVisible] = useState(false);
-  const [mergeTargetId, setMergeTargetId] = useState("");
-  const [mergeTargetSearch, setMergeTargetSearch] = useState("");
-  const [mergeConversionFactor, setMergeConversionFactor] = useState("1");
+  const [mergeTargetSearch] = useState("");
 
   // Switch base unit modal
-  const [switchUnitModalVisible, setSwitchUnitModalVisible] = useState(false);
-  const [switchNewUnit, setSwitchNewUnit] = useState("");
-  const [switchConversionFactor, setSwitchConversionFactor] = useState("1");
+  const [, setSwitchUnitModalVisible] = useState(false);
+  const [, setSwitchNewUnit] = useState("");
+  const [, setSwitchConversionFactor] = useState("1");
 
   // Rename unit modal
-  const [renameUnitModalVisible, setRenameUnitModalVisible] = useState(false);
-  const [renameNewUnit, setRenameNewUnit] = useState("");
+  const [, setRenameUnitModalVisible] = useState(false);
+  const [, setRenameNewUnit] = useState("");
 
   // Stock adjustment history pagination
   const [adjHistoryPage, setAdjHistoryPage] = useState(1);
@@ -112,7 +109,7 @@ export default function ItemDetailScreen() {
       { enabled: !!id && activeTab === "stockMovements" }
     );
 
-  const { data: itemSearchResults } = trpc.item.list.useQuery(
+  trpc.item.list.useQuery(
     { search: mergeTargetSearch, limit: 10 },
     { enabled: mergeModalVisible && mergeTargetSearch.length >= 2 }
   );
@@ -159,7 +156,7 @@ export default function ItemDetailScreen() {
   });
 
   // Variant mutations
-  const createVariant = trpc.item.createVariant.useMutation({
+  trpc.item.createVariant.useMutation({
     onSuccess: () => {
       utils.item.getById.invalidate({ id: id ?? "" });
       setVariantModal((s) => ({ ...s, visible: false }));
@@ -168,7 +165,7 @@ export default function ItemDetailScreen() {
     onError: (err) => Alert.alert("Error", err.message || "Failed to create variant"),
   });
 
-  const updateVariant = trpc.item.updateVariant.useMutation({
+  trpc.item.updateVariant.useMutation({
     onSuccess: () => {
       utils.item.getById.invalidate({ id: id ?? "" });
       setVariantModal((s) => ({ ...s, visible: false }));
@@ -186,7 +183,7 @@ export default function ItemDetailScreen() {
   });
 
   // Merge mutation
-  const mergeItem = trpc.item.merge.useMutation({
+  trpc.item.merge.useMutation({
     onSuccess: () => {
       utils.item.list.invalidate();
       setMergeModalVisible(false);
@@ -199,7 +196,7 @@ export default function ItemDetailScreen() {
   });
 
   // Switch base unit mutation
-  const switchBaseUnit = trpc.item.switchBaseUnit.useMutation({
+  trpc.item.switchBaseUnit.useMutation({
     onSuccess: () => {
       utils.item.getById.invalidate({ id: id ?? "" });
       setSwitchUnitModalVisible(false);
@@ -211,7 +208,7 @@ export default function ItemDetailScreen() {
   });
 
   // Rename unit mutation
-  const renameUnit = trpc.item.renameUnit.useMutation({
+  trpc.item.renameUnit.useMutation({
     onSuccess: () => {
       utils.item.getById.invalidate({ id: id ?? "" });
       setRenameUnitModalVisible(false);
@@ -253,48 +250,6 @@ export default function ItemDetailScreen() {
     });
   };
 
-  const parseAttributeValues = (raw: string): Record<string, string> => {
-    const result: Record<string, string> = {};
-    raw.split(",").forEach((part) => {
-      const idx = part.indexOf(":");
-      if (idx !== -1) {
-        const key = part.slice(0, idx).trim();
-        const val = part.slice(idx + 1).trim();
-        if (key) result[key] = val;
-      }
-    });
-    return result;
-  };
-
-  const handleVariantSubmit = () => {
-    const attrs = parseAttributeValues(variantModal.attributeValues);
-    if (Object.keys(attrs).length === 0) {
-      Alert.alert("Error", "Enter at least one attribute (e.g. Size: L)");
-      return;
-    }
-    const qty = parseFloat(variantModal.stockQuantity);
-    if (isNaN(qty)) {
-      Alert.alert("Error", "Enter a valid stock quantity");
-      return;
-    }
-
-    const payload = {
-      attributeValues: attrs,
-      sku: variantModal.sku.trim() || undefined,
-      salePrice: variantModal.salePrice.trim() || undefined,
-      purchasePrice: variantModal.purchasePrice.trim() || undefined,
-      stockQuantity: variantModal.stockQuantity,
-      lowStockAlert: variantModal.lowStockAlert.trim() || undefined,
-    };
-
-    haptic.medium();
-    if (variantModal.mode === "create") {
-      createVariant.mutate({ itemId: id ?? "", variant: payload });
-    } else if (variantModal.variantId) {
-      updateVariant.mutate({ variantId: variantModal.variantId, data: payload });
-    }
-  };
-
   const handleDeleteVariant = (variantId: string, label: string) => {
     Alert.alert("Delete Variant", `Delete variant "${label}"?`, [
       { text: "Cancel", style: "cancel" },
@@ -307,55 +262,6 @@ export default function ItemDetailScreen() {
         },
       },
     ]);
-  };
-
-  const handleMergeSubmit = () => {
-    if (!mergeTargetId) {
-      Alert.alert("Error", "Select a target item to merge into");
-      return;
-    }
-    const factor = parseFloat(mergeConversionFactor);
-    if (isNaN(factor) || factor <= 0) {
-      Alert.alert("Error", "Enter a valid conversion factor");
-      return;
-    }
-    haptic.medium();
-    mergeItem.mutate({
-      sourceId: id ?? "",
-      targetId: mergeTargetId,
-      stockConversionFactor: parseFloat(mergeConversionFactor),
-    });
-  };
-
-  const handleSwitchUnitSubmit = () => {
-    if (!switchNewUnit.trim()) {
-      Alert.alert("Error", "Enter a new unit name");
-      return;
-    }
-    const factor = parseFloat(switchConversionFactor);
-    if (isNaN(factor) || factor <= 0) {
-      Alert.alert("Error", "Enter a valid conversion factor");
-      return;
-    }
-    haptic.medium();
-    switchBaseUnit.mutate({
-      id: id ?? "",
-      newUnit: switchNewUnit.trim(),
-      conversionFactor: parseFloat(switchConversionFactor),
-    });
-  };
-
-  const handleRenameUnitSubmit = () => {
-    if (!renameNewUnit.trim()) {
-      Alert.alert("Error", "Enter a new unit name");
-      return;
-    }
-    haptic.medium();
-    renameUnit.mutate({
-      id: id ?? "",
-      oldUnit: item?.unit ?? "",
-      newUnit: renameNewUnit.trim(),
-    });
   };
 
   const handleAdjustSubmit = () => {

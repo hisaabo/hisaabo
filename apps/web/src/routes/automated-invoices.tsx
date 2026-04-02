@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
@@ -147,8 +147,6 @@ function AutomatedInvoicesPage() {
   useEffect(() => {
     setPage(1);
   }, [debouncedSearch, statusFilter]);
-
-  const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
   useHotkeys([
     {
