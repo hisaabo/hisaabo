@@ -1,10 +1,22 @@
 import { eq, and, sql, desc, gte, lte, ilike, or, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { expenses } from "@hisaabo/db";
-import { createExpenseSchema, paginationSchema } from "@hisaabo/shared";
+import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { createExpenseSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+
+// Map payment mode to the bank account type(s) to search for.
+// Returns null when no bank debit should be created.
+function modeToAccountTypes(mode: string): Array<"cash" | "savings" | "current" | "upi"> | null {
+  switch (mode) {
+    case "cash":    return ["cash"];
+    case "bank":    return ["savings", "current"];
+    case "upi":     return ["upi"];
+    case "cheque":  return ["savings", "current"];
+    default:        return null; // "other" and unknown modes — skip
+  }
+}
 
 export const expenseRouter = router({
   list: viewerProcedure
@@ -47,13 +59,62 @@ export const expenseRouter = router({
 
   create: memberProcedure.input(createExpenseSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Expense");
-    const [expense] = await ctx.db.insert(expenses).values({
-      ...input,
-      businessId: ctx.businessId,
-      expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
-      createdByUserId: ctx.user!.id,
-      createdByName: ctx.user!.name,
-    }).returning();
+
+    const expense = await ctx.db.transaction(async (tx) => {
+      const [newExpense] = await tx.insert(expenses).values({
+        ...input,
+        businessId: ctx.businessId,
+        expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
+        createdByUserId: ctx.user!.id,
+        createdByName: ctx.user!.name,
+      }).returning();
+
+      // ── Bank account debit ─────────────────────────────────────────
+      const accountTypes = modeToAccountTypes(input.mode);
+      if (accountTypes) {
+        // Find the default account matching the payment mode, then fall back
+        // to any account of that type belonging to this business.
+        const [account] = await tx
+          .select({ id: bankAccounts.id, currentBalance: bankAccounts.currentBalance })
+          .from(bankAccounts)
+          .where(
+            and(
+              eq(bankAccounts.businessId, ctx.businessId),
+              sql`${bankAccounts.accountType} = ANY(${accountTypes}::bank_account_type[])`
+            )
+          )
+          .orderBy(
+            // Prefer the default account first
+            sql`${bankAccounts.isDefault} DESC`,
+            bankAccounts.createdAt
+          )
+          .for("update")
+          .limit(1);
+
+        if (account) {
+          const newBalance = money.sub(account.currentBalance, input.amount);
+
+          await tx.insert(bankTransactions).values({
+            businessId: ctx.businessId,
+            bankAccountId: account.id,
+            type: "withdrawal",
+            amount: input.amount,
+            description: `Expense: ${input.category}${input.description ? ` — ${input.description}` : ""}`,
+            referenceType: "expense",
+            referenceId: newExpense.id,
+            transactionDate: newExpense.expenseDate,
+          });
+
+          await tx
+            .update(bankAccounts)
+            .set({ currentBalance: newBalance, updatedAt: new Date() })
+            .where(eq(bankAccounts.id, account.id));
+        }
+      }
+
+      return newExpense;
+    });
+
     return expense;
   }),
 
@@ -82,7 +143,8 @@ export const expenseRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Expense");
-      const [existing] = await ctx.db.select({ id: expenses.id, deletedAt: expenses.deletedAt })
+      const [existing] = await ctx.db
+        .select({ id: expenses.id, deletedAt: expenses.deletedAt })
         .from(expenses)
         .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
         .limit(1);
@@ -90,9 +152,56 @@ export const expenseRouter = router({
       if (!existing) return { success: true };
       if (existing.deletedAt) return { success: true }; // already soft-deleted
 
-      await ctx.db.update(expenses)
-        .set({ deletedAt: new Date() })
-        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)));
+      await ctx.db.transaction(async (tx) => {
+        // Soft-delete the expense
+        await tx
+          .update(expenses)
+          .set({ deletedAt: new Date() })
+          .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)));
+
+        // Reverse the bank withdrawal that was created when this expense was recorded
+        const [originalTx] = await tx
+          .select({
+            id: bankTransactions.id,
+            bankAccountId: bankTransactions.bankAccountId,
+            amount: bankTransactions.amount,
+          })
+          .from(bankTransactions)
+          .where(
+            and(
+              eq(bankTransactions.businessId, ctx.businessId),
+              eq(bankTransactions.referenceType, "expense"),
+              eq(bankTransactions.referenceId, input.id)
+            )
+          )
+          .limit(1);
+
+        if (originalTx) {
+          // Lock the account row before updating
+          const [account] = await tx
+            .select({ currentBalance: bankAccounts.currentBalance })
+            .from(bankAccounts)
+            .where(eq(bankAccounts.id, originalTx.bankAccountId))
+            .for("update")
+            .limit(1);
+
+          if (account) {
+            // Add the amount back (reversing the withdrawal)
+            const restoredBalance = money.add(account.currentBalance, originalTx.amount);
+
+            await tx
+              .update(bankAccounts)
+              .set({ currentBalance: restoredBalance, updatedAt: new Date() })
+              .where(eq(bankAccounts.id, originalTx.bankAccountId));
+          }
+
+          // Remove the bank transaction record
+          await tx
+            .delete(bankTransactions)
+            .where(eq(bankTransactions.id, originalTx.id));
+        }
+      });
+
       return { success: true };
     }),
 
