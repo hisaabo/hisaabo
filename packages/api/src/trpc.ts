@@ -62,16 +62,36 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
 });
 
 // Middleware: requires business selected and validates it exists in tenant DB
+// AND that the business belongs to the caller's tenant (critical in self-hosted
+// mode where all tenants share a single database).
 const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
   if (!ctx.businessId) throw new TRPCError({ code: "BAD_REQUEST", message: "No business selected" });
 
   // Verify business exists in this tenant's database (ctx.db injected by hasTenantAccess)
-  const [biz] = await (ctx as unknown as TenantCtx).db.select({ id: businesses.id })
+  const [biz] = await (ctx as unknown as TenantCtx).db.select({
+    id: businesses.id,
+    createdByUserId: businesses.createdByUserId,
+  })
     .from(businesses)
     .where(eq(businesses.id, ctx.businessId))
     .limit(1);
 
   if (!biz) throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+
+  // In self-hosted mode all businesses live in the same DB. Verify the business
+  // creator is a member of the caller's tenant to prevent cross-tenant access.
+  const [creatorMembership] = await controlDb
+    .select({ userId: tenantMembers.userId })
+    .from(tenantMembers)
+    .where(and(
+      eq(tenantMembers.tenantId, ctx.tenantId as string),
+      eq(tenantMembers.userId, biz.createdByUserId),
+    ))
+    .limit(1);
+
+  if (!creatorMembership) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+  }
 
   return next({
     ctx: {

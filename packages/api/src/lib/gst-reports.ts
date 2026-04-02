@@ -426,9 +426,12 @@ export async function generateGSTR3B(
   }
 
   // Net tax payable = output tax - ITC
-  const netIgst = Math.max(gstr1.totalIgst - itcIgst, 0);
-  const netCgst = Math.max(gstr1.totalCgst - itcCgst, 0);
-  const netSgst = Math.max(gstr1.totalSgst - itcSgst, 0);
+  // A negative value indicates ITC credit remaining (e.g. when purchase tax
+  // exceeds sales tax for a component). This is correct per GST rules —
+  // the excess credit carries forward. Do NOT clamp to zero.
+  const netIgst = gstr1.totalIgst - itcIgst;
+  const netCgst = gstr1.totalCgst - itcCgst;
+  const netSgst = gstr1.totalSgst - itcSgst;
 
   return {
     period: gstr1.period,
