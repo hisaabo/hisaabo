@@ -302,11 +302,11 @@ export const recurringInvoiceRouter = router({
   suggestions: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "RecurringInvoice");
 
-    // Analyze last 12 months of invoices to find parties with regular billing patterns
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+    // Analyze last 2 months of invoices — short lookback keeps suggestions
+    // relevant. If a party wasn't invoiced recently, no point suggesting automation.
+    const lookbackDate = new Date();
+    lookbackDate.setMonth(lookbackDate.getMonth() - 2);
 
-    // Get parties with 3+ invoices in last 12 months, with their invoice dates
     const partyInvoices = await ctx.db.select({
       partyId: invoices.partyId,
       partyName: parties.name,
@@ -319,7 +319,7 @@ export const recurringInvoiceRouter = router({
       .where(and(
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, "invoice"),
-        gte(invoices.invoiceDate, twelveMonthsAgo),
+        gte(invoices.invoiceDate, lookbackDate),
       ))
       .orderBy(invoices.partyId, invoices.invoiceDate);
 

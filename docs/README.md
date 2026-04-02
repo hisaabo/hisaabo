@@ -162,7 +162,7 @@ Automated invoice generation from recurring templates. Templates define a party,
 
 **Plan limits**: Free plan allows 5 successful runs/month/business. Exceeded runs are recorded as `skipped_limit`.
 
-**Suggestions engine**: Analyzes last 12 months of invoices, detects median interval + coefficient of variation for top 20 parties. Returns suggested frequency, median amount, and invoice count.
+**Suggestions engine**: Analyzes last 2 months of invoices, detects median interval + coefficient of variation for top 20 parties. Returns suggested frequency, median amount, and invoice count.
 
 ### Import
 

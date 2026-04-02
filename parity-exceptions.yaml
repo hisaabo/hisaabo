@@ -122,6 +122,6 @@ exceptions:
       - apiKey.revoke
 
       # --- Recurring Invoices ---
-      # Suggestions engine analyzes 12 months of invoices — heavy query
+      # Suggestions engine analyzes recent invoices — heavy query
       # better suited to web/desktop; mobile shows templates only.
       - recurringInvoice.suggestions

@@ -342,7 +342,7 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
     "automated_invoice_suggestions",
     [
       "Get AI-detected recurring billing patterns from invoice history.",
-      "Analyzes the last 12 months of invoices to find parties with regular billing intervals and consistent line items.",
+      "Analyzes recent invoices (last 2 months) to find parties with regular billing intervals and consistent line items.",
       "Returns suggested templates that the user can review and activate.",
       "Use this to help users discover automation opportunities they may not have noticed.",
     ].join(" "),
