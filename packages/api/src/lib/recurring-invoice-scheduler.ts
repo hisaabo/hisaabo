@@ -5,18 +5,36 @@
  */
 
 import { eq, and, sql, gte, lte } from "drizzle-orm";
-import { getTenantDb, recurringInvoiceTemplates, recurringInvoiceRuns } from "@hisaabo/db";
+import { getTenantDb, controlDb, tenants, recurringInvoiceTemplates, recurringInvoiceRuns } from "@hisaabo/db";
 import { generateInvoiceFromTemplate } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
 
 const TICK_MS = 60_000; // 60 seconds
+const isMultiTenant = process.env.MULTI_TENANT === "true";
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function tick() {
   try {
-    // In single-tenant mode, just use the default tenant DB
-    const db = await getTenantDb("default");
-    await processDueTemplates(db);
+    if (!isMultiTenant) {
+      // Self-hosted: single tenant DB
+      const db = await getTenantDb("single");
+      await processDueTemplates(db);
+    } else {
+      // Multi-tenant: iterate all active tenants
+      const activeTenants = await controlDb
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(eq(tenants.status, "active"));
+
+      for (const tenant of activeTenants) {
+        try {
+          const db = await getTenantDb(tenant.id);
+          await processDueTemplates(db);
+        } catch (err) {
+          console.error(`[recurring-scheduler] tenant ${tenant.id} error:`, err);
+        }
+      }
+    }
   } catch (err) {
     console.error("[recurring-scheduler] tick error:", err);
   }

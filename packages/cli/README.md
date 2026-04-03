@@ -329,4 +329,4 @@ The CLI stores credentials in the OS config directory (`~/.config/hisaabo-cli` o
 
 ## Full Documentation
 
-[docs.hisaabo.in/cli](https://docs.hisaabo.in/cli) -- Setup guide, full command reference with all flags, scripting recipes, and CI/CD integration examples.
+[docs.hisaabo.in/ai/cli/](https://docs.hisaabo.in/ai/cli/) -- Setup guide, full command reference with all flags, scripting recipes, and CI/CD integration examples.

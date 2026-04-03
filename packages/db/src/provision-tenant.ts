@@ -143,10 +143,10 @@ export async function provisionTenantDatabase(
   // The superuser connection is used so drizzle-kit can create extensions/types.
   const tenantUrl = `${baseUrl}/${dbName}`;
 
-  // Resolve the db package root (two levels up from this file at runtime)
+  // Resolve the db package root (one level up from src/)
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
-  const dbPackageRoot = resolve(__dirname, "..", "..");
+  const dbPackageRoot = resolve(__dirname, "..");
 
   const drizzleKitBin = resolve(dbPackageRoot, "node_modules", ".bin", "drizzle-kit");
   const configPath = resolve(dbPackageRoot, "drizzle-tenant.config.ts");
