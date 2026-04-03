@@ -181,7 +181,7 @@ export class HisaaboClient {
         return c.query<BusinessSummary[]>("business.list");
       },
       get() {
-        return c.query<BusinessDetail>("business.get");
+        return c.query<BusinessDetail>("business.getById");
       },
       create(input: any) {
         return c.mutate<any>("business.create", input);
@@ -210,7 +210,7 @@ export class HisaaboClient {
         return c.query<PaginatedResult<InvoiceSummary>>("invoice.list", input);
       },
       get(id: string) {
-        return c.query<InvoiceDetail>("invoice.get", { id });
+        return c.query<InvoiceDetail>("invoice.getById", { id });
       },
       create(input: InvoiceCreateInput) {
         return c.mutate<InvoiceDetail>("invoice.create", input);
@@ -236,7 +236,7 @@ export class HisaaboClient {
         return c.query<PaginatedResult<PartySummary>>("party.list", input);
       },
       get(id: string) {
-        return c.query<PartyDetail>("party.get", { id });
+        return c.query<PartyDetail>("party.getById", { id });
       },
       create(input: PartyCreateInput) {
         return c.mutate<PartySummary>("party.create", input);
@@ -274,7 +274,7 @@ export class HisaaboClient {
         return c.query<PaginatedResult<ItemSummary>>("item.list", input);
       },
       get(id: string) {
-        return c.query<ItemDetail>("item.get", { id });
+        return c.query<ItemDetail>("item.getById", { id });
       },
       create(input: ItemCreateInput) {
         return c.mutate<ItemSummary>("item.create", input);

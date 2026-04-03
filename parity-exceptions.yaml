@@ -125,3 +125,80 @@ exceptions:
       # Suggestions engine analyzes recent invoices — heavy query
       # better suited to web/desktop; mobile shows templates only.
       - recurringInvoice.suggestions
+
+  cli:
+    not-applicable:
+      # --- Auth ---
+      # Browser-only flows requiring email verification links / callbacks.
+      - auth.requestEmailChange
+      - auth.sendMagicLink
+      - auth.verifyMagicLink
+
+      # --- Bank ---
+      # Manual transaction entry — rare admin workflow. CLI uses transfer
+      # and reconciliation commands instead.
+      - bankAccount.addTransaction
+
+      # --- Dashboard ---
+      # Separate procedure from expensesByCategory (which CLI has).
+      # Adds per-vendor breakdown — low-priority for CLI.
+      - dashboard.expenseCategoryBreakdown
+
+      # --- Import ---
+      # Bank transfer import and payment reconciliation — complex admin
+      # workflows. Standard import (parties/items/invoices/payments) is covered.
+      - import.importTransfers
+      - import.reconcileDirectPayments
+
+      # --- Parties ---
+      # Tally accounting integration — desktop-specific export format.
+      - party.tallyExport
+
+  mcp:
+    not-applicable:
+      # --- Auth ---
+      # MCP runs as a pre-authenticated server-side agent. It does not
+      # manage user sessions, login flows, or account registration.
+      - auth.completeProfile
+      - auth.login
+      - auth.logout
+      - auth.logoutAll
+      - auth.me
+      - auth.register
+      - auth.requestEmailChange
+      - auth.sendMagicLink
+      - auth.updateName
+      - auth.verifyMagicLink
+
+      # --- Bank ---
+      # Manual transaction entry — rare admin workflow.
+      - bankAccount.addTransaction
+
+      # --- Business ---
+      # Admin/compliance and bulk export — not core MCP agent workflows.
+      - business.auditTrail
+      - business.exportData
+
+      # --- Dashboard / Analytics ---
+      # MCP focuses on data CRUD, not visualization. Agents needing
+      # analytics can use the summary endpoint; detailed dashboard
+      # breakdowns are designed for human-facing UIs.
+      - dashboard.collectionEfficiency
+      - dashboard.expenseCategoryBreakdown
+      - dashboard.invoiceStatusBreakdown
+      - dashboard.monthlyComparison
+      - dashboard.paymentModeBreakdown
+      - dashboard.profitAndLoss
+      - dashboard.receivablesAging
+      - dashboard.salesTrend
+      - dashboard.topCustomers
+      - dashboard.topSellingItems
+
+      # --- Import ---
+      # Bank transfer import and payment reconciliation — admin workflows.
+      - import.importTransfers
+      - import.reconcileDirectPayments
+
+      # --- Parties ---
+      # Tally accounting integration — desktop-specific export format.
+      - party.tallyExport

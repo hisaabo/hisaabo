@@ -46,23 +46,29 @@ const ROOT = path.resolve(__dirname, "..");
 // Types
 // ---------------------------------------------------------------------------
 
+type Platform = "mobile" | "cli" | "mcp";
+
 interface Exceptions {
   schemaVersion: string;
   mobile: Set<string>;
-  // Extend here when cli/mcp exceptions are needed.
+  cli: Set<string>;
+  mcp: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
 // Exceptions file parser (minimal YAML, known structure)
 // ---------------------------------------------------------------------------
 
+const PLATFORMS: Platform[] = ["mobile", "cli", "mcp"];
+
 function parseExceptions(filePath: string): Exceptions {
-  const result: Exceptions = { schemaVersion: "2.0", mobile: new Set() };
+  const result: Exceptions = { schemaVersion: "2.0", mobile: new Set(), cli: new Set(), mcp: new Set() };
   if (!fs.existsSync(filePath)) return result;
 
   const content = fs.readFileSync(filePath, "utf-8");
-  let inMobileNotApplicable = false;
-  let indentLevel = 0;
+  let currentPlatform: Platform | null = null;
+  let inNotApplicable = false;
+  let notApplicableIndent = 0;
 
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trimEnd();
@@ -75,19 +81,35 @@ function parseExceptions(filePath: string): Exceptions {
       continue;
     }
 
-    // Detect the "mobile:" key under "not-applicable:"
-    if (trimmed === "not-applicable:") {
-      inMobileNotApplicable = true;
-      indentLevel = line.length - trimmed.length;
+    // Detect platform key (e.g. "mobile:", "cli:", "mcp:")
+    const platformMatch = trimmed.match(/^(mobile|cli|mcp):$/);
+    if (platformMatch) {
+      currentPlatform = platformMatch[1] as Platform;
+      inNotApplicable = false;
       continue;
     }
 
-    if (inMobileNotApplicable) {
+    // Detect "not-applicable:" under a platform
+    if (trimmed === "not-applicable:" && currentPlatform) {
+      inNotApplicable = true;
+      notApplicableIndent = line.length - trimmed.length;
+      continue;
+    }
+
+    // Read list items under not-applicable
+    if (inNotApplicable && currentPlatform) {
       const currentIndent = line.length - line.trimStart().length;
-      if (trimmed.startsWith("- ") && currentIndent > indentLevel) {
-        result.mobile.add(trimmed.slice(2).trim());
-      } else if (!trimmed.startsWith("- ") && currentIndent <= indentLevel && trimmed !== "") {
-        inMobileNotApplicable = false;
+      if (trimmed.startsWith("- ") && currentIndent > notApplicableIndent) {
+        result[currentPlatform].add(trimmed.slice(2).trim());
+      } else if (!trimmed.startsWith("- ") && currentIndent <= notApplicableIndent && trimmed !== "") {
+        inNotApplicable = false;
+        // Check if this is a new platform key
+        const pm = trimmed.match(/^(mobile|cli|mcp):$/);
+        if (pm) {
+          currentPlatform = pm[1] as Platform;
+        } else if (trimmed === "exceptions:") {
+          currentPlatform = null;
+        }
       }
     }
   }
@@ -140,7 +162,8 @@ function scanTrpcStringPattern(dir: string): Set<string> {
       } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
         const content = fs.readFileSync(full, "utf-8");
         // .query("router.procedure") / .query<T>("router.procedure") / .mutate(...)
-        for (const m of content.matchAll(/\.(query|mutate)(?:<[^>]*>)?\(["'](\w+\.\w+)["']/g)) {
+        // Use [^(]* instead of generic matching to handle nested generics like PaginatedResult<T>
+        for (const m of content.matchAll(/\.(query|mutate)[^(]*\(["'](\w+\.\w+)["']/g)) {
           procedures.add(m[2]);
         }
       }
@@ -288,6 +311,64 @@ function scanAllPlatforms(): PlatformUsage {
 // Commands
 // ---------------------------------------------------------------------------
 
+interface PlatformGapResult {
+  platform: Platform;
+  label: string;
+  shared: string[];
+  excluded: string[];
+  trueGaps: string[];
+  platformOnly: string[];
+  applicable: string[];
+  applicableShared: string[];
+}
+
+function analyzePlatformGap(
+  webUsage: Set<string>,
+  platformUsage: Set<string>,
+  platformExceptions: Set<string>,
+  platform: Platform,
+  label: string,
+): PlatformGapResult {
+  const webOnly = [...webUsage].filter((p) => !platformUsage.has(p)).sort();
+  const shared = [...webUsage].filter((p) => platformUsage.has(p)).sort();
+  const excluded = webOnly.filter((p) => platformExceptions.has(p));
+  const trueGaps = webOnly.filter((p) => !platformExceptions.has(p));
+  const platformOnly = [...platformUsage].filter((p) => !webUsage.has(p)).sort();
+  const applicable = [...webUsage].filter((p) => !platformExceptions.has(p));
+  const applicableShared = applicable.filter((p) => platformUsage.has(p));
+  return { platform, label, shared, excluded, trueGaps, platformOnly, applicable, applicableShared };
+}
+
+function printGapResult(r: PlatformGapResult): void {
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`  Web ↔ ${r.label}`);
+  console.log(`${"═".repeat(60)}`);
+
+  console.log(`\n  Shared: ${r.shared.length} procedures`);
+
+  if (r.excluded.length > 0) {
+    console.log(`\n  Intentionally excluded (parity-exceptions.yaml): ${r.excluded.length}`);
+    for (const p of r.excluded) console.log(`    [skip] ${p}`);
+  }
+
+  if (r.trueGaps.length > 0) {
+    console.log(`\n  TRUE PARITY GAPS: ${r.trueGaps.length}`);
+    for (const p of r.trueGaps) console.log(`    [GAP]  ${p}`);
+  } else {
+    console.log(`\n  True parity gaps: 0`);
+  }
+
+  if (r.platformOnly.length > 0) {
+    console.log(`\n  ${r.label}-only (not on web): ${r.platformOnly.length}`);
+    for (const p of r.platformOnly) console.log(`    [${r.platform}]  ${p}`);
+  }
+
+  const adjPct = r.applicable.length > 0
+    ? ((r.applicableShared.length / r.applicable.length) * 100).toFixed(1)
+    : "100.0";
+  console.log(`\n  Adjusted parity: ${adjPct}% (${r.applicableShared.length}/${r.applicable.length})`);
+}
+
 function cmdScan() {
   console.log("=== tRPC Coverage Analysis ===\n");
 
@@ -296,89 +377,43 @@ function cmdScan() {
   const apiProcs = extractApiProcedures();
   const allApi = allApiProcedureNames(apiProcs);
 
-  // --- Web vs Mobile gap analysis ---
-  const webOnly = [...usage.web].filter((p) => !usage.mobile.has(p)).sort();
-  const mobileOnly = [...usage.mobile].filter((p) => !usage.web.has(p)).sort();
-  const shared = [...usage.web].filter((p) => usage.mobile.has(p)).sort();
+  // --- Print stats ---
+  console.log("Platform procedure counts:");
+  console.log(`  Web:    ${usage.web.size}`);
+  console.log(`  Mobile: ${usage.mobile.size}`);
+  console.log(`  CLI:    ${usage.cli.size}`);
+  console.log(`  MCP:    ${usage.mcp.size}`);
+  console.log(`  API:    ${allApi.size} procedures defined`);
 
-  const excluded = webOnly.filter((p) => exceptions.mobile.has(p));
-  const trueGaps = webOnly.filter((p) => !exceptions.mobile.has(p));
+  // --- Analyze all platforms against web ---
+  const results: PlatformGapResult[] = [
+    analyzePlatformGap(usage.web, usage.mobile, exceptions.mobile, "mobile", "Mobile"),
+    analyzePlatformGap(usage.web, usage.cli, exceptions.cli, "cli", "CLI"),
+    analyzePlatformGap(usage.web, usage.mcp, exceptions.mcp, "mcp", "MCP"),
+  ];
+
+  for (const r of results) printGapResult(r);
 
   // --- Unimplemented (in API but used nowhere) ---
   const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
   const unimplemented = [...allApi].filter((p) => !usedAnywhere.has(p)).sort();
 
-  // --- Print stats ---
-  console.log("Platform procedure counts:");
-  console.log(`  Web:    ${usage.web.size}`);
-  console.log(`  Mobile: ${usage.mobile.size}`);
-  console.log(`  CLI:    ${usage.cli.size === 0 ? "0 (package not present or no usage)" : usage.cli.size}`);
-  console.log(`  MCP:    ${usage.mcp.size === 0 ? "0 (package not present or no usage)" : usage.mcp.size}`);
-  console.log(`  API:    ${allApi.size} procedures defined`);
-  console.log();
-
-  console.log(`Web + Mobile shared: ${shared.length} procedures`);
-  console.log();
-
-  if (excluded.length > 0) {
-    console.log(`--- Intentionally excluded from mobile (parity-exceptions.yaml): ${excluded.length} ---`);
-    for (const p of excluded) console.log(`  [skip] ${p}`);
-    console.log();
-  }
-
-  if (trueGaps.length > 0) {
-    console.log(`--- TRUE PARITY GAPS (web has it, mobile does not, not in exceptions): ${trueGaps.length} ---`);
-    for (const p of trueGaps) console.log(`  [GAP]  ${p}`);
-    console.log();
-  } else {
-    console.log("--- True parity gaps: 0 (all web procedures are on mobile or in exceptions) ---\n");
-  }
-
-  if (mobileOnly.length > 0) {
-    console.log(`--- Mobile-only (${mobileOnly.length}) ---`);
-    for (const p of mobileOnly) console.log(`  [mob]  ${p}`);
-    console.log();
-  }
-
-  if (usage.cli.size > 0) {
-    const cliOnly = [...usage.cli].filter((p) => !usage.web.has(p) && !usage.mobile.has(p)).sort();
-    if (cliOnly.length > 0) {
-      console.log(`--- CLI-only (${cliOnly.length}) ---`);
-      for (const p of cliOnly) console.log(`  [cli]  ${p}`);
-      console.log();
-    }
-  }
-
-  if (usage.mcp.size > 0) {
-    const mcpOnly = [...usage.mcp].filter((p) => !usage.web.has(p) && !usage.mobile.has(p)).sort();
-    if (mcpOnly.length > 0) {
-      console.log(`--- MCP-only (${mcpOnly.length}) ---`);
-      for (const p of mcpOnly) console.log(`  [mcp]  ${p}`);
-      console.log();
-    }
-  }
-
   if (unimplemented.length > 0) {
-    console.log(`--- Unimplemented (in API, used on no platform): ${unimplemented.length} ---`);
-    for (const p of unimplemented) console.log(`  [api]  ${p}`);
-    console.log();
+    console.log(`\n${"═".repeat(60)}`);
+    console.log(`  Unimplemented (in API, used on no platform): ${unimplemented.length}`);
+    console.log(`${"═".repeat(60)}`);
+    for (const p of unimplemented) console.log(`    [api]  ${p}`);
   }
 
-  // --- Parity percentages ---
-  const totalUnique = new Set([...usage.web, ...usage.mobile]).size;
-  const rawPct = totalUnique > 0 ? ((shared.length / totalUnique) * 100).toFixed(1) : "100.0";
-  console.log(`Raw web/mobile parity: ${rawPct}% (${shared.length}/${totalUnique})`);
+  console.log();
 
-  const applicable = [...usage.web].filter((p) => !exceptions.mobile.has(p));
-  const applicableShared = applicable.filter((p) => usage.mobile.has(p));
-  const adjPct = applicable.length > 0
-    ? ((applicableShared.length / applicable.length) * 100).toFixed(1)
-    : "100.0";
-  console.log(`Adjusted parity (excl. not-applicable): ${adjPct}% (${applicableShared.length}/${applicable.length})\n`);
-
-  // Exit 1 when true gaps exist — CI should block.
-  if (trueGaps.length > 0) {
+  // --- Exit 1 when ANY platform has true gaps — CI should block ---
+  const totalGaps = results.reduce((s, r) => s + r.trueGaps.length, 0);
+  if (totalGaps > 0) {
+    console.log(`FAIL: ${totalGaps} total parity gap(s) across all platforms.\n`);
     process.exitCode = 1;
+  } else {
+    console.log("PASS: All platforms at 100% adjusted parity (or all gaps in exceptions).\n");
   }
 }
 
@@ -401,22 +436,25 @@ function cmdValidate() {
 
   // 1. Every exception must reference a real API procedure.
   console.log("Checking that exceptions reference real API procedures...");
-  for (const proc of exceptions.mobile) {
-    if (!allApi.has(proc)) {
-      console.log(`  ERROR: ${proc} is in parity-exceptions.yaml but does not exist in the API`);
-      errors++;
+  for (const platform of PLATFORMS) {
+    for (const proc of exceptions[platform]) {
+      if (!allApi.has(proc)) {
+        console.log(`  ERROR: [${platform}] ${proc} is in parity-exceptions.yaml but does not exist in the API`);
+        errors++;
+      }
     }
   }
-
   if (errors === 0) console.log("  All exceptions reference valid API procedures.");
 
   // 2. Scan web usage and check for stale exceptions (procedure no longer used on web).
   console.log("\nChecking for stale exceptions (procedure excluded but web no longer uses it)...");
   const webUsage = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
-  for (const proc of exceptions.mobile) {
-    if (!webUsage.has(proc)) {
-      console.log(`  WARNING: ${proc} is in exceptions but web does not use it — may be stale`);
-      warnings++;
+  for (const platform of PLATFORMS) {
+    for (const proc of exceptions[platform]) {
+      if (!webUsage.has(proc)) {
+        console.log(`  WARNING: [${platform}] ${proc} is in exceptions but web does not use it — may be stale`);
+        warnings++;
+      }
     }
   }
   if (warnings === 0) console.log("  No stale exceptions detected.");
@@ -434,7 +472,8 @@ function cmdValidate() {
   }
   if (unused === 0) console.log("  All API procedures are used on at least one platform.");
 
-  console.log(`\n--- Summary: ${exceptions.mobile.size} mobile exceptions, ${warnings} warnings, ${errors} errors ---`);
+  const totalExceptions = PLATFORMS.reduce((s, p) => s + exceptions[p].size, 0);
+  console.log(`\n--- Summary: ${totalExceptions} total exceptions (mobile: ${exceptions.mobile.size}, cli: ${exceptions.cli.size}, mcp: ${exceptions.mcp.size}), ${warnings} warnings, ${errors} errors ---`);
 
   if (errors > 0) process.exitCode = 1;
 }
@@ -443,7 +482,6 @@ function cmdChanged(changedFiles: string[]) {
   console.log("=== Changed Files Parity Check ===\n");
 
   const touchesWeb = changedFiles.some((f) => f.startsWith("apps/web/"));
-  const touchesMobile = changedFiles.some((f) => f.startsWith("apps/mobile/"));
   const touchesApi = changedFiles.some((f) => f.includes("packages/api/src/routers/"));
   const touchesExceptions = changedFiles.some((f) => f.includes("parity-exceptions.yaml"));
 
@@ -453,35 +491,45 @@ function cmdChanged(changedFiles: string[]) {
   }
 
   const exceptions = parseExceptions(path.join(ROOT, "parity-exceptions.yaml"));
-  const webUsage = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
-  const mobileUsage = scanTrpcDotPattern(path.join(ROOT, "apps/mobile"));
+  const usage = scanAllPlatforms();
 
-  const trueGaps = [...webUsage]
-    .filter((p) => !mobileUsage.has(p) && !exceptions.mobile.has(p))
-    .sort();
-
-  if (touchesApi && !touchesExceptions && !touchesMobile) {
+  if (touchesApi && !touchesExceptions) {
     console.log(
       "NOTE: API routers changed but parity-exceptions.yaml was not updated.\n" +
-      "      If you added a new procedure that is intentionally desktop-only, add it to parity-exceptions.yaml."
+      "      If you added a new procedure that is platform-specific, add it to parity-exceptions.yaml.\n"
     );
-    console.log();
   }
 
-  if (trueGaps.length === 0) {
-    console.log("No parity gaps detected — web and mobile are in sync (or all gaps are in exceptions).");
+  const platformChecks: Array<{ name: string; usage: Set<string>; exceptions: Set<string> }> = [
+    { name: "mobile", usage: usage.mobile, exceptions: exceptions.mobile },
+    { name: "cli", usage: usage.cli, exceptions: exceptions.cli },
+    { name: "mcp", usage: usage.mcp, exceptions: exceptions.mcp },
+  ];
+
+  let totalGaps = 0;
+  for (const { name, usage: platformUsage, exceptions: platformExceptions } of platformChecks) {
+    const trueGaps = [...usage.web]
+      .filter((p) => !platformUsage.has(p) && !platformExceptions.has(p))
+      .sort();
+
+    if (trueGaps.length > 0) {
+      console.log(`${name.toUpperCase()} PARITY GAPS (${trueGaps.length}):`);
+      for (const p of trueGaps) console.log(`  [GAP] ${p}`);
+      console.log();
+      totalGaps += trueGaps.length;
+    }
+  }
+
+  if (totalGaps === 0) {
+    console.log("No parity gaps detected — all platforms are in sync (or gaps are in exceptions).");
   } else {
-    console.log(`TRUE PARITY GAPS (${trueGaps.length}) — web has these procedures, mobile does not:\n`);
-    for (const p of trueGaps) console.log(`  [GAP] ${p}`);
     console.log(
-      "\nFor each gap, either:\n" +
-      "  a) implement it on mobile, or\n" +
+      `${totalGaps} total gap(s) found.\n\nFor each gap, either:\n` +
+      "  a) implement it on the missing platform, or\n" +
       "  b) add it to parity-exceptions.yaml with a justification comment."
     );
     process.exitCode = 1;
   }
-
-  console.log(`\n${trueGaps.length} gap(s) found`);
 }
 
 function cmdReport() {
@@ -490,21 +538,8 @@ function cmdReport() {
   const apiProcs = extractApiProcedures();
   const allApi = allApiProcedureNames(apiProcs);
 
-  const shared = [...usage.web].filter((p) => usage.mobile.has(p));
-  const trueGaps = [...usage.web]
-    .filter((p) => !usage.mobile.has(p) && !exceptions.mobile.has(p))
-    .sort();
-  const excluded = [...usage.web]
-    .filter((p) => !usage.mobile.has(p) && exceptions.mobile.has(p))
-    .sort();
   const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
   const unimplemented = [...allApi].filter((p) => !usedAnywhere.has(p)).sort();
-
-  const applicable = [...usage.web].filter((p) => !exceptions.mobile.has(p));
-  const applicableShared = applicable.filter((p) => usage.mobile.has(p));
-  const adjPct = applicable.length > 0
-    ? ((applicableShared.length / applicable.length) * 100).toFixed(1)
-    : "100.0";
 
   const lines: string[] = [];
   lines.push("# Feature Parity Report");
@@ -515,43 +550,63 @@ function cmdReport() {
   lines.push("");
   lines.push("| Platform | Procedures Used | Notes |");
   lines.push("|----------|----------------|-------|");
-  lines.push(`| Web      | ${usage.web.size} | auto-detected from apps/web/src |`);
+  lines.push(`| Web      | ${usage.web.size} | source of truth |`);
   lines.push(`| Mobile   | ${usage.mobile.size} | auto-detected from apps/mobile |`);
   lines.push(`| CLI      | ${usage.cli.size} | auto-detected from packages/cli/src |`);
   lines.push(`| MCP      | ${usage.mcp.size} | auto-detected from packages/mcp/src |`);
   lines.push(`| API      | ${allApi.size} | total procedures defined |`);
   lines.push("");
-  lines.push("## Web / Mobile Parity");
-  lines.push("");
-  lines.push(`- **Shared**: ${shared.length} procedures`);
-  lines.push(`- **Adjusted parity**: ${adjPct}% (${applicableShared.length}/${applicable.length} applicable procedures)`);
-  lines.push(`- **Excluded (not-applicable)**: ${excluded.length} procedures`);
-  lines.push(`- **True gaps**: ${trueGaps.length} procedures`);
+
+  // Per-platform parity sections
+  const platformConfigs: Array<{ platform: Platform; label: string; usage: Set<string> }> = [
+    { platform: "mobile", label: "Mobile", usage: usage.mobile },
+    { platform: "cli", label: "CLI", usage: usage.cli },
+    { platform: "mcp", label: "MCP", usage: usage.mcp },
+  ];
+
+  let allGaps = 0;
+
+  for (const { platform, label, usage: platformUsage } of platformConfigs) {
+    const r = analyzePlatformGap(usage.web, platformUsage, exceptions[platform], platform, label);
+    const adjPct = r.applicable.length > 0
+      ? ((r.applicableShared.length / r.applicable.length) * 100).toFixed(1)
+      : "100.0";
+
+    lines.push(`## Web / ${label} Parity`);
+    lines.push("");
+    lines.push(`- **Shared**: ${r.shared.length} procedures`);
+    lines.push(`- **Adjusted parity**: ${adjPct}% (${r.applicableShared.length}/${r.applicable.length} applicable)`);
+    lines.push(`- **Excluded (not-applicable)**: ${r.excluded.length} procedures`);
+    lines.push(`- **True gaps**: ${r.trueGaps.length} procedures`);
+    lines.push("");
+
+    if (r.trueGaps.length > 0) {
+      lines.push(`### ${label} True Gaps`);
+      lines.push("");
+      for (const p of r.trueGaps) lines.push(`- \`${p}\``);
+      lines.push("");
+      allGaps += r.trueGaps.length;
+    }
+
+    if (r.excluded.length > 0) {
+      lines.push(`<details><summary>${label} Intentional Exclusions (${r.excluded.length})</summary>`);
+      lines.push("");
+      for (const p of r.excluded) lines.push(`- \`${p}\``);
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
+  }
+
   lines.push(`- **Unimplemented** (in API, used nowhere): ${unimplemented.length} procedures`);
   lines.push("");
 
-  if (trueGaps.length > 0) {
-    lines.push("## True Parity Gaps");
-    lines.push("");
-    lines.push("Web has these procedures; mobile does not and they are not in exceptions:");
-    lines.push("");
-    for (const p of trueGaps) lines.push(`- \`${p}\``);
-    lines.push("");
-  }
-
-  if (excluded.length > 0) {
-    lines.push("## Intentional Exclusions (mobile)");
-    lines.push("");
-    for (const p of excluded) lines.push(`- \`${p}\``);
-    lines.push("");
-  }
-
   if (unimplemented.length > 0) {
-    lines.push("## Unimplemented API Procedures");
-    lines.push("");
-    lines.push("Defined in API but not used on any platform:");
+    lines.push("<details><summary>Unimplemented API Procedures</summary>");
     lines.push("");
     for (const p of unimplemented) lines.push(`- \`${p}\``);
+    lines.push("");
+    lines.push("</details>");
     lines.push("");
   }
 
