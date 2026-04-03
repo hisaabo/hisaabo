@@ -119,13 +119,13 @@ fi
 
 echo ""
 
-# ─── Commit and tag ─────────────────────────────────────────────────────────
+# ─── Amend version bump into HEAD and tag ───────────────────────────────────
 git add -A
-git commit -m "release: ${TAG}"
+git commit --amend --no-edit
 git tag "$TAG"
 
-echo "Done. Version bumped to $VERSION, committed, and tagged as $TAG."
+echo "Done. Version bumped to $VERSION, amended into HEAD, and tagged as $TAG."
 echo ""
 echo "To publish:"
-echo "  git push origin main --tags"
+echo "  git push origin main --tags --force-with-lease"
 echo ""
