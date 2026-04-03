@@ -262,7 +262,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm --filter @hisaabo/cli build
-      - run: pnpm --filter @hisaabo/cli publish --no-git-checks --access public --provenance
+      - run: pnpm --filter @hisaabo/cli pack --pack-destination /tmp/cli
+      - run: npm publish /tmp/cli/*.tgz --access public --provenance
 
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
@@ -288,7 +289,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm --filter @hisaabo/mcp build
-      - run: pnpm --filter @hisaabo/mcp publish --no-git-checks --access public --provenance
+      - run: pnpm --filter @hisaabo/mcp pack --pack-destination /tmp/mcp
+      - run: npm publish /tmp/mcp/*.tgz --access public --provenance
 
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:
