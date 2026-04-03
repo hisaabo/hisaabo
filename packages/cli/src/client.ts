@@ -192,6 +192,12 @@ export class HisaaboClient {
       updateSequenceNumber(input: any) {
         return c.mutate<any>("business.updateSequenceNumber", input);
       },
+      auditTrail(input?: { page?: number; limit?: number }) {
+        return c.query<any>("business.auditTrail", input);
+      },
+      exportData() {
+        return c.mutate<any>("business.exportData", {});
+      },
     };
   }
 
@@ -390,6 +396,42 @@ export class HisaaboClient {
       summary(input?: DashboardInput) {
         return c.query<DashboardSummary>("dashboard.summary", input);
       },
+      salesTrend(input: { months?: number; fromDate?: string; toDate?: string; granularity?: string }) {
+        return c.query<any>("dashboard.salesTrend", input);
+      },
+      topOutstanding(input?: { limit?: number }) {
+        return c.query<any>("dashboard.topOutstanding", input);
+      },
+      topCustomers(input?: { limit?: number; fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.topCustomers", input);
+      },
+      topSellingItems(input?: { limit?: number; itemType?: string; fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.topSellingItems", input);
+      },
+      expensesByCategory(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.expensesByCategory", input);
+      },
+      invoiceStatusBreakdown(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.invoiceStatusBreakdown", input);
+      },
+      profitAndLoss(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.profitAndLoss", input);
+      },
+      receivablesAging() {
+        return c.query<any>("dashboard.receivablesAging");
+      },
+      paymentModeBreakdown(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.paymentModeBreakdown", input);
+      },
+      collectionEfficiency(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.collectionEfficiency", input);
+      },
+      monthlyComparison() {
+        return c.query<any>("dashboard.monthlyComparison");
+      },
+      shippingSummary(input?: { fromDate?: string; toDate?: string }) {
+        return c.query<any>("dashboard.shippingSummary", input);
+      },
     };
   }
 
@@ -490,6 +532,18 @@ export class HisaaboClient {
       },
       paymentSummary(input: PaymentSummaryInput) {
         return c.query<PaymentSummaryResult>("reports.paymentSummary", input);
+      },
+      salesRegister(input: { fromDate: string; toDate: string; partyId?: string }) {
+        return c.query<any>("reports.salesRegister", input);
+      },
+      purchaseRegister(input: { fromDate: string; toDate: string; partyId?: string }) {
+        return c.query<any>("reports.purchaseRegister", input);
+      },
+      cashFlowForecast(input?: Record<string, unknown>) {
+        return c.query<any>("reports.cashFlowForecast", input ?? {});
+      },
+      collectionEfficiency(input: { fromDate: string; toDate: string }) {
+        return c.query<any>("reports.collectionEfficiency", input);
       },
     };
   }

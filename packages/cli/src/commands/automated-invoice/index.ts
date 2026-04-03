@@ -1,7 +1,11 @@
 export { automatedInvoiceListCommand } from "./list.js";
 export { automatedInvoiceGetCommand } from "./get.js";
 export { automatedInvoiceCreateCommand } from "./create.js";
+export { automatedInvoiceUpdateCommand } from "./update.js";
 export { automatedInvoicePauseCommand } from "./pause.js";
 export { automatedInvoiceResumeCommand } from "./resume.js";
 export { automatedInvoiceRunNowCommand } from "./run-now.js";
 export { automatedInvoiceDeleteCommand } from "./delete.js";
+export { automatedInvoiceHistoryCommand } from "./history.js";
+export { automatedInvoiceUsageCommand } from "./usage.js";
+export { automatedInvoiceSuggestionsCommand } from "./suggestions.js";
