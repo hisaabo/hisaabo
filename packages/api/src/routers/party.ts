@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc, asc, gte, lte } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, gte, lte, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
@@ -56,17 +56,23 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
-      // Computed balance: openingBalance + totalInvoiced - totalPaid (via correlated subquery)
-      const balanceExpr = sql<string>`(
-        ${parties.openingBalance}::numeric + COALESCE((
-          SELECT SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-          FROM ${invoices}
-          WHERE ${invoices.partyId} = ${parties.id}
-            AND ${invoices.businessId} = ${parties.businessId}
-            AND ${invoices.status} NOT IN ('cancelled')
-            AND ${invoices.deletedAt} IS NULL
-        ), 0)
-      )::text`;
+      // Pre-aggregate invoice balances per party in a single scan
+      // instead of a correlated subquery that executes once per row.
+      const invoiceBalanceSq = ctx.db
+        .select({
+          partyId: invoices.partyId,
+          balance: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)`.as("inv_balance"),
+        })
+        .from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          sql`${invoices.status} NOT IN ('cancelled')`,
+          isNull(invoices.deletedAt),
+        ))
+        .groupBy(invoices.partyId)
+        .as("invoice_balances");
+
+      const balanceExpr = sql<string>`(${parties.openingBalance}::numeric + COALESCE(${invoiceBalanceSq.balance}::numeric, 0))::text`;
 
       const sortCol = input.sortBy === "balance"
         ? (input.sortDir === "asc" ? sql`${balanceExpr}::numeric ASC` : sql`${balanceExpr}::numeric DESC`)
@@ -102,6 +108,7 @@ export const partyRouter = router({
           updatedAt: parties.updatedAt,
           balance: balanceExpr,
         }).from(parties)
+          .leftJoin(invoiceBalanceSq, eq(invoiceBalanceSq.partyId, parties.id))
           .where(and(...conditions))
           .orderBy(sortCol)
           .limit(input.limit)

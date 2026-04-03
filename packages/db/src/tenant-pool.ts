@@ -102,7 +102,9 @@ async function resolveConnectionString(tenantId: string): Promise<string> {
   const host = validateDbHost(tenant.dbHost || "localhost");
   const port = validateDbPort(tenant.dbPort || "5432");
   const user = sanitizeDbComponent(tenant.dbUser || "hisaabo");
-  const password = sanitizeDbComponent(tenant.dbPassword || "");
+  // Decrypt tenant password (handles legacy plaintext gracefully)
+  const { decryptDbPassword } = await import("./crypto.js");
+  const password = sanitizeDbComponent(decryptDbPassword(tenant.dbPassword || ""));
   const dbName = validateDbName(tenant.dbName);
 
   return `postgresql://${user}:${password}@${host}:${port}/${dbName}`;

@@ -4,7 +4,7 @@
  * Uses SELECT ... FOR UPDATE SKIP LOCKED for concurrency safety.
  */
 
-import { eq, and, lte, sql, gte } from "drizzle-orm";
+import { eq, and, sql, gte, lte } from "drizzle-orm";
 import { getTenantDb, recurringInvoiceTemplates, recurringInvoiceRuns } from "@hisaabo/db";
 import { generateInvoiceFromTemplate } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
@@ -23,17 +23,18 @@ async function tick() {
 }
 
 async function processDueTemplates(db: Awaited<ReturnType<typeof getTenantDb>>) {
-  const now = new Date();
-
-  // Find active templates that are due (nextRunDate <= now)
-  // Using raw SQL for FOR UPDATE SKIP LOCKED since Drizzle doesn't support SKIP LOCKED
-  const dueTemplates = await db.select()
-    .from(recurringInvoiceTemplates)
-    .where(and(
-      eq(recurringInvoiceTemplates.status, "active"),
-      lte(recurringInvoiceTemplates.nextRunDate, now),
-    ))
-    .limit(50);
+  // Find active templates that are due, using FOR UPDATE SKIP LOCKED
+  // to prevent duplicate processing in multi-instance deployments.
+  const dueTemplates = await db.transaction(async (tx) => {
+    return tx.select()
+      .from(recurringInvoiceTemplates)
+      .where(and(
+        eq(recurringInvoiceTemplates.status, "active"),
+        lte(recurringInvoiceTemplates.nextRunDate, new Date()),
+      ))
+      .limit(50)
+      .for("update", { skipLocked: true });
+  });
 
   for (const tpl of dueTemplates) {
     try {

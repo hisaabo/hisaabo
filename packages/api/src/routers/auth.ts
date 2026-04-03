@@ -13,6 +13,18 @@ import { verifyTurnstile } from "../lib/turnstile.js";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Per-email rate limiting for login attempts
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const failedLoginAttempts = new Map<string, { count: number; firstAttempt: number }>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of failedLoginAttempts) {
+    if (now - entry.firstAttempt > LOGIN_WINDOW_MS) failedLoginAttempts.delete(key);
+  }
+}, 5 * 60_000).unref();
+
 function generateSlug(name: string): string {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   const suffix = nanoid(6);
@@ -165,7 +177,11 @@ async function assignTenantToNewUser(userId: string, displayName: string, parent
 export const authRouter = router({
   // ── Password registration (keeps working for self-hosted) ────
   register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
-    // Verify Turnstile token when provided (skipped in dev / self-hosted without secret key)
+    // Require Turnstile when secret key is configured (production).
+    // Self-hosted / dev without the key can skip verification.
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+    }
     if (input.turnstileToken) {
       const ip = getClientIpFromRequest(ctx.req);
       const valid = await verifyTurnstile(input.turnstileToken, ip);
@@ -223,6 +239,13 @@ export const authRouter = router({
 
   // ── Password login ───────────────────────────────────────────
   login: publicProcedure.input(loginSchema).mutation(async ({ input, ctx }) => {
+    // Per-email rate limiting: block after too many failed attempts
+    const emailKey = input.email.toLowerCase();
+    const attempts = failedLoginAttempts.get(emailKey);
+    if (attempts && attempts.count >= LOGIN_MAX_ATTEMPTS && Date.now() - attempts.firstAttempt < LOGIN_WINDOW_MS) {
+      throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many failed login attempts. Please try again later." });
+    }
+
     const [user] = await controlDb
       .select({ id: users.id, email: users.email, name: users.name, passwordHash: users.passwordHash })
       .from(users)
@@ -230,17 +253,29 @@ export const authRouter = router({
       .limit(1);
 
     if (!user) {
+      const prev = failedLoginAttempts.get(emailKey);
+      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
+      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
 
     if (!user.passwordHash) {
+      const prev = failedLoginAttempts.get(emailKey);
+      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
+      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
 
     const valid = await argon2.verify(user.passwordHash, input.password);
     if (!valid) {
+      const prev = failedLoginAttempts.get(emailKey);
+      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
+      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
+
+    // Successful login — clear failed attempts
+    failedLoginAttempts.delete(emailKey);
 
     const memberships = await controlDb
       .select({ tenantId: tenantMembers.tenantId })

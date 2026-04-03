@@ -828,11 +828,8 @@ describe("invoice.delete", () => {
     expect(row!.status).toBe("cancelled");
   });
 
-  it("invoice.delete does NOT reverse stock — this is by design in the invoice router (finding confirmed)", async () => {
-    // IMPORTANT: The invoice.ts delete handler sets deletedAt + status=cancelled
-    // but does NOT reverse stock adjustments. This is asymmetric with the
-    // document-router-factory which DOES reverse stock on delete.
-    // This test DOCUMENTS that current behaviour so any future change is deliberate.
+  it("invoice.delete reverses stock adjustments", async () => {
+    // The invoice delete handler reverses stock (matching the document-router-factory pattern).
 
     const caller = callerForRamesh();
     const db = getTenantTestDb();
@@ -867,10 +864,8 @@ describe("invoice.delete", () => {
       .from(items)
       .where(eq(items.id, stockItem.id));
 
-    // Stock is NOT restored — this is the confirmed behaviour.
-    // If this expectation fails, stock reversal was added. Update the test
-    // and the comment above to reflect the new intentional behaviour.
-    expect(parseFloat(afterDelete!.stockQuantity)).toBeCloseTo(stockBefore - 10, 3);
+    // Stock IS restored on delete — reversal was added as part of the security audit fix #6.
+    expect(parseFloat(afterDelete!.stockQuantity)).toBeCloseTo(stockBefore, 3);
   });
 
   it("deleting an already-deleted invoice is idempotent — returns success without error", async () => {

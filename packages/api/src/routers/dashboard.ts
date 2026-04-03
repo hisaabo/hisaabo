@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, payments, expenses, parties, businesses } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
@@ -55,6 +55,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
+          isNull(invoices.deletedAt),
           dateCondition(invoices.invoiceDate),
         )),
 
@@ -66,6 +67,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
+          isNull(invoices.deletedAt),
           dateCondition(invoices.invoiceDate),
         )),
 
@@ -75,6 +77,7 @@ export const dashboardRouter = router({
       }).from(expenses)
         .where(and(
           eq(expenses.businessId, ctx.businessId),
+          isNull(expenses.deletedAt),
           dateCondition(expenses.expenseDate),
         )),
 
@@ -86,6 +89,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
+          isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),
 
@@ -97,6 +101,7 @@ export const dashboardRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
+          isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),
 
@@ -113,6 +118,7 @@ export const dashboardRouter = router({
         .where(and(
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.documentType, "invoice"),
+          isNull(invoices.deletedAt),
         ))
         .orderBy(desc(invoices.createdAt))
         .limit(10),
@@ -170,6 +176,7 @@ export const dashboardRouter = router({
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, "invoice"),
+        isNull(invoices.deletedAt),
         sql`${invoices.status} != 'cancelled'`,
       ];
 
@@ -189,6 +196,7 @@ export const dashboardRouter = router({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const expenseConditions: any[] = [
         eq(expenses.businessId, ctx.businessId),
+        isNull(expenses.deletedAt),
         sql`LOWER(${expenses.category}) IN ('shipping', 'freight', 'delivery', 'courier')`,
       ];
       if (input?.fromDate) expenseConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));

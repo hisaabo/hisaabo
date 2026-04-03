@@ -5,6 +5,7 @@ import {
   invoices,
   invoiceItems,
   items,
+  itemVariants,
   businesses,
   parties,
 } from "@hisaabo/db";
@@ -108,18 +109,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
         const offset = (input.page - 1) * input.limit;
 
-        // If itemId filter: find invoice IDs that have that item, then filter
-        let invoiceIdFilter: string[] | null = null;
+        // If itemId filter: use EXISTS subquery instead of loading IDs into memory
         if (input.itemId) {
-          const rows = await ctx.db
-            .select({ invoiceId: invoiceItems.invoiceId })
-            .from(invoiceItems)
-            .where(eq(invoiceItems.itemId, input.itemId));
-          invoiceIdFilter = rows.map((r) => r.invoiceId);
-          if (invoiceIdFilter.length === 0) {
-            return { data: [], total: 0, page: input.page, limit: input.limit };
-          }
-          conditions.push(inArray(invoices.id, invoiceIdFilter));
+          conditions.push(
+            sql`EXISTS (SELECT 1 FROM ${invoiceItems} WHERE ${invoiceItems.invoiceId} = ${invoices.id} AND ${invoiceItems.itemId} = ${input.itemId})`
+          );
         }
 
         const [data, [{ count }]] = await Promise.all([
@@ -323,14 +317,18 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           // Group by itemId and sum quantities to avoid redundant per-row updates.
           // skipStockAdjustment lets callers (e.g. challan→invoice conversion) opt out.
           if (config.stockEffect !== "none" && !input.skipStockAdjustment) {
-            const stockMap = new Map<string, number>();
+            const itemStockMap = new Map<string, number>();
+            const variantStockMap = new Map<string, number>();
             for (const li of input.lineItems) {
-              if (li.itemId) {
+              if (li.variantId) {
+                const qty = parseFloat(li.quantity);
+                variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+              } else if (li.itemId) {
                 const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-                stockMap.set(li.itemId, (stockMap.get(li.itemId) || 0) + qty);
+                itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
               }
             }
-            for (const [itemId, totalQty] of stockMap) {
+            for (const [itemId, totalQty] of itemStockMap) {
               const qtyStr = totalQty.toFixed(3);
               await tx
                 .update(items)
@@ -341,6 +339,18 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                   updatedAt: new Date(),
                 })
                 .where(and(eq(items.id, itemId), eq(items.businessId, ctx.businessId)));
+            }
+            for (const [variantId, totalQty] of variantStockMap) {
+              const qtyStr = totalQty.toFixed(3);
+              await tx
+                .update(itemVariants)
+                .set({
+                  stockQuantity: config.stockEffect === "decrement"
+                    ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
+                    : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
+                  updatedAt: new Date(),
+                })
+                .where(eq(itemVariants.id, variantId));
             }
           }
 
@@ -409,26 +419,31 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .where(eq(invoiceItems.invoiceId, input.id));
 
             for (const li of lineItems) {
-              if (li.itemId) {
+              if (li.variantId) {
+                const variantQty = parseFloat(li.quantity).toFixed(3);
+                if (config.stockEffect === "decrement") {
+                  await tx.update(itemVariants).set({
+                    stockQuantity: sql`${itemVariants.stockQuantity}::numeric + ${variantQty}::numeric`,
+                    updatedAt: new Date(),
+                  }).where(eq(itemVariants.id, li.variantId));
+                } else if (config.stockEffect === "increment") {
+                  await tx.update(itemVariants).set({
+                    stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${variantQty}::numeric`,
+                    updatedAt: new Date(),
+                  }).where(eq(itemVariants.id, li.variantId));
+                }
+              } else if (li.itemId) {
                 const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1")).toFixed(3);
                 if (config.stockEffect === "decrement") {
-                  // was decremented on create → add back on delete
-                  await tx
-                    .update(items)
-                    .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
-                      updatedAt: new Date(),
-                    })
-                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
+                  await tx.update(items).set({
+                    stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
+                    updatedAt: new Date(),
+                  }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 } else if (config.stockEffect === "increment") {
-                  // was incremented on create → subtract on delete
-                  await tx
-                    .update(items)
-                    .set({
-                      stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
-                      updatedAt: new Date(),
-                    })
-                    .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
+                  await tx.update(items).set({
+                    stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
+                    updatedAt: new Date(),
+                  }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
                 }
               }
             }

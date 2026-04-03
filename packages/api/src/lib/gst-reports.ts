@@ -2,6 +2,12 @@ import { eq, and, sql, gte, lte, inArray } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
 
+// Split a tax amount exactly in half using paise-level integer arithmetic
+// to avoid floating-point rounding errors on odd amounts (e.g. ₹1.01).
+function splitTax(amount: number): number {
+  return Math.round(amount * 100 / 2) / 100;
+}
+
 // ── Types ──────────────────────────────────────────────────────
 
 export interface GSTR1Report {
@@ -208,8 +214,8 @@ export async function generateGSTR1(
     const tax = parseFloat(inv.taxAmount);
     const total = parseFloat(inv.totalAmount);
 
-    const cgst = sameState ? tax / 2 : 0;
-    const sgst = sameState ? tax / 2 : 0;
+    const cgst = sameState ? splitTax(tax) : 0;
+    const sgst = sameState ? splitTax(tax) : 0;
     const igst = sameState ? 0 : tax;
 
     totalTaxableValue += taxable;
@@ -246,8 +252,8 @@ export async function generateGSTR1(
         const itemTax = parseFloat(li.taxAmount);
         existing.taxableValue += itemTaxable;
         if (sameState) {
-          existing.cgst += itemTax / 2;
-          existing.sgst += itemTax / 2;
+          existing.cgst += splitTax(itemTax);
+          existing.sgst += splitTax(itemTax);
         } else {
           existing.igst += itemTax;
         }
@@ -270,8 +276,8 @@ export async function generateGSTR1(
       existing.taxableValue += itemTaxable;
       existing.totalValue += parseFloat(li.totalAmount);
       if (sameState) {
-        existing.cgst += itemTax / 2;
-        existing.sgst += itemTax / 2;
+        existing.cgst += splitTax(itemTax);
+        existing.sgst += splitTax(itemTax);
       } else {
         existing.igst += itemTax;
       }
@@ -418,8 +424,8 @@ export async function generateGSTR3B(
           biz.state.toLowerCase() === inv.partyState.toLowerCase());
 
     if (sameState) {
-      itcCgst += tax / 2;
-      itcSgst += tax / 2;
+      itcCgst += splitTax(tax);
+      itcSgst += splitTax(tax);
     } else {
       itcIgst += tax;
     }

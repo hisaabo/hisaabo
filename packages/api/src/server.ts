@@ -6,6 +6,7 @@ import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -18,6 +19,15 @@ import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, pa
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 const app = new Hono();
 
@@ -137,7 +147,7 @@ app.get("/pay/upi", async (c) => {
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pay ${pn || pa} \u20B9${am}</title>
+<title>Pay ${escapeHtml(pn || pa)} \u20B9${escapeHtml(am)}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:system-ui,-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8f9fa;color:#1a1a2e;padding:1rem}
@@ -161,8 +171,8 @@ app.get("/pay/upi", async (c) => {
 </head><body>
 <div class="card">
   <div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4"/></svg></div>
-  <div class="to">Pay ${pn || pa}</div>
-  <div class="amount">\u20B9${am}</div>
+  <div class="to">Pay ${escapeHtml(pn || pa)}</div>
+  <div class="amount">\u20B9${escapeHtml(am)}</div>
 
   <div class="mobile-only">
     <a class="pay-btn" href="${upiUrl}">Pay with UPI</a>
@@ -1088,6 +1098,8 @@ app.post("/store/:slug/order", async (c) => {
         .where(eq(businesses.id, resolved.businessId));
 
       // Find or create a "Walk-in Customer" party for online store orders
+      // Advisory lock prevents race condition with concurrent store order requests
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${resolved.businessId} || ':walkin'))`);
       let walkinPartyId: string;
       const [existingWalkin] = await tx.select({ id: parties.id })
         .from(parties)
@@ -1305,9 +1317,31 @@ function brandedHtml(title: string, heading: string, message: string, status: nu
 // Each carrier has a different payload format — the handler normalises them into shipment events.
 // For now: accept, log, and store the raw payload. Actual carrier-specific parsing comes later.
 app.post("/webhooks/shipping/:businessId", async (c) => {
+  const secret = process.env.SHIPPING_WEBHOOK_SECRET;
+  if (!secret) {
+    return c.json({ error: "Webhook not configured" }, 503);
+  }
+
+  const signature = c.req.header("x-webhook-signature");
+  if (!signature) {
+    return c.json({ error: "Missing signature" }, 401);
+  }
+
+  const rawBody = await c.req.text();
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const expectedBuf = Buffer.from(expected, "utf8");
+  const signatureBuf = Buffer.from(signature, "utf8");
+  if (expectedBuf.length !== signatureBuf.length || !timingSafeEqual(expectedBuf, signatureBuf)) {
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
   const businessId = c.req.param("businessId");
-  const body = await c.req.json().catch(() => null);
-  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+  let body: Record<string, any>;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
 
   // Resolve tenant from business ID and get DB connection
   const { shipments: shipmentsTable, shipmentEvents } = await import("@hisaabo/db");
