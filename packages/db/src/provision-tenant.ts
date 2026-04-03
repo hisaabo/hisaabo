@@ -148,12 +148,11 @@ export async function provisionTenantDatabase(
   const __dirname = dirname(__filename);
   const dbPackageRoot = resolve(__dirname, "..");
 
-  const drizzleKitBin = resolve(dbPackageRoot, "node_modules", ".bin", "drizzle-kit");
   const configPath = resolve(dbPackageRoot, "drizzle-tenant.config.ts");
 
   await execFileAsync(
-    drizzleKitBin,
-    ["push", "--config", configPath, "--force"],
+    "npx",
+    ["drizzle-kit", "push", "--config", configPath, "--force"],
     {
       env: {
         ...process.env,
