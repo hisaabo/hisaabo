@@ -2,7 +2,7 @@
   "expo": {
     "name": "Hisaabo",
     "slug": "hisaabo",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "hisaabo",
