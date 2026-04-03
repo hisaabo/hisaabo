@@ -121,7 +121,7 @@ hisaabo invoice list --status draft --format ids | xargs -I{} hisaabo invoice st
 
 14 command groups: `invoice`, `party`, `item`, `payment`, `expense`, `bank`, `gst`, `report`, `shipment`, `target`, `store`, `import`, `dashboard`, `business`.
 
-**Deep-dive:** [@hisaabo/cli on npm](https://www.npmjs.com/package/@hisaabo/cli) | [docs.hisaabo.in/cli](https://docs.hisaabo.in/cli)
+**Deep-dive:** [@hisaabo/cli on npm](https://www.npmjs.com/package/@hisaabo/cli) | [docs.hisaabo.in/ai/cli/](https://docs.hisaabo.in/ai/cli/)
 
 ### Integrations
 
