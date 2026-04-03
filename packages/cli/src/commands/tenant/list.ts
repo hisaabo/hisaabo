@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, type ColumnDef } from "../../output.js";
+import { fatalError, outputJSON, outputTable, EXIT, type ColumnDef } from "../../output.js";
 
 interface TenantEntry {
   id: string;

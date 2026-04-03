@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart } from "../../format.js";
+import { formatAmount } from "../../format.js";
 import chalk from "chalk";
 
 interface SalesTrendOpts {

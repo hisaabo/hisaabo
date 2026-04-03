@@ -564,8 +564,6 @@ function cmdReport() {
     { platform: "mcp", label: "MCP", usage: usage.mcp },
   ];
 
-  let allGaps = 0;
-
   for (const { platform, label, usage: platformUsage } of platformConfigs) {
     const r = analyzePlatformGap(usage.web, platformUsage, exceptions[platform], platform, label);
     const adjPct = r.applicable.length > 0
@@ -585,7 +583,6 @@ function cmdReport() {
       lines.push("");
       for (const p of r.trueGaps) lines.push(`- \`${p}\``);
       lines.push("");
-      allGaps += r.trueGaps.length;
     }
 
     if (r.excluded.length > 0) {

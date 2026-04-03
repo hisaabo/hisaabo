@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, success, outputJSON, EXIT, hasColor } from "../../output.js";
+import { fatalError, outputJSON, EXIT, hasColor } from "../../output.js";
 import chalk from "chalk";
 
 interface ApiKeyCreateOpts {

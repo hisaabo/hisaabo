@@ -38,7 +38,6 @@ export async function paymentGetCommand(id: string, opts: { json?: boolean }): P
       console.log(`\n  Linked Invoices:`);
       console.log(`  ${"─".repeat(65)}`);
       for (const inv of p.linkedInvoices) {
-        const paid = formatINR(inv.amountPaid);
         const total = formatINR(inv.totalAmount);
         const applied = formatINR(inv.amount);
         console.log(`   ${inv.invoiceNumber.padEnd(14)} ${formatDate(inv.invoiceDate).padEnd(14)} Total: ${total.padStart(11)}  Applied: ${applied.padStart(11)}  [${inv.status.toUpperCase()}]`);
