@@ -50,19 +50,13 @@ hisaabo whoami
 | `hisaabo logout` | Clear saved credentials |
 | `hisaabo whoami` | Show current user and active business |
 | `hisaabo switch` | Switch active business |
-| `hisaabo auth register` | Register a new account |
-| `hisaabo auth complete-profile` | Complete profile setup after registration |
-| `hisaabo auth update-name` | Update your display name |
-| `hisaabo auth logout-all` | Revoke all active sessions for your account |
 
 ### Business
 
 | Command | Description |
 |---|---|
 | `hisaabo business list` | List all businesses under your account |
-| `hisaabo business create` | Create a new business |
-| `hisaabo business update` | Update business profile (name, address, GSTIN, etc.) |
-| `hisaabo business sequence` | Update the invoice sequence number prefix or counter |
+| `hisaabo business switch` | Switch active business |
 
 ### Dashboard
 
@@ -77,7 +71,6 @@ hisaabo whoami
 | `invoice list` | List invoices (filterable by status, party, date range, type) |
 | `invoice get <id>` | Get full invoice details with line items |
 | `invoice create` | Create a new invoice (interactive or with flags) |
-| `invoice update <id>` | Update an existing invoice |
 | `invoice status <id> <status>` | Update status (draft, sent, paid, cancelled) |
 | `invoice pdf <id>` | Download invoice as PDF |
 | `invoice delete <id>` | Delete an invoice |
@@ -90,10 +83,6 @@ hisaabo whoami
 | `party get <id>` | Get party profile with balance |
 | `party create` | Add a new customer or supplier |
 | `party ledger <id>` | Debit/credit history for a party |
-| `party ledger-report` | Full ledger report with opening/closing balances |
-| `party stats <id>` | Transaction statistics for a party |
-| `party top-items <id>` | Top items purchased or sold by a party |
-| `party merge` | Merge two duplicate party records |
 | `party delete <id>` | Delete a party |
 
 ### Items
@@ -104,18 +93,6 @@ hisaabo whoami
 | `item get <id>` | Get item details with stock and pricing |
 | `item create` | Add a new product or service |
 | `item stock <id> <adjustment>` | Adjust stock (+10, -5, or set to 100) |
-| `item stock-history <id>` | Full stock adjustment history for an item |
-| `item stock-movements <id>` | Stock movement log (invoices, adjustments) |
-| `item low-stock-count` | Count of items currently below their threshold |
-| `item price-history <id>` | Historical price changes for an item |
-| `item sales-stats <id>` | Sales volume and revenue stats for an item |
-| `item variants list <id>` | List variants for an item |
-| `item variants create` | Add a variant (size, color, etc.) to an item |
-| `item variants update` | Update a variant |
-| `item variants delete` | Delete a variant |
-| `item merge` | Merge two duplicate item records |
-| `item switch-base-unit` | Change the base unit of measurement for an item |
-| `item rename-unit` | Rename a unit on an item without changing quantities |
 | `item delete <id>` | Delete an item |
 
 ### Payments
@@ -124,10 +101,6 @@ hisaabo whoami
 |---|---|
 | `payment list` | List payments (filterable by party, date range) |
 | `payment create` | Record a payment (cash, bank, UPI, cheque) |
-| `payment unpaid-invoices` | List invoices with outstanding balances |
-| `payment untracked` | Payments not yet linked to any invoice |
-| `payment default-account` | Show the default bank account for payments |
-| `payment assign-account` | Assign a bank account to a payment |
 | `payment delete <id>` | Delete a payment |
 
 ### Expenses
@@ -201,112 +174,6 @@ hisaabo whoami
 |---|---|
 | `store settings` | Show online store settings |
 | `store orders` | List store orders |
-| `store order confirm <id>` | Confirm a pending store order |
-| `store order cancel <id>` | Cancel a store order |
-| `store check-slug <slug>` | Check if a store URL slug is available |
-| `store items` | List items visible in the store |
-| `store items toggle` | Bulk enable or disable items in the store |
-
-### Tenant
-
-Manage the tenant (organisation) that owns your businesses. Useful when your account belongs to more than one tenant.
-
-| Command | Description |
-|---|---|
-| `tenant list` | List tenants your account has access to |
-| `tenant select <id>` | Switch the active tenant |
-| `tenant members` | List members of the current tenant |
-| `tenant invite <email>` | Invite a new member to the tenant |
-| `tenant remove <userId>` | Remove a member from the tenant |
-| `tenant role <userId> <role>` | Update a member's role |
-
-### Document Types
-
-Beyond standard invoices, Hisaabo supports six additional document types. Each shares the same sub-command structure.
-
-**Quotation**
-
-| Command | Description |
-|---|---|
-| `quotation list` | List quotations |
-| `quotation get <id>` | Get quotation details |
-| `quotation create` | Create a new quotation |
-| `quotation status <id> <status>` | Update quotation status |
-| `quotation delete <id>` | Delete a quotation |
-
-**Credit Note**
-
-| Command | Description |
-|---|---|
-| `credit-note list` | List credit notes |
-| `credit-note get <id>` | Get credit note details |
-| `credit-note create` | Create a new credit note |
-| `credit-note status <id> <status>` | Update status |
-| `credit-note delete <id>` | Delete a credit note |
-
-**Debit Note**
-
-| Command | Description |
-|---|---|
-| `debit-note list` | List debit notes |
-| `debit-note get <id>` | Get debit note details |
-| `debit-note create` | Create a new debit note |
-| `debit-note status <id> <status>` | Update status |
-| `debit-note delete <id>` | Delete a debit note |
-
-**Delivery Challan**
-
-| Command | Description |
-|---|---|
-| `challan list` | List delivery challans |
-| `challan get <id>` | Get challan details |
-| `challan create` | Create a new delivery challan |
-| `challan status <id> <status>` | Update status |
-| `challan delete <id>` | Delete a challan |
-
-**Proforma Invoice**
-
-| Command | Description |
-|---|---|
-| `proforma list` | List proforma invoices |
-| `proforma get <id>` | Get proforma details |
-| `proforma create` | Create a new proforma invoice |
-| `proforma status <id> <status>` | Update status |
-| `proforma delete <id>` | Delete a proforma invoice |
-
-**Sales Return**
-
-| Command | Description |
-|---|---|
-| `sales-return list` | List sales returns |
-| `sales-return get <id>` | Get sales return details |
-| `sales-return create` | Create a new sales return |
-| `sales-return status <id> <status>` | Update status |
-| `sales-return delete <id>` | Delete a sales return |
-
-**Purchase Return**
-
-| Command | Description |
-|---|---|
-| `purchase-return list` | List purchase returns |
-| `purchase-return get <id>` | Get purchase return details |
-| `purchase-return create` | Create a new purchase return |
-| `purchase-return status <id> <status>` | Update status |
-| `purchase-return delete <id>` | Delete a purchase return |
-
-**Convert document**
-
-| Command | Description |
-|---|---|
-| `document convert` | Convert one document type to another (e.g. challan to invoice) |
-
-### API Keys
-
-| Command | Description |
-|---|---|
-| `api-key list` | List all API keys for the current business |
-| `api-key create` | Generate a new API key |
-| `api-key revoke <id>` | Revoke an API key |
 
 ### Import
 
@@ -415,20 +282,17 @@ Most commands accept these flags:
 
 ## Multi-Business Support
 
-If you manage multiple businesses under one account, create and switch between them from the CLI:
+If you manage multiple businesses under one account, list and switch between them from the CLI:
 
 ```bash
 # List all businesses on your account
 hisaabo business list
 
-# Create a new business
-hisaabo business create
-
 # Switch the active business (interactive picker)
 hisaabo switch
 
-# Switch non-interactively
-hisaabo switch <business-id>
+# Or switch via the business subcommand
+hisaabo business switch
 ```
 
 All subsequent commands operate on the active business. The `dashboard`, `invoice`, `party`, and every other command scopes data to whichever business is currently selected. Switching resets all cached data so you always see numbers for the correct business.

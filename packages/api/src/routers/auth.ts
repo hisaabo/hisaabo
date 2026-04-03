@@ -298,7 +298,10 @@ export const authRouter = router({
     const magicLinkUrl = `${baseUrl}/auth/verify?${tokenParam}`;
     const deepLinkUrl = `hisaabo://auth/verify?${tokenParam}`;
 
-    await emailService.sendMagicLink(email, magicLinkUrl, deepLinkUrl);
+    // Check if user already exists to send welcome vs sign-in variant
+    // (API response is always { success: true } regardless — no enumeration risk)
+    const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+    await emailService.sendMagicLink(email, magicLinkUrl, deepLinkUrl, !existingUser);
 
     return { success: true }; // Always success — no email enumeration
   }),

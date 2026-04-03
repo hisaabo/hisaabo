@@ -98,3 +98,71 @@ export async function importItemsCommand(filePath: string, opts: { json?: boolea
     fatalError(String(e instanceof Error ? e.message : e));
   }
 }
+
+export async function importInvoicesCommand(filePath: string, opts: { json?: boolean; format?: string }): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+
+  const fmt = opts.format ?? (filePath.endsWith(".csv") ? "csv" : "json");
+  const data = fmt === "csv"
+    ? readCsvFile(filePath)
+    : readJsonFile(filePath) as Array<Record<string, unknown>>;
+
+  console.log(`  Importing ${data.length} invoices...`);
+
+  try {
+    const result = await client.import.importInvoices({ invoices: data as Array<Record<string, unknown>> });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    success(`Imported: ${result.imported} invoices`);
+    if (result.skipped > 0) warn(`Skipped: ${result.skipped}`);
+    result.errors.forEach((e) => console.error(`  Row ${e.row}: ${e.message}`));
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "validation_failed") fatalError(e.message, EXIT.VALIDATION);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}
+
+export async function importPaymentsCommand(filePath: string, opts: { json?: boolean; format?: string }): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+
+  const fmt = opts.format ?? (filePath.endsWith(".csv") ? "csv" : "json");
+  const data = fmt === "csv"
+    ? readCsvFile(filePath)
+    : readJsonFile(filePath) as Array<Record<string, unknown>>;
+
+  console.log(`  Importing ${data.length} payments...`);
+
+  try {
+    const result = await client.import.importPayments({ payments: data as Array<Record<string, unknown>> });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    success(`Imported: ${result.imported} payments`);
+    if (result.skipped > 0) warn(`Skipped: ${result.skipped}`);
+    result.errors.forEach((e) => console.error(`  Row ${e.row}: ${e.message}`));
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "validation_failed") fatalError(e.message, EXIT.VALIDATION);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}

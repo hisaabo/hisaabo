@@ -89,6 +89,12 @@ export default {
           from: { strokeDashoffset: "20", opacity: "0" },
           to: { strokeDashoffset: "0", opacity: "1" },
         },
+        "hint-lifecycle": {
+          "0%": { opacity: "0", transform: "translateY(-4px)" },
+          "10%": { opacity: "1", transform: "translateY(0)" },
+          "80%": { opacity: "1", transform: "translateY(0)" },
+          "100%": { opacity: "0", transform: "translateY(-2px)" },
+        },
       },
       animation: {
         "slide-in": "slide-in-right 0.3s ease-out",
@@ -98,6 +104,7 @@ export default {
         "shortcut-flash": "shortcut-flash 1.2s ease-out forwards",
         "milestone-enter": "milestone-enter 0.35s ease-out both",
         "check-draw": "check-draw 0.4s ease-out both",
+        "hint-lifecycle": "hint-lifecycle 3.5s ease-out forwards",
       },
     },
   },

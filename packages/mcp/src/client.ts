@@ -170,7 +170,7 @@ export class HisaaboClient {
         return c.mutate<InvoiceDetail>("invoice.create", input);
       },
       get(id: string) {
-        return c.query<InvoiceDetail>("invoice.get", { id });
+        return c.query<InvoiceDetail>("invoice.getById", { id });
       },
       update(id: string, data: Partial<InvoiceCreateInput>) {
         return c.mutate<InvoiceDetail>("invoice.update", { id, data });
@@ -194,7 +194,7 @@ export class HisaaboClient {
         return c.mutate<PartySummary>("party.create", input);
       },
       get(id: string) {
-        return c.query<PartyDetail>("party.get", { id });
+        return c.query<PartyDetail>("party.getById", { id });
       },
       ledger(partyId: string, input?: LedgerInput) {
         return c.query<LedgerResult>("party.ledger", { partyId, ...input });
@@ -230,7 +230,7 @@ export class HisaaboClient {
         return c.mutate<ItemSummary>("item.create", input);
       },
       get(id: string) {
-        return c.query<ItemDetail>("item.get", { id });
+        return c.query<ItemDetail>("item.getById", { id });
       },
       adjustStock(input: StockAdjustInput) {
         return c.mutate<ItemSummary>("item.adjustStock", input);
@@ -350,7 +350,7 @@ export class HisaaboClient {
     const c = this;
     return {
       get() {
-        return c.query<BusinessDetail>("business.get");
+        return c.query<BusinessDetail>("business.getById");
       },
       list() {
         return c.query<BusinessSummary[]>("business.list");
