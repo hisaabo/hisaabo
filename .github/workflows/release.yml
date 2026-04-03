@@ -174,9 +174,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set version from git tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd apps/desktop/src-tauri && cat tauri.conf.json | jq --arg v "$VERSION" '.version = $v' > tmp.json && mv tmp.json tauri.conf.json
+        run: node -e "const fs=require('fs'),f='apps/desktop/src-tauri/tauri.conf.json',c=JSON.parse(fs.readFileSync(f));c.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
 
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
@@ -219,9 +217,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set version from git tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd apps/mobile && cat app.json | jq --arg v "$VERSION" '.expo.version = $v' > tmp.json && mv tmp.json app.json
+        run: node -e "const fs=require('fs'),f='apps/mobile/app.json',c=JSON.parse(fs.readFileSync(f));c.expo.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
 
       - name: Expo prebuild
         working-directory: apps/mobile
@@ -261,6 +257,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set version from git tag
+        run: node -e "const fs=require('fs'),f='packages/cli/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+
       - run: pnpm --filter @hisaabo/cli build
       - run: pnpm --filter @hisaabo/cli pack --pack-destination /tmp/cli
       - run: npm publish /tmp/cli/*.tgz --access public --provenance
@@ -287,6 +286,9 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Set version from git tag
+        run: node -e "const fs=require('fs'),f='packages/mcp/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
 
       - run: pnpm --filter @hisaabo/mcp build
       - run: pnpm --filter @hisaabo/mcp pack --pack-destination /tmp/mcp
