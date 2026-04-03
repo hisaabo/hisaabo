@@ -43,3 +43,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy apps/api-docs/dist --project-name=hisaabo-api-docs
+          packageManager: npm

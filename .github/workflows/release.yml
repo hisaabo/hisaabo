@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      store: ${{ steps.filter.outputs.store }}
       mobile: ${{ steps.filter.outputs.mobile }}
       desktop: ${{ steps.filter.outputs.desktop }}
       cli: ${{ steps.filter.outputs.cli }}
@@ -315,6 +317,8 @@ jobs:
         id: notes
         env:
           API: ${{ needs.changes.outputs.api }}
+          WEB: ${{ needs.changes.outputs.web }}
+          STORE: ${{ needs.changes.outputs.store }}
           MOBILE: ${{ needs.changes.outputs.mobile }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           CLI: ${{ needs.changes.outputs.cli }}
@@ -350,12 +354,21 @@ jobs:
             fi
           }
 
+          web_status() {
+            local changed=$1 label=$2
+            if [ "$changed" = "true" ]; then
+              echo "| $label | Updated (deploys on merge) | :white_check_mark: |"
+            else
+              echo "| $label | No changes | :heavy_minus_sign: |"
+            fi
+          }
+
           cat >> /tmp/release-body.md << EOF
           | Component | Status | Build |
           |---|---|---|
           $(status "$API" "$DOCKER_RESULT" "API (Docker)")
-          | Web App | Deployed on merge | :white_check_mark: |
-          | Online Store | Deployed on merge | :white_check_mark: |
+          $(web_status "$WEB" "Web App")
+          $(web_status "$STORE" "Online Store")
           $(status "$MOBILE" "$MOBILE_RESULT" "Android APK")
           $(status "$DESKTOP" "$DESKTOP_RESULT" "Desktop (Win/Mac/Linux)")
           $(status "$CLI" "$CLI_RESULT" "CLI (@hisaabo/cli)")
