@@ -164,11 +164,14 @@ export async function provisionTenantDatabase(
     },
   );
 
+  // Encrypt the password before returning — stored encrypted in the tenants table
+  const { encryptDbPassword } = await import("./crypto.js");
+
   return {
     dbName,
     dbHost: host,
     dbPort: port,
     dbUser,
-    dbPassword,
+    dbPassword: encryptDbPassword(dbPassword),
   };
 }

@@ -507,6 +507,7 @@ export const storeOrders = pgTable("store_orders", {
   index("store_orders_date_idx").on(t.businessId, t.createdAt),
   index("store_orders_phone_idx").on(t.businessId, t.customerPhone),
   uniqueIndex("store_orders_number_idx").on(t.businessId, t.orderNumber),
+  index("store_orders_invoice_idx").on(t.invoiceId),
 ]);
 
 // ── Recurring Invoice Templates ────────────────────────────────

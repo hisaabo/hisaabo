@@ -269,6 +269,17 @@ export const paymentRouter = router({
         `);
       }
 
+      // ── Write payment allocations to junction table ──────────────────────
+      if (effectiveAllocations.length > 0) {
+        await tx.insert(paymentAllocations).values(
+          effectiveAllocations.map((alloc) => ({
+            paymentId: payment.id,
+            invoiceId: alloc.invoiceId,
+            amount: alloc.amount,
+          }))
+        );
+      }
+
       // ── Bank account transaction ─────────────────────────────────────────
       if (input.bankAccountId) {
         const [account] = await tx
@@ -423,8 +434,29 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
-      // 2. Reverse old invoice allocation (single SQL: update amountPaid and status atomically)
-      if (existing.invoiceId) {
+      // 2. Reverse old invoice allocations (per-allocation for multi-invoice payments)
+      const existingAllocations = await tx.select({
+        invoiceId: paymentAllocations.invoiceId,
+        amount: paymentAllocations.amount,
+      }).from(paymentAllocations).where(eq(paymentAllocations.paymentId, existing.id));
+
+      if (existingAllocations.length > 0) {
+        for (const alloc of existingAllocations) {
+          await tx.execute(sql`
+            UPDATE invoices SET
+              amount_paid = GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0),
+              status = CASE
+                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'
+                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) > 0 THEN 'partial'
+                ELSE 'sent'
+              END,
+              updated_at = NOW()
+            WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+          `);
+        }
+        await tx.delete(paymentAllocations).where(eq(paymentAllocations.paymentId, existing.id));
+      } else if (existing.invoiceId) {
+        // Legacy fallback: no allocation rows, reverse full amount on single invoice
         await tx.execute(sql`
           UPDATE invoices SET
             amount_paid = GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0),
@@ -527,6 +559,17 @@ export const paymentRouter = router({
             updated_at = NOW()
           WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
         `);
+      }
+
+      // Write new payment allocations to junction table
+      if (newAllocations.length > 0) {
+        await tx.insert(paymentAllocations).values(
+          newAllocations.map((alloc) => ({
+            paymentId: existing.id,
+            invoiceId: alloc.invoiceId,
+            amount: alloc.amount,
+          }))
+        );
       }
 
       // 6. Create new bank transaction if bank account set

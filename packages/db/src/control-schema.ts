@@ -23,10 +23,9 @@ export const tenants = pgTable("tenants", {
   dbHost: text("db_host"),
   dbPort: text("db_port"),
   dbUser: text("db_user"),
-  // TODO (FINDING 5 - SECURITY): dbPassword is stored in plaintext. This requires
-  // encryption at rest via a KMS or envelope encryption with an env-based key (e.g., AES-256-GCM
-  // with DB_ENCRYPTION_KEY). Implement before production deployment in cloud/multi-tenant mode.
-  dbPassword: text("db_password"), // FIXME: encrypt with KMS/env key before production use
+  // Encrypted at rest via AES-256-GCM when DB_ENCRYPTION_KEY is set (see crypto.ts).
+  // Legacy plaintext values are handled gracefully on read.
+  dbPassword: text("db_password"),
   plan: tenantPlanEnum("plan").default("free").notNull(),
   status: tenantStatusEnum("status").default("active").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

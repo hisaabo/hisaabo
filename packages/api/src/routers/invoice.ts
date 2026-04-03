@@ -404,6 +404,20 @@ export const invoiceRouter = router({
               throw new TRPCError({ code: "BAD_REQUEST", message: "One or more items do not belong to this business" });
             }
           }
+
+          // Security: validate variantIds belong to items in this business.
+          const updateVariantIds = input.lineItems
+            .map((li) => li.variantId)
+            .filter((id): id is string => Boolean(id));
+          if (updateVariantIds.length > 0) {
+            const ownedVariants = await tx.select({ id: itemVariants.id })
+              .from(itemVariants)
+              .innerJoin(items, eq(items.id, itemVariants.itemId))
+              .where(and(inArray(itemVariants.id, updateVariantIds), eq(items.businessId, ctx.businessId)));
+            if (ownedVariants.length !== new Set(updateVariantIds).size) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "One or more variants do not belong to this business" });
+            }
+          }
         }
 
         // 2. Build update payload
@@ -562,7 +576,7 @@ export const invoiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Invoice");
 
-      const [inv] = await ctx.db.select({ status: invoices.status, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
+      const [inv] = await ctx.db.select({ status: invoices.status, type: invoices.type, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
@@ -581,9 +595,47 @@ export const invoiceRouter = router({
         }
       }
 
-      await ctx.db.update(invoices)
-        .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
-        .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
+      await ctx.db.transaction(async (tx) => {
+        // Reverse stock adjustments made at creation
+        const lineItemRows = await tx.select()
+          .from(invoiceItems)
+          .where(eq(invoiceItems.invoiceId, input.id));
+
+        const itemStockMap = new Map<string, number>();
+        const variantStockMap = new Map<string, number>();
+        for (const li of lineItemRows) {
+          if (li.variantId) {
+            const qty = parseFloat(li.quantity);
+            variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+          } else if (li.itemId) {
+            const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1");
+            itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
+          }
+        }
+        for (const [itemId, totalQty] of itemStockMap) {
+          const qtyStr = totalQty.toFixed(3);
+          await tx.update(items).set({
+            stockQuantity: inv.type === "sale"
+              ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`
+              : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`,
+            updatedAt: new Date(),
+          }).where(eq(items.id, itemId));
+        }
+        for (const [variantId, totalQty] of variantStockMap) {
+          const qtyStr = totalQty.toFixed(3);
+          await tx.update(itemVariants).set({
+            stockQuantity: inv.type === "sale"
+              ? sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`
+              : sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`,
+            updatedAt: new Date(),
+          }).where(eq(itemVariants.id, variantId));
+        }
+
+        // Soft delete
+        await tx.update(invoices)
+          .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
+          .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
+      });
 
       const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       await logAudit(ctx.db, {

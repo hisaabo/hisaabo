@@ -40,6 +40,15 @@ interface TemplateRow {
   createdByUserId: string | null;
 }
 
+/** Advance a date by N months, clamping to the last day of the target month. */
+function addMonthsClamped(d: Date, months: number): void {
+  const originalDay = d.getDate();
+  d.setDate(1); // avoid day overflow skipping months
+  d.setMonth(d.getMonth() + months);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(originalDay, lastDay));
+}
+
 /** Calculate the next run date after a given date based on frequency. */
 export function computeNextRunDate(
   from: Date,
@@ -50,10 +59,10 @@ export function computeNextRunDate(
   switch (frequency) {
     case "weekly": d.setDate(d.getDate() + 7); break;
     case "biweekly": d.setDate(d.getDate() + 14); break;
-    case "monthly": d.setMonth(d.getMonth() + 1); break;
-    case "quarterly": d.setMonth(d.getMonth() + 3); break;
-    case "half_yearly": d.setMonth(d.getMonth() + 6); break;
-    case "yearly": d.setFullYear(d.getFullYear() + 1); break;
+    case "monthly": addMonthsClamped(d, 1); break;
+    case "quarterly": addMonthsClamped(d, 3); break;
+    case "half_yearly": addMonthsClamped(d, 6); break;
+    case "yearly": addMonthsClamped(d, 12); break;
     case "custom": d.setDate(d.getDate() + (customIntervalDays || 30)); break;
   }
   return d;

@@ -123,21 +123,94 @@ export const expenseRouter = router({
     .input(z.object({ id: z.string().uuid(), data: createExpenseSchema.partial() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Expense");
-      const [existing] = await ctx.db.select({ id: expenses.id })
-        .from(expenses)
-        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
-        .limit(1);
 
-      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Expense not found" });
+      return ctx.db.transaction(async (tx) => {
+        const [existing] = await tx.select()
+          .from(expenses)
+          .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
+          .for("update")
+          .limit(1);
 
-      const [updated] = await ctx.db.update(expenses)
-        .set({
-          ...input.data,
-          expenseDate: input.data.expenseDate ? new Date(input.data.expenseDate) : undefined,
-        })
-        .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
-        .returning();
-      return updated;
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Expense not found" });
+
+        // Reverse old bank transaction if one exists
+        const [oldBankTx] = await tx.select({
+          id: bankTransactions.id,
+          bankAccountId: bankTransactions.bankAccountId,
+          amount: bankTransactions.amount,
+        }).from(bankTransactions)
+          .where(and(
+            eq(bankTransactions.businessId, ctx.businessId),
+            eq(bankTransactions.referenceType, "expense"),
+            eq(bankTransactions.referenceId, input.id),
+          ))
+          .limit(1);
+
+        if (oldBankTx) {
+          const [account] = await tx.select({ currentBalance: bankAccounts.currentBalance })
+            .from(bankAccounts)
+            .where(eq(bankAccounts.id, oldBankTx.bankAccountId))
+            .for("update")
+            .limit(1);
+
+          if (account) {
+            const restoredBalance = money.add(account.currentBalance, oldBankTx.amount);
+            await tx.update(bankAccounts)
+              .set({ currentBalance: restoredBalance, updatedAt: new Date() })
+              .where(eq(bankAccounts.id, oldBankTx.bankAccountId));
+          }
+
+          await tx.delete(bankTransactions).where(eq(bankTransactions.id, oldBankTx.id));
+        }
+
+        // Update the expense
+        const newAmount = input.data.amount ?? existing.amount;
+        const newMode = input.data.mode ?? existing.mode;
+
+        const [updated] = await tx.update(expenses)
+          .set({
+            ...input.data,
+            expenseDate: input.data.expenseDate ? new Date(input.data.expenseDate) : undefined,
+          })
+          .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
+          .returning();
+
+        // Create new bank transaction with updated values
+        const accountTypes = modeToAccountTypes(newMode);
+        if (accountTypes) {
+          const [account] = await tx
+            .select({ id: bankAccounts.id, currentBalance: bankAccounts.currentBalance })
+            .from(bankAccounts)
+            .where(and(
+              eq(bankAccounts.businessId, ctx.businessId),
+              inArray(bankAccounts.accountType, accountTypes),
+            ))
+            .orderBy(sql`${bankAccounts.isDefault} DESC`, bankAccounts.createdAt)
+            .for("update")
+            .limit(1);
+
+          if (account) {
+            const newBalance = money.sub(account.currentBalance, newAmount);
+
+            await tx.insert(bankTransactions).values({
+              businessId: ctx.businessId,
+              bankAccountId: account.id,
+              type: "withdrawal",
+              amount: newAmount,
+              description: `Expense: ${updated.category}${updated.description ? ` — ${updated.description}` : ""}`,
+              referenceType: "expense",
+              referenceId: updated.id,
+              transactionDate: updated.expenseDate,
+            });
+
+            await tx.update(bankAccounts)
+              .set({ currentBalance: newBalance, updatedAt: new Date() })
+              .where(eq(bankAccounts.id, account.id));
+          }
+        }
+
+        return updated;
+      });
     }),
 
   delete: adminProcedure

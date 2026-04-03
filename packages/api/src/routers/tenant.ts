@@ -5,6 +5,7 @@ import { eq, and, gt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
+import { invalidateSessionCache } from "../context.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -54,6 +55,9 @@ export const tenantRouter = router({
       await controlDb.update(sessions)
         .set({ tenantId: input.tenantId })
         .where(eq(sessions.id, sessionId));
+
+      // Invalidate cached session so the next request picks up the new tenant
+      invalidateSessionCache(sessionId);
 
       return { success: true };
     }),
