@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/Modal";
 import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
+import { formatRole } from "@/lib/roles";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -74,7 +75,7 @@ const navSections = [
   {
     label: "OVERVIEW",
     items: [
-      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true, resource: "Business", action: "read" },
+      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true, resource: "Report", action: "read" },
     ],
   },
   {
@@ -126,6 +127,53 @@ const navSections = [
   },
 ];
 
+// ── NoOrgScreen — shown when user has zero memberships ─────────
+
+function NoOrgScreen() {
+  const utils = trpc.useUtils();
+  const createOrgMutation = trpc.tenant.create.useMutation({
+    onSuccess: async () => {
+      await utils.auth.me.refetch();
+      utils.tenant.list.invalidate();
+      utils.business.list.invalidate();
+    },
+  });
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
+      <div className="w-full max-w-[380px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light text-center">
+        <div className="flex items-center justify-center gap-2.5 mb-6">
+          <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
+            <span className="text-white font-bold text-base">H</span>
+          </div>
+          <span className="font-semibold text-lg tracking-tight text-text-primary">Hisaabo</span>
+        </div>
+        <h2 className="text-lg font-semibold text-text-primary mb-1">No organization found</h2>
+        <p className="text-sm text-text-tertiary mb-6">
+          You're not part of any organization yet. Create one to get started.
+        </p>
+
+        {createOrgMutation.isError && (
+          <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
+            {createOrgMutation.error?.message ?? "Something went wrong"}
+          </div>
+        )}
+
+        <button
+          onClick={() => createOrgMutation.mutate()}
+          disabled={createOrgMutation.isPending}
+          className="btn-primary w-full py-2.5 mb-3"
+        >
+          {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
+        </button>
+        <p className="text-xs text-text-tertiary">
+          Or ask your team admin to send you an invitation.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── TenantPicker ───────────────────────────────────────────────
 
 type TenantMembership = {
@@ -138,13 +186,17 @@ type TenantMembership = {
 function TenantPicker({
   tenants,
   onSelect,
+  onCreateNew,
+  onClose,
 }: {
   tenants: TenantMembership[];
   onSelect: (tenantId: string) => void;
+  onCreateNew?: () => void;
+  onClose?: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-      <div className="w-full max-w-sm rounded-xl bg-surface-0 border border-border-light shadow-modal p-6 animate-scale-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-xl bg-surface-0 border border-border-light shadow-modal p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-base font-semibold text-text-primary mb-1">
           Select Organization
         </h2>
@@ -176,10 +228,26 @@ function TenantPicker({
                       : "bg-surface-2 text-text-secondary",
                 )}
               >
-                {t.role}
+                {formatRole(t.role)}
               </span>
             </button>
           ))}
+
+          {onCreateNew && (
+            <button
+              onClick={onCreateNew}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-border-medium hover:border-brand-400 hover:bg-brand-600/5 transition-colors text-left group"
+            >
+              <div className="w-8 h-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-secondary group-hover:text-brand-600 shrink-0">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              </div>
+              <span className="text-sm font-medium text-text-secondary group-hover:text-brand-700 transition-colors">
+                Create new organization
+              </span>
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -192,9 +260,9 @@ function RootLayout() {
   const utils = trpc.useUtils();
   const { data: session, isLoading: sessionLoading, isFetching: sessionFetching } = trpc.auth.me.useQuery();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
-    enabled: !!session?.user && !session?.tenantId,
+    enabled: !!session?.user,
   });
-  const { data: businesses, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
+  const { data: businesses, isLoading: businessesLoading, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
     enabled: !!session?.user && !!session?.tenantId,
   });
 
@@ -204,6 +272,8 @@ function RootLayout() {
   const [showPalette, setShowPalette] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showTenantPicker, setShowTenantPicker] = useState(false);
+
+  const createOrgMutation = trpc.tenant.create.useMutation();
   const [currentBusinessId, setCurrentBusinessId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -287,12 +357,31 @@ function RootLayout() {
       return;
     }
 
+    // Priority 2.5: Pending invite token in localStorage → accept it
+    // This handles the case where an existing user (has name) clicked an
+    // invite link, was redirected to login, and is now back. The invite
+    // page stored the token before redirecting; we pick it up here.
+    if (!session.tenantId) {
+      const pendingToken = localStorage.getItem("pendingInviteToken");
+      if (pendingToken && !pathname.startsWith("/invite")) {
+        navigate({ to: `/invite/${pendingToken}` });
+        return;
+      }
+    }
+
     // Priority 3: Authenticated with name but no business → settings
-    // Skip redirect while businesses are refetching (e.g. after a tenant switch via invite)
-    if (session?.tenantId && businesses !== undefined && businesses.length === 0 && !businessesFetching) {
+    // Guard: only redirect AFTER businesses query has completed its initial load.
+    // businessesLoading is true when the query is enabled but has no data yet.
+    // This prevents redirecting to /settings before we know if businesses exist.
+    if (session?.tenantId && !businessesLoading && !businessesFetching && Array.isArray(businesses) && businesses.length === 0) {
       if (pathname !== "/settings") {
         navigate({ to: "/settings" });
       }
+      return;
+    }
+    // Priority 4: On dashboard but role can't access it → first accessible page
+    if (pathname === "/" && session?.role && !canAccess(session.role, "Report", "read")) {
+      navigate({ to: "/invoices" });
       return;
     }
   }, [sessionLoading, sessionFetching, session, businesses, navigate, pathname]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -339,16 +428,12 @@ function RootLayout() {
     if (!tenantList) return loadingSpinner;
 
     if (tenantList.length === 0) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-surface-1">
-          <div className="text-center">
-            <p className="text-text-primary font-medium">No organization found</p>
-            <p className="text-text-tertiary text-sm mt-1">
-              Please contact support or try logging in again.
-            </p>
-          </div>
-        </div>
-      );
+      // If a pending invite token exists, show spinner — the redirect useEffect
+      // will navigate to /invite/$token momentarily.
+      const hasPendingInvite = !!localStorage.getItem("pendingInviteToken");
+      if (hasPendingInvite) return loadingSpinner;
+
+      return <NoOrgScreen />;
     }
 
     if (tenantList.length === 1) {
@@ -369,9 +454,18 @@ function RootLayout() {
       <TenantPicker
         tenants={tenantList}
         onSelect={(tenantId) => selectTenantMutation.mutate({ tenantId })}
+        onCreateNew={async () => {
+          await createOrgMutation.mutateAsync();
+          await utils.auth.me.refetch();
+          await utils.tenant.list.refetch();
+        }}
       />
     );
   }
+
+  // Tenant selected but businesses still loading — show spinner, don't render
+  // the main layout yet (prevents flash of /settings "Set up your business")
+  if (session.tenantId && businessesLoading) return loadingSpinner;
 
   const displayName = session.user.name || session.user.email.split("@")[0];
   const initials = displayName
@@ -579,13 +673,21 @@ function RootLayout() {
       <ShortcutIndicator />
 
       {/* Tenant picker overlay — shown when user clicks the tenant name */}
-      {showTenantPicker && tenantList && tenantList.length > 1 && (
+      {showTenantPicker && (
         <TenantPicker
-          tenants={tenantList}
+          tenants={tenantList ?? []}
           onSelect={(tenantId) => {
             setShowTenantPicker(false);
             selectTenantMutation.mutate({ tenantId });
           }}
+          onCreateNew={async () => {
+            setShowTenantPicker(false);
+            const result = await createOrgMutation.mutateAsync();
+            await utils.auth.me.refetch();
+            await utils.tenant.list.refetch();
+            await utils.business.list.refetch();
+          }}
+          onClose={() => setShowTenantPicker(false)}
         />
       )}
     </div>
@@ -633,19 +735,9 @@ const roleStyles: Record<string, string> = {
   accountant: "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
 };
 
-const roleLabels: Record<string, string> = {
-  owner: "Owner",
-  superadmin: "Super Admin",
-  admin: "Admin",
-  seller_manager: "Seller Manager",
-  member: "Member",
-  seller: "Seller",
-  accountant: "Accountant",
-};
-
 function RoleBadge({ role }: { role: string }) {
   const style = roleStyles[role] ?? "bg-surface-2 text-text-secondary";
-  const label = roleLabels[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+  const label = formatRole(role);
   return (
     <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 leading-none", style)}>
       {label}

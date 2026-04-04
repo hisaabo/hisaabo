@@ -227,7 +227,9 @@ describe("tenant.acceptInvitation", () => {
     });
   });
 
-  it("rejects already-accepted invitation — BAD_REQUEST", async () => {
+  it("already-accepted invitation is handled idempotently — succeeds if user is member", async () => {
+    // newUser is already a member of tenant1 from the first test.
+    // An already-accepted invite should succeed silently (not throw).
     const rawToken = randomUUID();
     await insertInvitation({
       tenantId: tenant1.id,
@@ -238,12 +240,9 @@ describe("tenant.acceptInvitation", () => {
     });
 
     const caller = callerNoTenant(newUserSession.id, newUser);
-    await expect(
-      caller.tenant.acceptInvitation({ token: rawToken }),
-    ).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-      message: "Invitation already accepted",
-    });
+    const result = await caller.tenant.acceptInvitation({ token: rawToken });
+    expect(result.tenantId).toBe(tenant1.id);
+    expect(result.tenantName).toBe("Sharma Traders");
   });
 
   it("handles double-accept gracefully — already a member returns success", async () => {
@@ -280,6 +279,67 @@ describe("tenant.acceptInvitation", () => {
     await expect(
       caller.tenant.acceptInvitation({ token: "any-token" }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("REGRESSION: accepting an already-accepted invite succeeds idempotently if user is a member", async () => {
+    // Scenario: user accepted invite, clicks old link again. Should not error.
+    const rawToken = randomUUID();
+    const reinviteUser = await createUser({ email: `reinvite.idem.${randomUUID().slice(0, 8)}@example.in`, name: "Reinvite User" });
+    await addMember(tenant1.id, reinviteUser.id, "seller");
+
+    // Insert an already-accepted invite for this user
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email: reinviteUser.email,
+      invitedBy: admin.id,
+      rawToken,
+      acceptedAt: new Date(),
+    });
+
+    const reinviteSession = await createSession(reinviteUser.id);
+    const caller = callerNoTenant(reinviteSession.id, reinviteUser);
+    const result = await caller.tenant.acceptInvitation({ token: rawToken });
+
+    // Should succeed idempotently — not throw "already accepted"
+    expect(result.tenantId).toBe(tenant1.id);
+    expect(result.tenantName).toBe("Sharma Traders");
+  });
+
+  it("REGRESSION: accepting an already-accepted invite re-adds a removed member", async () => {
+    // Scenario: user accepted invite, was removed, clicks old link again.
+    // Should re-add them to the org.
+    const rawToken = randomUUID();
+    const email = `reinvite.readd.${randomUUID().slice(0, 8)}@example.in`;
+    const readdUser = await createUser({ email, name: "Re-add User" });
+
+    // Insert an already-accepted invite (from first invite cycle)
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email,
+      role: "accountant",
+      invitedBy: admin.id,
+      rawToken,
+      acceptedAt: new Date(),
+    });
+
+    // User is NOT a member (was removed after accepting)
+    const readdSession = await createSession(readdUser.id);
+    const caller = callerNoTenant(readdSession.id, readdUser);
+    const result = await caller.tenant.acceptInvitation({ token: rawToken });
+
+    expect(result.tenantId).toBe(tenant1.id);
+
+    // Should now be a member again
+    const db = getControlDb();
+    const [membership] = await db.select({ role: tenantMembers.role })
+      .from(tenantMembers)
+      .where(and(
+        eq(tenantMembers.tenantId, tenant1.id),
+        eq(tenantMembers.userId, readdUser.id),
+      ))
+      .limit(1);
+    expect(membership).toBeDefined();
+    expect(membership!.role).toBe("accountant");
   });
 });
 
@@ -549,6 +609,96 @@ describe("tenant.inviteMember — duplicate guard", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Plan limit enforcement — accepted invitations must not count
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tenant.inviteMember — plan limit counting", () => {
+  it("accepted invitations do not count against the team member limit", async () => {
+    // Create a fresh tenant on the free plan (maxTeamMembers=3)
+    const limitTenant = await createTenant({ name: "Limit Test Org", plan: "free" });
+    const limitAdmin = await createUser({ email: `limit.admin.${randomUUID().slice(0, 8)}@test.in`, name: "Limit Admin" });
+    await addMember(limitTenant.id, limitAdmin.id, "owner");
+    const limitSession = await createSession(limitAdmin.id, limitTenant.id);
+
+    const caller = callerForTenant(limitSession.id, limitAdmin, limitTenant.id);
+
+    // Free plan: 3 max members. Owner = 1 member.
+    // Invite person 1 — should succeed (1 member + 1 pending = 2)
+    const invite1 = await caller.tenant.inviteMember({
+      email: `limit.user1.${randomUUID().slice(0, 8)}@test.in`,
+      role: "seller",
+    });
+    expect(invite1.token).toBeDefined();
+
+    // Accept invite 1 (simulate: mark as accepted in DB)
+    const db = getControlDb();
+    await db.update(invitations)
+      .set({ acceptedAt: new Date() })
+      .where(eq(invitations.token, hashToken(invite1.token)));
+
+    // Add the user as a member (simulates what acceptInvitation does)
+    const user1 = await createUser({ email: `limit.user1.${randomUUID().slice(0, 8)}@test.in` });
+    await addMember(limitTenant.id, user1.id, "seller");
+    // Now: 2 members, 0 pending invites = 2 total
+
+    // Invite person 2 — should succeed (2 members + 1 pending = 3, at limit)
+    const invite2 = await caller.tenant.inviteMember({
+      email: `limit.user2.${randomUUID().slice(0, 8)}@test.in`,
+      role: "seller",
+    });
+    expect(invite2.token).toBeDefined();
+
+    // Invite person 3 — should FAIL (2 members + 1 pending = 3, hits limit)
+    await expect(
+      caller.tenant.inviteMember({
+        email: `limit.user3.${randomUUID().slice(0, 8)}@test.in`,
+        role: "seller",
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Upgrade"),
+    });
+  });
+
+  it("REGRESSION: accepted-but-unexpired invite does not double-count with the member row", async () => {
+    // This is the exact bug: person accepts invite, now they're counted as
+    // BOTH a member AND a pending invite (because acceptedAt wasn't checked).
+    const regTenant = await createTenant({ name: "Regression Limit Org", plan: "free" });
+    const regAdmin = await createUser({ email: `reg.admin.${randomUUID().slice(0, 8)}@test.in`, name: "Reg Admin" });
+    await addMember(regTenant.id, regAdmin.id, "owner");
+    const regSession = await createSession(regAdmin.id, regTenant.id);
+
+    const caller = callerForTenant(regSession.id, regAdmin, regTenant.id);
+
+    // Invite and accept user 1
+    const email1 = `reg.user1.${randomUUID().slice(0, 8)}@test.in`;
+    await caller.tenant.inviteMember({ email: email1, role: "seller" });
+
+    // Simulate acceptance: mark invite accepted + add member
+    const db = getControlDb();
+    const user1 = await createUser({ email: email1 });
+    await addMember(regTenant.id, user1.id, "seller");
+    await db.update(invitations)
+      .set({ acceptedAt: new Date() })
+      .where(and(
+        eq(invitations.tenantId, regTenant.id),
+        eq(invitations.email, email1),
+      ));
+
+    // State: 2 members (owner + user1), 0 truly pending invites
+    // With the bug: would count as 2 members + 1 "pending" (accepted but unexpired) = 3 → blocked
+    // After fix: correctly counts as 2 members + 0 pending = 2 → allowed
+
+    // Invite user 2 — MUST succeed
+    const invite2 = await caller.tenant.inviteMember({
+      email: `reg.user2.${randomUUID().slice(0, 8)}@test.in`,
+      role: "accountant",
+    });
+    expect(invite2.token).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Multi-tenant isolation (cross-cutting)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -740,6 +890,55 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
     const tenantsAfterAccept = await authedCaller.tenant.list();
     expect(tenantsAfterAccept.length).toBe(1);
     expect(tenantsAfterAccept[0]!.tenantId).toBe(tenant1.id);
+  });
+
+  it("REGRESSION: removed member can create a personal org via create", async () => {
+    // This covers the edge case where a user was invited, joined an org,
+    // was later removed, and is now stuck with "No organization found".
+    // create gives them an escape hatch.
+    const db = getControlDb();
+
+    // 1. Create a user who joins tenant1 via invite
+    const email = `removed.member.${randomUUID().slice(0, 8)}@example.in`;
+    const removedUser = await createUser({ email, name: "Removed User" });
+    await addMember(tenant1.id, removedUser.id, "seller");
+    const removedSession = await createSession(removedUser.id, tenant1.id);
+
+    // Confirm they have 1 membership
+    let memberships = await db.select().from(tenantMembers)
+      .where(eq(tenantMembers.userId, removedUser.id));
+    expect(memberships.length).toBe(1);
+
+    // 2. Admin removes them
+    const adminCaller = callerForTenant(adminSession.id, admin, tenant1.id);
+    await adminCaller.tenant.removeMember({ userId: removedUser.id });
+
+    // 3. User now has 0 memberships
+    memberships = await db.select().from(tenantMembers)
+      .where(eq(tenantMembers.userId, removedUser.id));
+    expect(memberships.length).toBe(0);
+
+    // 4. User calls create — gets a new org
+    const caller = callerNoTenant(removedSession.id, {
+      id: removedUser.id, email, name: "Removed User",
+    });
+    const result = await caller.tenant.create();
+    expect(result.tenantId).toBeDefined();
+    expect(result.tenantName).toBeDefined();
+
+    // 5. User now has 1 membership (owner of new org)
+    memberships = await db.select().from(tenantMembers)
+      .where(eq(tenantMembers.userId, removedUser.id));
+    expect(memberships.length).toBe(1);
+    expect(memberships[0]!.role).toBe("owner");
+  });
+
+  it("create allows users who already have memberships to create a new org", async () => {
+    // Admin already has a membership — should still be able to create a second org
+    const caller = callerNoTenant(adminSession.id, admin);
+    const result = await caller.tenant.create();
+    expect(result.tenantId).toBeDefined();
+    expect(result.tenantName).toBeDefined();
   });
 
   it("new user WITHOUT pending invitation still gets auto-created tenant", async () => {

@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { formatRole } from "@/lib/roles";
 
 export const Route = createFileRoute("/auth/complete-profile")({
   component: CompleteProfilePage,
@@ -12,6 +13,11 @@ type Step = "name" | "org-choice" | "done";
 function CompleteProfilePage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
+  const { data: session } = trpc.auth.me.useQuery();
+
+  // If the user already has a name (e.g., component remounted after navigation),
+  // skip straight to org-choice or redirect away — never flash the name form.
+  const alreadyHasName = !!session?.user?.name;
 
   const [step, setStep] = useState<Step>("name");
   const [name, setName] = useState("");
@@ -20,14 +26,34 @@ function CompleteProfilePage() {
 
   const pendingToken = localStorage.getItem("pendingInviteToken");
 
-  // Peek at invitation to show org name before accepting
-  const { data: inviteInfo } = trpc.tenant.peekInvitation.useQuery(
+  // Peek at invitation to show org name before accepting.
+  // Returns null for expired/accepted tokens — clears stale localStorage.
+  const { data: inviteInfo, isFetched: invitePeekDone } = trpc.tenant.peekInvitation.useQuery(
     { token: pendingToken! },
     { enabled: !!pendingToken },
   );
 
+  // Clean up stale token if peek returned null (expired or already accepted)
+  useEffect(() => {
+    if (pendingToken && invitePeekDone && inviteInfo === null) {
+      localStorage.removeItem("pendingInviteToken");
+    }
+  }, [pendingToken, invitePeekDone, inviteInfo]);
+
+  // If name already saved (e.g., component remounted after navigation),
+  // skip straight to org-choice or redirect away — never flash the name form.
+  useEffect(() => {
+    if (!alreadyHasName || step !== "name") return;
+    if (pendingToken && inviteInfo) {
+      setName(session!.user!.name!);
+      setStep("org-choice");
+    } else {
+      navigate({ to: session?.tenantId ? "/" : "/settings" });
+    }
+  }, [alreadyHasName, step, pendingToken, inviteInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const acceptInviteMutation = trpc.tenant.acceptInvitation.useMutation();
-  const selectTenantMutation = trpc.tenant.select.useMutation();
+
 
   const profileMutation = trpc.auth.completeProfile.useMutation({
     onSuccess: async () => {
@@ -61,11 +87,14 @@ function CompleteProfilePage() {
     setError("");
     try {
       const result = await acceptInviteMutation.mutateAsync({ token: pendingToken });
-      await selectTenantMutation.mutateAsync({ tenantId: result.tenantId });
+      // acceptInvitation already calls autoSelectTenantInSession on the backend,
+      // so no need for a separate selectTenant call.
       localStorage.removeItem("pendingInviteToken");
+      // Await ALL refetches before navigating — prevents the root layout from
+      // seeing stale empty businesses and redirecting to /settings.
       await utils.auth.me.refetch();
-      utils.tenant.list.invalidate();
-      utils.business.list.invalidate();
+      await utils.tenant.list.refetch();
+      await utils.business.list.refetch();
       setDoneMessage(`Joining ${result.tenantName}...`);
       setStep("done");
       setTimeout(() => navigate({ to: "/", search: { joined: result.tenantName } }), 800);
@@ -96,8 +125,8 @@ function CompleteProfilePage() {
           </span>
         </div>
 
-        {/* ── Step 1: Name entry ─────────────────────────────────────── */}
-        {step === "name" && (
+        {/* ── Step 1: Name entry (hidden if name already saved) ──────── */}
+        {step === "name" && !alreadyHasName && (
           <>
             <h1 className="text-xl font-semibold mb-1 text-text-primary">
               {inviteInfo ? "Almost there!" : "Welcome to Hisaabo"}
@@ -170,7 +199,7 @@ function CompleteProfilePage() {
                     Join {inviteInfo.tenantName}
                   </p>
                   <p className="text-xs text-text-tertiary">
-                    as {inviteInfo.role}
+                    as {formatRole(inviteInfo.role)}
                   </p>
                 </div>
                 {acceptInviteMutation.isPending && (

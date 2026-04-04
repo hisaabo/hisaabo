@@ -28,7 +28,59 @@ async function autoSelectTenantInSession(req: Request, tenantId: string): Promis
   return tenant?.name ?? "Organization";
 }
 
+function generateSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) + "-" + nanoid(6);
+}
+
 export const tenantRouter = router({
+  // Create a new organization for the authenticated user.
+  // User becomes the owner. In self-hosted mode, joins the default tenant instead.
+  create: protectedProcedure.mutation(async ({ ctx }) => {
+    const displayName = ctx.user.name ?? ctx.user.email.split("@")[0];
+
+    if (process.env.MULTI_TENANT === "true") {
+      const tenantName = `${displayName}'s Organization`;
+      const slug = generateSlug(tenantName);
+
+      const [tenant] = await controlDb.insert(tenants).values({
+        name: tenantName,
+        slug,
+      }).returning({ id: tenants.id });
+
+      await controlDb.insert(tenantMembers).values({
+        tenantId: tenant.id,
+        userId: ctx.user.id,
+        role: "owner",
+        acceptedAt: new Date(),
+      });
+
+      // Auto-select the new tenant in session
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, tenant.id);
+      return { tenantId: tenant.id, tenantName: tenantNameResult };
+    } else {
+      // Self-hosted: join/create default tenant
+      let [defaultTenant] = await controlDb.select({ id: tenants.id })
+        .from(tenants).where(eq(tenants.slug, "default")).limit(1);
+      if (!defaultTenant) {
+        [defaultTenant] = await controlDb.insert(tenants).values({
+          name: "Default Organization", slug: "default",
+        }).returning({ id: tenants.id });
+      }
+
+      const memberCount = await controlDb.select({ id: tenantMembers.id })
+        .from(tenantMembers).where(eq(tenantMembers.tenantId, defaultTenant.id));
+      const role = memberCount.length === 0 ? "owner" : "member";
+
+      await controlDb.insert(tenantMembers).values({
+        tenantId: defaultTenant.id, userId: ctx.user.id,
+        role, acceptedAt: new Date(),
+      });
+
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenant.id);
+      return { tenantId: defaultTenant.id, tenantName: tenantNameResult };
+    }
+  }),
+
   // List user's tenant memberships
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await controlDb.select({
@@ -252,15 +304,38 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Invalid or expired invitation" });
       }
 
-      if (invitation.acceptedAt) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invitation already accepted" });
-      }
-
       // Verify the invitation email matches the authenticated user
       const [currentUser] = await controlDb.select({ email: users.email })
         .from(users).where(eq(users.id, ctx.user.id)).limit(1);
       if (!currentUser || currentUser.email.toLowerCase() !== invitation.email.toLowerCase()) {
         throw new TRPCError({ code: "FORBIDDEN", message: "This invitation was sent to a different email address" });
+      }
+
+      // If already accepted, treat as idempotent — the user may be clicking
+      // an old link or retrying after a partial failure. Check membership and
+      // auto-select the tenant if they're already in.
+      if (invitation.acceptedAt) {
+        const [existingMember] = await controlDb.select({ id: tenantMembers.id })
+          .from(tenantMembers)
+          .where(and(
+            eq(tenantMembers.tenantId, invitation.tenantId),
+            eq(tenantMembers.userId, ctx.user.id),
+          ))
+          .limit(1);
+        if (existingMember) {
+          const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+          return { tenantId: invitation.tenantId, tenantName };
+        }
+        // Accepted but not a member (removed after accepting) — re-add them
+        await controlDb.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
+        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+        return { tenantId: invitation.tenantId, tenantName };
       }
 
       // Check if already a member (e.g. double-click)

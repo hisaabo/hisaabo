@@ -8,7 +8,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, and, gt, count } from "drizzle-orm";
+import { eq, and, gt, isNull, count } from "drizzle-orm";
 import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
@@ -131,6 +131,7 @@ export async function enforceTeamMemberLimit(tenantId: string): Promise<void> {
       .where(and(
         eq(invitations.tenantId, tenantId),
         gt(invitations.expiresAt, new Date()),
+        isNull(invitations.acceptedAt),
       )),
   ]);
 

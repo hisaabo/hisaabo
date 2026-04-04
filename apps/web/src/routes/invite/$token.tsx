@@ -15,7 +15,6 @@ function InviteAcceptPage() {
   const [error, setError] = useState<string | null>(null);
 
   const acceptMutation = trpc.tenant.acceptInvitation.useMutation();
-  const selectTenantMutation = trpc.tenant.select.useMutation();
 
   useEffect(() => {
     if (sessionLoading) return;
@@ -29,37 +28,32 @@ function InviteAcceptPage() {
     if (calledRef.current) return;
     calledRef.current = true;
 
-    acceptMutation.mutate(
-      { token },
-      {
-        onSuccess: (data) => {
+    (async () => {
+      try {
+        const data = await acceptMutation.mutateAsync({ token });
+        localStorage.removeItem("pendingInviteToken");
+        // acceptInvitation already calls autoSelectTenantInSession — no
+        // need for a separate selectTenant call. Await all refetches so
+        // the root layout sees the correct tenant + businesses.
+        await utils.auth.me.refetch();
+        await utils.tenant.list.refetch();
+        await utils.business.list.refetch();
+        navigate({ to: "/", search: { joined: data.tenantName } });
+      } catch (err: any) {
+        const message = err?.message ?? String(err);
+        if (message.includes("different email")) {
+          localStorage.setItem("pendingInviteToken", token);
+          navigate({ to: "/login", search: { invite: "1", error: "email_mismatch" } });
+        } else if (message.includes("already accepted")) {
+          // Idempotent — already a member, just go home
           localStorage.removeItem("pendingInviteToken");
-          selectTenantMutation.mutate(
-            { tenantId: data.tenantId },
-            {
-              onSuccess: async () => {
-                // Await refetch so root layout sees the correct tenant + businesses
-                await utils.auth.me.refetch();
-                utils.tenant.list.invalidate();
-                utils.business.list.invalidate();
-                navigate({ to: "/", search: { joined: data.tenantName } });
-              },
-            },
-          );
-        },
-        onError: (err) => {
-          if (err.message.includes("different email")) {
-            localStorage.setItem("pendingInviteToken", token);
-            navigate({ to: "/login", search: { invite: "1", error: "email_mismatch" } });
-          } else if (err.message.includes("already accepted")) {
-            localStorage.removeItem("pendingInviteToken");
-            navigate({ to: "/" });
-          } else {
-            setError(err.message);
-          }
-        },
-      },
-    );
+          await utils.auth.me.refetch();
+          navigate({ to: "/" });
+        } else {
+          setError(message);
+        }
+      }
+    })();
   }, [sessionLoading, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
