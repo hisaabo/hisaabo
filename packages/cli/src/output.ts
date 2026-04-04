@@ -46,6 +46,7 @@ export const EXIT = {
   VALIDATION: 6,
   NETWORK: 7,
   CONFLICT: 8,
+  RATE_LIMITED: 9,
 } as const;
 
 // ── Output helpers ────────────────────────────────────────────────────────

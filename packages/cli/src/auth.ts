@@ -2,12 +2,20 @@ import { HisaaboClient, HisaaboApiError } from "./client.js";
 import { getConfig, setConfig, clearConfig, requireAuth, getConfigPath } from "./config.js";
 import { fatalError, EXIT, outputJSON, success } from "./output.js";
 
+function validateApiUrl(url: string): string {
+  const parsed = new URL(url);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    fatalError("API URL must use http:// or https://", EXIT.USAGE);
+  }
+  return parsed.origin + parsed.pathname.replace(/\/$/, "");
+}
+
 /**
  * Authenticate using a long-lived API key (hisaabo_key_...).
  * Validates the token by calling auth.me, then stores it in config.
  */
 export async function loginWithToken(apiUrl: string, token: string): Promise<void> {
-  const base = apiUrl.replace(/\/$/, "");
+  const base = validateApiUrl(apiUrl);
 
   // Use a temporary client with the token but no business/tenant yet
   const client = new HisaaboClient({
@@ -81,6 +89,7 @@ export async function loginWithToken(apiUrl: string, token: string): Promise<voi
     businessId: selected.id,
     businessName: selected.name,
     tenantId: selected.id,
+    tokenCreatedAt: Date.now(),
   });
 
   success(`Authenticated as ${user.name ?? user.email} (${user.email}) via API key`);
@@ -93,8 +102,7 @@ type AuthUser = { id: string; email: string; name: string | null; role: string }
 type BusinessSummary = { id: string; name: string; gstin?: string | null; gstRegistrationType?: string | null };
 
 export async function login(apiUrl: string, email: string, password: string): Promise<void> {
-  // Normalize URL
-  const base = apiUrl.replace(/\/$/, "");
+  const base = validateApiUrl(apiUrl);
 
   // Use a temporary client without auth for login
   const client = new HisaaboClient({
@@ -156,6 +164,7 @@ export async function login(apiUrl: string, email: string, password: string): Pr
       businessId: selected.id,
       businessName: selected.name,
       tenantId: selected.id, // fallback; real tenantId may differ
+      tokenCreatedAt: Date.now(),
     });
 
     success(`Active business: ${selected.name}`);

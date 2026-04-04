@@ -20,6 +20,7 @@ export type HisaaboError =
   | { code: "not_found"; resource: string }
   | { code: "validation_failed"; fields: Record<string, string[]> }
   | { code: "network_error"; message: string }
+  | { code: "rate_limited"; retryAfterMs: number; message: string }
   | { code: "api_error"; message: string };
 
 export class HisaaboApiError extends Error {
@@ -44,6 +45,8 @@ export function formatHisaaboError(err: HisaaboError): string {
           .map(([field, msgs]) => `  ${field}: ${msgs.join(", ")}`)
           .join("\n")
       );
+    case "rate_limited":
+      return `Rate limited: ${err.message}`;
     case "network_error":
       return `Network error: ${err.message}`;
     case "api_error":
@@ -94,6 +97,23 @@ export class HisaaboClient {
   }
 
   private async unwrap<T>(res: Response): Promise<T> {
+    // Detect rate limiting before tRPC error parsing
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("retry-after");
+      let retryMs = 60_000;
+      if (retryAfter) {
+        const parsed = Number(retryAfter);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          retryMs = Math.min(parsed * 1000, 120_000); // cap at 2 minutes
+        }
+      }
+      throw new HisaaboApiError({
+        code: "rate_limited",
+        retryAfterMs: retryMs,
+        message: `Rate limited. Try again in ${Math.ceil(retryMs / 1000)}s.`,
+      });
+    }
+
     const body = await res.json() as unknown;
 
     if (typeof body !== "object" || body === null) {
@@ -116,17 +136,27 @@ export class HisaaboClient {
   }
 
   async query<T>(path: string, input?: unknown): Promise<T> {
-    const url = new URL(`${this.config.apiUrl}/api/trpc/${path}`);
-    if (input !== undefined) {
-      url.searchParams.set("input", JSON.stringify(superjson.serialize(input)));
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const url = new URL(`${this.config.apiUrl}/api/trpc/${path}`);
+        if (input !== undefined) {
+          url.searchParams.set("input", JSON.stringify(superjson.serialize(input)));
+        }
+        const res = await fetch(url.toString(), { headers: this.buildHeaders() });
+        return await this.unwrap<T>(res);
+      } catch (e) {
+        // Auto-retry on rate limit for idempotent reads
+        if (e instanceof HisaaboApiError && e.hisaaboError.code === "rate_limited" && attempt < maxRetries) {
+          const waitMs = Math.min((e.hisaaboError as { retryAfterMs: number }).retryAfterMs, 10_000);
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        if (e instanceof HisaaboApiError) throw e;
+        throw new HisaaboApiError({ code: "network_error", message: String(e instanceof Error ? e.message : e) });
+      }
     }
-    try {
-      const res = await fetch(url.toString(), { headers: this.buildHeaders() });
-      return this.unwrap<T>(res);
-    } catch (e) {
-      if (e instanceof HisaaboApiError) throw e;
-      throw new HisaaboApiError({ code: "network_error", message: String(e instanceof Error ? e.message : e) });
-    }
+    throw new HisaaboApiError({ code: "api_error", message: "Max retries exceeded" });
   }
 
   async mutate<T>(path: string, input: unknown): Promise<T> {
