@@ -102,7 +102,7 @@ export async function createTenant(
       id,
       name: "Acme Trading Co",
       slug,
-      plan: "free",
+      plan: "business",
       status: "active",
       ...overrides,
     })

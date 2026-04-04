@@ -2,8 +2,9 @@ import { TRPCError } from "@trpc/server";
 import { createHash, randomBytes } from "crypto";
 import { eq, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../trpc.js";
-import { controlDb, apiKeys, tenants } from "@hisaabo/db";
+import { controlDb, apiKeys } from "@hisaabo/db";
 import { createApiKeySchema, revokeApiKeySchema } from "@hisaabo/shared";
+import { enforceApiKeyLimit } from "../lib/plan-limits.js";
 
 export const apiKeyRouter = router({
   /**
@@ -40,23 +41,8 @@ export const apiKeyRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "No organization selected" });
     }
 
-    // Plan check — API keys are a paid feature
-    const [tenant] = await controlDb
-      .select({ plan: tenants.plan })
-      .from(tenants)
-      .where(eq(tenants.id, ctx.tenantId))
-      .limit(1);
-
-    if (!tenant) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Tenant not found" });
-    }
-
-    if (tenant.plan === "free") {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "API keys are available on paid plans. Upgrade to Pro to use the CLI and MCP server.",
-      });
-    }
+    // Plan check — enforces both plan access and key count limit
+    await enforceApiKeyLimit(ctx.tenantId);
 
     // Generate a high-entropy raw key
     const rawKey = `hisaabo_key_${randomBytes(32).toString("base64url")}`;

@@ -24,6 +24,7 @@
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "expo": "~55.0.9",
+    "expo-clipboard": "^55.0.11",
     "expo-constants": "~55.0.9",
     "expo-contacts": "~55.0.9",
     "expo-file-system": "~55.0.12",

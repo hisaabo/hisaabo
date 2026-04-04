@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Modal } from "@/components/ui/Modal";
 import { PillTabs } from "@/components/ui/Tabs";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
@@ -485,10 +486,245 @@ function ActivityLogContent() {
   );
 }
 
+// ── API Keys Section ─────────────────────────────────────────────────────────
+
+function KeyIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+    </svg>
+  );
+}
+
+function ApiKeysContent() {
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: tenantList } = trpc.tenant.list.useQuery();
+  const { data: keys, isLoading } = trpc.apiKey.list.useQuery();
+  const utils = trpc.useUtils();
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyExpiry, setNewKeyExpiry] = useState("");
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const currentTenant = tenantList?.find((t) => t.tenantId === session?.tenantId);
+  const isFree = currentTenant?.tenantPlan === "free";
+
+  const createMutation = trpc.apiKey.create.useMutation({
+    onSuccess: (data) => {
+      setCreatedKey(data.key);
+      utils.apiKey.list.invalidate();
+    },
+    onError: (err) => toast.error("Failed to create API key", err.message),
+  });
+
+  const revokeMutation = trpc.apiKey.revoke.useMutation({
+    onSuccess: () => {
+      utils.apiKey.list.invalidate();
+      toast.success("API key revoked");
+    },
+    onError: (err) => toast.error("Failed to revoke", err.message),
+  });
+
+  function handleCreate() {
+    if (!newKeyName.trim()) return;
+    createMutation.mutate({
+      name: newKeyName.trim(),
+      expiresAt: newKeyExpiry || undefined,
+    });
+  }
+
+  function handleCloseCreateModal() {
+    setShowCreate(false);
+    setNewKeyName("");
+    setNewKeyExpiry("");
+    setCreatedKey(null);
+    setCopied(false);
+  }
+
+  function handleCopy() {
+    if (createdKey) {
+      navigator.clipboard.writeText(createdKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  return (
+    <>
+      <div className="card overflow-hidden">
+        <div className="px-6 py-3 flex items-center justify-between border-b border-border-light">
+          <span className="text-sm font-medium text-text-primary">API Keys</span>
+          {!isFree && (
+            <button
+              className="btn-primary btn-sm"
+              onClick={() => setShowCreate(true)}
+            >
+              + Create API Key
+            </button>
+          )}
+        </div>
+
+        <div className="max-h-[400px] overflow-y-auto">
+          {isFree ? (
+            <p className="text-sm text-text-tertiary py-8 text-center px-6">
+              API keys are available on paid plans. Upgrade to create programmatic access tokens.
+            </p>
+          ) : isLoading ? (
+            <div className="p-6 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="skeleton h-16 rounded-lg" />
+              ))}
+            </div>
+          ) : !keys?.length ? (
+            <p className="text-sm text-text-tertiary py-8 text-center">
+              No API keys created yet.
+            </p>
+          ) : (
+            <div className="p-4 space-y-2">
+              {keys.map((k) => (
+                <div
+                  key={k.id}
+                  className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border-light bg-surface-0"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-surface-2 flex items-center justify-center text-text-secondary shrink-0">
+                    <KeyIcon />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-text-primary truncate">
+                        {k.name}
+                      </span>
+                      <span className="text-xs font-mono text-text-tertiary truncate">
+                        {k.keyPrefix}...
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-text-tertiary mt-0.5">
+                      <span>
+                        {k.lastUsedAt ? `Last used ${timeAgo(k.lastUsedAt)}` : "Never used"}
+                      </span>
+                      <span>&middot;</span>
+                      <span>
+                        {k.expiresAt
+                          ? `Expires ${new Date(k.expiresAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`
+                          : "Never expires"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setRevokeTarget({ id: k.id, name: k.name })}
+                    className="btn-ghost text-xs text-red-600 hover:text-red-700 shrink-0"
+                  >
+                    Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Create API Key Modal */}
+      <Modal
+        open={showCreate}
+        onClose={handleCloseCreateModal}
+        title={createdKey ? "API Key Created" : "Create API Key"}
+      >
+        {createdKey ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-600/40 dark:bg-amber-900/20 px-4 py-3">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                Copy this key now — it won't be shown again.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-sm font-mono bg-surface-2 rounded-lg px-3 py-2 text-text-primary break-all select-all">
+                {createdKey}
+              </code>
+              <button
+                className="btn-primary btn-sm shrink-0"
+                onClick={handleCopy}
+              >
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <div className="flex justify-end">
+              <button className="btn-primary" onClick={handleCloseCreateModal}>
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-text-primary block mb-1">
+                Key Name <span className="text-red-500">*</span>
+              </label>
+              <input
+                className="input w-full"
+                placeholder="e.g. CLI Access Key"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-text-primary block mb-1">
+                Expiry Date <span className="text-text-tertiary text-xs">(optional)</span>
+              </label>
+              <input
+                type="date"
+                className="input w-full"
+                value={newKeyExpiry}
+                onChange={(e) => setNewKeyExpiry(e.target.value)}
+                min={new Date().toISOString().split("T")[0]}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-ghost" onClick={handleCloseCreateModal}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleCreate}
+                disabled={!newKeyName.trim() || createMutation.isPending}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Key"}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Revoke Confirmation */}
+      <ConfirmDialog
+        open={!!revokeTarget}
+        title="Revoke API key?"
+        description={`This will permanently revoke "${revokeTarget?.name ?? ""}". Any integrations using this key will stop working immediately.`}
+        confirmLabel="Revoke"
+        variant="danger"
+        loading={revokeMutation.isPending}
+        onConfirm={() => {
+          if (revokeTarget) {
+            revokeMutation.mutate({ id: revokeTarget.id });
+            setRevokeTarget(null);
+          }
+        }}
+        onCancel={() => setRevokeTarget(null)}
+      />
+    </>
+  );
+}
+
 // ── Main Export ────────────────────────────────────────────────────────────────
 
 const ACCOUNT_TABS = [
   { value: "sessions", label: "Sessions" },
+  { value: "api-keys", label: "API Keys" },
   { value: "activity", label: "Activity Log" },
 ];
 
@@ -501,6 +737,7 @@ export function AccountTab() {
       <div>
         <PillTabs tabs={ACCOUNT_TABS} value={tab} onChange={setTab} className="mb-4" />
         {tab === "sessions" && <SessionsContent />}
+        {tab === "api-keys" && <ApiKeysContent />}
         {tab === "activity" && <ActivityLogContent />}
       </div>
     </div>

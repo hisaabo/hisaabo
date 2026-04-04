@@ -10,6 +10,7 @@ import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
 import { invalidateSessionCache } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
+import { enforceSessionLimit } from "../lib/plan-limits.js";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -100,6 +101,9 @@ async function createSessionForUser(
     .where(eq(tenantMembers.userId, userId));
 
   const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+  // Evict oldest sessions if at plan limit (FIFO, never blocks login)
+  await enforceSessionLimit(userId);
 
   const sessionId = nanoid(64);
   await controlDb.insert(sessions).values({
@@ -232,6 +236,8 @@ export const authRouter = router({
         .from(tenantMembers)
         .where(eq(tenantMembers.userId, user.id));
       const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await enforceSessionLimit(user.id);
 
       await tx.insert(sessions).values({
         id: sessionId,
@@ -423,6 +429,8 @@ export const authRouter = router({
         .from(tenantMembers)
         .where(eq(tenantMembers.userId, user.id));
       const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await enforceSessionLimit(user.id);
 
       await tx.insert(sessions).values({
         id: sessionId,

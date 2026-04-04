@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { invalidateSessionCache } from "../context.js";
 import { emailService } from "../lib/email.js";
+import { enforceTeamMemberLimit } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -123,6 +124,9 @@ export const tenantRouter = router({
       if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can invite members" });
       }
+
+      // Enforce team member limit before proceeding
+      await enforceTeamMemberLimit(ctx.tenantId);
 
       // Check if already a member
       const [existingUser] = await controlDb.select({ id: users.id })

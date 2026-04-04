@@ -16,6 +16,7 @@ import {
   StatusBar,
 } from "react-native";
 import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 
@@ -455,6 +456,16 @@ export default function LoginScreen() {
   const [cooldown, setCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const passwordRef = useRef<TextInput>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem("sessionExpired").then((v: string | null) => {
+      if (v === "1") {
+        setSessionExpired(true);
+        AsyncStorage.removeItem("sessionExpired");
+      }
+    });
+  }, []);
 
   /* ── Animations ────────────────────────────────────────────────── */
   const logoAnim = useRef(new Animated.Value(0)).current;
@@ -579,6 +590,14 @@ export default function LoginScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
       <BackgroundMesh />
+
+      {sessionExpired && (
+        <View style={styles.sessionExpiredBanner}>
+          <Text style={styles.sessionExpiredText}>
+            Your session was ended. Please sign in again.
+          </Text>
+        </View>
+      )}
 
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -875,6 +894,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 28,
     paddingVertical: 40,
+  },
+  sessionExpiredBanner: {
+    backgroundColor: C.amberBg,
+    borderWidth: 1,
+    borderColor: C.amberBorder,
+    marginHorizontal: 28,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    zIndex: 10,
+  },
+  sessionExpiredText: {
+    color: C.amber,
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "center",
   },
 
   /* ── Background mesh ──────────────────────────────────────────── */

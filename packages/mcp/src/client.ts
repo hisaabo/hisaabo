@@ -364,6 +364,9 @@ export class HisaaboClient {
       updateSequenceNumber(input: { businessId: string; documentType: string; newNumber: number }) {
         return c.mutate<{ success: boolean }>("business.updateSequenceNumber", input);
       },
+      auditTrail(input: { page?: number; limit?: number; fromDate?: string; toDate?: string }) {
+        return c.query<PaginatedResult<unknown>>("business.auditTrail", input);
+      },
     };
   }
 
@@ -538,6 +541,18 @@ export class HisaaboClient {
     };
   }
 
+  get auth() {
+    const c = this;
+    return {
+      listSessions(expired = false) {
+        return c.query<unknown[]>("auth.listSessions", { expired });
+      },
+      revokeSession(sessionId: string) {
+        return c.mutate<{ success: boolean }>("auth.revokeSession", { sessionId });
+      },
+    };
+  }
+
   get tenant() {
     const c = this;
     return {
@@ -558,6 +573,12 @@ export class HisaaboClient {
       },
       updateMemberRole(userId: string, role: string) {
         return c.mutate<{ success: boolean }>("tenant.updateMemberRole", { userId, role });
+      },
+      pendingInvitations() {
+        return c.query<unknown[]>("tenant.pendingInvitations");
+      },
+      revokeInvitation(invitationId: string) {
+        return c.mutate<{ success: boolean }>("tenant.revokeInvitation", { invitationId });
       },
     };
   }

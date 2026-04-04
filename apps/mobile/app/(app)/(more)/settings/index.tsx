@@ -29,6 +29,8 @@ const SETTINGS: SettingItem[] = [
   { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
   { label: "Online Store", icon: "storefront-outline", description: "Store settings" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
+  { label: "Account", icon: "shield-checkmark-outline", description: "Sessions and activity log", route: "/(more)/settings/account" },
+  { label: "API Keys", icon: "key-outline", description: "Programmatic access tokens", route: "/(more)/settings/api-keys" },
   { label: "Sign Out", icon: "log-out-outline", description: "End your session", danger: true },
 ];
 

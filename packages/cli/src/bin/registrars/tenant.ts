@@ -52,4 +52,22 @@ export function registerTenantCommands(program: Command): void {
       const { tenantUpdateRoleCommand } = await import("../../commands/tenant/update-role.js");
       await tenantUpdateRoleCommand(userId, role, { json: opts.json });
     });
+
+  tenant
+    .command("invitations")
+    .description("List pending invitations")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const { listInvitationsCommand } = await import("../../commands/tenant/invitations.js");
+      await listInvitationsCommand(opts);
+    });
+
+  tenant
+    .command("revoke-invitation <invitationId>")
+    .description("Revoke a pending invitation")
+    .option("--json", "JSON output")
+    .action(async (invitationId, opts) => {
+      const { revokeInvitationCommand } = await import("../../commands/tenant/revoke-invitation.js");
+      await revokeInvitationCommand(invitationId, opts);
+    });
 }

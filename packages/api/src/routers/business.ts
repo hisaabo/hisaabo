@@ -6,6 +6,7 @@ import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema 
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { enforceBusinessLimit, enforceDataExport } from "../lib/plan-limits.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -45,6 +46,7 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+    await enforceBusinessLimit(ctx.tenantId!, ctx.db);
     const biz = await ctx.db.transaction(async (tx) => {
       const [biz] = await tx.insert(businesses).values({
         ...input,
@@ -206,6 +208,7 @@ export const businessRouter = router({
 
   exportData: adminProcedure.mutation(async ({ ctx }) => {
     requireCan(ctx.ability, "manage", "Business");
+    await enforceDataExport(ctx.tenantId!);
     const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
       ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
       ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),
