@@ -422,7 +422,7 @@ export const paymentRouter = router({
 
   update: memberProcedure.input(updatePaymentSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "update", "Payment");
-    return ctx.db.transaction(async (tx) => {
+    const updated = await ctx.db.transaction(async (tx) => {
       // 1. Fetch the existing payment
       const [existing] = await tx.select()
         .from(payments)
@@ -512,7 +512,7 @@ export const paymentRouter = router({
         ? input.allocations[0].invoiceId
         : existing.invoiceId;
 
-      const [updated] = await tx.update(payments)
+      const [result] = await tx.update(payments)
         .set({
           amount: newAmount,
           discount: input.discount ?? existing.discount,
@@ -608,8 +608,20 @@ export const paymentRouter = router({
         }
       }
 
-      return updated;
+      return result;
     });
+
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "payment.update",
+      entityType: "payment",
+      entityId: updated.id,
+      metadata: { paymentNumber: updated.paymentNumber },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
+    return updated;
   }),
 
   delete: adminProcedure
@@ -765,7 +777,7 @@ export const paymentRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Payment");
-      return ctx.db.transaction(async (tx) => {
+      const result = await ctx.db.transaction(async (tx) => {
         // Verify bank account exists and belongs to this business
         const [account] = await tx.select({
           id: bankAccounts.id,
@@ -869,7 +881,21 @@ export const paymentRouter = router({
           })
           .where(eq(bankAccounts.id, input.bankAccountId));
 
-        return { assigned: paymentIds.length };
+        return { assigned: paymentIds.length, paymentIds };
       });
+
+      if (result.assigned > 0 && result.paymentIds?.length) {
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: "payment.reassignBankAccount",
+          entityType: "payment",
+          entityId: result.paymentIds[0],
+          metadata: { paymentId: result.paymentIds[0], bankAccountId: input.bankAccountId, totalAssigned: result.assigned },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+      }
+
+      return { assigned: result.assigned };
     }),
 });

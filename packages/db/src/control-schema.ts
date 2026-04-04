@@ -56,6 +56,7 @@ export const sessions = pgTable("sessions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   // tenantId can be null for users who haven't selected a tenant yet
   tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),

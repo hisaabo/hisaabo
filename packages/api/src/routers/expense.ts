@@ -5,6 +5,7 @@ import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createExpenseSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 
 // Map payment mode to the bank account type(s) to search for.
@@ -116,6 +117,16 @@ export const expenseRouter = router({
       return newExpense;
     });
 
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "expense.create",
+      entityType: "expense",
+      entityId: expense.id,
+      metadata: { amount: expense.amount, category: expense.category },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
     return expense;
   }),
 
@@ -124,7 +135,7 @@ export const expenseRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Expense");
 
-      return ctx.db.transaction(async (tx) => {
+      const updated = await ctx.db.transaction(async (tx) => {
         const [existing] = await tx.select()
           .from(expenses)
           .where(and(eq(expenses.id, input.id), eq(expenses.businessId, ctx.businessId)))
@@ -167,7 +178,7 @@ export const expenseRouter = router({
         const newAmount = input.data.amount ?? existing.amount;
         const newMode = input.data.mode ?? existing.mode;
 
-        const [updated] = await tx.update(expenses)
+        const [result] = await tx.update(expenses)
           .set({
             ...input.data,
             expenseDate: input.data.expenseDate ? new Date(input.data.expenseDate) : undefined,
@@ -197,10 +208,10 @@ export const expenseRouter = router({
               bankAccountId: account.id,
               type: "withdrawal",
               amount: newAmount,
-              description: `Expense: ${updated.category}${updated.description ? ` — ${updated.description}` : ""}`,
+              description: `Expense: ${result.category}${result.description ? ` — ${result.description}` : ""}`,
               referenceType: "expense",
-              referenceId: updated.id,
-              transactionDate: updated.expenseDate,
+              referenceId: result.id,
+              transactionDate: result.expenseDate,
             });
 
             await tx.update(bankAccounts)
@@ -209,8 +220,20 @@ export const expenseRouter = router({
           }
         }
 
-        return updated;
+        return result;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "expense.update",
+        entityType: "expense",
+        entityId: updated.id,
+        metadata: { expenseId: updated.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return updated;
     }),
 
   delete: adminProcedure
@@ -274,6 +297,16 @@ export const expenseRouter = router({
             .delete(bankTransactions)
             .where(eq(bankTransactions.id, originalTx.id));
         }
+      });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "expense.delete",
+        entityType: "expense",
+        entityId: input.id,
+        metadata: { expenseId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
       });
 
       return { success: true };

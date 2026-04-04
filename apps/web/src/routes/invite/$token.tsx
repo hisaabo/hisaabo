@@ -2,50 +2,65 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 
-export const Route = createFileRoute("/auth/verify")({
-  component: VerifyPage,
+export const Route = createFileRoute("/invite/$token")({
+  component: InviteAcceptPage,
 });
 
-function VerifyPage() {
+function InviteAcceptPage() {
+  const { token } = Route.useParams();
   const navigate = useNavigate();
   const utils = trpc.useUtils();
-  const [error, setError] = useState<string | null>(null);
+  const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
   const calledRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const token = new URLSearchParams(window.location.search).get("token");
-
-  const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
-    onSuccess: (data) => {
-      utils.auth.me.invalidate();
-      const pendingToken = localStorage.getItem("pendingInviteToken");
-      if (data.needsProfile) {
-        navigate({
-          to: "/auth/complete-profile",
-          search: pendingToken ? { invite: "1" } : undefined,
-        });
-      } else if (pendingToken) {
-        navigate({ to: `/invite/${pendingToken}` });
-      } else {
-        navigate({ to: "/" });
-      }
-    },
-    onError: (e) => setError(e.message),
-  });
+  const acceptMutation = trpc.tenant.acceptInvitation.useMutation();
+  const selectTenantMutation = trpc.tenant.select.useMutation();
 
   useEffect(() => {
-    if (calledRef.current) return;
-    calledRef.current = true;
+    if (sessionLoading) return;
 
-    // Strip token from URL immediately to prevent Referer leakage
-    window.history.replaceState({}, "", "/auth/verify");
-
-    if (!token) {
-      setError("No token found in URL.");
+    if (!session?.user) {
+      localStorage.setItem("pendingInviteToken", token);
+      navigate({ to: "/login", search: { invite: "1" } });
       return;
     }
 
-    verifyMutation.mutate({ token });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (calledRef.current) return;
+    calledRef.current = true;
+
+    acceptMutation.mutate(
+      { token },
+      {
+        onSuccess: (data) => {
+          localStorage.removeItem("pendingInviteToken");
+          selectTenantMutation.mutate(
+            { tenantId: data.tenantId },
+            {
+              onSuccess: async () => {
+                // Await refetch so root layout sees the correct tenant + businesses
+                await utils.auth.me.refetch();
+                utils.tenant.list.invalidate();
+                utils.business.list.invalidate();
+                navigate({ to: "/", search: { joined: data.tenantName } });
+              },
+            },
+          );
+        },
+        onError: (err) => {
+          if (err.message.includes("different email")) {
+            localStorage.setItem("pendingInviteToken", token);
+            navigate({ to: "/login", search: { invite: "1", error: "email_mismatch" } });
+          } else if (err.message.includes("already accepted")) {
+            localStorage.removeItem("pendingInviteToken");
+            navigate({ to: "/" });
+          } else {
+            setError(err.message);
+          }
+        },
+      },
+    );
+  }, [sessionLoading, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
@@ -67,7 +82,7 @@ function VerifyPage() {
               </svg>
             </div>
             <h1 className="text-lg font-semibold text-text-primary mb-2">
-              Link expired or invalid
+              Could not accept invitation
             </h1>
             <p className="text-sm text-text-tertiary mb-6">{error}</p>
             <button
@@ -86,7 +101,7 @@ function VerifyPage() {
               </svg>
             </div>
             <h1 className="text-lg font-semibold text-text-primary mb-1">
-              Verifying your link...
+              Accepting your invitation...
             </h1>
             <p className="text-sm text-text-tertiary">
               Just a moment

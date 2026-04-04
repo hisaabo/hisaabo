@@ -3,6 +3,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { shipments, invoices, parties } from "@hisaabo/db";
 import { router, memberProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 
 // Known carriers with auto-generated tracking URLs
 const CARRIER_TRACKING_URLS: Record<string, (trackingNumber: string) => string> = {
@@ -152,6 +153,16 @@ export const shipmentRouter = router({
         notes: input.notes || null,
       }).returning();
 
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "shipment.create",
+        entityType: "shipment",
+        entityId: shipment.id,
+        metadata: { trackingNumber: input.trackingNumber || null },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return shipment;
     }),
 
@@ -202,6 +213,17 @@ export const shipmentRouter = router({
         .set(updates)
         .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "shipment.update",
+        entityType: "shipment",
+        entityId: input.id,
+        metadata: { shipmentId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return shipment;
     }),
 
@@ -211,6 +233,17 @@ export const shipmentRouter = router({
       requireCan(ctx.ability, "delete", "Invoice");
       await ctx.db.delete(shipments)
         .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "shipment.delete",
+        entityType: "shipment",
+        entityId: input.id,
+        metadata: { shipmentId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true };
     }),
 });

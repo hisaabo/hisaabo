@@ -9,6 +9,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 import { generateInvoiceFromTemplate, computeNextRunDate } from "../lib/recurring-invoice-generator.js";
 
 export const recurringInvoiceRouter = router({
@@ -127,6 +128,16 @@ export const recurringInvoiceRouter = router({
       createdByUserId: ctx.user!.id,
     }).returning();
 
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user!.id,
+      action: "recurringInvoice.create",
+      entityType: "recurringInvoice",
+      entityId: template.id,
+      metadata: { templateName: input.name },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
     return template;
   }),
 
@@ -157,6 +168,17 @@ export const recurringInvoiceRouter = router({
         })
         .where(and(eq(recurringInvoiceTemplates.id, input.id), eq(recurringInvoiceTemplates.businessId, ctx.businessId)))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "recurringInvoice.update",
+        entityType: "recurringInvoice",
+        entityId: input.id,
+        metadata: { templateId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return updated;
     }),
 
@@ -166,6 +188,17 @@ export const recurringInvoiceRouter = router({
       requireCan(ctx.ability, "delete", "RecurringInvoice");
       await ctx.db.delete(recurringInvoiceTemplates)
         .where(and(eq(recurringInvoiceTemplates.id, input.id), eq(recurringInvoiceTemplates.businessId, ctx.businessId)));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "recurringInvoice.delete",
+        entityType: "recurringInvoice",
+        entityId: input.id,
+        metadata: { templateId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true };
     }),
 
@@ -182,6 +215,17 @@ export const recurringInvoiceRouter = router({
         ))
         .returning();
       if (!updated) throw new TRPCError({ code: "BAD_REQUEST", message: "Template is not active" });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "recurringInvoice.pause",
+        entityType: "recurringInvoice",
+        entityId: input.id,
+        metadata: { templateId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return updated;
     }),
 
@@ -210,6 +254,17 @@ export const recurringInvoiceRouter = router({
         .set({ status: "active", nextRunDate, updatedAt: new Date() })
         .where(eq(recurringInvoiceTemplates.id, input.id))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "recurringInvoice.resume",
+        entityType: "recurringInvoice",
+        entityId: input.id,
+        metadata: { templateId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return updated;
     }),
 

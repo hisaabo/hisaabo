@@ -346,10 +346,29 @@ export const invoiceRouter = router({
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Invoice");
+      // Fetch current status before the update for audit metadata
+      const [before] = await ctx.db.select({ status: invoices.status })
+        .from(invoices)
+        .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
+        .limit(1);
+
       const [invoice] = await ctx.db.update(invoices)
         .set({ status: input.status, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .returning();
+
+      if (invoice) {
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: "invoice.updateStatus",
+          entityType: "invoice",
+          entityId: input.id,
+          metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+      }
+
       return invoice;
     }),
 
@@ -369,7 +388,7 @@ export const invoiceRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Invoice");
-      return ctx.db.transaction(async (tx) => {
+      const updated = await ctx.db.transaction(async (tx) => {
         // 1. Fetch existing invoice
         const [existing] = await tx.select()
           .from(invoices)
@@ -562,13 +581,25 @@ export const invoiceRouter = router({
         }
 
         // 5. Apply update
-        const [updated] = await tx.update(invoices)
+        const [result] = await tx.update(invoices)
           .set(updates)
           .where(eq(invoices.id, input.id))
           .returning();
 
-        return updated;
+        return result;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "invoice.update",
+        entityType: "invoice",
+        entityId: updated.id,
+        metadata: { invoiceNumber: updated.invoiceNumber },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return updated;
     }),
 
   delete: adminProcedure

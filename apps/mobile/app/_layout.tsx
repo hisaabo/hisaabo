@@ -680,6 +680,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
+        <Stack.Screen name="invite/[token]" />
       </Stack>
     </TRPCProvider>
   );

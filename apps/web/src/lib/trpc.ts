@@ -1,6 +1,6 @@
 import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink, splitLink, httpLink } from "@trpc/client";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryCache } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 
@@ -52,12 +52,37 @@ export function createTRPCClient() {
   });
 }
 
+// Track whether we're already redirecting to avoid multiple redirects
+let isRedirectingToLogin = false;
+
+function handleAuthError(error: unknown) {
+  if (isRedirectingToLogin) return;
+  const trpcError = error as { data?: { code?: string } };
+  if (trpcError?.data?.code === "UNAUTHORIZED") {
+    isRedirectingToLogin = true;
+    // Use sessionStorage so the login page can show a message
+    sessionStorage.setItem("sessionExpired", "1");
+    window.location.href = "/login";
+  }
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 30, // 30 seconds
-      retry: 1,
+      retry: (failureCount, error) => {
+        // Don't retry UNAUTHORIZED — session is gone
+        const trpcError = error as { data?: { code?: string } };
+        if (trpcError?.data?.code === "UNAUTHORIZED") return false;
+        return failureCount < 1;
+      },
       refetchOnWindowFocus: false,
     },
+    mutations: {
+      onError: handleAuthError,
+    },
   },
+  queryCache: new QueryCache({
+    onError: handleAuthError,
+  }),
 });
