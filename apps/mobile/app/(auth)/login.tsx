@@ -557,7 +557,7 @@ export default function LoginScreen() {
   const handleSendMagicLink = useCallback(() => {
     if (!email.includes("@")) return;
     setError("");
-    sendMagicLink.mutate({ email });
+    sendMagicLink.mutate({ email, source: "mobile" });
   }, [email, sendMagicLink]);
 
   const handlePasswordLogin = useCallback(() => {
@@ -568,7 +568,7 @@ export default function LoginScreen() {
 
   const handleResend = useCallback(() => {
     if (cooldown > 0 || sendMagicLink.isPending) return;
-    sendMagicLink.mutate({ email });
+    sendMagicLink.mutate({ email, source: "mobile" });
     setCooldown(60);
   }, [cooldown, email, sendMagicLink]);
 

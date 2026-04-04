@@ -468,9 +468,9 @@ export const paymentRouter = router({
             UPDATE invoices SET
               amount_paid = GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0),
               status = CASE
-                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'
-                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) > 0 THEN 'partial'
-                ELSE 'sent'
+                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'::invoice_status
+                WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) > 0 THEN 'partial'::invoice_status
+                ELSE 'sent'::invoice_status
               END,
               updated_at = NOW()
             WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
@@ -483,9 +483,9 @@ export const paymentRouter = router({
           UPDATE invoices SET
             amount_paid = GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0),
             status = CASE
-              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'
-              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) > 0 THEN 'partial'
-              ELSE 'sent'
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'::invoice_status
+              WHEN GREATEST(amount_paid::numeric - ${existing.amount}::numeric, 0) > 0 THEN 'partial'::invoice_status
+              ELSE 'sent'::invoice_status
             END,
             updated_at = NOW()
           WHERE id = ${existing.invoiceId} AND business_id = ${ctx.businessId}

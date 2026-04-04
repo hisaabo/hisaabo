@@ -37,6 +37,7 @@ export const registerSchema = z.object({
 export const magicLinkRequestSchema = z.object({
   email: z.string().email().max(255),
   turnstileToken: z.string().optional(),
+  source: z.enum(["web", "desktop", "mobile"]).default("web"),
 });
 
 export const magicLinkVerifySchema = z.object({

@@ -26,8 +26,8 @@ class ConsoleEmailService implements EmailService {
     console.log("╔══════════════════════════════════════════════════════════╗");
     console.log(`║  ${isNewUser ? "WELCOME" : "Magic link"} for ${to.padEnd(isNewUser ? 36 : 40)}║`);
     console.log("╠══════════════════════════════════════════════════════════╣");
-    console.log(`║  Web:     ${magicLinkUrl}`);
-    if (deepLinkUrl) console.log(`║  Desktop: ${deepLinkUrl}`);
+    console.log(`║  Primary:   ${magicLinkUrl}`);
+    if (deepLinkUrl) console.log(`║  Secondary: ${deepLinkUrl}`);
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log("");
   }
@@ -56,10 +56,12 @@ class ResendEmailService implements EmailService {
   ) {}
 
   async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void> {
-    // The primary button uses the web URL (works everywhere).
-    // If a deep link is available, show it as a secondary option for desktop app users.
+    // Secondary link: when primary is the web URL, secondary is the deep link
+    // (for desktop/mobile users). When primary is the deep link, secondary is the web URL.
+    const isSecondaryWeb = deepLinkUrl?.startsWith("http");
+    const secondaryLabel = isSecondaryWeb ? "Open in browser instead" : "Using the desktop app? Open in Hisaabo";
     const deepLinkHtml = deepLinkUrl
-      ? `<tr><td style="padding: 0 40px;"><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding: 4px 0 0 0; text-align: center;"><p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 20px; color: #6b7280;">Using the desktop app?&nbsp;<a href="${escapeHtml(deepLinkUrl)}" style="color: #4f46e5; text-decoration: underline; font-weight: 500;">Open in Hisaabo</a></p></td></tr></table></td></tr>`
+      ? `<tr><td style="padding: 0 40px;"><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding: 4px 0 0 0; text-align: center;"><p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 20px; color: #6b7280;"><a href="${escapeHtml(deepLinkUrl)}" style="color: #4f46e5; text-decoration: underline; font-weight: 500;">${secondaryLabel}</a></p></td></tr></table></td></tr>`
       : "";
 
     const subject = isNewUser ? "Welcome to Hisaabo" : "Sign in to Hisaabo";

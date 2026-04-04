@@ -348,13 +348,19 @@ export const authRouter = router({
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
     const tokenParam = `token=${encodeURIComponent(rawToken)}`;
-    const magicLinkUrl = `${baseUrl}/auth/verify?${tokenParam}`;
+    const webUrl = `${baseUrl}/auth/verify?${tokenParam}`;
     const deepLinkUrl = `hisaabo://auth/verify?${tokenParam}`;
+
+    // Primary link matches the initiator: desktop/mobile get the deep link,
+    // web gets the regular HTTPS link. The other is shown as secondary.
+    const isAppSource = input.source === "desktop" || input.source === "mobile";
+    const primaryUrl = isAppSource ? deepLinkUrl : webUrl;
+    const secondaryUrl = isAppSource ? webUrl : deepLinkUrl;
 
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)
     const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
-    await emailService.sendMagicLink(email, magicLinkUrl, deepLinkUrl, !existingUser);
+    await emailService.sendMagicLink(email, primaryUrl, secondaryUrl, !existingUser);
 
     return { success: true }; // Always success — no email enumeration
   }),
