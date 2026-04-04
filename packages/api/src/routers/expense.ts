@@ -72,23 +72,42 @@ export const expenseRouter = router({
       }).returning();
 
       // ── Bank account debit ─────────────────────────────────────────
-      const accountTypes = modeToAccountTypes(input.mode);
-      if (accountTypes) {
-        // Find the default account matching the payment mode, then fall back
-        // to any account of that type belonging to this business.
+      // If bankAccountId is explicitly provided, use it directly;
+      // otherwise auto-resolve from payment mode.
+      let targetAccountId: string | null = null;
+
+      if (input.bankAccountId) {
+        targetAccountId = input.bankAccountId;
+      } else {
+        const accountTypes = modeToAccountTypes(input.mode);
+        if (accountTypes) {
+          const [resolved] = await tx
+            .select({ id: bankAccounts.id })
+            .from(bankAccounts)
+            .where(
+              and(
+                eq(bankAccounts.businessId, ctx.businessId),
+                inArray(bankAccounts.accountType, accountTypes)
+              )
+            )
+            .orderBy(
+              sql`${bankAccounts.isDefault} DESC`,
+              bankAccounts.createdAt
+            )
+            .limit(1);
+          targetAccountId = resolved?.id ?? null;
+        }
+      }
+
+      if (targetAccountId) {
         const [account] = await tx
           .select({ id: bankAccounts.id, currentBalance: bankAccounts.currentBalance })
           .from(bankAccounts)
           .where(
             and(
+              eq(bankAccounts.id, targetAccountId),
               eq(bankAccounts.businessId, ctx.businessId),
-              inArray(bankAccounts.accountType, accountTypes)
             )
-          )
-          .orderBy(
-            // Prefer the default account first
-            sql`${bankAccounts.isDefault} DESC`,
-            bankAccounts.createdAt
           )
           .for("update")
           .limit(1);

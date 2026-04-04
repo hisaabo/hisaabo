@@ -14,7 +14,7 @@ import { formatCurrency } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { PressableRow, EmptyState, FAB } from "../../../../src/components/ui";
 
-type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "other";
+type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "payment_gateway" | "other";
 
 const ACCOUNT_TYPE_CONFIG: Record<AccountType, { label: string; color: string; bg: string; icon: string }> = {
   savings: { label: "Savings", color: "#3b82f6", bg: "rgba(59,130,246,0.15)", icon: "card-outline" },
@@ -22,6 +22,7 @@ const ACCOUNT_TYPE_CONFIG: Record<AccountType, { label: string; color: string; b
   cash: { label: "Cash", color: "#22c55e", bg: "rgba(34,197,94,0.15)", icon: "cash-outline" },
   upi: { label: "UPI", color: "#a855f7", bg: "rgba(168,85,247,0.15)", icon: "phone-portrait-outline" },
   credit: { label: "Credit Card", color: "#f59e0b", bg: "rgba(245,158,11,0.15)", icon: "wallet-outline" },
+  payment_gateway: { label: "Gateway", color: "#ec4899", bg: "rgba(236,72,153,0.15)", icon: "globe-outline" },
   other: { label: "Other", color: "#9ca3af", bg: "rgba(156,163,175,0.15)", icon: "ellipsis-horizontal-outline" },
 };
 

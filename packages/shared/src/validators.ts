@@ -37,6 +37,7 @@ export const registerSchema = z.object({
 export const magicLinkRequestSchema = z.object({
   email: z.string().email().max(255),
   turnstileToken: z.string().optional(),
+  source: z.enum(["web", "desktop", "mobile"]).default("web"),
 });
 
 export const magicLinkVerifySchema = z.object({
@@ -89,7 +90,7 @@ export type ItemType = (typeof itemTypes)[number];
 export const documentTypes = ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] as const;
 export type DocumentType = (typeof documentTypes)[number];
 
-export const bankAccountTypes = ["savings", "current", "cash", "upi", "credit_card"] as const;
+export const bankAccountTypes = ["savings", "current", "cash", "upi", "credit_card", "payment_gateway"] as const;
 export type BankAccountType = (typeof bankAccountTypes)[number];
 
 export const bankTransactionTypes = ["deposit", "withdrawal", "transfer"] as const;
@@ -238,7 +239,7 @@ export const updateInvoiceStatusSchema = z.object({
 
 // ── Payment ────────────────────────────────────────────────────
 
-export const paymentModes = ["cash", "bank", "upi", "cheque", "other"] as const;
+export const paymentModes = ["cash", "bank", "upi", "cheque", "other", "credit_card", "debit_card", "net_banking", "wallet"] as const;
 
 export const paymentAllocationSchema = z.object({
   invoiceId: z.string().uuid(),
@@ -281,7 +282,36 @@ export const createExpenseSchema = z.object({
   mode: z.enum(paymentModes),
   expenseDate: z.string().datetime().optional(),
   referenceNumber: z.string().max(100).optional(),
+  bankAccountId: z.string().uuid().optional(),
 });
+
+// ── Payment Gateway Configs ───────────────────────────────────
+
+export const gatewayChargeRateSchema = z.object({
+  type: z.enum(["percentage", "flat"]),
+  value: z.string().regex(/^\d+(\.\d{1,4})?$/),
+});
+
+export const gatewayChargeConfigSchema = z.object({
+  credit_card: gatewayChargeRateSchema.optional(),
+  debit_card: gatewayChargeRateSchema.optional(),
+  upi: gatewayChargeRateSchema.optional(),
+  net_banking: gatewayChargeRateSchema.optional(),
+  wallet: gatewayChargeRateSchema.optional(),
+  default: gatewayChargeRateSchema.optional(),
+});
+
+export const createPaymentGatewayConfigSchema = z.object({
+  bankAccountId: z.string().uuid(),
+  settlementAccountId: z.string().uuid(),
+  chargeConfig: gatewayChargeConfigSchema,
+  expenseCategory: z.string().min(1).max(100).default("Payment Gateway Charges"),
+  autoSettle: z.boolean().default(true),
+});
+
+export const updatePaymentGatewayConfigSchema = createPaymentGatewayConfigSchema
+  .partial()
+  .omit({ bankAccountId: true });
 
 // ── Bank Accounts ──────────────────────────────────────────────
 

@@ -2,6 +2,8 @@ import { Command } from "commander";
 import {
   bankListCommand, bankGetCommand, bankCreateCommand, bankTransferCommand, bankTransactionsCommand,
 } from "../../commands/bank/index.js";
+import { bankGatewayConfigCommand } from "../../commands/bank/gateway-config.js";
+import { bankUpdateGatewayCommand } from "../../commands/bank/update-gateway.js";
 
 export function registerBankCommands(program: Command): void {
   // ── bank ─────────────────────────────────────────────────────────────────
@@ -85,6 +87,38 @@ export function registerBankCommands(program: Command): void {
         to: opts.to,
         page: opts.page,
         limit: opts.limit,
+      });
+    });
+
+  bank
+    .command("gateway-config <accountId>")
+    .description("Display gateway configuration (charge rates, settlement account)")
+    .option("--json", "JSON output")
+    .action(async (accountId, opts) => {
+      await bankGatewayConfigCommand(accountId, { json: opts.json });
+    });
+
+  bank
+    .command("update-gateway <accountId>")
+    .description("Update gateway charge configuration")
+    .option("--json", "JSON output")
+    .option("--charge-credit-card <rate>", "Credit card charge rate (e.g. 2 for 2%, flat:20 for flat)")
+    .option("--charge-debit-card <rate>", "Debit card charge rate")
+    .option("--charge-upi <rate>", "UPI charge rate")
+    .option("--charge-net-banking <rate>", "Net banking charge rate")
+    .option("--charge-wallet <rate>", "Wallet charge rate")
+    .option("--charge-default <rate>", "Default charge rate for unlisted modes")
+    .option("--settlement-account <id>", "Settlement bank account ID")
+    .action(async (accountId, opts) => {
+      await bankUpdateGatewayCommand(accountId, {
+        json: opts.json,
+        chargeCreditCard: opts.chargeCreditCard,
+        chargeDebitCard: opts.chargeDebitCard,
+        chargeUpi: opts.chargeUpi,
+        chargeNetBanking: opts.chargeNetBanking,
+        chargeWallet: opts.chargeWallet,
+        chargeDefault: opts.chargeDefault,
+        settlementAccount: opts.settlementAccount,
       });
     });
 }

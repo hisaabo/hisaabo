@@ -1165,6 +1165,31 @@ Get a summary of account balances and cash flow for a period.
 }
 ```
 
+#### `bank_account_gateway_config`
+
+Get the payment gateway configuration for a bank account, including charge rates per payment mode, settlement account, and expense category.
+
+**Input:** `{ bank_account_id: string }` — UUID of the payment gateway account.
+
+#### `bank_account_update_gateway`
+
+Create or update gateway charge configuration for a payment gateway bank account.
+
+**Input:**
+```typescript
+{
+  bank_account_id: string;
+  settlement_account_id?: string;
+  charge_config?: {
+    credit_card?: { type: "percentage" | "flat"; value: string };
+    debit_card?: { type: "percentage" | "flat"; value: string };
+    // ... per-mode rates
+  };
+  expense_category?: string;
+  auto_settle?: boolean;
+}
+```
+
 ---
 
 ### Reports

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
@@ -6,6 +6,8 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { InputField, TextareaField } from "@/components/ui/FormField";
+import { calculateGatewayCharge } from "@hisaabo/shared";
+import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,23 +26,25 @@ export interface RecordPaymentPanelProps {
 
 function accountTypeIcon(type: string): string {
   switch (type) {
-    case "cash":        return "💵";
-    case "current":     return "🏦";
-    case "savings":     return "🏦";
-    case "upi":         return "📱";
-    case "credit_card": return "💳";
-    default:            return "💳";
+    case "cash":            return "💵";
+    case "current":         return "🏦";
+    case "savings":         return "🏦";
+    case "upi":             return "📱";
+    case "credit_card":     return "💳";
+    case "payment_gateway": return "🔗";
+    default:                return "💳";
   }
 }
 
 function accountTypeLabel(type: string): string {
   switch (type) {
-    case "savings":     return "Savings";
-    case "current":     return "Current";
-    case "cash":        return "Cash";
-    case "upi":         return "UPI";
-    case "credit_card": return "Credit Card";
-    default:            return type;
+    case "savings":         return "Savings";
+    case "current":         return "Current";
+    case "cash":            return "Cash";
+    case "upi":             return "UPI";
+    case "credit_card":     return "Credit Card";
+    case "payment_gateway": return "Gateway";
+    default:                return type;
   }
 }
 
@@ -50,6 +54,16 @@ function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "
   if (type === "upi") return "upi";
   return "bank";
 }
+
+// Gateway payment mode options
+const GATEWAY_PAYMENT_MODES = [
+  { value: "credit_card", label: "Credit Card" },
+  { value: "debit_card", label: "Debit Card" },
+  { value: "upi", label: "UPI" },
+  { value: "net_banking", label: "Net Banking" },
+  { value: "wallet", label: "Wallet" },
+  { value: "other", label: "Other" },
+] as const;
 
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -74,6 +88,7 @@ export function RecordPaymentPanel({
     new Date().toISOString().split("T")[0]
   );
   const [notes, setNotes] = useState("");
+  const [gatewayMode, setGatewayMode] = useState<string>("credit_card");
 
   const utils = trpc.useUtils();
 
@@ -119,6 +134,13 @@ export function RecordPaymentPanel({
           : new Date().toISOString().split("T")[0]
       );
       setNotes(editData.notes ?? "");
+      // Restore gateway mode from edit data if it's a gateway mode
+      const gwModes = ["credit_card", "debit_card", "net_banking", "wallet"];
+      if (editData.mode && gwModes.includes(editData.mode)) {
+        setGatewayMode(editData.mode);
+      } else {
+        setGatewayMode("credit_card");
+      }
       // Pre-check the linked invoices
       if (editData.linkedInvoices.length > 0) {
         const checked = new Set(editData.linkedInvoices.map((li) => li.invoiceId));
@@ -141,6 +163,7 @@ export function RecordPaymentPanel({
       setReferenceNumber("");
       setPaymentDate(new Date().toISOString().split("T")[0]);
       setNotes("");
+      setGatewayMode("credit_card");
     }
   }, [open, isEditMode, editData, preSelectedPartyId]);
 
@@ -290,6 +313,41 @@ export function RecordPaymentPanel({
   const activeMutation = isEditMode ? updateMutation : createMutation;
 
   const selectedAccount = bankAccountsData?.find((a) => a.id === selectedAccountId) ?? null;
+  const isGatewaySelected = selectedAccount?.accountType === "payment_gateway";
+
+  // Fetch gateway config when a gateway account is selected
+  const { data: gatewayConfig } = trpc.bankAccount.getGatewayConfig.useQuery(
+    { bankAccountId: selectedAccountId! },
+    { enabled: open && isGatewaySelected && !!selectedAccountId }
+  );
+
+  // Find settlement account name for the charge preview
+  const settlementAccountName = useMemo(() => {
+    if (!gatewayConfig?.settlementAccountId || !bankAccountsData) return "";
+    const acct = bankAccountsData.find((a) => a.id === gatewayConfig.settlementAccountId);
+    return acct?.accountName ?? "";
+  }, [gatewayConfig?.settlementAccountId, bankAccountsData]);
+
+  // Calculate gateway charge preview
+  const gatewayChargePreview = useMemo(() => {
+    if (!isGatewaySelected || !gatewayConfig?.chargeConfig || !displayAmount) return null;
+    const amount = parseFloat(displayAmount);
+    if (!amount || amount <= 0) return null;
+    const config = gatewayConfig.chargeConfig as GatewayChargeConfig;
+    const result = calculateGatewayCharge(
+      parseFloat(displayAmount).toFixed(2),
+      config,
+      gatewayMode
+    );
+    // Find the rate for display
+    const rate = (config as Record<string, { type: string; value: string } | undefined>)[gatewayMode]
+      ?? config.default;
+    return {
+      ...result,
+      rateValue: rate?.value ?? "0",
+      rateType: rate?.type ?? "percentage",
+    };
+  }, [isGatewaySelected, gatewayConfig, displayAmount, gatewayMode]);
 
   function handleSubmit() {
     if (!partyId || !displayAmount) return;
@@ -302,9 +360,12 @@ export function RecordPaymentPanel({
       }
     }
 
-    const mode = selectedAccount
-      ? accountTypeToMode(selectedAccount.accountType)
-      : "cash";
+    // For gateway accounts, use the selected gateway mode; otherwise map from account type
+    const mode = isGatewaySelected
+      ? gatewayMode as any
+      : selectedAccount
+        ? accountTypeToMode(selectedAccount.accountType)
+        : "cash";
 
     const paymentDateISO = new Date(paymentDate + "T00:00:00").toISOString();
 
@@ -687,6 +748,60 @@ export function RecordPaymentPanel({
             </div>
           )}
         </div>
+
+        {/* ── Gateway Payment Mode ──────────────────────────────────────── */}
+        {isGatewaySelected && (
+          <div>
+            <p className="label mb-2">Payment Mode</p>
+            <div className="flex flex-wrap gap-1.5">
+              {GATEWAY_PAYMENT_MODES.map((mode) => {
+                const isActive = gatewayMode === mode.value;
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => setGatewayMode(mode.value)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border",
+                      isActive
+                        ? "border-brand-500 bg-brand-600/[0.1] text-brand-700 dark:text-brand-400"
+                        : "border-border-light text-text-secondary hover:border-brand-300 hover:bg-surface-1"
+                    )}
+                    aria-pressed={isActive}
+                  >
+                    {mode.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Gateway charge preview */}
+            {gatewayChargePreview && parseFloat(gatewayChargePreview.chargeAmount) > 0 && (
+              <div className="mt-2.5 rounded-lg bg-amber-600/[0.06] border border-amber-200 dark:border-amber-800/40 px-3 py-2">
+                <p className="text-xs text-amber-800 dark:text-amber-300">
+                  Gateway charge:{" "}
+                  <span className="font-semibold tabular-nums">
+                    {formatCurrency(gatewayChargePreview.chargeAmount)}
+                  </span>
+                  {gatewayChargePreview.rateType === "percentage" && (
+                    <span className="text-amber-600 dark:text-amber-400">
+                      {" "}({gatewayChargePreview.rateValue}%)
+                    </span>
+                  )}
+                  . Net{" "}
+                  <span className="font-semibold tabular-nums">
+                    {formatCurrency(gatewayChargePreview.netSettlement)}
+                  </span>
+                  {settlementAccountName && (
+                    <>
+                      {" "}→ {settlementAccountName}
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Date ───────────────────────────────────────────────────────── */}
         <InputField

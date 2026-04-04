@@ -1,13 +1,14 @@
 import { eq, and, sql, desc, gte, lte, asc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { bankAccounts, bankTransactions } from "@hisaabo/db";
+import { bankAccounts, bankTransactions, paymentGatewayConfigs } from "@hisaabo/db";
 import {
   createBankAccountSchema,
   updateBankAccountSchema,
   createBankTransactionSchema,
   bankTransferSchema,
   paginationSchema,
+  createPaymentGatewayConfigSchema,
   money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
@@ -503,4 +504,151 @@ export const bankAccountRouter = router({
 
     return result;
   }),
+
+  // ── Gateway Config ──────────────────────────────────────────
+
+  getGatewayConfig: viewerProcedure
+    .input(z.object({ bankAccountId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankAccount");
+      const [config] = await ctx.db
+        .select()
+        .from(paymentGatewayConfigs)
+        .where(
+          and(
+            eq(paymentGatewayConfigs.bankAccountId, input.bankAccountId),
+            eq(paymentGatewayConfigs.businessId, ctx.businessId),
+          )
+        )
+        .limit(1);
+
+      return config ?? null;
+    }),
+
+  upsertGatewayConfig: memberProcedure
+    .input(createPaymentGatewayConfigSchema)
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "BankAccount");
+
+      // Validate bankAccountId is a payment_gateway type
+      const [gatewayAccount] = await ctx.db
+        .select({ id: bankAccounts.id, accountType: bankAccounts.accountType })
+        .from(bankAccounts)
+        .where(
+          and(
+            eq(bankAccounts.id, input.bankAccountId),
+            eq(bankAccounts.businessId, ctx.businessId),
+          )
+        )
+        .limit(1);
+
+      if (!gatewayAccount) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
+      }
+      if (gatewayAccount.accountType !== "payment_gateway") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Gateway config can only be set on payment_gateway accounts",
+        });
+      }
+
+      // Validate settlementAccountId is NOT a payment_gateway and belongs to same business
+      const [settlementAccount] = await ctx.db
+        .select({ id: bankAccounts.id, accountType: bankAccounts.accountType })
+        .from(bankAccounts)
+        .where(
+          and(
+            eq(bankAccounts.id, input.settlementAccountId),
+            eq(bankAccounts.businessId, ctx.businessId),
+          )
+        )
+        .limit(1);
+
+      if (!settlementAccount) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Settlement account not found" });
+      }
+      if (settlementAccount.accountType === "payment_gateway") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Settlement account cannot be a payment_gateway account",
+        });
+      }
+
+      // Upsert: insert or update on conflict (unique index on bankAccountId)
+      const [config] = await ctx.db
+        .insert(paymentGatewayConfigs)
+        .values({
+          businessId: ctx.businessId,
+          bankAccountId: input.bankAccountId,
+          settlementAccountId: input.settlementAccountId,
+          chargeConfig: input.chargeConfig,
+          expenseCategory: input.expenseCategory,
+          autoSettle: input.autoSettle,
+        })
+        .onConflictDoUpdate({
+          target: paymentGatewayConfigs.bankAccountId,
+          set: {
+            settlementAccountId: input.settlementAccountId,
+            chargeConfig: input.chargeConfig,
+            expenseCategory: input.expenseCategory,
+            autoSettle: input.autoSettle,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "gatewayConfig.upsert",
+        entityType: "paymentGatewayConfig",
+        entityId: config.id,
+        metadata: { bankAccountId: input.bankAccountId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return config;
+    }),
+
+  deleteGatewayConfig: adminProcedure
+    .input(z.object({ bankAccountId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "BankAccount");
+
+      const [existing] = await ctx.db
+        .select({ id: paymentGatewayConfigs.id })
+        .from(paymentGatewayConfigs)
+        .where(
+          and(
+            eq(paymentGatewayConfigs.bankAccountId, input.bankAccountId),
+            eq(paymentGatewayConfigs.businessId, ctx.businessId),
+          )
+        )
+        .limit(1);
+
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Gateway config not found" });
+      }
+
+      await ctx.db
+        .delete(paymentGatewayConfigs)
+        .where(
+          and(
+            eq(paymentGatewayConfigs.bankAccountId, input.bankAccountId),
+            eq(paymentGatewayConfigs.businessId, ctx.businessId),
+          )
+        );
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "gatewayConfig.delete",
+        entityType: "paymentGatewayConfig",
+        entityId: existing.id,
+        metadata: { bankAccountId: input.bankAccountId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return { success: true };
+    }),
 });

@@ -6,12 +6,12 @@ import { relations } from "drizzle-orm";
 export const partyTypeEnum = pgEnum("party_type", ["customer", "supplier"]);
 export const invoiceTypeEnum = pgEnum("invoice_type", ["sale", "purchase"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]);
-export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other"]);
+export const paymentModeEnum = pgEnum("payment_mode", ["cash", "bank", "upi", "cheque", "other", "credit_card", "debit_card", "net_banking", "wallet"]);
 export const unitEnum = pgEnum("unit", ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "pkt", "bun", "pouch", "jar", "btl", "bag", "ton", "pack", "pet", "person", "other"]);
 export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
 export const itemModeEnum = pgEnum("item_mode", ["simple", "alt_units", "variants"]);
 export const documentTypeEnum = pgEnum("document_type", ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"]);
-export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card"]);
+export const bankAccountTypeEnum = pgEnum("bank_account_type", ["savings", "current", "cash", "upi", "credit_card", "payment_gateway"]);
 export const bankTransactionTypeEnum = pgEnum("bank_transaction_type", ["deposit", "withdrawal", "transfer"]);
 export const gstRegistrationTypeEnum = pgEnum("gst_registration_type", ["regular", "composition", "unregistered"]);
 export const recurringFrequencyEnum = pgEnum("recurring_frequency", ["weekly", "biweekly", "monthly", "quarterly", "half_yearly", "yearly", "custom"]);
@@ -287,6 +287,7 @@ export const expenses = pgTable("expenses", {
   mode: paymentModeEnum("mode").notNull(),
   expenseDate: timestamp("expense_date", { withTimezone: true }).defaultNow().notNull(),
   referenceNumber: text("reference_number"),
+  bankAccountId: uuid("bank_account_id").references(() => bankAccounts.id),
   createdByUserId: uuid("created_by_user_id"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -327,6 +328,7 @@ export const bankTransactions = pgTable("bank_transactions", {
   description: text("description"),
   referenceType: text("reference_type"),
   referenceId: uuid("reference_id"),
+  paymentId: uuid("payment_id"), // links gateway charge/settlement txns to originating payment
   transactionDate: timestamp("transaction_date", { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
@@ -334,7 +336,39 @@ export const bankTransactions = pgTable("bank_transactions", {
   index("bank_txn_account_idx").on(t.bankAccountId),
   index("bank_txn_date_idx").on(t.bankAccountId, t.transactionDate),
   index("bank_txn_ref_idx").on(t.referenceType, t.referenceId),
+  index("bank_txn_payment_idx").on(t.paymentId),
 ]);
+
+// ── Payment Gateway Configs ───────────────────────────────────
+
+export const paymentGatewayConfigs = pgTable("payment_gateway_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  bankAccountId: uuid("bank_account_id").notNull().references(() => bankAccounts.id, { onDelete: "cascade" }),
+  settlementAccountId: uuid("settlement_account_id").notNull().references(() => bankAccounts.id, { onDelete: "restrict" }),
+  chargeConfig: jsonb("charge_config").notNull().$type<{
+    credit_card?: { type: "percentage" | "flat"; value: string };
+    debit_card?: { type: "percentage" | "flat"; value: string };
+    upi?: { type: "percentage" | "flat"; value: string };
+    net_banking?: { type: "percentage" | "flat"; value: string };
+    wallet?: { type: "percentage" | "flat"; value: string };
+    default?: { type: "percentage" | "flat"; value: string };
+  }>(),
+  expenseCategory: text("expense_category").default("Payment Gateway Charges").notNull(),
+  autoSettle: boolean("auto_settle").default(true).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("pg_config_account_idx").on(t.bankAccountId),
+  index("pg_config_business_idx").on(t.businessId),
+]);
+
+export const paymentGatewayConfigsRelations = relations(paymentGatewayConfigs, ({ one }) => ({
+  business: one(businesses, { fields: [paymentGatewayConfigs.businessId], references: [businesses.id] }),
+  bankAccount: one(bankAccounts, { fields: [paymentGatewayConfigs.bankAccountId], references: [bankAccounts.id] }),
+  settlementAccount: one(bankAccounts, { fields: [paymentGatewayConfigs.settlementAccountId], references: [bankAccounts.id] }),
+}));
 
 // ── Stock Adjustments ─────────────────────────────────────────
 

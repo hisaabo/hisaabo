@@ -1,0 +1,84 @@
+---
+title: Payment Gateway Accounts
+description: Track payment gateway charges and settlements automatically. Set up Razorpay, PayU, PhonePe, or any payment gateway in 60 seconds.
+sidebar:
+  order: 2
+---
+
+## What are Payment Gateway Accounts?
+
+When customers pay through gateways like Razorpay, PayU, or PhonePe, the gateway deducts charges before settling to your bank. Hisaabo tracks this automatically.
+
+Example: Customer pays ₹1,000 via credit card through Razorpay (2% charge).
+- ₹1,000 recorded as payment received
+- ₹20 expense auto-created (gateway charge)
+- ₹980 auto-settled to your bank account
+- Full audit trail in bank transactions
+
+## Setup (60 seconds)
+
+1. Go to **Cash & Bank** → **Add Account**
+2. Select **Payment Gateway** as account type
+3. Enter name (e.g., "Razorpay")
+4. Select your settlement bank account
+5. Set charge rates per payment mode:
+   - Credit Card: 2%
+   - Debit Card: 1.5%
+   - UPI: 0%
+   - Net Banking: 2%
+6. Click **Create**
+
+## How It Works
+
+When you record a payment and select a gateway account:
+
+1. Select the payment mode (Credit Card, Debit Card, UPI, etc.)
+2. The system shows the charge preview: "Gateway charge: ₹20 (2%). Net ₹980"
+3. On confirmation:
+   - Full amount deposited to gateway account
+   - Charge expense auto-created
+   - Net amount auto-transferred to your bank
+
+## Charge Configuration
+
+Each payment mode can have a different charge rate:
+
+| Mode | Typical Rate |
+|------|-------------|
+| Credit Card | 1.5% - 2.5% |
+| Debit Card | 0.5% - 1.5% |
+| UPI | 0% (usually free) |
+| Net Banking | 1.5% - 2% |
+| Wallet | 1% - 2% |
+
+Rates are inclusive (enter the total effective rate including GST on charges).
+
+## Reports
+
+Gateway charges appear automatically in:
+- **Expenses** — categorized as "Payment Gateway Charges"
+- **Daybook** — full transaction trail
+- **Profit & Loss** — reduces profit by the charge amount
+
+## CLI & MCP
+
+```bash
+hisaabo bank gateway-config <accountId>
+hisaabo bank update-gateway <accountId> --charge-credit-card 2.5
+```
+
+MCP tools: `bank_account_gateway_config`, `bank_account_update_gateway`
+
+## FAQ
+
+**Can I have multiple gateway accounts?**
+Yes. Create one for each gateway (Razorpay, PayU, etc.) with different charge rates.
+
+**What if charge rates change?**
+Update the config anytime. Changes apply to new payments only.
+
+**What about refunds?**
+V1 does not auto-handle refunds. Record a manual expense or credit note.
+
+**Does Hisaabo connect to the gateway API?**
+No. This is internal bookkeeping. No API integration with Razorpay/PayU.

@@ -433,6 +433,12 @@ export class HisaaboClient {
       summary() {
         return c.query<BankSummary>("bankAccount.summary");
       },
+      getGatewayConfig(bankAccountId: string) {
+        return c.query<GatewayConfig | null>("bankAccount.getGatewayConfig", { bankAccountId });
+      },
+      upsertGatewayConfig(input: UpsertGatewayConfigInput) {
+        return c.mutate<GatewayConfig>("bankAccount.upsertGatewayConfig", input);
+      },
     };
   }
 
@@ -1261,7 +1267,42 @@ export interface ShipmentUpdateInput {
 
 // ── Bank account types ─────────────────────────────────────────
 
-export type BankAccountType = "savings" | "current" | "cash" | "credit" | "other";
+export type BankAccountType = "savings" | "current" | "cash" | "credit" | "other" | "payment_gateway";
+
+export interface GatewayChargeRate {
+  type: "percentage" | "flat";
+  value: string;
+}
+
+export interface GatewayChargeConfig {
+  credit_card?: GatewayChargeRate;
+  debit_card?: GatewayChargeRate;
+  upi?: GatewayChargeRate;
+  net_banking?: GatewayChargeRate;
+  wallet?: GatewayChargeRate;
+  default?: GatewayChargeRate;
+}
+
+export interface GatewayConfig {
+  id: string;
+  businessId: string;
+  bankAccountId: string;
+  settlementAccountId: string;
+  chargeConfig: GatewayChargeConfig;
+  expenseCategory: string;
+  autoSettle: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertGatewayConfigInput {
+  bankAccountId: string;
+  settlementAccountId: string;
+  chargeConfig: GatewayChargeConfig;
+  expenseCategory?: string;
+  autoSettle?: boolean;
+}
 
 export interface BankAccountSummary {
   id: string;
