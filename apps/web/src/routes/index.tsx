@@ -1,4 +1,4 @@
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
@@ -1136,6 +1136,15 @@ const PRESET_LABELS: Record<string, string> = {
 };
 
 function DashboardPage() {
+  const joinedOrg = new URLSearchParams(window.location.search).get("joined");
+  const [showJoinBanner, setShowJoinBanner] = useState(!!joinedOrg);
+
+  useEffect(() => {
+    if (joinedOrg) {
+      window.history.replaceState({}, "", "/");
+    }
+  }, [joinedOrg]);
+
   const [isPending, startTransition] = useTransition();
   const {
     preset,
@@ -1244,6 +1253,25 @@ function DashboardPage() {
           </div>
         }
       />
+
+      {showJoinBanner && joinedOrg && (
+        <div className="mb-4 px-4 py-3 rounded-xl bg-brand-600/[0.06] border border-brand-600/20 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-brand-700 dark:text-brand-400">
+              You've joined {joinedOrg}!
+            </p>
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Switch between your organizations anytime using the sidebar.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowJoinBanner(false)}
+            className="btn-ghost text-xs px-2 py-1 shrink-0"
+          >
+            Got it
+          </button>
+        </div>
+      )}
 
       <div style={{ opacity: isPending ? 0.6 : 1, transition: "opacity 0.15s ease" }}>
       {milestone && (

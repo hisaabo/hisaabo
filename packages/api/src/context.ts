@@ -87,6 +87,13 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
             data: { userId: result[0].userId, email: result[0].email, name: result[0].name, tenantId: result[0].tenantId },
             expires: Date.now() + SESSION_CACHE_TTL,
           });
+
+          // Fire-and-forget: update lastUsedAt without blocking the request
+          controlDb
+            .update(sessions)
+            .set({ lastUsedAt: new Date() })
+            .where(eq(sessions.id, sessionId))
+            .catch(() => { /* ignore update errors */ });
         } else {
           sessionCache.delete(sessionId);
         }

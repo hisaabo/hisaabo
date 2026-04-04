@@ -110,8 +110,8 @@ interface SettingsNavProps {
 export function SettingsNav({ value, onChange }: SettingsNavProps) {
   return (
     <>
-      {/* Desktop: vertical sidebar */}
-      <nav className="hidden md:block w-[220px] shrink-0">
+      {/* Desktop: vertical sidebar — sticky */}
+      <nav className="hidden md:block w-[220px] shrink-0 sticky top-0 self-start">
         <div className="space-y-0.5">
           {SETTINGS_TABS.map((tab) => (
             <button
@@ -131,8 +131,8 @@ export function SettingsNav({ value, onChange }: SettingsNavProps) {
         </div>
       </nav>
 
-      {/* Mobile: horizontal scrollable tabs */}
-      <div className="md:hidden flex gap-1 overflow-x-auto pb-4 -mx-1 px-1">
+      {/* Mobile: horizontal scrollable tabs — sticky */}
+      <div className="md:hidden flex gap-1 overflow-x-auto pb-4 -mx-1 px-1 sticky top-0 z-10 bg-surface-1">
         {SETTINGS_TABS.map((tab) => (
           <button
             key={tab.value}

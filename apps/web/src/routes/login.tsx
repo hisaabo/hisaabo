@@ -534,6 +534,13 @@ function LoginPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
 
+  // Show session-expired banner if redirected from a revoked session
+  const [sessionExpired] = useState(() => {
+    const expired = sessionStorage.getItem("sessionExpired") === "1";
+    if (expired) sessionStorage.removeItem("sessionExpired");
+    return expired;
+  });
+
   // ── Turnstile modal (bot protection) ──────────────────────────
   // Form handlers save a pending action and open the modal.
   // On Turnstile success, the pending action fires with the token.
@@ -653,9 +660,23 @@ function LoginPage() {
         <div className="flex-1 flex items-center justify-center px-6 py-12 lg:py-0 bg-surface-0 lg:bg-surface-0">
           <div className="w-full max-w-[420px]">
 
+            {/* Session expired banner */}
+            {sessionExpired && (
+              <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300" style={{ animation: "form-enter 0.3s ease-out" }}>
+                Your session was ended — either by you from another device, or it expired. Please sign in again.
+              </div>
+            )}
+
             {/* ── Mode: magic-link ────────────────────────────────── */}
             {mode === "magic-link" && (
               <div style={{ animation: "form-enter 0.35s ease-out" }}>
+                {new URLSearchParams(window.location.search).get("invite") === "1" && (
+                  <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
+                    {new URLSearchParams(window.location.search).get("error") === "email_mismatch"
+                      ? "This invitation was sent to a different email address. Please sign in with the email where you received the invitation."
+                      : "You've been invited to join an organization! Sign in with the email address where you received the invitation."}
+                  </div>
+                )}
                 <div className="mb-8">
                   <h1
                     className="text-2xl font-bold text-text-primary mb-2"
@@ -864,6 +885,13 @@ function LoginPage() {
             {/* ── Mode: password-login ────────────────────────────── */}
             {mode === "password-login" && (
               <div style={{ animation: "form-enter 0.35s ease-out" }}>
+                {new URLSearchParams(window.location.search).get("invite") === "1" && (
+                  <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
+                    {new URLSearchParams(window.location.search).get("error") === "email_mismatch"
+                      ? "This invitation was sent to a different email address. Please sign in with the email where you received the invitation."
+                      : "You've been invited to join an organization! Sign in with the email address where you received the invitation."}
+                  </div>
+                )}
                 <div className="mb-8">
                   <h1
                     className="text-2xl font-bold text-text-primary mb-2"
@@ -943,6 +971,13 @@ function LoginPage() {
             {/* ── Mode: register ──────────────────────────────────── */}
             {mode === "register" && (
               <div style={{ animation: "form-enter 0.35s ease-out" }}>
+                {new URLSearchParams(window.location.search).get("invite") === "1" && (
+                  <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
+                    {new URLSearchParams(window.location.search).get("error") === "email_mismatch"
+                      ? "This invitation was sent to a different email address. Please sign in with the email where you received the invitation."
+                      : "You've been invited to join an organization! Sign in with the email address where you received the invitation."}
+                  </div>
+                )}
                 <div className="mb-8">
                   <h1
                     className="text-2xl font-bold text-text-primary mb-2"

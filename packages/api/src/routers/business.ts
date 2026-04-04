@@ -1,10 +1,12 @@
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, count } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { businesses, bankAccounts, controlDb, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses } from "@hisaabo/db";
+import { businesses, bankAccounts, controlDb, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
+import { enforceBusinessLimit, enforceDataExport } from "../lib/plan-limits.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -44,7 +46,8 @@ export const businessRouter = router({
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
-    return ctx.db.transaction(async (tx) => {
+    await enforceBusinessLimit(ctx.tenantId!, ctx.db);
+    const biz = await ctx.db.transaction(async (tx) => {
       const [biz] = await tx.insert(businesses).values({
         ...input,
         createdByUserId: ctx.user.id,
@@ -64,6 +67,18 @@ export const businessRouter = router({
 
       return biz;
     });
+
+    logAudit(ctx.db, {
+      businessId: biz.id,
+      userId: ctx.user.id,
+      action: "business.create",
+      entityType: "business",
+      entityId: biz.id,
+      metadata: { name: biz.name },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
+    return biz;
   }),
 
   update: tenantProcedure
@@ -75,6 +90,17 @@ export const businessRouter = router({
         .set({ ...input.data, updatedAt: new Date() })
         .where(eq(businesses.id, input.id))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.update",
+        entityType: "business",
+        entityId: biz.id,
+        metadata: { name: biz.name },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return biz;
     }),
 
@@ -119,6 +145,16 @@ export const businessRouter = router({
         sql`UPDATE businesses SET ${sql.identifier(column)} = ${input.newNumber} WHERE id = ${input.businessId}`
       );
 
+      logAudit(ctx.db, {
+        businessId: input.businessId,
+        userId: ctx.user.id,
+        action: "business.updateSequenceNumber",
+        entityType: "business",
+        entityId: input.businessId,
+        metadata: { field: input.documentType, value: input.newNumber },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true, previousNumber: currentNumber, newNumber: input.newNumber };
     }),
 
@@ -126,21 +162,53 @@ export const businessRouter = router({
     .input(z.object({
       page: z.number().int().min(1).default(1),
       limit: z.number().int().min(1).max(100).default(50),
+      fromDate: z.string().datetime().nullish(),
+      toDate: z.string().datetime().nullish(),
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
       const offset = (input.page - 1) * input.limit;
-      const data = await ctx.db.select()
-        .from(auditLog)
-        .where(eq(auditLog.businessId, ctx.businessId))
-        .orderBy(desc(auditLog.createdAt))
-        .limit(input.limit)
-        .offset(offset);
-      return { data, page: input.page, limit: input.limit };
+
+      const conditions = [eq(auditLog.businessId, ctx.businessId)];
+      if (input.fromDate) conditions.push(gte(auditLog.createdAt, new Date(input.fromDate)));
+      if (input.toDate) conditions.push(lte(auditLog.createdAt, new Date(input.toDate)));
+
+      const [data, [totalRow]] = await Promise.all([
+        ctx.db.select()
+          .from(auditLog)
+          .where(and(...conditions))
+          .orderBy(desc(auditLog.createdAt))
+          .limit(input.limit)
+          .offset(offset),
+        ctx.db.select({ count: count() })
+          .from(auditLog)
+          .where(and(...conditions)),
+      ]);
+
+      // Resolve userIds → names via control DB (can't JOIN across DBs in cloud mode)
+      const userIds = [...new Set(data.map((e) => e.userId))];
+      const userRows = userIds.length > 0
+        ? await controlDb
+            .select({ id: users.id, name: users.name, email: users.email })
+            .from(users)
+            .where(inArray(users.id, userIds))
+        : [];
+      const userMap = new Map(userRows.map((u) => [u.id, u.name || u.email]));
+
+      return {
+        data: data.map((entry) => ({
+          ...entry,
+          userName: userMap.get(entry.userId) ?? "Unknown user",
+        })),
+        total: totalRow?.count ?? 0,
+        page: input.page,
+        limit: input.limit,
+      };
     }),
 
   exportData: adminProcedure.mutation(async ({ ctx }) => {
     requireCan(ctx.ability, "manage", "Business");
+    await enforceDataExport(ctx.tenantId!);
     const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
       ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
       ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),

@@ -126,4 +126,47 @@ export function registerTenantTools(server: McpServer, client: HisaaboClient) {
       };
     })
   );
+
+  server.tool(
+    "tenant_pending_invitations",
+    [
+      "List pending (unaccepted) invitations for the current tenant.",
+      "Shows email, role, inviter name, and expiry date.",
+      "Only owners and admins can view pending invitations.",
+    ].join(" "),
+    {},
+    wrapTool(async (_input) => {
+      const invitations = await client.tenant.pendingInvitations();
+      return {
+        content: [{
+          type: "text" as const,
+          text: invitations.length === 0
+            ? "No pending invitations."
+            : JSON.stringify(invitations, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "tenant_revoke_invitation",
+    [
+      "Revoke a pending invitation by its ID.",
+      "Only owners and admins can revoke invitations.",
+      "Use tenant_pending_invitations to find invitation IDs.",
+    ].join(" "),
+    {
+      invitation_id: z.string().uuid()
+        .describe("The UUID of the invitation to revoke. Use tenant_pending_invitations to find IDs."),
+    },
+    wrapTool(async (input) => {
+      await client.tenant.revokeInvitation(input.invitation_id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: "Invitation revoked successfully.",
+        }],
+      };
+    })
+  );
 }

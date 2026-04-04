@@ -515,3 +515,73 @@ describe("auth.verifyMagicLink", () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// auth.revokeSession
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.revokeSession", () => {
+  it("revokes another session — session row is deleted, revoking user's session A still works", async () => {
+    const db = getControlDb();
+
+    // Create a user with two sessions (simulates two devices)
+    const user = await createUser({ email: "revoke.test@example.in", name: "Revoke User" });
+    const tenant = await createTenant({ name: "Revoke Test Org" });
+    await addMember(tenant.id, user.id, "owner");
+    const sessionA = await createSession(user.id, tenant.id); // "this device"
+    const sessionB = await createSession(user.id, tenant.id); // "other device"
+
+    // From session A, revoke session B
+    const callerA = callerWithSession(sessionA.id, user.id, user.email, tenant.id);
+    const result = await callerA.auth.revokeSession({ sessionId: sessionB.id });
+    expect(result.success).toBe(true);
+
+    // Verify session B is gone from DB — createContext will return user:null
+    // for this session, causing protectedProcedure to throw UNAUTHORIZED
+    const [remaining] = await db.select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionB.id))
+      .limit(1);
+    expect(remaining).toBeUndefined();
+
+    // Verify session A still works
+    const meA = await callerA.auth.me();
+    expect(meA.user?.email).toBe("revoke.test@example.in");
+
+    // Verify session A is still in DB
+    const [sessionARow] = await db.select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionA.id))
+      .limit(1);
+    expect(sessionARow).toBeDefined();
+  });
+
+  it("cannot revoke your own current session — BAD_REQUEST", async () => {
+    const user = await createUser({ email: "self.revoke@example.in", name: "Self Revoker" });
+    const session = await createSession(user.id);
+
+    const caller = callerWithSession(session.id, user.id, user.email);
+    await expect(
+      caller.auth.revokeSession({ sessionId: session.id }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Cannot revoke your current session. Use logout instead.",
+    });
+  });
+
+  it("cannot revoke another user's session — NOT_FOUND", async () => {
+    const user1 = await createUser({ email: "user1.revoke@example.in", name: "User 1" });
+    const user2 = await createUser({ email: "user2.revoke@example.in", name: "User 2" });
+    const session1 = await createSession(user1.id);
+    const session2 = await createSession(user2.id);
+
+    // User 1 tries to revoke User 2's session
+    const caller1 = callerWithSession(session1.id, user1.id, user1.email);
+    await expect(
+      caller1.auth.revokeSession({ sessionId: session2.id }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Session not found",
+    });
+  });
+});

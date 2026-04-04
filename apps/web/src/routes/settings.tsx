@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SettingsNav } from "@/components/settings/SettingsNav";
@@ -20,12 +20,25 @@ export const Route = createFileRoute("/settings")({
 });
 
 function SettingsPage() {
-  const [tab, setTab] = useState("business");
+  const [tab, setTab] = useState(() => sessionStorage.getItem("settings-tab") || "business");
+  const handleTabChange = (t: string) => { setTab(t); sessionStorage.setItem("settings-tab", t); };
   const { data: businesses, isLoading } = trpc.business.list.useQuery();
+  const { data: session } = trpc.auth.me.useQuery();
   const [showWhatsNext, setShowWhatsNext] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [newBizName, setNewBizName] = useState("");
+  const [showCreateBusiness, setShowCreateBusiness] = useState(
+    () => new URLSearchParams(window.location.search).get("action") === "create-business",
+  );
   const biz = businesses?.[0];
+  const canCreateBusiness = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
+
+  // Listen for "create-business" event from BusinessSwitcher (when already on settings)
+  useEffect(() => {
+    const handler = () => setShowCreateBusiness(true);
+    window.addEventListener("create-business", handler);
+    return () => window.removeEventListener("create-business", handler);
+  }, []);
 
   if (isLoading) {
     return (
@@ -44,6 +57,47 @@ function SettingsPage() {
         <BusinessForm
           onDone={(name) => {
             if (name) setNewBizName(name);
+            setShowWhatsNext(true);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Create additional business (triggered from BusinessSwitcher)
+  if (showCreateBusiness && biz) {
+    if (!canCreateBusiness) {
+      return (
+        <div>
+          <PageHeader title="Cannot create business" description="" />
+          <div className="card px-6 py-8 text-center">
+            <p className="text-sm text-text-primary font-medium mb-1">
+              Your role in this organization doesn't allow creating businesses.
+            </p>
+            <p className="text-sm text-text-tertiary mb-4">
+              To create your own business, sign out and create a new organization at login.
+            </p>
+            <button
+              className="btn-ghost text-sm"
+              onClick={() => {
+                window.history.replaceState({}, "", "/settings");
+                setShowCreateBusiness(false);
+              }}
+            >
+              Back to settings
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <PageHeader title="Create New Business" description="Add another business to your organization" />
+        <BusinessForm
+          onDone={(name) => {
+            window.history.replaceState({}, "", "/settings");
+            if (name) setNewBizName(name);
+            setShowCreateBusiness(false);
             setShowWhatsNext(true);
           }}
         />
@@ -77,7 +131,7 @@ function SettingsPage() {
     <div>
       <PageHeader title="Settings" description="Manage your business and preferences" />
       <div className="flex gap-8 mt-2">
-        <SettingsNav value={tab} onChange={setTab} />
+        <SettingsNav value={tab} onChange={handleTabChange} />
         <div className="flex-1 min-w-0">
           {tab === "business" && <BusinessTab biz={biz} />}
           {tab === "documents" && <DocumentsTab biz={biz} />}

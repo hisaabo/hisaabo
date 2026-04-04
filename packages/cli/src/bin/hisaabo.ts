@@ -20,6 +20,7 @@ import { registerBusinessCommands } from "./registrars/business.js";
 import { registerDocumentCommands } from "./registrars/document.js";
 import { registerTenantCommands } from "./registrars/tenant.js";
 import { registerApiKeyCommands } from "./registrars/api-key.js";
+import { registerSessionCommands } from "./registrars/session.js";
 
 // ── Program ───────────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ registerBusinessCommands(program);
 registerDocumentCommands(program);
 registerTenantCommands(program);
 registerApiKeyCommands(program);
+registerSessionCommands(program);
 
 // ── Run ────────────────────────────────────────────────────────────────────
 

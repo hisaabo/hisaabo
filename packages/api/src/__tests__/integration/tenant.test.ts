@@ -128,7 +128,7 @@ describe("tenant.list", () => {
     expect(acme).toBeDefined();
     expect(acme!.role).toBe("owner");
     expect(acme!.tenantName).toBe("Acme Corp");
-    expect(acme!.tenantPlan).toBe("free");
+    expect(acme!.tenantPlan).toBe("business");
   });
 
   it("shows correct role per tenant — Suresh is seller on Acme Corp", async () => {

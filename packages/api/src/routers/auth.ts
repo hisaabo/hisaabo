@@ -1,15 +1,16 @@
-import { eq, and, gt, isNull } from "drizzle-orm";
+import { eq, and, gt, lte, isNull, desc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import * as argon2 from "argon2";
-import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, provisionTenantDatabase } from "@hisaabo/db";
+import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, provisionTenantDatabase } from "@hisaabo/db";
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
 import { invalidateSessionCache } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
+import { enforceSessionLimit } from "../lib/plan-limits.js";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -100,6 +101,9 @@ async function createSessionForUser(
     .where(eq(tenantMembers.userId, userId));
 
   const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+  // Evict oldest sessions if at plan limit (FIFO, never blocks login)
+  await enforceSessionLimit(userId);
 
   const sessionId = nanoid(64);
   await controlDb.insert(sessions).values({
@@ -212,7 +216,19 @@ export const authRouter = router({
         passwordHash,
       }).returning({ id: users.id, email: users.email, name: users.name });
 
-      await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0], tx);
+      // Skip auto-tenant creation if the user has a pending invitation
+      const [pendingInvite] = await tx.select({ id: invitations.id })
+        .from(invitations)
+        .where(and(
+          eq(invitations.email, input.email.toLowerCase()),
+          isNull(invitations.acceptedAt),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (!pendingInvite) {
+        await assignTenantToNewUser(user.id, user.name || input.email.split("@")[0], tx);
+      }
 
       const sessionId = nanoid(64);
       const memberships = await tx
@@ -220,6 +236,8 @@ export const authRouter = router({
         .from(tenantMembers)
         .where(eq(tenantMembers.userId, user.id));
       const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await enforceSessionLimit(user.id);
 
       await tx.insert(sessions).values({
         id: sessionId,
@@ -384,7 +402,20 @@ export const authRouter = router({
         }).returning({ id: users.id, email: users.email, name: users.name });
         user = newUser;
 
-        await assignTenantToNewUser(user.id, email.split("@")[0], tx);
+        // Skip auto-tenant creation if the user has a pending invitation —
+        // they'll join the invited org after completing their profile.
+        const [pendingInvite] = await tx.select({ id: invitations.id })
+          .from(invitations)
+          .where(and(
+            eq(invitations.email, email.toLowerCase()),
+            isNull(invitations.acceptedAt),
+            gt(invitations.expiresAt, new Date()),
+          ))
+          .limit(1);
+
+        if (!pendingInvite) {
+          await assignTenantToNewUser(user.id, email.split("@")[0], tx);
+        }
       } else {
         // Mark email as verified for existing users
         await tx.update(users)
@@ -398,6 +429,8 @@ export const authRouter = router({
         .from(tenantMembers)
         .where(eq(tenantMembers.userId, user.id));
       const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
+
+      await enforceSessionLimit(user.id);
 
       await tx.insert(sessions).values({
         id: sessionId,
@@ -549,6 +582,59 @@ export const authRouter = router({
     clearSessionCookie(ctx.resHeaders);
     return { success: true };
   }),
+
+  // ── List sessions (active or expired) ───────────────────────
+  listSessions: protectedProcedure
+    .input(z.object({ expired: z.boolean().default(false) }).default({}))
+    .query(async ({ input, ctx }) => {
+      const currentSessionId = getSessionIdFromContext(ctx);
+      const now = new Date();
+      const userSessions = await controlDb
+        .select({
+          id: sessions.id,
+          ipAddress: sessions.ipAddress,
+          userAgent: sessions.userAgent,
+          createdAt: sessions.createdAt,
+          lastUsedAt: sessions.lastUsedAt,
+          expiresAt: sessions.expiresAt,
+        })
+        .from(sessions)
+        .where(and(
+          eq(sessions.userId, ctx.user!.id),
+          input.expired ? lte(sessions.expiresAt, now) : gt(sessions.expiresAt, now),
+        ))
+        .orderBy(desc(sessions.createdAt));
+
+      return userSessions.map((s) => ({
+        ...s,
+        isCurrent: !input.expired && s.id === currentSessionId,
+      }));
+    }),
+
+  // ── Revoke a specific session ───────────────────────────────
+  revokeSession: protectedProcedure
+    .input(z.object({ sessionId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const currentSessionId = getSessionIdFromContext(ctx);
+      if (input.sessionId === currentSessionId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot revoke your current session. Use logout instead." });
+      }
+
+      const deleted = await controlDb
+        .delete(sessions)
+        .where(and(
+          eq(sessions.id, input.sessionId),
+          eq(sessions.userId, ctx.user!.id),
+        ))
+        .returning({ id: sessions.id });
+
+      if (deleted.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      }
+
+      invalidateSessionCache(input.sessionId);
+      return { success: true };
+    }),
 
   // ── Me ───────────────────────────────────────────────────────
   me: publicProcedure.query(async ({ ctx }) => {

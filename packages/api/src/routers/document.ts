@@ -4,6 +4,7 @@ import { invoices, invoiceItems } from "@hisaabo/db";
 import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@hisaabo/shared";
 import { router, memberProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
+import { logAudit } from "../lib/audit.js";
 
 // ── Per-document-type routers ───────────────────────────────────
 
@@ -135,6 +136,17 @@ export const documentRouter = router({
         const callerFactory = createCallerFactory(invoiceRouter);
         const caller = callerFactory(callerCtx);
         const newDoc = await caller.create(convertInput);
+
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: "document.convert",
+          entityType: "document",
+          entityId: newDoc.id,
+          metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+
         return { id: newDoc.id, documentType: "invoice" as DocumentType, invoiceNumber: newDoc.invoiceNumber };
       }
 
@@ -158,6 +170,17 @@ export const documentRouter = router({
       const callerFactory = createCallerFactory(targetRouter);
       const caller = callerFactory(callerCtx);
       const newDoc = await caller.create(convertInput);
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "document.convert",
+        entityType: "document",
+        entityId: newDoc.id,
+        metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { id: newDoc.id, documentType: targetType, invoiceNumber: newDoc.invoiceNumber };
     }),
 });

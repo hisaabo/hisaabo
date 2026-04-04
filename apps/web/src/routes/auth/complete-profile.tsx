@@ -14,12 +14,33 @@ function CompleteProfilePage() {
 
   const [saved, setSaved] = useState(false);
 
+  const acceptInviteMutation = trpc.tenant.acceptInvitation.useMutation();
+  const selectTenantMutation = trpc.tenant.select.useMutation();
+
   const mutation = trpc.auth.completeProfile.useMutation({
     onSuccess: async () => {
       await utils.auth.me.refetch();
       setSaved(true);
-      // Brief pause so user sees confirmation before redirect
-      setTimeout(() => navigate({ to: "/settings" }), 800);
+
+      const pendingToken = localStorage.getItem("pendingInviteToken");
+      if (pendingToken) {
+        try {
+          const result = await acceptInviteMutation.mutateAsync({ token: pendingToken });
+          await selectTenantMutation.mutateAsync({ tenantId: result.tenantId });
+          localStorage.removeItem("pendingInviteToken");
+          // Refetch session (now points to invited tenant) and invalidate
+          // business list so root layout sees the correct tenant's businesses
+          await utils.auth.me.refetch();
+          utils.tenant.list.invalidate();
+          utils.business.list.invalidate();
+          setTimeout(() => navigate({ to: "/", search: { joined: result.tenantName } }), 800);
+        } catch {
+          localStorage.removeItem("pendingInviteToken");
+          setTimeout(() => navigate({ to: "/" }), 800);
+        }
+      } else {
+        setTimeout(() => navigate({ to: "/settings" }), 800);
+      }
     },
     onError: (e) => setError(e.message),
   });
@@ -57,16 +78,22 @@ function CompleteProfilePage() {
               Welcome, {name}!
             </h1>
             <p className="text-sm text-text-tertiary mt-1">
-              Setting up your business...
+              {localStorage.getItem("pendingInviteToken")
+                ? "Joining the team..."
+                : "Setting up your business..."}
             </p>
           </div>
         ) : (
         <>
         <h1 className="text-xl font-semibold mb-1 text-text-primary">
-          Welcome to Hisaabo
+          {new URLSearchParams(window.location.search).get("invite") === "1"
+            ? "Almost there!"
+            : "Welcome to Hisaabo"}
         </h1>
         <p className="text-sm mb-6 text-text-tertiary">
-          What should we call you?
+          {new URLSearchParams(window.location.search).get("invite") === "1"
+            ? "Just tell us your name to join the team."
+            : "What should we call you?"}
         </p>
 
         {error && (

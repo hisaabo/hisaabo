@@ -104,7 +104,7 @@ export function BusinessSwitcher({
   const activeInitial = activeBusiness.name.charAt(0).toUpperCase();
 
   return (
-    <div ref={containerRef} className="relative px-3 py-2 border-b border-border-light shrink-0">
+    <div ref={containerRef} className="relative shrink-0">
       {/* Trigger */}
       <button
         ref={triggerRef}
@@ -129,12 +129,12 @@ export function BusinessSwitcher({
         <ChevronUpDownIcon />
       </button>
 
-      {/* Popover — opens upward */}
+      {/* Popover — opens downward */}
       {open && (
         <div
           ref={menuRef}
           role="menu"
-          className="absolute left-3 right-3 bottom-full mb-1 z-50 rounded-lg border border-border-light bg-surface-0 shadow-dropdown animate-scale-in overflow-hidden"
+          className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-border-light bg-surface-0 shadow-dropdown animate-scale-in overflow-hidden"
         >
           {/* Business list */}
           <div className="max-h-48 overflow-y-auto py-1">

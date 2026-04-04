@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 
@@ -21,7 +22,13 @@ export default function VerifyScreen() {
     onSuccess: async (data) => {
       if (data.sessionToken) {
         await login(data.sessionToken);
-        router.replace("/(app)/(home)");
+        const pendingToken = await SecureStore.getItemAsync("pendingInviteToken");
+        if (pendingToken) {
+          // Redirect to invite accept screen to handle the pending invitation
+          router.replace(`/invite/${pendingToken}`);
+        } else {
+          router.replace("/(app)/(home)");
+        }
       }
     },
     onError: (err) => {

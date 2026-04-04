@@ -17,6 +17,9 @@ function TeamSection() {
   const { data: members, isLoading } = trpc.tenant.members.useQuery(undefined, {
     enabled: !!session?.tenantId,
   });
+  const { data: pendingInvitations } = trpc.tenant.pendingInvitations.useQuery(undefined, {
+    enabled: !!session?.tenantId,
+  });
   const utils = trpc.useUtils();
   const [showInvite, setShowInvite] = useState(false);
 
@@ -34,6 +37,14 @@ function TeamSection() {
       utils.tenant.members.invalidate();
     },
     onError: (err) => toast.error("Failed to update role", err.message),
+  });
+
+  const revokeInvitation = trpc.tenant.revokeInvitation.useMutation({
+    onSuccess: () => {
+      toast.success("Invitation revoked");
+      utils.tenant.pendingInvitations.invalidate();
+    },
+    onError: (err) => toast.error("Failed to revoke invitation", err.message),
   });
 
   const { data: me } = trpc.auth.me.useQuery();
@@ -58,6 +69,57 @@ function TeamSection() {
             </button>
           )}
         </div>
+
+        {pendingInvitations && pendingInvitations.length > 0 && (
+          <div className="border-b border-border-light">
+            <div className="px-6 py-2">
+              <span className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">
+                Pending Invitations
+              </span>
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Sent</th>
+                  {canManage && <th />}
+                </tr>
+              </thead>
+              <tbody>
+                {pendingInvitations.map((inv) => (
+                  <tr key={inv.id}>
+                    <td className="text-text-secondary">{inv.email}</td>
+                    <td>
+                      <span className={cn(
+                        "px-2 py-0.5 rounded text-[11px] font-medium",
+                        inv.role === "admin"
+                          ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
+                          : "bg-surface-2 text-text-secondary",
+                      )}>
+                        {inv.role}
+                      </span>
+                    </td>
+                    <td className="text-text-secondary text-xs">
+                      {formatDate(inv.createdAt)}
+                    </td>
+                    {canManage && (
+                      <td className="text-right">
+                        <button
+                          onClick={() => revokeInvitation.mutate({ invitationId: inv.id })}
+                          disabled={revokeInvitation.isPending}
+                          className="btn-ghost text-red-600 hover:text-red-700 text-xs px-2 py-1"
+                        >
+                          Revoke
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="px-6 py-8 space-y-3">
@@ -146,6 +208,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       setInviteResult({ token: data.token, inviteLink });
       toast.success("Invitation created");
       utils.tenant.members.invalidate();
+      utils.tenant.pendingInvitations.invalidate();
     },
     onError: (err) => toast.error("Failed to send invite", err.message),
   });
@@ -169,7 +232,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           <div className="rounded-lg bg-emerald-600/[0.08] border border-emerald-200 dark:border-emerald-800 px-4 py-3">
             <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Invitation created!</p>
             <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
-              Share this link with {email} to give them access.
+              We've sent an invitation email to {email}. You can also share the link below.
             </p>
           </div>
           <div>

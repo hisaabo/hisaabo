@@ -12,6 +12,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 
 export const bankAccountRouter = router({
   // ── Accounts ────────────────────────────────────────────────
@@ -56,7 +57,7 @@ export const bankAccountRouter = router({
     .input(createBankAccountSchema)
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "create", "BankAccount");
-      return ctx.db.transaction(async (tx) => {
+      const account = await ctx.db.transaction(async (tx) => {
         // If new account is default, clear existing defaults
         if (input.isDefault) {
           await tx
@@ -65,7 +66,7 @@ export const bankAccountRouter = router({
             .where(eq(bankAccounts.businessId, ctx.businessId));
         }
 
-        const [account] = await tx
+        const [result] = await tx
           .insert(bankAccounts)
           .values({
             businessId: ctx.businessId,
@@ -81,15 +82,27 @@ export const bankAccountRouter = router({
           })
           .returning();
 
-        return account;
+        return result;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "bankAccount.create",
+        entityType: "bankAccount",
+        entityId: account.id,
+        metadata: { accountName: account.accountName },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return account;
     }),
 
   update: memberProcedure
     .input(z.object({ id: z.string().uuid(), data: updateBankAccountSchema }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "BankAccount");
-      return ctx.db.transaction(async (tx) => {
+      const account = await ctx.db.transaction(async (tx) => {
         // Verify ownership
         const [existing] = await tx
           .select({ id: bankAccounts.id })
@@ -119,7 +132,7 @@ export const bankAccountRouter = router({
             );
         }
 
-        const [account] = await tx
+        const [result] = await tx
           .update(bankAccounts)
           .set({ ...input.data, updatedAt: new Date() })
           .where(
@@ -130,15 +143,27 @@ export const bankAccountRouter = router({
           )
           .returning();
 
-        return account;
+        return result;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "bankAccount.update",
+        entityType: "bankAccount",
+        entityId: account.id,
+        metadata: { accountName: account.accountName },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return account;
     }),
 
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "BankAccount");
-      return ctx.db.transaction(async (tx) => {
+      const result = await ctx.db.transaction(async (tx) => {
         const [account] = await tx
           .select({ id: bankAccounts.id })
           .from(bankAccounts)
@@ -178,6 +203,18 @@ export const bankAccountRouter = router({
 
         return { success: true };
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "bankAccount.delete",
+        entityType: "bankAccount",
+        entityId: input.id,
+        metadata: { accountId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return result;
     }),
 
   // ── Transactions ────────────────────────────────────────────
@@ -271,7 +308,7 @@ export const bankAccountRouter = router({
     .input(createBankTransactionSchema)
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "create", "BankTransaction");
-      return ctx.db.transaction(async (tx) => {
+      const txn = await ctx.db.transaction(async (tx) => {
         // Lock account row for atomic balance update
         const [account] = await tx
           .select({
@@ -297,7 +334,7 @@ export const bankAccountRouter = router({
             ? money.add(account.currentBalance, input.amount)
             : money.sub(account.currentBalance, input.amount);
 
-        const [txn] = await tx
+        const [result] = await tx
           .insert(bankTransactions)
           .values({
             businessId: ctx.businessId,
@@ -319,8 +356,20 @@ export const bankAccountRouter = router({
           .set({ currentBalance: newBalance, updatedAt: new Date() })
           .where(eq(bankAccounts.id, input.bankAccountId));
 
-        return txn;
+        return result;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "bankTransaction.create",
+        entityType: "bankTransaction",
+        entityId: txn.id,
+        metadata: { amount: txn.amount, type: txn.type },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return txn;
     }),
 
   transfer: memberProcedure
@@ -334,7 +383,7 @@ export const bankAccountRouter = router({
         });
       }
 
-      return ctx.db.transaction(async (tx) => {
+      const transferResult = await ctx.db.transaction(async (tx) => {
         // Lock both accounts in a consistent order to prevent deadlocks
         const firstId =
           input.fromAccountId < input.toAccountId
@@ -426,6 +475,18 @@ export const bankAccountRouter = router({
 
         return { withdrawal: withdrawalTxn, deposit: depositTxn };
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "bankTransaction.transfer",
+        entityType: "bankTransaction",
+        entityId: transferResult.withdrawal.id,
+        metadata: { amount: input.amount, fromAccountId: input.fromAccountId, toAccountId: input.toAccountId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return transferResult;
     }),
 
   summary: viewerProcedure.query(async ({ ctx }) => {

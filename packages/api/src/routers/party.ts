@@ -151,6 +151,17 @@ export const partyRouter = router({
       // Handle optional date fields
       contactPersonDob: input.contactPersonDob ? new Date(input.contactPersonDob) : null,
     }).returning();
+
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user.id,
+      action: "party.create",
+      entityType: "party",
+      entityId: party.id,
+      metadata: { name: party.name },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
     return party;
   }),
 
@@ -167,6 +178,17 @@ export const partyRouter = router({
         })
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "party.update",
+        entityType: "party",
+        entityId: party.id,
+        metadata: { name: party.name },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return party;
     }),
 
@@ -176,6 +198,17 @@ export const partyRouter = router({
       requireCan(ctx.ability, "delete", "Party");
       await ctx.db.delete(parties)
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "party.delete",
+        entityType: "party",
+        entityId: input.id,
+        metadata: { partyId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true };
     }),
 

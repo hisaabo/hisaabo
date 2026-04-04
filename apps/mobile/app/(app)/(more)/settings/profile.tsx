@@ -17,8 +17,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect, useCallback } from "react";
 import * as LocalAuthentication from "expo-local-authentication";
 import { trpc } from "../../../../src/lib/trpc";
-import { useAuthStore } from "../../../../src/stores/auth";
-import { useBusinessStore } from "../../../../src/stores/business";
 import { useBiometricStore } from "../../../../src/stores/biometric";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
@@ -28,8 +26,6 @@ const PIN_LENGTH = 4;
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const logout = useAuthStore((s) => s.logout);
-  const clearBusiness = useBusinessStore((s) => s.clearBusiness);
 
   // Biometric / security state
   const biometricEnabled = useBiometricStore((s) => s.biometricEnabled);
@@ -195,58 +191,6 @@ export default function ProfileScreen() {
     },
   });
 
-  const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: async () => {
-      await logout();
-      clearBusiness();
-      router.replace("/(auth)/login");
-    },
-    onError: async () => {
-      await logout();
-      clearBusiness();
-      router.replace("/(auth)/login");
-    },
-  });
-
-  const logoutAllMutation = trpc.auth.logoutAll.useMutation({
-    onSuccess: async () => {
-      await logout();
-      clearBusiness();
-      router.replace("/(auth)/login");
-    },
-    onError: async () => {
-      await logout();
-      clearBusiness();
-      router.replace("/(auth)/login");
-    },
-  });
-
-  const handleLogout = () => {
-    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign Out",
-        style: "destructive",
-        onPress: () => logoutMutation.mutate(),
-      },
-    ]);
-  };
-
-  const handleLogoutAll = () => {
-    Alert.alert(
-      "Sign Out All Devices",
-      "This will sign you out from all devices. Continue?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Sign Out All",
-          style: "destructive",
-          onPress: () => logoutAllMutation.mutate(),
-        },
-      ]
-    );
-  };
-
   const handleSaveName = () => {
     if (!name.trim() || name.trim().length < 2) {
       Alert.alert("Validation", "Name must be at least 2 characters.");
@@ -279,8 +223,6 @@ export default function ProfileScreen() {
       </SafeAreaView>
     );
   }
-
-  const isBusy = logoutMutation.isPending || logoutAllMutation.isPending;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -546,49 +488,6 @@ export default function ProfileScreen() {
           </View>
         </Modal>
 
-        {/* Danger Zone */}
-        <Text style={styles.sectionLabel}>Session</Text>
-        <View style={styles.dangerList}>
-          <TouchableOpacity
-            style={styles.dangerRow}
-            onPress={handleLogout}
-            disabled={isBusy}
-            activeOpacity={0.7}
-          >
-            <View style={styles.dangerIconWrap}>
-              <Ionicons name="log-out-outline" size={20} color={colors.danger} />
-            </View>
-            <View style={styles.dangerText}>
-              <Text style={styles.dangerLabel}>Sign Out</Text>
-              <Text style={styles.dangerDesc}>End your current session</Text>
-            </View>
-            {logoutMutation.isPending ? (
-              <ActivityIndicator size="small" color={colors.danger} />
-            ) : (
-              <Ionicons name="chevron-forward" size={16} color={colors.danger} />
-            )}
-          </TouchableOpacity>
-          <View style={styles.dangerDivider} />
-          <TouchableOpacity
-            style={styles.dangerRow}
-            onPress={handleLogoutAll}
-            disabled={isBusy}
-            activeOpacity={0.7}
-          >
-            <View style={styles.dangerIconWrap}>
-              <Ionicons name="phone-portrait-outline" size={20} color={colors.danger} />
-            </View>
-            <View style={styles.dangerText}>
-              <Text style={styles.dangerLabel}>Sign Out All Devices</Text>
-              <Text style={styles.dangerDesc}>End sessions on all devices</Text>
-            </View>
-            {logoutAllMutation.isPending ? (
-              <ActivityIndicator size="small" color={colors.danger} />
-            ) : (
-              <Ionicons name="chevron-forward" size={16} color={colors.danger} />
-            )}
-          </TouchableOpacity>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -858,43 +757,4 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  // Danger zone
-  dangerList: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: "hidden",
-    marginBottom: 24,
-  },
-  dangerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    gap: 14,
-  },
-  dangerDivider: {
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dangerIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: colors.dangerBg,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  dangerText: { flex: 1 },
-  dangerLabel: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: colors.danger,
-  },
-  dangerDesc: {
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
 });

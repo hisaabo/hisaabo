@@ -5,6 +5,7 @@ import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemMo
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 
 export const itemRouter = router({
@@ -122,8 +123,29 @@ export const itemRouter = router({
       if (input.itemMode === "variants") {
         const variants = await tx.select().from(itemVariants)
           .where(eq(itemVariants.itemId, item.id));
+
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user.id,
+          action: "item.create",
+          entityType: "item",
+          entityId: item.id,
+          metadata: { name: item.name },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+
         return { ...item, variants };
       }
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.create",
+        entityType: "item",
+        entityId: item.id,
+        metadata: { name: item.name },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
 
       return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
     });
@@ -138,7 +160,7 @@ export const itemRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
-      return ctx.db.transaction(async (tx) => {
+      const result = await ctx.db.transaction(async (tx) => {
         const [item] = await tx.select().from(items)
           .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
           .for("update")
@@ -202,6 +224,18 @@ export const itemRouter = router({
 
         return updated;
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.switchBaseUnit",
+        entityType: "item",
+        entityId: input.id,
+        metadata: { itemId: input.id, newUnit: input.newUnit },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return result;
     }),
 
   update: memberProcedure
@@ -212,6 +246,17 @@ export const itemRouter = router({
         .set({ ...input.data, updatedAt: new Date() })
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.update",
+        entityType: "item",
+        entityId: item.id,
+        metadata: { name: item.name },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return item;
     }),
 
@@ -223,7 +268,7 @@ export const itemRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
-      return ctx.db.transaction(async (tx) => {
+      const result = await ctx.db.transaction(async (tx) => {
         const [item] = await tx.select()
           .from(items)
           .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
@@ -260,6 +305,18 @@ export const itemRouter = router({
 
         return { success: true, renamedFrom: input.oldUnit, renamedTo: input.newUnit };
       });
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.renameUnit",
+        entityType: "item",
+        entityId: input.id,
+        metadata: { itemId: input.id, oldUnit: input.oldUnit, newUnit: input.newUnit },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
+      return result;
     }),
 
   delete: adminProcedure
@@ -268,6 +325,17 @@ export const itemRouter = router({
       requireCan(ctx.ability, "delete", "Item");
       await ctx.db.delete(items)
         .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.delete",
+        entityType: "item",
+        entityId: input.id,
+        metadata: { itemId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true };
     }),
 
@@ -505,6 +573,17 @@ export const itemRouter = router({
         stockQuantity: input.variant.stockQuantity || "0",
         lowStockAlert: input.variant.lowStockAlert || null,
       }).returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.createVariant",
+        entityType: "itemVariant",
+        entityId: variant.id,
+        metadata: { itemId: input.itemId, variantName: JSON.stringify(input.variant.attributeValues) },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return variant;
     }),
 
@@ -538,6 +617,17 @@ export const itemRouter = router({
         .set(updates)
         .where(eq(itemVariants.id, input.variantId))
         .returning();
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.updateVariant",
+        entityType: "itemVariant",
+        entityId: input.variantId,
+        metadata: { variantId: input.variantId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return variant;
     }),
 
@@ -555,6 +645,17 @@ export const itemRouter = router({
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
 
       await ctx.db.delete(itemVariants).where(eq(itemVariants.id, input.variantId));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "item.deleteVariant",
+        entityType: "itemVariant",
+        entityId: input.variantId,
+        metadata: { variantId: input.variantId },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
+
       return { success: true };
     }),
 

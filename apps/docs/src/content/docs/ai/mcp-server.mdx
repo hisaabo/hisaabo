@@ -1558,6 +1558,36 @@ Change the role of an existing tenant member. Requires admin or owner role.
 }
 ```
 
+#### `tenant_pending_invitations`
+
+List pending (unaccepted, non-expired) invitations for the current tenant. Returns email, role, inviter name, creation date, and expiry date for each.
+
+**Input:** `{}` (no parameters)
+
+#### `tenant_revoke_invitation`
+
+Revoke a pending invitation by its UUID. Only owners and admins can revoke invitations.
+
+**Input:** `{ invitation_id: string }` — UUID of the invitation to revoke.
+
+---
+
+### Sessions
+
+Manage active user sessions. Useful for security audits and revoking suspicious sessions.
+
+#### `session_list`
+
+List active (or expired) sessions for the current user. Returns session ID, IP address, user agent, creation time, last activity time, expiry, and whether it is the current session.
+
+**Input:** `{ expired?: boolean }` — set `true` to list expired/old sessions instead of active ones. Defaults to `false`.
+
+#### `session_revoke`
+
+Terminate a specific session by ID. Cannot revoke the current session (use logout instead).
+
+**Input:** `{ session_id: string }` — the session ID to revoke.
+
 ---
 
 ### Business
@@ -1600,6 +1630,20 @@ Claude: "Done. Sharma Exports Pvt Ltd has been created (ID: biz_xxxxx).
          To operate on this business, update HISAABO_BUSINESS_ID in your
          MCP config and restart the server, or ask me to pass the business
          ID directly in any tool call."
+```
+
+#### `business_audit_trail`
+
+Query the activity/audit log for the current business. Returns recent actions (invoice creation, payment recording, party updates, etc.) with the user who performed each action and timestamps.
+
+**Input:**
+```typescript
+{
+  page?: number;       // page number, starts at 1 (default: 1)
+  limit?: number;      // items per page, max 100 (default: 50)
+  from_date?: string;  // ISO 8601 datetime — only entries after this time
+  to_date?: string;    // ISO 8601 datetime — only entries before this time
+}
 ```
 
 ---

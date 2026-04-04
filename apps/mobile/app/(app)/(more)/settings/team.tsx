@@ -85,6 +85,9 @@ export default function TeamScreen() {
   const { data: members, isLoading, isError, refetch, isRefetching } =
     trpc.tenant.members.useQuery(undefined);
 
+  const { data: pendingInvitations, refetch: refetchPending, isRefetching: isPendingRefetching } =
+    trpc.tenant.pendingInvitations.useQuery(undefined);
+
   const { data: me } = trpc.auth.me.useQuery(undefined);
   const myRole = me?.role ?? "";
   const canManage = ["owner", "superadmin", "admin"].includes(myRole);
@@ -92,12 +95,13 @@ export default function TeamScreen() {
   const inviteMutation = trpc.tenant.inviteMember.useMutation({
     onSuccess: () => {
       utils.tenant.members.invalidate();
+      utils.tenant.pendingInvitations.invalidate();
       setShowInviteModal(false);
       setInviteEmail("");
       setInviteRole("seller");
       Alert.alert(
         "Invitation sent",
-        "An invitation link has been sent. Share it with the team member."
+        "We've sent an invitation email. The invite will appear as pending until accepted."
       );
     },
     onError: (err) => {
@@ -121,6 +125,16 @@ export default function TeamScreen() {
     },
     onError: (err) => {
       Alert.alert("Error", err.message || "Failed to remove member.");
+    },
+  });
+
+  const revokeMutation = trpc.tenant.revokeInvitation.useMutation({
+    onSuccess: () => {
+      utils.tenant.pendingInvitations.invalidate();
+      Alert.alert("Revoked", "Invitation has been revoked.");
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message || "Failed to revoke invitation.");
     },
   });
 
@@ -203,8 +217,8 @@ export default function TeamScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isRefetching}
-            onRefresh={refetch}
+            refreshing={isRefetching || isPendingRefetching}
+            onRefresh={() => { refetch(); refetchPending(); }}
             tintColor={colors.brand}
             colors={[colors.brand]}
           />
@@ -282,6 +296,65 @@ export default function TeamScreen() {
           <Card>
             <Text style={styles.emptyText}>No team members found</Text>
           </Card>
+        )}
+
+        {/* Pending Invitations */}
+        {pendingInvitations && pendingInvitations.length > 0 && (
+          <View style={styles.pendingSection}>
+            <Text style={styles.sectionLabel}>Pending Invitations</Text>
+            <View style={styles.membersList}>
+              {pendingInvitations.map((inv, idx) => {
+                const isLast = idx === pendingInvitations.length - 1;
+                return (
+                  <View
+                    key={inv.id}
+                    style={[styles.memberRow, !isLast && styles.memberRowBorder]}
+                  >
+                    <View style={[styles.memberAvatar, { backgroundColor: "rgba(251,191,36,0.12)", borderColor: "rgba(251,191,36,0.3)" }]}>
+                      <Text style={[styles.memberAvatarText, { color: "#fbbf24" }]}>
+                        {inv.email.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.memberInfo}>
+                      <Text style={styles.memberEmail} numberOfLines={1}>
+                        {inv.email}
+                      </Text>
+                      <View style={styles.memberRoleRow}>
+                        <RoleBadge role={inv.role} />
+                      </View>
+                    </View>
+                    {canManage && (
+                      <TouchableOpacity
+                        style={styles.removeBtn}
+                        onPress={() => {
+                          Alert.alert(
+                            "Revoke Invitation",
+                            `Revoke invitation for ${inv.email}?`,
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              {
+                                text: "Revoke",
+                                style: "destructive",
+                                onPress: () => revokeMutation.mutate({ invitationId: inv.id }),
+                              },
+                            ],
+                          );
+                        }}
+                        activeOpacity={0.7}
+                        disabled={revokeMutation.isPending}
+                      >
+                        {revokeMutation.isPending ? (
+                          <ActivityIndicator size="small" color={colors.danger} />
+                        ) : (
+                          <Ionicons name="close-circle-outline" size={18} color={colors.danger} />
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          </View>
         )}
 
         {canManage && (
@@ -634,5 +707,17 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 16,
     fontWeight: "700",
+  },
+  pendingSection: {
+    marginTop: 16,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    paddingHorizontal: 4,
   },
 });

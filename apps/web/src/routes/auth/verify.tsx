@@ -17,8 +17,14 @@ function VerifyPage() {
   const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
     onSuccess: (data) => {
       utils.auth.me.invalidate();
+      const pendingToken = localStorage.getItem("pendingInviteToken");
       if (data.needsProfile) {
-        navigate({ to: "/auth/complete-profile" });
+        navigate({
+          to: "/auth/complete-profile",
+          search: pendingToken ? { invite: "1" } : undefined,
+        });
+      } else if (pendingToken) {
+        navigate({ to: `/invite/${pendingToken}` });
       } else {
         navigate({ to: "/" });
       }

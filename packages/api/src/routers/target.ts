@@ -5,6 +5,7 @@ import { salesTargets, invoices, invoiceItems } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { logAudit } from "../lib/audit.js";
 
 // ── Zod schemas ────────────────────────────────────────────────
 
@@ -176,6 +177,16 @@ export const targetRouter = router({
       })
       .returning();
 
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user.id,
+      action: "salesTarget.create",
+      entityType: "salesTarget",
+      entityId: target.id,
+      metadata: { period: input.periodType },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
     return target;
   }),
 
@@ -291,6 +302,16 @@ export const targetRouter = router({
       .where(eq(salesTargets.id, id))
       .returning();
 
+    logAudit(ctx.db, {
+      businessId: ctx.businessId,
+      userId: ctx.user.id,
+      action: "salesTarget.update",
+      entityType: "salesTarget",
+      entityId: id,
+      metadata: { targetId: id },
+      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+    });
+
     return updated;
   }),
 
@@ -316,6 +337,16 @@ export const targetRouter = router({
       }
 
       await ctx.db.delete(salesTargets).where(eq(salesTargets.id, input.id));
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user.id,
+        action: "salesTarget.delete",
+        entityType: "salesTarget",
+        entityId: input.id,
+        metadata: { targetId: input.id },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
 
       return { success: true };
     }),

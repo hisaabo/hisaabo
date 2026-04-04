@@ -134,6 +134,11 @@ exceptions:
       - auth.sendMagicLink
       - auth.verifyMagicLink
 
+      # --- Tenant ---
+      # Invite acceptance is a browser/mobile flow (click link → auth → accept).
+      # CLI users don't accept invitations via the terminal.
+      - tenant.acceptInvitation
+
       # --- Bank ---
       # Manual transaction entry — rare admin workflow. CLI uses transfer
       # and reconciliation commands instead.
@@ -169,6 +174,10 @@ exceptions:
       - auth.sendMagicLink
       - auth.updateName
       - auth.verifyMagicLink
+
+      # --- Tenant ---
+      # Invite acceptance is a browser/mobile flow. MCP agents don't accept invitations.
+      - tenant.acceptInvitation
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow.

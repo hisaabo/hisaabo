@@ -466,12 +466,15 @@ describe("target.list", () => {
 
 describe("apiKey — plan check", () => {
   it("apiKey.create is blocked for free-plan tenants — gap: paid feature guard", async () => {
-    // world.tenant1 is on the free plan (created with plan: "free" in fixture)
+    // Create an explicitly free-plan tenant for this test
+    const freeTenant = await createTenant({ name: "Free Plan Org", plan: "free" as any });
+    await addMember(freeTenant.id, world.ramesh.id, "owner");
+
     const caller = createTestCaller({
       userId: world.ramesh.id,
       email: world.ramesh.email,
       name: world.ramesh.name,
-      tenantId: world.tenant1.id,
+      tenantId: freeTenant.id,
       businessId: world.business1.id,
     });
 
@@ -491,7 +494,7 @@ describe("apiKey — paid tenant", () => {
   beforeAll(async () => {
     // Create a paid-plan tenant
     const paidUser = await createUser({ email: `apikey.test.${Date.now()}@example.in`, name: "ApiKey Tester" });
-    const paidTenant = await createTenant({ plan: "pro", name: "Paid Org" });
+    const paidTenant = await createTenant({ plan: "business" as any, name: "Paid Org" });
     await addMember(paidTenant.id, paidUser.id, "owner");
     await createSession(paidUser.id, paidTenant.id);
 

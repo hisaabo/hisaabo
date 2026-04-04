@@ -1,14 +1,31 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { controlDb, tenants, tenantMembers, invitations, users, sessions } from "@hisaabo/db";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { invalidateSessionCache } from "../context.js";
+import { emailService } from "../lib/email.js";
+import { enforceTeamMemberLimit } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+async function autoSelectTenantInSession(req: Request, tenantId: string): Promise<string> {
+  const sessionId = getCookieFromRequest(req, "session_id");
+  if (sessionId) {
+    await controlDb.update(sessions)
+      .set({ tenantId })
+      .where(eq(sessions.id, sessionId));
+    invalidateSessionCache(sessionId);
+  }
+  const [tenant] = await controlDb.select({ name: tenants.name })
+    .from(tenants)
+    .where(eq(tenants.id, tenantId))
+    .limit(1);
+  return tenant?.name ?? "Organization";
 }
 
 export const tenantRouter = router({
@@ -108,6 +125,9 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can invite members" });
       }
 
+      // Enforce team member limit before proceeding
+      await enforceTeamMemberLimit(ctx.tenantId);
+
       // Check if already a member
       const [existingUser] = await controlDb.select({ id: users.id })
         .from(users).where(eq(users.email, input.email)).limit(1);
@@ -126,6 +146,21 @@ export const tenantRouter = router({
         }
       }
 
+      // Check for existing pending invitation (prevent duplicates)
+      const [existingInvite] = await controlDb.select({ id: invitations.id })
+        .from(invitations)
+        .where(and(
+          eq(invitations.tenantId, ctx.tenantId),
+          eq(invitations.email, input.email),
+          isNull(invitations.acceptedAt),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (existingInvite) {
+        throw new TRPCError({ code: "CONFLICT", message: "A pending invitation for this email already exists" });
+      }
+
       const rawToken = nanoid(32);
       const tokenHash = hashInvitationToken(rawToken);
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
@@ -137,6 +172,29 @@ export const tenantRouter = router({
         token: tokenHash, // Store hash, never the raw token
         invitedBy: ctx.user.id,
         expiresAt,
+      });
+
+      // Fire-and-forget invitation email — failure doesn't block invite creation
+      const [tenant] = await controlDb.select({ name: tenants.name })
+        .from(tenants)
+        .where(eq(tenants.id, ctx.tenantId))
+        .limit(1);
+
+      const [inviter] = await controlDb.select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+
+      const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 5173}`;
+      const inviteUrl = `${baseUrl}/invite/${rawToken}`;
+
+      emailService.sendInvitation(
+        input.email,
+        inviteUrl,
+        tenant?.name ?? "Organization",
+        inviter?.name ?? null,
+      ).catch((err) => {
+        console.error("[invite] Failed to send invitation email:", err);
       });
 
       // Return the raw token — this is what gets sent via email
@@ -180,9 +238,9 @@ export const tenantRouter = router({
         ))
         .limit(1);
       if (existingMember) {
-        // Already a member — just mark invitation accepted and return
         await controlDb.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invitation.id));
-        return { tenantId: invitation.tenantId };
+        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+        return { tenantId: invitation.tenantId, tenantName };
       }
 
       // Create membership and mark invitation accepted atomically so a crash
@@ -202,7 +260,57 @@ export const tenantRouter = router({
           .where(eq(invitations.id, invitation.id));
       });
 
-      return { tenantId: invitation.tenantId };
+      const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+      return { tenantId: invitation.tenantId, tenantName };
+    }),
+
+  // List pending invitations for the current tenant
+  pendingInvitations: tenantProcedure.query(async ({ ctx }) => {
+    const pending = await controlDb.select({
+      id: invitations.id,
+      email: invitations.email,
+      role: invitations.role,
+      createdAt: invitations.createdAt,
+      expiresAt: invitations.expiresAt,
+      invitedByName: users.name,
+    })
+      .from(invitations)
+      .leftJoin(users, eq(users.id, invitations.invitedBy))
+      .where(and(
+        eq(invitations.tenantId, ctx.tenantId),
+        isNull(invitations.acceptedAt),
+        gt(invitations.expiresAt, new Date()),
+      ))
+      .orderBy(desc(invitations.createdAt));
+
+    return pending;
+  }),
+
+  // Revoke a pending invitation
+  revokeInvitation: tenantProcedure
+    .input(z.object({ invitationId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      // Verify caller is admin/owner
+      const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, ctx.tenantId),
+          eq(tenantMembers.userId, ctx.user.id),
+        ))
+        .limit(1);
+
+      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can revoke invitations" });
+      }
+
+      await controlDb.delete(invitations)
+        .where(and(
+          eq(invitations.id, input.invitationId),
+          eq(invitations.tenantId, ctx.tenantId),
+          isNull(invitations.acceptedAt),
+        ));
+
+      return { success: true };
     }),
 
   // Remove a member

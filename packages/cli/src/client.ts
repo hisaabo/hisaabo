@@ -169,6 +169,12 @@ export class HisaaboClient {
       updateName(input: { name: string }) {
         return c.mutate<any>("auth.updateName", input);
       },
+      listSessions(input: { expired: boolean }) {
+        return c.query<any>("auth.listSessions", input);
+      },
+      revokeSession(input: { sessionId: string }) {
+        return c.mutate<any>("auth.revokeSession", input);
+      },
     };
   }
 
@@ -634,6 +640,12 @@ export class HisaaboClient {
       },
       updateMemberRole(input: any) {
         return c.mutate<any>("tenant.updateMemberRole", input);
+      },
+      pendingInvitations() {
+        return c.query<any>("tenant.pendingInvitations");
+      },
+      revokeInvitation(input: { invitationId: string }) {
+        return c.mutate<any>("tenant.revokeInvitation", input);
       },
     };
   }

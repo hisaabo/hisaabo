@@ -194,7 +194,7 @@ function RootLayout() {
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
     enabled: !!session?.user && !session?.tenantId,
   });
-  const { data: businesses } = trpc.business.list.useQuery(undefined, {
+  const { data: businesses, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
     enabled: !!session?.user && !!session?.tenantId,
   });
 
@@ -267,7 +267,7 @@ function RootLayout() {
   }, [businesses, currentBusinessId]);
 
   // Single consolidated redirect — priority order matters
-  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change"];
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite"];
   useEffect(() => {
     if (sessionLoading || sessionFetching) return;
 
@@ -288,7 +288,8 @@ function RootLayout() {
     }
 
     // Priority 3: Authenticated with name but no business → settings
-    if (session?.tenantId && businesses !== undefined && businesses.length === 0) {
+    // Skip redirect while businesses are refetching (e.g. after a tenant switch via invite)
+    if (session?.tenantId && businesses !== undefined && businesses.length === 0 && !businessesFetching) {
       if (pathname !== "/settings") {
         navigate({ to: "/settings" });
       }
@@ -374,8 +375,8 @@ function RootLayout() {
     .join("")
     .toUpperCase();
 
-  const _hasMultipleTenants = (tenantList?.length ?? 0) > 1;
-  const _tenantName = session.tenantName ?? "Organization";
+  const hasMultipleTenants = (tenantList?.length ?? 0) > 1;
+  const tenantName = session.tenantName ?? "Organization";
 
   function handleBusinessSwitch(id: string) {
     setBusinessId(id);
@@ -407,14 +408,31 @@ function RootLayout() {
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Logo */}
-        <div className="px-4 py-4 flex items-center gap-2.5 shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
-            <span className="text-white font-semibold text-sm">H</span>
+        {/* Logo + Org switcher */}
+        <div className="px-4 py-4 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
+              <span className="text-white font-semibold text-sm">H</span>
+            </div>
+            <span className="font-semibold text-[15px] tracking-tight text-text-primary">
+              Hisaabo
+            </span>
           </div>
-          <span className="font-semibold text-[15px] tracking-tight text-text-primary">
-            Hisaabo
-          </span>
+          {hasMultipleTenants && (
+            <button
+              type="button"
+              onClick={() => setShowTenantPicker(true)}
+              className="mt-2 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-text-secondary hover:bg-surface-1 hover:text-text-primary transition-colors text-left"
+            >
+              <span className="w-5 h-5 rounded-md bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
+                {tenantName.charAt(0).toUpperCase()}
+              </span>
+              <span className="flex-1 min-w-0 text-xs font-medium truncate">{tenantName}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-tertiary">
+                <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Nav sections */}
@@ -469,7 +487,7 @@ function RootLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col overflow-hidden bg-surface-1 md:ml-0">
+      <main className="flex-1 flex flex-col bg-surface-1 md:ml-0">
         {/* Top bar */}
         <div className="h-14 border-b border-border-light flex items-center gap-2 px-4 md:px-6 shrink-0 bg-surface-0">
           {/* Hamburger — mobile only */}
@@ -503,7 +521,14 @@ function RootLayout() {
                 businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
                 activeBusinessId={currentBusinessId ?? businesses[0].id}
                 onSwitch={handleBusinessSwitch}
-                onCreateNew={() => navigate({ to: "/settings" })}
+                onCreateNew={() => {
+                  if (pathname === "/settings") {
+                    // Already on settings — trigger create via custom event
+                    window.dispatchEvent(new CustomEvent("create-business"));
+                  } else {
+                    navigate({ to: "/settings", search: { action: "create-business" } });
+                  }
+                }}
               />
             )}
 
@@ -604,7 +629,9 @@ const roleStyles: Record<string, string> = {
 
 const roleLabels: Record<string, string> = {
   owner: "Owner",
+  superadmin: "Super Admin",
   admin: "Admin",
+  seller_manager: "Seller Manager",
   member: "Member",
   seller: "Seller",
   accountant: "Accountant",

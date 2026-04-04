@@ -17,6 +17,7 @@ import {
   calcInvoiceTotals,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { logAudit } from "./audit.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -179,7 +180,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     create: memberProcedure
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
-        return ctx.db.transaction(async (tx) => {
+        const doc = await ctx.db.transaction(async (tx) => {
           // Security: validate that partyId belongs to the current business.
           const [partyCheck] = await tx.select({ id: parties.id })
             .from(parties)
@@ -281,7 +282,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             : (input.additionalCharges || "0");
           const roundOff = input.roundOff || "0";
 
-          const [doc] = await tx
+          const [result] = await tx
             .insert(invoices)
             .values({
               businessId: ctx.businessId,
@@ -310,7 +311,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           if (processedItems.length > 0) {
             await tx
               .insert(invoiceItems)
-              .values(processedItems.map((li) => ({ ...li, invoiceId: doc.id })));
+              .values(processedItems.map((li) => ({ ...li, invoiceId: result.id })));
           }
 
           // Stock effects (adjusted for unit conversion)
@@ -354,8 +355,20 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             }
           }
 
-          return doc;
+          return result;
         });
+
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: `${config.documentType}.create`,
+          entityType: config.documentType,
+          entityId: doc.id,
+          metadata: { invoiceNumber: doc.invoiceNumber, type: config.documentType },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+
+        return doc;
       }),
 
     updateStatus: memberProcedure
@@ -385,13 +398,23 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
         }
 
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user!.id,
+          action: `${config.documentType}.updateStatus`,
+          entityType: config.documentType,
+          entityId: input.id,
+          metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: input.status },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+
         return doc;
       }),
 
     delete: adminProcedure
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
-        return ctx.db.transaction(async (tx) => {
+        const deleteResult = await ctx.db.transaction(async (tx) => {
           const [doc] = await tx
             .select()
             .from(invoices)
@@ -409,7 +432,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
 
           // Already soft-deleted — return early
-          if (doc.deletedAt) return { success: true };
+          if (doc.deletedAt) return { success: true, invoiceNumber: doc.invoiceNumber, deleted: false };
 
           // Reverse stock effects on delete (using stored conversionFactor)
           if (config.stockEffect !== "none") {
@@ -460,8 +483,22 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               )
             );
 
-          return { success: true };
+          return { success: true, invoiceNumber: doc.invoiceNumber, deleted: true };
         });
+
+        if (deleteResult.deleted) {
+          logAudit(ctx.db, {
+            businessId: ctx.businessId,
+            userId: ctx.user!.id,
+            action: `${config.documentType}.delete`,
+            entityType: config.documentType,
+            entityId: input.id,
+            metadata: { invoiceNumber: deleteResult.invoiceNumber },
+            ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          });
+        }
+
+        return { success: deleteResult.success };
       }),
   });
 }
