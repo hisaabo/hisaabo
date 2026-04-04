@@ -1,0 +1,96 @@
+---
+title: Invitations
+description: How Hisaabo invitations work — sending, accepting, pending management, and expiry.
+sidebar:
+  order: 2
+---
+
+Hisaabo uses email-based invitations to add new members to your organization. This page covers the full invitation lifecycle, from sending to acceptance.
+
+## Invitation lifecycle
+
+1. An Admin or Owner creates an invitation from **Settings → Team** by entering the invitee's email and selecting a role.
+2. An invitation email is sent automatically. A copyable link is also displayed in the UI as a fallback.
+3. The invitee clicks the link. The invitation token is stored in their browser and they are redirected to the login page.
+4. **New user:** signs up via magic link, completes their profile, and the invitation is auto-accepted. They land directly in the invited organization.
+5. **Existing user:** clicks the link, the invitation is accepted immediately, and the invited organization is auto-selected in their session.
+6. The invitation expires after **7 days** if not accepted.
+
+## Pending invitations
+
+After sending an invitation, it appears in the **Pending Invitations** section at the top of the Team settings page. Each pending invitation shows:
+
+- The invitee's email address
+- The assigned role
+- When the invitation was sent
+
+Admins and Owners can **revoke** any pending invitation at any time. Revoking invalidates the invitation link immediately.
+
+Pending invitations are also accessible via the CLI and MCP server:
+
+- CLI: `hisaabo tenant invitations`
+- MCP: `tenant_pending_invitations` tool
+
+## What happens to new users
+
+When a user signs up through an invitation link, **no auto-created organization** is generated for them. They join directly into the invited organization with the role that was set at invitation time.
+
+Available roles at invitation time:
+
+| Role | Description |
+|------|-------------|
+| `admin` | Full access to all businesses and settings |
+| `seller_manager` | Manage the sales team and see all invoices |
+| `seller` | Create invoices and record payments |
+| `accountant` | Read-only access to reports and ledgers |
+
+After accepting, the invited organization is automatically selected in the user's session.
+
+## Email notifications
+
+Invitation emails are sent automatically using:
+
+- **Production:** Resend (transactional email service)
+- **Development:** console log output
+
+Each invitation email contains:
+
+- The inviter's name
+- The organization name
+- An **Accept** button linking to the app
+- A 7-day expiry notice
+
+If email delivery fails, the copyable link displayed in the Team settings UI is always available as a fallback. Share it with the invitee directly.
+
+## Plan limits
+
+The number of team members (including pending invitations) is limited by your plan:
+
+| Plan | Max Team Members |
+|------|-----------------|
+| Free | 3 (including pending invites) |
+| Pro | 15 |
+| Business | Unlimited |
+| Enterprise | Unlimited |
+
+If you reach the limit, you must upgrade your plan or revoke an existing invitation before sending a new one.
+
+## CLI and MCP reference
+
+### CLI
+
+```bash
+# List pending invitations
+hisaabo tenant invitations
+hisaabo tenant invitations --json
+
+# Revoke a pending invitation
+hisaabo tenant revoke-invitation <invitationId>
+```
+
+### MCP tools
+
+- `tenant_pending_invitations` — list all pending (unaccepted, non-expired) invitations
+- `tenant_revoke_invitation` — revoke a pending invitation by UUID
+
+See [CLI reference](/ai/cli) and [MCP Server reference](/ai/mcp-server) for full details.

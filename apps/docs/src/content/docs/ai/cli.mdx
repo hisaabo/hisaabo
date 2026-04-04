@@ -976,6 +976,23 @@ Update a member's role:
 hisaabo tenant role user_xxxxxxxxxx --role admin
 ```
 
+#### `hisaabo tenant invitations`
+
+List pending invitations for the current tenant.
+
+```bash
+hisaabo tenant invitations
+hisaabo tenant invitations --json
+```
+
+#### `hisaabo tenant revoke-invitation`
+
+Revoke a pending invitation.
+
+```bash
+hisaabo tenant revoke-invitation <invitationId>
+```
+
 ---
 
 ### Document types
@@ -1073,6 +1090,42 @@ hisaabo document convert \
 ```
 
 The `--skip-stock-adjustment` flag is available when converting a challan to an invoice to avoid double-deducting stock that was already deducted when the challan was created.
+
+---
+
+### `hisaabo session`
+
+Manage active sessions across devices.
+
+#### `hisaabo session list`
+
+List all active sessions for the current user.
+
+```bash
+hisaabo session list
+hisaabo session list --expired
+hisaabo session list --json
+```
+
+Shows device/browser, IP address, last activity time, creation date, and marks the current session.
+
+#### `hisaabo session revoke`
+
+Terminate a specific session by ID.
+
+```bash
+hisaabo session revoke <sessionId>
+```
+
+The revoked session is immediately invalidated. The user on that device will be redirected to the login page.
+
+#### `hisaabo session revoke-all`
+
+Sign out from all devices (including the current one).
+
+```bash
+hisaabo session revoke-all
+```
 
 ---
 
