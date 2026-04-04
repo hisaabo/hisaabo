@@ -8,7 +8,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 
@@ -42,7 +42,7 @@ export default function InviteAcceptScreen() {
 
     if (!authToken) {
       // Not authenticated — store token and redirect to login
-      AsyncStorage.setItem("pendingInviteToken", token).then(() => {
+      SecureStore.setItemAsync("pendingInviteToken", token).then(() => {
         router.replace("/(auth)/login");
       });
       return;
@@ -56,7 +56,7 @@ export default function InviteAcceptScreen() {
       { token },
       {
         onSuccess: (data) => {
-          AsyncStorage.removeItem("pendingInviteToken");
+          SecureStore.deleteItemAsync("pendingInviteToken");
           selectTenantMutation.mutate(
             { tenantId: data.tenantId },
             {
@@ -73,7 +73,7 @@ export default function InviteAcceptScreen() {
             // Keep token so they can retry after re-auth with the correct email
             router.replace("/(auth)/login");
           } else if (err.message.includes("already accepted")) {
-            AsyncStorage.removeItem("pendingInviteToken");
+            SecureStore.deleteItemAsync("pendingInviteToken");
             router.replace("/(app)/(home)");
           } else {
             setError(err.message);

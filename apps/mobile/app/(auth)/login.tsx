@@ -16,7 +16,7 @@ import {
   StatusBar,
 } from "react-native";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 
@@ -459,10 +459,10 @@ export default function LoginScreen() {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem("sessionExpired").then((v: string | null) => {
+    SecureStore.getItemAsync("sessionExpired").then((v: string | null) => {
       if (v === "1") {
         setSessionExpired(true);
-        AsyncStorage.removeItem("sessionExpired");
+        SecureStore.deleteItemAsync("sessionExpired");
       }
     });
   }, []);

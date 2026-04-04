@@ -1,5 +1,5 @@
 import { QueryClient, QueryCache } from "@tanstack/react-query";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import { useAuthStore } from "../stores/auth";
 
 export const queryClient = new QueryClient({
@@ -18,7 +18,7 @@ export const queryClient = new QueryClient({
     onError: (error) => {
       const trpcError = error as any;
       if (trpcError?.data?.code === "UNAUTHORIZED") {
-        AsyncStorage.setItem("sessionExpired", "1");
+        SecureStore.setItemAsync("sessionExpired", "1");
         useAuthStore.getState().logout();
       }
     },

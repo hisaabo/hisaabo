@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import { trpc } from "../../src/lib/trpc";
 
 const colors = {
@@ -40,16 +40,16 @@ export default function CompleteProfileScreen() {
 
   const completeMutation = trpc.auth.completeProfile.useMutation({
     onSuccess: async () => {
-      const pendingToken = await AsyncStorage.getItem("pendingInviteToken");
+      const pendingToken = await SecureStore.getItemAsync("pendingInviteToken");
       if (pendingToken) {
         try {
           const result = await acceptInviteMutation.mutateAsync({ token: pendingToken });
           await selectTenantMutation.mutateAsync({ tenantId: result.tenantId });
           utils.auth.me.invalidate();
           utils.tenant.list.invalidate();
-          await AsyncStorage.removeItem("pendingInviteToken");
+          await SecureStore.deleteItemAsync("pendingInviteToken");
         } catch {
-          await AsyncStorage.removeItem("pendingInviteToken");
+          await SecureStore.deleteItemAsync("pendingInviteToken");
         }
       }
       router.replace("/(app)");
