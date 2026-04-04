@@ -752,6 +752,26 @@ hisaabo bank transactions "HDFC Current Account"
 hisaabo bank transactions account_xxxxxxxxxx --from 2026-03-01 --to 2026-03-31 --json
 ```
 
+#### `hisaabo bank gateway-config`
+
+View the gateway configuration (charge rates, settlement account) for a payment gateway account.
+
+```bash
+hisaabo bank gateway-config <accountId>
+hisaabo bank gateway-config <accountId> --json
+```
+
+#### `hisaabo bank update-gateway`
+
+Update gateway charge rates or settlement account.
+
+```bash
+hisaabo bank update-gateway <accountId> --charge-credit-card 2.5 --charge-upi 0
+hisaabo bank update-gateway <accountId> --settlement-account <bankAccountId>
+```
+
+Charge values are percentages by default. Use `flat:20` for a flat ₹20 charge.
+
 ---
 
 ### `hisaabo report`

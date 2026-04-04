@@ -19,36 +19,49 @@ import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
 import { DatePickerField } from "../../../src/components/ui";
+import { calculateGatewayCharge } from "@hisaabo/shared";
+import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
+type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other" | "credit_card" | "debit_card" | "net_banking" | "wallet";
+
+const GATEWAY_PAYMENT_MODES: { value: PaymentMode; label: string }[] = [
+  { value: "credit_card", label: "Credit Card" },
+  { value: "debit_card", label: "Debit Card" },
+  { value: "upi", label: "UPI" },
+  { value: "net_banking", label: "Net Banking" },
+  { value: "wallet", label: "Wallet" },
+];
 
 function accountTypeIcon(type: string): string {
   switch (type) {
-    case "cash":        return "\u{1F4B5}";
-    case "current":     return "\u{1F3E6}";
-    case "savings":     return "\u{1F3E6}";
-    case "upi":         return "\u{1F4F1}";
-    case "credit_card": return "\u{1F4B3}";
-    default:            return "\u{1F4B3}";
+    case "cash":            return "\u{1F4B5}";
+    case "current":         return "\u{1F3E6}";
+    case "savings":         return "\u{1F3E6}";
+    case "upi":             return "\u{1F4F1}";
+    case "credit_card":     return "\u{1F4B3}";
+    case "payment_gateway": return "\u{1F310}";
+    default:                return "\u{1F4B3}";
   }
 }
 
 function accountTypeLabel(type: string): string {
   switch (type) {
-    case "savings":     return "Savings";
-    case "current":     return "Current";
-    case "cash":        return "Cash";
-    case "upi":         return "UPI";
-    case "credit_card": return "Credit Card";
-    default:            return type;
+    case "savings":         return "Savings";
+    case "current":         return "Current";
+    case "cash":            return "Cash";
+    case "upi":             return "UPI";
+    case "credit_card":     return "Credit Card";
+    case "payment_gateway": return "Gateway";
+    default:                return type;
   }
 }
 
 function accountTypeToMode(type: string): PaymentMode {
   if (type === "cash") return "cash";
   if (type === "upi") return "upi";
+  if (type === "payment_gateway") return "credit_card"; // default gateway mode, user can change
   return "bank";
 }
 
@@ -111,6 +124,9 @@ export default function CreatePaymentScreen() {
   const [checkedInvoices, setCheckedInvoices] = useState<Set<string>>(new Set());
   const [amount, setAmount] = useState("");
   const amountManuallyEdited = useRef(false);
+
+  // Gateway payment mode (only used when selected account is a gateway)
+  const [gatewayMode, setGatewayMode] = useState<PaymentMode>("credit_card");
 
   // Party selector modal
   const [partyModalVisible, setPartyModalVisible] = useState(false);
@@ -198,6 +214,25 @@ export default function CreatePaymentScreen() {
   // ── Resolve selected account ─────────────────────────────────────────────
 
   const selectedAccount = bankAccountsData?.find((a) => a.id === selectedAccountId) ?? null;
+  const isGatewayAccount = selectedAccount?.accountType === "payment_gateway";
+
+  // ── Gateway config + charge preview ─────────────────────────────────────
+
+  const { data: gatewayConfig } = trpc.bankAccount.getGatewayConfig.useQuery(
+    { bankAccountId: selectedAccountId! },
+    { enabled: isGatewayAccount && !!selectedAccountId }
+  );
+
+  const gatewayCharge = useMemo(() => {
+    if (!isGatewayAccount || !gatewayConfig?.chargeConfig || !amount) return null;
+    const parsed = parseFloat(amount);
+    if (isNaN(parsed) || parsed <= 0) return null;
+    return calculateGatewayCharge(
+      parsed.toFixed(2),
+      gatewayConfig.chargeConfig as GatewayChargeConfig,
+      gatewayMode,
+    );
+  }, [isGatewayAccount, gatewayConfig, amount, gatewayMode]);
 
   // ── Mutation ─────────────────────────────────────────────────────────────
 
@@ -269,9 +304,11 @@ export default function CreatePaymentScreen() {
       return;
     }
 
-    const mode: PaymentMode = selectedAccount
-      ? accountTypeToMode(selectedAccount.accountType)
-      : "cash";
+    const mode: PaymentMode = isGatewayAccount
+      ? gatewayMode
+      : selectedAccount
+        ? accountTypeToMode(selectedAccount.accountType)
+        : "cash";
 
     const activeAllocations = computedAllocations
       .filter((a) => parseFloat(a.amount) > 0)
@@ -289,7 +326,7 @@ export default function CreatePaymentScreen() {
       paymentDate: paymentDate.toISOString(),
       allocations: activeAllocations.length > 0 ? activeAllocations : undefined,
     });
-  }, [selectedParty, amount, selectedAccount, selectedAccountId, computedAllocations, referenceNumber, notes, paymentDate, createPayment]);
+  }, [selectedParty, amount, selectedAccount, selectedAccountId, isGatewayAccount, gatewayMode, computedAllocations, referenceNumber, notes, paymentDate, createPayment]);
 
   const parties = partiesData?.data ?? [];
   const bankAccounts = bankAccountsData ?? [];
@@ -375,6 +412,48 @@ export default function CreatePaymentScreen() {
             <Text style={styles.partyHint}>{partyAccountHint}</Text>
           )}
         </View>
+
+        {/* Gateway Payment Mode Selector */}
+        {isGatewayAccount && (
+          <View style={styles.section}>
+            <Text style={styles.label}>Payment Mode</Text>
+            <View style={styles.gatewayModeRow}>
+              {GATEWAY_PAYMENT_MODES.map((m) => {
+                const isActive = gatewayMode === m.value;
+                return (
+                  <TouchableOpacity
+                    key={m.value}
+                    style={[styles.gatewayModeChip, isActive && styles.gatewayModeChipActive]}
+                    onPress={() => setGatewayMode(m.value)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.gatewayModeText, isActive && styles.gatewayModeTextActive]}>
+                      {m.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Charge Preview */}
+            {gatewayCharge && parseFloat(gatewayCharge.chargeAmount) > 0 && (
+              <View style={styles.chargePreview}>
+                <View style={styles.chargeRow}>
+                  <Text style={styles.chargeLabel}>Gateway charge</Text>
+                  <Text style={styles.chargeValue}>
+                    {formatCurrency(gatewayCharge.chargeAmount)}
+                  </Text>
+                </View>
+                <View style={styles.chargeRow}>
+                  <Text style={styles.chargeLabel}>Net settlement</Text>
+                  <Text style={styles.chargeNet}>
+                    {formatCurrency(gatewayCharge.netSettlement)}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Unpaid Invoices with chronological allocation */}
         {selectedParty && (
@@ -772,6 +851,58 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     marginTop: 6,
     paddingLeft: 2,
+  },
+
+  // ── Gateway payment mode ────────────────────────────────────────────────
+
+  gatewayModeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  gatewayModeChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  gatewayModeChipActive: {
+    borderColor: "#ec4899",
+    backgroundColor: "rgba(236,72,153,0.12)",
+  },
+  gatewayModeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  gatewayModeTextActive: {
+    color: "#ec4899",
+  },
+  chargePreview: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 12,
+    marginTop: 10,
+    gap: 6,
+  },
+  chargeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  chargeLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  chargeValue: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.warning,
+  },
+  chargeNet: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.success,
   },
 
   // ── Invoice rows ─────────────────────────────────────────────────────────

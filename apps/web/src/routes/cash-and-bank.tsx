@@ -15,6 +15,7 @@ import { SearchInput } from "@/components/ui/SearchInput";
 import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "@/hooks/useToast";
 import { getDatePreset } from "@/hooks/useDateRange";
+import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 export const Route = createFileRoute("/cash-and-bank")({
   component: CashAndBankPage,
@@ -318,6 +319,11 @@ function CashAndBankPage() {
                             <p className="text-sm font-medium text-text-primary truncate">
                               {account.accountName}
                             </p>
+                            {account.accountType === "payment_gateway" && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-600/[0.1] text-purple-700 dark:text-purple-400 shrink-0">
+                                Gateway
+                              </span>
+                            )}
                             {account.isDefault && (
                               <svg className="w-3 h-3 text-amber-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
                                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -863,6 +869,35 @@ function EditAccountSlideOver({
   const [isDefault, setIsDefault] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
+  // Gateway-specific state
+  const isGateway = accountType === "payment_gateway";
+  const [settlementAccountId, setSettlementAccountId] = useState("");
+  const [chargeRates, setChargeRates] = useState<Record<string, string>>({
+    credit_card: "",
+    debit_card: "",
+    upi: "",
+    net_banking: "",
+    wallet: "",
+    default: "",
+  });
+  const [expenseCategory, setExpenseCategory] = useState("Payment Gateway Charges");
+  const [autoSettle, setAutoSettle] = useState(true);
+  const [gatewayInitialized, setGatewayInitialized] = useState(false);
+
+  // Fetch gateway config if this is a gateway account
+  const { data: gatewayConfig } = trpc.bankAccount.getGatewayConfig.useQuery(
+    { bankAccountId: accountId },
+    { enabled: isGateway && !!account, staleTime: 0 }
+  );
+
+  // Fetch non-gateway accounts for settlement dropdown
+  const { data: allAccounts } = trpc.bankAccount.list.useQuery(undefined, {
+    enabled: isGateway,
+  });
+  const nonGatewayAccounts = allAccounts?.filter(
+    (a) => a.accountType !== "payment_gateway"
+  ) ?? [];
+
   // Populate form when account data loads
   useEffect(() => {
     if (account && !initialized) {
@@ -877,30 +912,78 @@ function EditAccountSlideOver({
     }
   }, [account, initialized]);
 
+  // Populate gateway config when it loads
+  useEffect(() => {
+    if (gatewayConfig && !gatewayInitialized) {
+      setSettlementAccountId(gatewayConfig.settlementAccountId);
+      setExpenseCategory(gatewayConfig.expenseCategory);
+      setAutoSettle(gatewayConfig.autoSettle);
+      const config = gatewayConfig.chargeConfig as GatewayChargeConfig | null;
+      if (config) {
+        const rates: Record<string, string> = {};
+        for (const mode of GATEWAY_CHARGE_MODES) {
+          rates[mode.key] = config[mode.key]?.value ?? "";
+        }
+        setChargeRates(rates);
+      }
+      setGatewayInitialized(true);
+    }
+  }, [gatewayConfig, gatewayInitialized]);
+
   const updateMutation = trpc.bankAccount.update.useMutation({
-    onSuccess: () => {
+    onError: (err) => toast.error(err.message),
+  });
+
+  const upsertGatewayMutation = trpc.bankAccount.upsertGatewayConfig.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  async function handleSave() {
+    if (!accountName.trim()) return;
+    if (isGateway && !settlementAccountId) {
+      toast.error("Please select a settlement bank account");
+      return;
+    }
+
+    try {
+      await updateMutation.mutateAsync({
+        id: accountId,
+        data: {
+          accountName: accountName.trim(),
+          accountType: accountType as any,
+          accountNumber: isGateway ? undefined : (accountNumber || undefined),
+          ifsc: isGateway ? undefined : (ifsc || undefined),
+          bankName: isGateway ? undefined : (bankName || undefined),
+          openingBalance: openingBalance || "0",
+          isDefault,
+        },
+      });
+
+      if (isGateway) {
+        const chargeConfig: GatewayChargeConfig = {};
+        for (const mode of GATEWAY_CHARGE_MODES) {
+          const val = chargeRates[mode.key];
+          if (val && parseFloat(val) > 0) {
+            chargeConfig[mode.key] = { type: "percentage", value: parseFloat(val).toString() };
+          }
+        }
+
+        await upsertGatewayMutation.mutateAsync({
+          bankAccountId: accountId,
+          settlementAccountId,
+          chargeConfig,
+          expenseCategory: expenseCategory || "Payment Gateway Charges",
+          autoSettle,
+        });
+      }
+
       toast.success("Account updated");
       onClose();
       utils.bankAccount.list.invalidate();
       utils.bankAccount.summary.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  function handleSave() {
-    if (!accountName.trim()) return;
-    updateMutation.mutate({
-      id: accountId,
-      data: {
-        accountName: accountName.trim(),
-        accountType: accountType as "savings" | "current" | "cash" | "upi" | "credit_card",
-        accountNumber: accountNumber || undefined,
-        ifsc: ifsc || undefined,
-        bankName: bankName || undefined,
-        openingBalance: openingBalance || "0",
-        isDefault,
-      },
-    });
+    } catch {
+      // Error toast already shown by mutation onError
+    }
   }
 
   const showAccountNumber = accountType === "savings" || accountType === "current" || accountType === "credit_card";
@@ -911,6 +994,8 @@ function EditAccountSlideOver({
 
   const openingBalanceChanged =
     account && initialized && openingBalance !== account.openingBalance;
+
+  const isPending = updateMutation.isPending || upsertGatewayMutation.isPending;
 
   return (
     <SlideOver
@@ -935,9 +1020,9 @@ function EditAccountSlideOver({
               type="button"
               className="btn-primary"
               onClick={handleSave}
-              disabled={updateMutation.isPending || !accountName.trim() || isLoading}
+              disabled={isPending || !accountName.trim() || isLoading}
             >
-              {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              {isPending ? "Saving..." : "Save Changes"}
             </button>
           </div>
         </div>
@@ -975,7 +1060,7 @@ function EditAccountSlideOver({
             placeholder="e.g. HDFC Current"
           />
 
-          {showAccountNumber && showIfsc && (
+          {!isGateway && showAccountNumber && showIfsc && (
             <div className="grid grid-cols-2 gap-4">
               <InputField
                 label={accountNumberLabel}
@@ -992,7 +1077,7 @@ function EditAccountSlideOver({
             </div>
           )}
 
-          {showAccountNumber && !showIfsc && (
+          {!isGateway && showAccountNumber && !showIfsc && (
             <InputField
               label={accountNumberLabel}
               value={accountNumber}
@@ -1001,7 +1086,7 @@ function EditAccountSlideOver({
             />
           )}
 
-          {showUpiId && (
+          {!isGateway && showUpiId && (
             <InputField
               label="UPI ID"
               value={accountNumber}
@@ -1010,13 +1095,85 @@ function EditAccountSlideOver({
             />
           )}
 
-          {showBankName && (
+          {!isGateway && showBankName && (
             <InputField
               label="Bank Name"
               value={bankName}
               onChange={(e) => setBankName(e.target.value)}
               placeholder="e.g. HDFC Bank"
             />
+          )}
+
+          {/* Gateway-specific fields */}
+          {isGateway && (
+            <>
+              <div>
+                <p className="label">Settlement Bank Account</p>
+                {nonGatewayAccounts.length === 0 ? (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Create a bank account first to use as a settlement account.
+                  </p>
+                ) : (
+                  <Listbox
+                    value={settlementAccountId}
+                    onChange={setSettlementAccountId}
+                    options={nonGatewayAccounts.map((a) => ({
+                      value: a.id,
+                      label: `${a.accountName} (${a.accountType})`,
+                    }))}
+                    placeholder="Select settlement account"
+                    className="w-full"
+                  />
+                )}
+              </div>
+
+              <div>
+                <p className="label mb-2">Charge Rates (%)</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {GATEWAY_CHARGE_MODES.map((mode) => (
+                    <div key={mode.key}>
+                      <label className="text-xs text-text-secondary mb-1 block">
+                        {mode.label}
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={chargeRates[mode.key] ?? ""}
+                          onChange={(e) =>
+                            setChargeRates((prev) => ({ ...prev, [mode.key]: e.target.value }))
+                          }
+                          className="input py-1.5 text-sm pr-7 w-full"
+                          placeholder="0"
+                        />
+                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-tertiary pointer-events-none">
+                          %
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <InputField
+                label="Expense Category"
+                value={expenseCategory}
+                onChange={(e) => setExpenseCategory(e.target.value)}
+                placeholder="Payment Gateway Charges"
+              />
+
+              <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSettle}
+                  onChange={(e) => setAutoSettle(e.target.checked)}
+                  className="rounded"
+                />
+                Auto-settle to bank
+              </label>
+            </>
           )}
 
           <div>
@@ -1076,7 +1233,18 @@ const ACCOUNT_TYPE_OPTIONS = [
   { value: "cash", label: "Cash" },
   { value: "upi", label: "UPI" },
   { value: "credit_card", label: "Credit Card" },
+  { value: "payment_gateway", label: "Payment Gateway" },
 ];
+
+// Gateway charge mode labels for the config form
+const GATEWAY_CHARGE_MODES = [
+  { key: "credit_card", label: "Credit Card" },
+  { key: "debit_card", label: "Debit Card" },
+  { key: "upi", label: "UPI" },
+  { key: "net_banking", label: "Net Banking" },
+  { key: "wallet", label: "Wallet" },
+  { key: "default", label: "Default" },
+] as const;
 
 function AddAccountModal({ onClose }: { onClose: () => void }) {
   const [accountName, setAccountName] = useState("");
@@ -1087,29 +1255,83 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
   const [openingBalance, setOpeningBalance] = useState("");
   const [isDefault, setIsDefault] = useState(false);
 
+  // Gateway-specific state
+  const [settlementAccountId, setSettlementAccountId] = useState("");
+  const [chargeRates, setChargeRates] = useState<Record<string, string>>({
+    credit_card: "",
+    debit_card: "",
+    upi: "",
+    net_banking: "",
+    wallet: "",
+    default: "2",
+  });
+  const [expenseCategory, setExpenseCategory] = useState("Payment Gateway Charges");
+  const [autoSettle, setAutoSettle] = useState(true);
+
+  const isGateway = accountType === "payment_gateway";
+
   const utils = trpc.useUtils();
 
+  // Fetch accounts for settlement dropdown (only for gateway type)
+  const { data: allAccounts } = trpc.bankAccount.list.useQuery(undefined, {
+    enabled: isGateway,
+  });
+  const nonGatewayAccounts = allAccounts?.filter(
+    (a) => a.accountType !== "payment_gateway"
+  ) ?? [];
+
   const createAccountMutation = trpc.bankAccount.create.useMutation({
-    onSuccess: () => {
+    onError: (err) => toast.error(err.message),
+  });
+
+  const upsertGatewayMutation = trpc.bankAccount.upsertGatewayConfig.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  async function handleCreate() {
+    if (!accountName.trim()) return;
+    if (isGateway && !settlementAccountId) {
+      toast.error("Please select a settlement bank account");
+      return;
+    }
+
+    try {
+      const account = await createAccountMutation.mutateAsync({
+        accountName: accountName.trim(),
+        accountType: accountType as any,
+        accountNumber: isGateway ? undefined : (accountNumber || undefined),
+        ifsc: isGateway ? undefined : (ifsc || undefined),
+        bankName: isGateway ? undefined : (bankName || undefined),
+        openingBalance: openingBalance || "0",
+        isDefault,
+      });
+
+      if (isGateway) {
+        // Build chargeConfig from rates
+        const chargeConfig: GatewayChargeConfig = {};
+        for (const mode of GATEWAY_CHARGE_MODES) {
+          const val = chargeRates[mode.key];
+          if (val && parseFloat(val) > 0) {
+            chargeConfig[mode.key] = { type: "percentage", value: parseFloat(val).toString() };
+          }
+        }
+
+        await upsertGatewayMutation.mutateAsync({
+          bankAccountId: account.id,
+          settlementAccountId,
+          chargeConfig,
+          expenseCategory: expenseCategory || "Payment Gateway Charges",
+          autoSettle,
+        });
+      }
+
       toast.success("Account created");
       onClose();
       utils.bankAccount.list.invalidate();
       utils.bankAccount.summary.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  function handleCreate() {
-    if (!accountName.trim()) return;
-    createAccountMutation.mutate({
-      accountName: accountName.trim(),
-      accountType: accountType as "savings" | "current" | "cash" | "upi" | "credit_card",
-      accountNumber: accountNumber || undefined,
-      ifsc: ifsc || undefined,
-      bankName: bankName || undefined,
-      openingBalance: openingBalance || "0",
-      isDefault,
-    });
+    } catch {
+      // Error toast already shown by mutation onError
+    }
   }
 
   const showAccountNumber = accountType === "savings" || accountType === "current" || accountType === "credit_card";
@@ -1121,10 +1343,13 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
     accountType === "cash" ? "e.g. Cash in Hand" :
     accountType === "upi" ? "e.g. PhonePe" :
     accountType === "credit_card" ? "e.g. HDFC Credit Card" :
+    accountType === "payment_gateway" ? "e.g. Razorpay" :
     "e.g. HDFC Current";
 
   const accountNumberLabel = accountType === "credit_card" ? "Last 4 Digits" : "Account Number";
   const accountNumberPlaceholder = accountType === "credit_card" ? "1234" : "Optional";
+
+  const isPending = createAccountMutation.isPending || upsertGatewayMutation.isPending;
 
   return (
     <Modal open onClose={onClose} title="Add Bank Account">
@@ -1146,7 +1371,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
           onChange={(e) => setAccountName(e.target.value)}
           placeholder={accountNamePlaceholder}
         />
-        {showAccountNumber && showIfsc && (
+        {!isGateway && showAccountNumber && showIfsc && (
           <div className="grid grid-cols-2 gap-4">
             <InputField
               label={accountNumberLabel}
@@ -1162,7 +1387,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
             />
           </div>
         )}
-        {showAccountNumber && !showIfsc && (
+        {!isGateway && showAccountNumber && !showIfsc && (
           <InputField
             label={accountNumberLabel}
             value={accountNumber}
@@ -1170,7 +1395,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
             placeholder={accountNumberPlaceholder}
           />
         )}
-        {showUpiId && (
+        {!isGateway && showUpiId && (
           <InputField
             label="UPI ID"
             value={accountNumber}
@@ -1178,7 +1403,7 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
             placeholder="e.g. business@upi"
           />
         )}
-        {showBankName && (
+        {!isGateway && showBankName && (
           <InputField
             label="Bank Name"
             value={bankName}
@@ -1186,6 +1411,79 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
             placeholder="e.g. HDFC Bank"
           />
         )}
+
+        {/* Gateway-specific fields */}
+        {isGateway && (
+          <>
+            <div>
+              <p className="label">Settlement Bank Account</p>
+              {nonGatewayAccounts.length === 0 ? (
+                <p className="text-xs text-amber-600 mt-1">
+                  Create a bank account first to use as a settlement account.
+                </p>
+              ) : (
+                <Listbox
+                  value={settlementAccountId}
+                  onChange={setSettlementAccountId}
+                  options={nonGatewayAccounts.map((a) => ({
+                    value: a.id,
+                    label: `${a.accountName} (${a.accountType})`,
+                  }))}
+                  placeholder="Select settlement account"
+                  className="w-full"
+                />
+              )}
+            </div>
+
+            <div>
+              <p className="label mb-2">Charge Rates (%)</p>
+              <div className="grid grid-cols-2 gap-3">
+                {GATEWAY_CHARGE_MODES.map((mode) => (
+                  <div key={mode.key}>
+                    <label className="text-xs text-text-secondary mb-1 block">
+                      {mode.label}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={chargeRates[mode.key] ?? ""}
+                        onChange={(e) =>
+                          setChargeRates((prev) => ({ ...prev, [mode.key]: e.target.value }))
+                        }
+                        className="input py-1.5 text-sm pr-7 w-full"
+                        placeholder="0"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-tertiary pointer-events-none">
+                        %
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <InputField
+              label="Expense Category"
+              value={expenseCategory}
+              onChange={(e) => setExpenseCategory(e.target.value)}
+              placeholder="Payment Gateway Charges"
+            />
+
+            <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoSettle}
+                onChange={(e) => setAutoSettle(e.target.checked)}
+                className="rounded"
+              />
+              Auto-settle to bank
+            </label>
+          </>
+        )}
+
         <InputField
           label="Opening Balance (₹)"
           type="number"
@@ -1211,9 +1509,9 @@ function AddAccountModal({ onClose }: { onClose: () => void }) {
           <button
             className="btn-primary"
             onClick={handleCreate}
-            disabled={createAccountMutation.isPending || !accountName.trim()}
+            disabled={isPending || !accountName.trim()}
           >
-            {createAccountMutation.isPending ? "Creating..." : "Create Account"}
+            {isPending ? "Creating..." : "Create Account"}
           </button>
         </div>
       </div>

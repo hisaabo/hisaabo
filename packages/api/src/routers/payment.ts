@@ -7,6 +7,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -329,6 +330,27 @@ export const paymentRouter = router({
         }
       }
 
+      // ── Gateway charge + settlement ─────────────────────────────────
+      if (input.bankAccountId) {
+        const [gwAccount] = await tx
+          .select({ accountType: bankAccounts.accountType })
+          .from(bankAccounts)
+          .where(eq(bankAccounts.id, input.bankAccountId))
+          .limit(1);
+
+        if (gwAccount?.accountType === "payment_gateway") {
+          await processGatewayPayment(tx, {
+            businessId: ctx.businessId,
+            paymentId: payment.id,
+            paymentNumber: payment.paymentNumber ?? payment.id,
+            bankAccountId: input.bankAccountId,
+            amount: input.amount,
+            mode: input.mode,
+            paymentDate: payment.paymentDate,
+          });
+        }
+      }
+
       return payment;
     });
 
@@ -470,7 +492,13 @@ export const paymentRouter = router({
         `);
       }
 
-      // 3. Reverse old bank transaction
+      // 3a. Reverse old gateway operations (before reversing the main bank txn)
+      await reverseGatewayPayment(tx, {
+        businessId: ctx.businessId,
+        paymentId: existing.id,
+      });
+
+      // 3b. Reverse old bank transaction
       if (existing.bankAccountId) {
         const [bankTxn] = await tx.select({ type: bankTransactions.type, amount: bankTransactions.amount })
           .from(bankTransactions)
@@ -608,6 +636,27 @@ export const paymentRouter = router({
         }
       }
 
+      // 7. Process new gateway charge + settlement if the (new) account is a gateway
+      if (newBankAccountId) {
+        const [gwAccount] = await tx
+          .select({ accountType: bankAccounts.accountType })
+          .from(bankAccounts)
+          .where(eq(bankAccounts.id, newBankAccountId))
+          .limit(1);
+
+        if (gwAccount?.accountType === "payment_gateway") {
+          await processGatewayPayment(tx, {
+            businessId: ctx.businessId,
+            paymentId: existing.id,
+            paymentNumber: existing.paymentNumber ?? existing.id,
+            bankAccountId: newBankAccountId,
+            amount: newAmount,
+            mode: newMode,
+            paymentDate: newDate,
+          });
+        }
+      }
+
       return result;
     });
 
@@ -649,6 +698,12 @@ export const paymentRouter = router({
             })
             .where(eq(invoices.id, payment.invoiceId));
         }
+
+        // Reverse gateway operations before the main bank txn reversal
+        await reverseGatewayPayment(tx, {
+          businessId: ctx.businessId,
+          paymentId: payment.id,
+        });
 
         // Reverse the bank transaction if applicable
         if (payment.bankAccountId) {

@@ -19,7 +19,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
 
-type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card";
+type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card" | "payment_gateway";
 
 const ACCOUNT_TYPES: { value: AccountType; label: string; icon: string }[] = [
   { value: "savings", label: "Savings", icon: "card-outline" },
@@ -27,13 +27,14 @@ const ACCOUNT_TYPES: { value: AccountType; label: string; icon: string }[] = [
   { value: "cash", label: "Cash", icon: "cash-outline" },
   { value: "upi", label: "UPI", icon: "phone-portrait-outline" },
   { value: "credit_card", label: "Credit Card", icon: "wallet-outline" },
+  { value: "payment_gateway", label: "Gateway", icon: "globe-outline" },
 ];
 
 // Normalise the value coming from the DB (which may use "credit") to the
 // create/update schema value "credit_card".
 function normaliseType(raw: string): AccountType {
   if (raw === "credit") return "credit_card";
-  const valid: AccountType[] = ["savings", "current", "cash", "upi", "credit_card"];
+  const valid: AccountType[] = ["savings", "current", "cash", "upi", "credit_card", "payment_gateway"];
   return valid.includes(raw as AccountType) ? (raw as AccountType) : "savings";
 }
 
