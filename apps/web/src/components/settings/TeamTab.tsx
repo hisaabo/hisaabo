@@ -56,7 +56,7 @@ function TeamSection() {
 
   return (
     <>
-      <div className="card overflow-hidden">
+      <div className="card overflow-visible">
         <div className="px-6 py-4 flex items-center justify-between border-b border-border-light">
           <div>
             <h3 className="text-sm font-semibold text-text-primary">Team Members</h3>

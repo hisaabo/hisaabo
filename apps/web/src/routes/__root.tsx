@@ -130,45 +130,120 @@ const navSections = [
 // ── NoOrgScreen — shown when user has zero memberships ─────────
 
 function NoOrgScreen() {
+  const navigate = useNavigate();
   const utils = trpc.useUtils();
-  const createOrgMutation = trpc.tenant.create.useMutation({
-    onSuccess: async () => {
+  const { data: pendingInvites, isLoading: invitesLoading } = trpc.tenant.myInvitations.useQuery();
+
+  const acceptByIdMutation = trpc.tenant.acceptById.useMutation({
+    onSuccess: async (data) => {
       await utils.auth.me.refetch();
-      utils.tenant.list.invalidate();
-      utils.business.list.invalidate();
+      await utils.tenant.list.refetch();
+      await utils.business.list.refetch();
+      navigate({ to: "/", search: { joined: data.tenantName } });
     },
   });
 
+  const createOrgMutation = trpc.tenant.create.useMutation({
+    onSuccess: async () => {
+      await utils.auth.me.refetch();
+      await utils.tenant.list.refetch();
+      await utils.business.list.refetch();
+    },
+  });
+
+  const isActing = acceptByIdMutation.isPending || createOrgMutation.isPending;
+  const error = acceptByIdMutation.error?.message ?? createOrgMutation.error?.message;
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
-      <div className="w-full max-w-[380px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light text-center">
+      <div className="w-full max-w-[400px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light">
         <div className="flex items-center justify-center gap-2.5 mb-6">
           <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
             <span className="text-white font-bold text-base">H</span>
           </div>
           <span className="font-semibold text-lg tracking-tight text-text-primary">Hisaabo</span>
         </div>
-        <h2 className="text-lg font-semibold text-text-primary mb-1">No organization found</h2>
-        <p className="text-sm text-text-tertiary mb-6">
-          You're not part of any organization yet. Create one to get started.
-        </p>
 
-        {createOrgMutation.isError && (
-          <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
-            {createOrgMutation.error?.message ?? "Something went wrong"}
+        {invitesLoading ? (
+          <div className="text-center py-4">
+            <div className="w-5 h-5 mx-auto border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
           </div>
-        )}
+        ) : pendingInvites && pendingInvites.length > 0 ? (
+          <>
+            <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">
+              You've been invited
+            </h2>
+            <p className="text-sm text-text-tertiary mb-5 text-center">
+              Join an organization or create your own.
+            </p>
 
-        <button
-          onClick={() => createOrgMutation.mutate()}
-          disabled={createOrgMutation.isPending}
-          className="btn-primary w-full py-2.5 mb-3"
-        >
-          {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
-        </button>
-        <p className="text-xs text-text-tertiary">
-          Or ask your team admin to send you an invitation.
-        </p>
+            {error && (
+              <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-2 mb-4">
+              {pendingInvites.map((inv) => (
+                <button
+                  key={inv.id}
+                  onClick={() => acceptByIdMutation.mutate({ invitationId: inv.id })}
+                  disabled={isActing}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 border-brand-200 bg-brand-50/50 hover:border-brand-400 hover:bg-brand-50 transition-colors text-left group dark:border-brand-600/30 dark:bg-brand-600/10 dark:hover:border-brand-500"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-brand-600 flex items-center justify-center text-white font-semibold text-lg shrink-0">
+                    {inv.tenantName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-text-primary group-hover:text-brand-700 dark:group-hover:text-brand-400 truncate">
+                      Join {inv.tenantName}
+                    </p>
+                    <p className="text-xs text-text-tertiary">
+                      as {formatRole(inv.role)}
+                    </p>
+                  </div>
+                  {acceptByIdMutation.isPending && acceptByIdMutation.variables?.invitationId === inv.id && (
+                    <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
+              <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
+            </div>
+
+            <button
+              onClick={() => createOrgMutation.mutate()}
+              disabled={isActing}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
+            >
+              {createOrgMutation.isPending ? "Creating..." : "Create my own organization"}
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">No organization found</h2>
+            <p className="text-sm text-text-tertiary mb-6 text-center">
+              Create an organization to get started, or ask your team admin to send you an invitation.
+            </p>
+
+            {error && (
+              <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={() => createOrgMutation.mutate()}
+              disabled={createOrgMutation.isPending}
+              className="btn-primary w-full py-2.5"
+            >
+              {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

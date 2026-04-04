@@ -99,6 +99,76 @@ export const tenantRouter = router({
     return memberships;
   }),
 
+  // Pending invitations for the authenticated user's email.
+  // Used by the NoOrgScreen to show "You've been invited to [Org]".
+  myInvitations: protectedProcedure.query(async ({ ctx }) => {
+    const pending = await controlDb.select({
+      id: invitations.id,
+      tenantName: tenants.name,
+      role: invitations.role,
+    })
+      .from(invitations)
+      .innerJoin(tenants, eq(tenants.id, invitations.tenantId))
+      .where(and(
+        eq(invitations.email, ctx.user.email.toLowerCase()),
+        isNull(invitations.acceptedAt),
+        gt(invitations.expiresAt, new Date()),
+      ));
+    return pending;
+  }),
+
+  // Accept invitation by ID (for users who see their pending invites in-app,
+  // without having clicked the email link). Same logic as acceptInvitation
+  // but looks up by ID + email match instead of raw token.
+  acceptById: protectedProcedure
+    .input(z.object({ invitationId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const [invitation] = await controlDb.select()
+        .from(invitations)
+        .where(and(
+          eq(invitations.id, input.invitationId),
+          eq(invitations.email, ctx.user.email.toLowerCase()),
+          isNull(invitations.acceptedAt),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (!invitation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found or expired" });
+      }
+
+      // Check if already a member
+      const [existingMember] = await controlDb.select({ id: tenantMembers.id })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, invitation.tenantId),
+          eq(tenantMembers.userId, ctx.user.id),
+        ))
+        .limit(1);
+
+      if (existingMember) {
+        await controlDb.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invitation.id));
+        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+        return { tenantId: invitation.tenantId, tenantName };
+      }
+
+      await controlDb.transaction(async (tx) => {
+        await tx.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
+        await tx.update(invitations)
+          .set({ acceptedAt: new Date() })
+          .where(eq(invitations.id, invitation.id));
+      });
+
+      const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+      return { tenantId: invitation.tenantId, tenantName };
+    }),
+
   // Select/switch tenant — updates session's tenantId
   select: protectedProcedure
     .input(z.object({ tenantId: z.string().uuid() }))
