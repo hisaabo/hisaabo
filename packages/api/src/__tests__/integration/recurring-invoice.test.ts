@@ -416,6 +416,7 @@ describe("Recurring invoice full lifecycle", () => {
     // Step 2: Pause
     await caller.recurringInvoice.pause({ id: template.id });
     [tpl] = await db.select({
+      totalRuns: recurringInvoiceTemplates.totalRuns,
       status: recurringInvoiceTemplates.status,
     }).from(recurringInvoiceTemplates)
       .where(eq(recurringInvoiceTemplates.id, template.id));
@@ -424,6 +425,7 @@ describe("Recurring invoice full lifecycle", () => {
     // Step 3: Resume
     await caller.recurringInvoice.resume({ id: template.id });
     [tpl] = await db.select({
+      totalRuns: recurringInvoiceTemplates.totalRuns,
       status: recurringInvoiceTemplates.status,
     }).from(recurringInvoiceTemplates)
       .where(eq(recurringInvoiceTemplates.id, template.id));

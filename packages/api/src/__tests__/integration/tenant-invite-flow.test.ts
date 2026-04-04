@@ -680,6 +680,68 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
     expect(memberships.length).toBe(0);
   });
 
+  it("REGRESSION: invited user can complete profile → accept invite → tenant.list returns membership", async () => {
+    // This test covers the exact flow that was broken: an invited user verifies
+    // via magic link, has 0 memberships (tenantId=null on session), but must
+    // still be able to complete profile and accept the invitation. The frontend
+    // root layout was blocking with "No organization found" before this fix.
+    const email = `invited.fullflow.${randomUUID().slice(0, 8)}@example.in`;
+    const inviteRawToken = randomUUID();
+
+    // Step 1: Admin creates invitation for this email
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email,
+      role: "seller",
+      invitedBy: admin.id,
+      rawToken: inviteRawToken,
+    });
+
+    // Step 2: User clicks magic link and verifies
+    const magicRawToken = "magic-fullflow-" + Date.now();
+    const magicHash = createHash("sha256").update(magicRawToken).digest("hex");
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: magicHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    const unauthenticated = _callerFactory(createTestContext({}));
+    const verifyResult = await unauthenticated.auth.verifyMagicLink({ token: magicRawToken });
+
+    expect(verifyResult.isNewUser).toBe(true);
+    expect(verifyResult.needsProfile).toBe(true);
+
+    // User has 0 memberships — this is the state that broke the frontend
+    const membershipsBeforeAccept = await db.select()
+      .from(tenantMembers)
+      .where(eq(tenantMembers.userId, verifyResult.user.id));
+    expect(membershipsBeforeAccept.length).toBe(0);
+
+    // tenant.list returns empty — this is what triggered "No organization found"
+    const sessionId = verifyResult.sessionToken;
+    const authedCaller = callerNoTenant(sessionId, {
+      id: verifyResult.user.id,
+      email,
+      name: null,
+    });
+    const tenantsBeforeAccept = await authedCaller.tenant.list();
+    expect(tenantsBeforeAccept.length).toBe(0);
+
+    // Step 3: User completes profile
+    await authedCaller.auth.completeProfile({ name: "Invited User" });
+
+    // Step 4: User accepts the invitation
+    const acceptResult = await authedCaller.tenant.acceptInvitation({ token: inviteRawToken });
+    expect(acceptResult.tenantId).toBe(tenant1.id);
+    expect(acceptResult.tenantName).toBe("Sharma Traders");
+
+    // Step 5: tenant.list NOW returns the invited tenant
+    const tenantsAfterAccept = await authedCaller.tenant.list();
+    expect(tenantsAfterAccept.length).toBe(1);
+    expect(tenantsAfterAccept[0]!.tenantId).toBe(tenant1.id);
+  });
+
   it("new user WITHOUT pending invitation still gets auto-created tenant", async () => {
     const email = `noinvite.autotenant.${randomUUID().slice(0, 8)}@example.in`;
 

@@ -330,6 +330,12 @@ function RootLayout() {
 
   // Authenticated but no tenant selected
   if (!session.tenantId) {
+    // Auth flow pages (complete-profile, invite) handle tenant resolution
+    // themselves — let them render even with zero memberships.
+    const authFlowPaths = ["/auth/complete-profile", "/invite"];
+    const isAuthFlow = authFlowPaths.some((p) => pathname.startsWith(p));
+    if (isAuthFlow) return <Outlet />;
+
     if (!tenantList) return loadingSpinner;
 
     if (tenantList.length === 0) {

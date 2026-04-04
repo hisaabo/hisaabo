@@ -4,7 +4,7 @@ import { controlDb, tenants, tenantMembers, invitations, users, sessions } from 
 import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
-import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
+import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { invalidateSessionCache } from "../context.js";
 import { emailService } from "../lib/email.js";
 import { enforceTeamMemberLimit } from "../lib/plan-limits.js";
@@ -202,6 +202,40 @@ export const tenantRouter = router({
     }),
 
   // Accept an invitation
+  // Preview invitation details without accepting — used by the onboarding
+  // flow to show "Join [Org] or create your own?" before committing.
+  // Public because new users calling this may not have a session yet.
+  // Security: token is nanoid(32) (~192 bits entropy) — brute-force infeasible.
+  // Response deliberately omits email to avoid leaking PII via token possession.
+  peekInvitation: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .query(async ({ input }) => {
+      const tokenHash = hashInvitationToken(input.token);
+      const [invitation] = await controlDb.select({
+        role: invitations.role,
+        tenantId: invitations.tenantId,
+        acceptedAt: invitations.acceptedAt,
+      })
+        .from(invitations)
+        .where(and(
+          eq(invitations.token, tokenHash),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (!invitation || invitation.acceptedAt) return null;
+
+      const [tenant] = await controlDb.select({ name: tenants.name })
+        .from(tenants)
+        .where(eq(tenants.id, invitation.tenantId))
+        .limit(1);
+
+      return {
+        tenantName: tenant?.name ?? "Organization",
+        role: invitation.role,
+      };
+    }),
+
   acceptInvitation: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
