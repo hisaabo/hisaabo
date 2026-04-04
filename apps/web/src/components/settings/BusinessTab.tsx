@@ -203,9 +203,12 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
           <PincodeInput
             value={pincode}
             onChange={setPincode}
+            currentCity={city}
+            currentState={stateName}
             onCityStateResolved={(resolvedCity, resolvedState) => {
-              setCity(resolvedCity);
-              setStateName(resolvedState);
+              // Only autofill if user hasn't already typed values
+              if (!city.trim()) setCity(resolvedCity);
+              if (!stateName.trim()) setStateName(resolvedState);
             }}
           />
           <div>
@@ -213,13 +216,9 @@ export function BusinessForm({ existing, onDone }: { existing?: any; onDone: (na
               label="City"
               value={city}
               onChange={(e) => setCity(e.target.value)}
-              disabled={!pincode || pincode.length < 6}
             />
-            {(!pincode || pincode.length < 6) && (
-              <p className="text-[11px] text-text-tertiary mt-1">Enter pincode first</p>
-            )}
           </div>
-          <div className={!pincode || pincode.length < 6 ? "opacity-50 pointer-events-none" : ""}>
+          <div>
             <Combobox
               label="State"
               value={stateName}

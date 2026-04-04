@@ -231,7 +231,7 @@ export const itemRouter = router({
         action: "item.switchBaseUnit",
         entityType: "item",
         entityId: input.id,
-        metadata: { itemId: input.id, newUnit: input.newUnit },
+        metadata: { itemId: input.id, name: result.name, newUnit: input.newUnit, conversionFactor: input.conversionFactor },
         ipAddress: ctx.req.headers.get("x-forwarded-for"),
       });
 
