@@ -140,7 +140,10 @@ export class HisaaboClient {
     if (input !== undefined) {
       url.searchParams.set("input", JSON.stringify(superjson.serialize(input)));
     }
-    const res = await fetch(url.toString(), { headers: this.buildHeaders() });
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      signal: AbortSignal.timeout(30_000),
+    });
     return this.unwrap<T>(res);
   }
 
@@ -153,6 +156,7 @@ export class HisaaboClient {
       method: "POST",
       headers: { ...this.buildHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify(superjson.serialize(input)),
+      signal: AbortSignal.timeout(30_000),
     });
     return this.unwrap<T>(res);
   }

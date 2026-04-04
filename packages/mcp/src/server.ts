@@ -27,6 +27,7 @@ import { registerAutomatedInvoiceTools } from "./tools/automatedInvoice.js";
 import { registerSessionTools } from "./tools/session.js";
 import { registerAuditTools } from "./tools/audit.js";
 import { registerResources } from "./resources/index.js";
+import { registerPrompts } from "./prompts/index.js";
 
 export function registerTools(server: McpServer, client: HisaaboClient): void {
   // Core business operations
@@ -76,4 +77,7 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
 
   // Read-only context resources
   registerResources(server, client);
+
+  // Prompt templates for guided workflows
+  registerPrompts(server);
 }

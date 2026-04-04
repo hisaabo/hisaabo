@@ -45,20 +45,46 @@ function requireEnv(name: string): string {
   return val;
 }
 
+function validateApiUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    process.stderr.write(`[hisaabo-mcp] Error: HISAABO_API_URL is not a valid URL: "${raw}"\n`);
+    process.exit(1);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    process.stderr.write(`[hisaabo-mcp] Error: HISAABO_API_URL must use http: or https: protocol.\n`);
+    process.exit(1);
+  }
+  return url.origin;
+}
+
 const config = {
-  apiUrl: process.env.HISAABO_API_URL ?? "http://localhost:3000",
+  apiUrl: validateApiUrl(process.env.HISAABO_API_URL ?? "http://localhost:3000"),
   token: requireEnv("HISAABO_API_KEY"),
   tenantId: requireEnv("HISAABO_TENANT_ID"),
   businessId: requireEnv("HISAABO_BUSINESS_ID"),
 };
 
+declare const __MCP_VERSION__: string | undefined;
+const mcpVersion = typeof __MCP_VERSION__ !== "undefined" ? __MCP_VERSION__ : "dev";
+
 const client = new HisaaboClient(config);
 const server = new McpServer({
   name: "hisaabo",
-  version: "0.1.0",
+  version: mcpVersion,
 });
 
 registerTools(server, client);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Graceful shutdown — close MCP connection before exiting
+const shutdown = async () => {
+  await server.close();
+  process.exit(0);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

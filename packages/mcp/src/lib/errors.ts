@@ -42,8 +42,18 @@ function toHisaaboError(err: unknown): HisaaboError {
   if (err instanceof HisaaboApiError) {
     return err.hisaaboError;
   }
-  // Network or unexpected error — collapse to api_error, never surface stack traces
-  const message =
-    err instanceof Error ? err.message : "An unexpected error occurred. Check server logs.";
-  return { code: "api_error", message };
+  // Sanitize network errors — don't leak hostnames, IPs, or ports to the AI agent
+  if (err instanceof Error) {
+    if (err.message.includes("ECONNREFUSED") || err.message.includes("ETIMEDOUT")) {
+      return { code: "api_error", message: "Unable to connect to the Hisaabo API. Check that the server is running and HISAABO_API_URL is correct." };
+    }
+    if (err.message.includes("ENOTFOUND")) {
+      return { code: "api_error", message: "Cannot resolve the Hisaabo API hostname. Check HISAABO_API_URL." };
+    }
+    if (err.name === "AbortError" || err.message.includes("timeout")) {
+      return { code: "api_error", message: "Request to the Hisaabo API timed out (30s). The server may be overloaded." };
+    }
+    return { code: "api_error", message: err.message };
+  }
+  return { code: "api_error", message: "An unexpected error occurred. Check server logs." };
 }
