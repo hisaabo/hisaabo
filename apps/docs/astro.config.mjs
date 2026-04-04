@@ -27,59 +27,75 @@ export default defineConfig({
         },
         {
           label: "Invoicing",
-          autogenerate: { directory: "invoicing" },
+          items: [
+            { label: "Overview", slug: "invoicing" },
+            { label: "Create an Invoice", slug: "invoicing/create-invoice" },
+            { label: "Invoice Statuses", slug: "invoicing/invoice-statuses" },
+            { label: "Invoice PDF", slug: "invoicing/invoice-pdf" },
+            { label: "GST on Invoices", slug: "invoicing/gst-on-invoices" },
+          ],
         },
         {
-          label: "Parties",
-          autogenerate: { directory: "parties" },
+          label: "Business Data",
+          items: [
+            {
+              label: "Parties",
+              items: [
+                { label: "Managing Parties", slug: "parties" },
+                { label: "Party Ledger", slug: "parties/party-ledger" },
+              ],
+            },
+            {
+              label: "Items & Inventory",
+              items: [
+                { label: "Managing Items", slug: "items" },
+                { label: "Variants", slug: "items/variants" },
+                { label: "Units & Conversions", slug: "items/units-and-conversions" },
+              ],
+            },
+            { label: "Payments", slug: "payments" },
+            { label: "Expenses", slug: "expenses" },
+            { label: "Banking", slug: "banking" },
+          ],
         },
         {
-          label: "Items & Inventory",
-          autogenerate: { directory: "items" },
+          label: "Reports & GST",
+          items: [
+            { label: "Business Reports", slug: "reports" },
+            { label: "GST Compliance", slug: "gst" },
+            { label: "GSTR-1 Filing", slug: "gst/gstr1" },
+          ],
         },
         {
-          label: "Payments",
-          autogenerate: { directory: "payments" },
+          label: "Settings & Team",
+          items: [
+            { label: "Settings", slug: "settings" },
+            { label: "Team & Roles", slug: "team" },
+            { label: "Invitations", slug: "team/invitations" },
+            { label: "Online Store", slug: "online-store" },
+          ],
         },
         {
-          label: "Expenses",
-          autogenerate: { directory: "expenses" },
-        },
-        {
-          label: "GST Compliance",
-          autogenerate: { directory: "gst" },
-        },
-        {
-          label: "Online Store",
-          autogenerate: { directory: "online-store" },
-        },
-        {
-          label: "Banking",
-          autogenerate: { directory: "banking" },
-        },
-        {
-          label: "Reports",
-          autogenerate: { directory: "reports" },
-        },
-        {
-          label: "Team & Roles",
-          autogenerate: { directory: "team" },
-        },
-        {
-          label: "Settings",
-          autogenerate: { directory: "settings" },
-        },
-        {
-          label: "Self-Hosting",
-          autogenerate: { directory: "self-hosting" },
-        },
-        {
-          label: "AI & Automation",
-          autogenerate: { directory: "ai" },
-        },
-        {
-          label: "Reference",
-          autogenerate: { directory: "reference" },
+          label: "Advanced",
+          items: [
+            { label: "Self-Hosting Reference", slug: "self-hosting" },
+            {
+              label: "AI & Automation",
+              items: [
+                { label: "Overview", slug: "ai" },
+                { label: "MCP Server", slug: "ai/mcp-server" },
+                { label: "CLI", slug: "ai/cli" },
+                { label: "Integrations", slug: "ai/integrations" },
+              ],
+            },
+            {
+              label: "Reference",
+              items: [
+                { label: "Keyboard Shortcuts", slug: "reference/keyboard-shortcuts" },
+                { label: "Supported Units", slug: "reference/supported-units" },
+              ],
+            },
+          ],
         },
       ],
       defaultLocale: "en",
