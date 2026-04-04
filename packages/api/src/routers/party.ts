@@ -279,9 +279,14 @@ export const partyRouter = router({
 
         if (!source || !target) throw new TRPCError({ code: "NOT_FOUND", message: "Party not found" });
 
-        // Move all invoices from source to target
+        // Move all invoices from source to target, preserving original party name
+        const mergeNote = `[Party merged: originally issued to "${source.name}"]`;
         await tx.update(invoices)
-          .set({ partyId: input.targetId, updatedAt: new Date() })
+          .set({
+            partyId: input.targetId,
+            notes: sql`CASE WHEN ${invoices.notes} IS NULL OR ${invoices.notes} = '' THEN ${mergeNote} ELSE ${invoices.notes} || E'\n' || ${mergeNote} END`,
+            updatedAt: new Date(),
+          })
           .where(and(eq(invoices.partyId, input.sourceId), eq(invoices.businessId, ctx.businessId)));
 
         // Move all payments from source to target
