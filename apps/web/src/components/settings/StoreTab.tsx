@@ -11,11 +11,13 @@ import { PhoneInput } from "./PhoneInput";
 // ---------------------------------------------------------------------------
 
 const IS_DEV = import.meta.env.DEV;
-const STORE_PREFIX = IS_DEV ? "localhost:5174/store/" : "store.hisaabo.in/";
+// Self-hosted installs can override via VITE_STORE_DOMAIN (e.g. "store.mycompany.com")
+const STORE_DOMAIN = import.meta.env.VITE_STORE_DOMAIN || (IS_DEV ? "localhost:5174" : "store.hisaabo.in");
+const STORE_PROTOCOL = IS_DEV ? "http" : "https";
+const STORE_PREFIX = `${STORE_DOMAIN}/`;
 
 function buildStoreUrl(slug: string) {
-  const origin = IS_DEV ? "http://localhost:5174" : "https://store.hisaabo.in";
-  return `${origin}/store/${slug}`;
+  return `${STORE_PROTOCOL}://${STORE_DOMAIN}/${slug}`;
 }
 
 // ---------------------------------------------------------------------------

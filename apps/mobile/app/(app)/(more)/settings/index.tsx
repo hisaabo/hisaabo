@@ -30,7 +30,7 @@ const SETTINGS: SettingItem[] = [
   { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business" },
   { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents" },
   { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
-  { label: "Online Store", icon: "storefront-outline", description: "Orders and store management", route: "/(more)/store-orders" },
+  { label: "Online Store", icon: "storefront-outline", description: "Store settings and items", route: "/(more)/settings/store" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
   { label: "Account", icon: "shield-checkmark-outline", description: "Sessions and activity log", route: "/(more)/settings/account" },
   { label: "API Keys", icon: "key-outline", description: "Programmatic access tokens", route: "/(more)/settings/api-keys" },

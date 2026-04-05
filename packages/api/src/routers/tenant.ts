@@ -578,6 +578,27 @@ export const tenantRouter = router({
           eq(tenantMembers.userId, input.userId),
         ));
 
+      // Revoke the removed user's access immediately: clear the tenantId from
+      // their sessions so the next request can't piggyback on the cached session.
+      const affectedSessions = await controlDb.select({ id: sessions.id })
+        .from(sessions)
+        .where(and(
+          eq(sessions.userId, input.userId),
+          eq(sessions.tenantId, ctx.tenantId),
+        ));
+
+      if (affectedSessions.length > 0) {
+        await controlDb.update(sessions)
+          .set({ tenantId: null })
+          .where(and(
+            eq(sessions.userId, input.userId),
+            eq(sessions.tenantId, ctx.tenantId),
+          ));
+        for (const s of affectedSessions) {
+          invalidateSessionCache(s.id);
+        }
+      }
+
       return { success: true };
     }),
 

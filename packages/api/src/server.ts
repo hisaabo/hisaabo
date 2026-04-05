@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import QRCode from "qrcode";
 import { appRouter } from "./router.js";
-import { createContext } from "./context.js";
+import { createContext, getSessionIdFromRequest } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -231,14 +231,28 @@ async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): 
   });
 }
 
-// ── Shared auth helper for non-tRPC endpoints ─────────────────
-function getSessionIdFromRequest(req: Request): string | null {
-  const cookies = req.headers.get("cookie") || "";
-  const match = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (match) return decodeURIComponent(match[1]);
-  const auth = req.headers.get("authorization");
-  if (auth?.startsWith("Bearer ")) return auth.slice(7);
-  return null;
+// ── Shared business access check for non-tRPC endpoints ─────────
+// Mirrors the hasBusinessAccess middleware in trpc.ts: verifies the business
+// exists in the tenant DB AND (for self-hosted shared-DB mode) that the
+// business creator is a member of the caller's tenant.
+async function verifyBusinessAccess(
+  db: Awaited<ReturnType<typeof getTenantDb>>,
+  businessId: string,
+  tenantId: string,
+): Promise<{ ok: true; business: { id: string; createdByUserId: string } } | { ok: false; error: string }> {
+  const [biz] = await db.select({ id: businesses.id, createdByUserId: businesses.createdByUserId })
+    .from(businesses).where(eq(businesses.id, businessId)).limit(1);
+  if (!biz) return { ok: false, error: "Business not found" };
+
+  // Self-hosted cross-tenant guard: verify the creator is a member of this tenant
+  const [creatorMembership] = await controlDb
+    .select({ userId: tenantMembers.userId })
+    .from(tenantMembers)
+    .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, biz.createdByUserId)))
+    .limit(1);
+  if (!creatorMembership) return { ok: false, error: "Business not found" };
+
+  return { ok: true, business: biz };
 }
 
 // ── PDF Download endpoint ──────────────────────────────────────
@@ -272,12 +286,9 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   // Get tenant DB for invoice data
   const db = await getTenantDb(sessionRow.tenantId);
 
-  // Verify the business exists in this tenant (prevents cross-tenant access)
-  const [bizCheck] = await db.select({ id: businesses.id })
-    .from(businesses)
-    .where(eq(businesses.id, businessId))
-    .limit(1);
-  if (!bizCheck) return c.json({ error: "Business not found" }, 403);
+  // Verify the business exists and belongs to this tenant (cross-tenant guard)
+  const bizAccess = await verifyBusinessAccess(db, businessId, sessionRow.tenantId);
+  if (!bizAccess.ok) return c.json({ error: bizAccess.error }, 403);
 
   // Fetch invoice with party and business
   const [invoice] = await db.select().from(invoices)
@@ -413,12 +424,9 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 
   const db = await getTenantDb(sessionRow.tenantId);
 
-  // Verify the business exists in this tenant (prevents cross-tenant access)
-  const [bizOwnerCheck] = await db.select({ id: businesses.id })
-    .from(businesses)
-    .where(eq(businesses.id, businessId))
-    .limit(1);
-  if (!bizOwnerCheck) return c.json({ error: "Business not found" }, 403);
+  // Verify the business exists and belongs to this tenant (cross-tenant guard)
+  const bizAccess = await verifyBusinessAccess(db, businessId, sessionRow.tenantId);
+  if (!bizAccess.ok) return c.json({ error: bizAccess.error }, 403);
 
   // Validate party belongs to this business
   const [party] = await db.select().from(parties)
