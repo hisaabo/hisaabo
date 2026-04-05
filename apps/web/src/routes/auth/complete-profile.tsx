@@ -219,7 +219,7 @@ function CompleteProfilePage() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-text-primary">
-                    Create my own organization
+                    I want my own organization instead
                   </p>
                   <p className="text-xs text-text-tertiary">
                     Start fresh with a new business

@@ -171,10 +171,10 @@ function NoOrgScreen() {
         ) : pendingInvites && pendingInvites.length > 0 ? (
           <>
             <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">
-              You've been invited
+              You've been invited!
             </h2>
             <p className="text-sm text-text-tertiary mb-5 text-center">
-              Join an organization or create your own.
+              Pick an organization to get started.
             </p>
 
             {error && (
@@ -219,7 +219,7 @@ function NoOrgScreen() {
               disabled={isActing}
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
             >
-              {createOrgMutation.isPending ? "Creating..." : "Create my own organization"}
+              {createOrgMutation.isPending ? "Creating..." : "I want my own organization instead"}
             </button>
           </>
         ) : (
