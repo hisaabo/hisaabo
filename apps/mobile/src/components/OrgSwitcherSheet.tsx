@@ -10,38 +10,54 @@ import {
   ScrollView,
   Dimensions,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../lib/theme";
 import { haptic } from "../lib/haptics";
 
-interface BusinessSwitcherSheetProps {
+interface OrgItem {
+  tenantId: string;
+  tenantName: string;
+  role: string;
+}
+
+interface OrgSwitcherSheetProps {
   visible: boolean;
   onClose: () => void;
-  businesses: Array<{ id: string; name: string }>;
-  activeBusinessId: string;
-  onSwitch: (id: string, name: string) => void;
+  orgs: OrgItem[];
+  activeTenantId: string | null;
+  onSwitch: (tenantId: string) => void;
+  canCreateOrg?: boolean;
   onCreateNew?: () => void;
+  isCreating?: boolean;
 }
 
-function getInitials(name: string): string {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
+const ROLE_LABELS: Record<string, string> = {
+  owner: "Owner",
+  superadmin: "Super Admin",
+  admin: "Admin",
+  seller_manager: "Sales Manager",
+  seller: "Seller",
+  accountant: "Accountant",
+  member: "Member",
+};
+
+function formatRole(role: string): string {
+  return ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1).replace(/_/g, " ");
 }
 
-export function BusinessSwitcherSheet({
+export function OrgSwitcherSheet({
   visible,
   onClose,
-  businesses,
-  activeBusinessId,
+  orgs,
+  activeTenantId,
   onSwitch,
+  canCreateOrg,
   onCreateNew,
-}: BusinessSwitcherSheetProps) {
+  isCreating,
+}: OrgSwitcherSheetProps) {
   const [slideAnim] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
@@ -67,18 +83,18 @@ export function BusinessSwitcherSheet({
     });
   };
 
-  const handleSwitch = (id: string, name: string) => {
-    if (id === activeBusinessId) {
+  const handleSwitch = (tenantId: string) => {
+    if (tenantId === activeTenantId) {
       handleClose();
       return;
     }
     haptic.medium();
-    onSwitch(id, name);
+    onSwitch(tenantId);
   };
 
   const handleCreateNew = () => {
     haptic.light();
-    onCreateNew();
+    onCreateNew?.();
   };
 
   const screenHeight = Dimensions.get("window").height;
@@ -100,38 +116,41 @@ export function BusinessSwitcherSheet({
 
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Switch Business</Text>
+            <Text style={styles.headerTitle}>Switch Organization</Text>
             <TouchableOpacity style={styles.closeBtn} onPress={handleClose} activeOpacity={0.7}>
               <Ionicons name="close" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
-          {/* Business list */}
+          {/* Org list */}
           <ScrollView
             style={{ maxHeight: screenHeight * 0.5 }}
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
-            {businesses.map((biz) => {
-              const isActive = biz.id === activeBusinessId;
+            {orgs.map((org) => {
+              const isActive = org.tenantId === activeTenantId;
               return (
                 <TouchableOpacity
-                  key={biz.id}
-                  style={styles.bizRow}
-                  onPress={() => handleSwitch(biz.id, biz.name)}
+                  key={org.tenantId}
+                  style={styles.orgRow}
+                  onPress={() => handleSwitch(org.tenantId)}
                   activeOpacity={0.7}
                 >
                   <View style={[styles.avatar, isActive && styles.avatarActive]}>
                     <Text style={[styles.avatarText, isActive && styles.avatarTextActive]}>
-                      {getInitials(biz.name)}
+                      {org.tenantName.charAt(0).toUpperCase()}
                     </Text>
                   </View>
-                  <Text
-                    style={[styles.bizName, isActive && styles.bizNameActive]}
-                    numberOfLines={1}
-                  >
-                    {biz.name}
-                  </Text>
+                  <View style={styles.orgInfo}>
+                    <Text
+                      style={[styles.orgName, isActive && styles.orgNameActive]}
+                      numberOfLines={1}
+                    >
+                      {org.tenantName}
+                    </Text>
+                    <Text style={styles.orgRole}>{formatRole(org.role)}</Text>
+                  </View>
                   {isActive && (
                     <Ionicons name="checkmark" size={20} color={colors.brand} />
                   )}
@@ -140,22 +159,30 @@ export function BusinessSwitcherSheet({
             })}
           </ScrollView>
 
-          {onCreateNew && (
+          {/* Create new org */}
+          {canCreateOrg && onCreateNew && (
             <>
-              {/* Divider */}
               <View style={styles.divider} />
-
-              {/* Create new business row */}
-              <TouchableOpacity style={styles.bizRow} onPress={handleCreateNew} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={styles.orgRow}
+                onPress={handleCreateNew}
+                activeOpacity={0.7}
+                disabled={isCreating}
+              >
                 <View style={styles.createAvatar}>
-                  <Ionicons name="add" size={20} color={colors.textSecondary} />
+                  {isCreating ? (
+                    <ActivityIndicator size="small" color={colors.textSecondary} />
+                  ) : (
+                    <Ionicons name="add" size={20} color={colors.textSecondary} />
+                  )}
                 </View>
-                <Text style={styles.createText}>Create New Business</Text>
+                <Text style={styles.createText}>
+                  {isCreating ? "Creating..." : "Create New Organization"}
+                </Text>
               </TouchableOpacity>
             </>
           )}
 
-          {/* Safe area bottom padding */}
           <SafeAreaView edges={["bottom"]} />
         </Animated.View>
       </View>
@@ -208,12 +235,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  bizRow: {
+  orgRow: {
     flexDirection: "row",
     alignItems: "center",
-    height: 56,
+    minHeight: 56,
     gap: 12,
     paddingHorizontal: 4,
+    paddingVertical: 8,
   },
   avatar: {
     width: 36,
@@ -234,15 +262,23 @@ const styles = StyleSheet.create({
   avatarTextActive: {
     color: colors.textPrimary,
   },
-  bizName: {
+  orgInfo: {
     flex: 1,
+    minWidth: 0,
+  },
+  orgName: {
     fontSize: 15,
     fontWeight: "500",
     color: colors.textSecondary,
   },
-  bizNameActive: {
+  orgNameActive: {
     fontWeight: "700",
     color: colors.textPrimary,
+  },
+  orgRole: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 1,
   },
   divider: {
     height: 1,

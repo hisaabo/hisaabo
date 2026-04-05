@@ -20,7 +20,7 @@ interface BusinessSwitcherProviderProps {
   businesses: Array<{ id: string; name: string }>;
   activeBusinessId: string;
   onSwitch: (id: string, name: string) => void;
-  onCreateNew: () => void;
+  onCreateNew?: () => void;
 }
 
 export function BusinessSwitcherProvider({

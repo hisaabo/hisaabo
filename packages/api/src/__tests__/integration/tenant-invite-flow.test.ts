@@ -1011,3 +1011,177 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
     expect(memberships.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tenant.peekInvitation — preview invite without accepting
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tenant.peekInvitation", () => {
+  it("returns tenantName and role for a valid pending invitation", async () => {
+    const rawToken = randomUUID();
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email: "peek.test@example.in",
+      role: "accountant",
+      invitedBy: admin.id,
+      rawToken,
+    });
+
+    const caller = _callerFactory(createTestContext({}));
+    const result = await caller.tenant.peekInvitation({ token: rawToken });
+
+    expect(result).not.toBeNull();
+    expect(result!.tenantName).toBe("Sharma Traders");
+    expect(result!.role).toBe("accountant");
+    // Must NOT return email (no PII leak via token possession)
+    expect((result as any).email).toBeUndefined();
+  });
+
+  it("returns null for an accepted invitation", async () => {
+    const rawToken = randomUUID();
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email: "peek.accepted@example.in",
+      invitedBy: admin.id,
+      rawToken,
+      acceptedAt: new Date(),
+    });
+
+    const caller = _callerFactory(createTestContext({}));
+    const result = await caller.tenant.peekInvitation({ token: rawToken });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for an expired invitation", async () => {
+    const rawToken = randomUUID();
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email: "peek.expired@example.in",
+      invitedBy: admin.id,
+      rawToken,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    const caller = _callerFactory(createTestContext({}));
+    const result = await caller.tenant.peekInvitation({ token: rawToken });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for a bogus token", async () => {
+    const caller = _callerFactory(createTestContext({}));
+    const result = await caller.tenant.peekInvitation({ token: "totally-fake" });
+    expect(result).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tenant.myInvitations — pending invites for user's email
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tenant.myInvitations", () => {
+  it("returns pending invitations matching the user's email", async () => {
+    const email = `my.invites.${randomUUID().slice(0, 8)}@example.in`;
+    const myUser = await createUser({ email, name: "My Invites" });
+    const mySession = await createSession(myUser.id);
+
+    await insertInvitation({
+      tenantId: tenant1.id,
+      email,
+      role: "seller",
+      invitedBy: admin.id,
+      rawToken: randomUUID(),
+    });
+
+    const caller = callerNoTenant(mySession.id, myUser);
+    const invites = await caller.tenant.myInvitations();
+
+    expect(invites.length).toBe(1);
+    expect(invites[0]!.tenantName).toBe("Sharma Traders");
+    expect(invites[0]!.role).toBe("seller");
+  });
+
+  it("excludes accepted and expired invitations", async () => {
+    const email = `my.filtered.${randomUUID().slice(0, 8)}@example.in`;
+    const filterUser = await createUser({ email, name: "Filter Test" });
+    const filterSession = await createSession(filterUser.id);
+
+    // Accepted invite — should be excluded
+    await insertInvitation({ tenantId: tenant1.id, email, invitedBy: admin.id, rawToken: randomUUID(), acceptedAt: new Date() });
+    // Expired invite — should be excluded
+    await insertInvitation({ tenantId: tenant1.id, email, invitedBy: admin.id, rawToken: randomUUID(), expiresAt: new Date(Date.now() - 1000) });
+
+    const caller = callerNoTenant(filterSession.id, filterUser);
+    const invites = await caller.tenant.myInvitations();
+    expect(invites.length).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tenant.acceptById — accept by invitation ID (in-app, no token)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tenant.acceptById", () => {
+  it("accepts invitation by ID — creates membership and returns tenant info", async () => {
+    const db = getControlDb();
+    const email = `accept.byid.${randomUUID().slice(0, 8)}@example.in`;
+    const byIdUser = await createUser({ email, name: "ById User" });
+    const byIdSession = await createSession(byIdUser.id);
+
+    const rawToken = randomUUID();
+    const invite = await insertInvitation({
+      tenantId: tenant1.id,
+      email,
+      role: "seller",
+      invitedBy: admin.id,
+      rawToken,
+    });
+
+    const caller = callerNoTenant(byIdSession.id, byIdUser);
+    const result = await caller.tenant.acceptById({ invitationId: invite.id });
+
+    expect(result.tenantId).toBe(tenant1.id);
+    expect(result.tenantName).toBe("Sharma Traders");
+
+    // Membership created
+    const [membership] = await db.select({ role: tenantMembers.role })
+      .from(tenantMembers)
+      .where(and(eq(tenantMembers.tenantId, tenant1.id), eq(tenantMembers.userId, byIdUser.id)))
+      .limit(1);
+    expect(membership!.role).toBe("seller");
+  });
+
+  it("rejects if email doesn't match authenticated user", async () => {
+    const rawToken = randomUUID();
+    const invite = await insertInvitation({
+      tenantId: tenant1.id,
+      email: "someone.else@example.in",
+      invitedBy: admin.id,
+      rawToken,
+    });
+
+    // newUser's email doesn't match
+    const caller = callerNoTenant(newUserSession.id, newUser);
+    await expect(
+      caller.tenant.acceptById({ invitationId: invite.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rejects expired invitation", async () => {
+    const email = `accept.byid.expired.${randomUUID().slice(0, 8)}@example.in`;
+    const expUser = await createUser({ email });
+    const expSession = await createSession(expUser.id);
+
+    const invite = await insertInvitation({
+      tenantId: tenant1.id,
+      email,
+      invitedBy: admin.id,
+      rawToken: randomUUID(),
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    const caller = callerNoTenant(expSession.id, expUser);
+    await expect(
+      caller.tenant.acceptById({ invitationId: invite.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});

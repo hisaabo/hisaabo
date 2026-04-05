@@ -126,15 +126,12 @@ exceptions:
       # better suited to web/desktop; mobile shows templates only.
       - recurringInvoice.suggestions
 
-      # --- Onboarding / Org Management ---
-      # Web-only onboarding flows for invite acceptance and org creation
-      # limit checks. Mobile uses invite deep links and has its own onboarding.
-      - tenant.canCreateOrg
+      # --- Onboarding ---
+      # Web-only onboarding flows for invite acceptance via browser.
+      # Mobile uses invite deep links and its own onboarding screens.
       - tenant.myInvitations
       - tenant.acceptById
       - tenant.peekInvitation
-      - tenant.create
-      - business.canCreate
 
   cli:
     not-applicable:

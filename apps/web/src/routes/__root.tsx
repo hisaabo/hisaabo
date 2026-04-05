@@ -119,12 +119,6 @@ const navSections = [
       { to: "/reports", label: "Reports", icon: ReportsIcon, resource: "Report", action: "read" },
     ],
   },
-  {
-    label: "ACCOUNT",
-    items: [
-      { to: "/settings", label: "Settings", icon: SettingsIcon, resource: "Business", action: "manage" },
-    ],
-  },
 ];
 
 // ── NoOrgScreen — shown when user has zero memberships ─────────
@@ -609,21 +603,6 @@ function RootLayout() {
               Hisaabo
             </span>
           </div>
-          {hasMultipleTenants && (
-            <button
-              type="button"
-              onClick={() => setShowTenantPicker(true)}
-              className="mt-2 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-text-secondary hover:bg-surface-1 hover:text-text-primary transition-colors text-left"
-            >
-              <span className="w-5 h-5 rounded-md bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
-                {tenantName.charAt(0).toUpperCase()}
-              </span>
-              <span className="flex-1 min-w-0 text-xs font-medium truncate">{tenantName}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-tertiary">
-                <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
-              </svg>
-            </button>
-          )}
         </div>
 
         {/* Nav sections */}
@@ -669,11 +648,28 @@ function RootLayout() {
           })}
         </nav>
 
-        {/* Version — sticky bottom */}
-        <div className="shrink-0 px-4 py-2 border-t border-border-light">
-          <span className="text-[10px] text-text-tertiary/50 select-none">
-            v{__APP_VERSION__}
-          </span>
+        {/* Sidebar footer: org name + version */}
+        <div className="shrink-0 border-t border-border-light">
+          {hasMultipleTenants ? (
+            <button
+              type="button"
+              onClick={() => setShowTenantPicker(true)}
+              className="w-full px-4 py-2.5 text-left group"
+            >
+              <p className="flex items-center gap-1.5 text-[11px] font-medium text-text-tertiary/60 group-hover:text-text-secondary transition-colors">
+                <span className="truncate">{tenantName}</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-tertiary/40 group-hover:text-text-secondary transition-colors">
+                  <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
+                </svg>
+              </p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 tabular-nums">v{__APP_VERSION__}</p>
+            </button>
+          ) : (
+            <div className="px-4 py-2.5">
+              <p className="text-[11px] text-text-tertiary/50 truncate select-none">{tenantName}</p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 select-none tabular-nums">v{__APP_VERSION__}</p>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -702,6 +698,19 @@ function RootLayout() {
             title="Keyboard shortcuts (?)"
           >
             <span className="font-mono text-xs">?</span>
+          </button>
+
+          {/* Settings gear */}
+          <button
+            onClick={() => navigate({ to: "/settings" })}
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
           </button>
 
           {/* Business switcher + User info — pushed to the right */}

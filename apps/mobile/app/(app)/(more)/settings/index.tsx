@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -14,6 +15,8 @@ import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
 import { colors } from "../../../../src/lib/theme";
 import { PressableRow } from "../../../../src/components/ui";
+import { OrgSwitcherSheet } from "../../../../src/components/OrgSwitcherSheet";
+import { queryClient } from "../../../../src/lib/query-client";
 
 interface SettingItem {
   label: string;
@@ -37,6 +40,29 @@ const SETTINGS: SettingItem[] = [
 export default function SettingsScreen() {
   const router = useRouter();
   const logout = useAuthStore((s) => s.logout);
+  const utils = trpc.useUtils();
+  const [showOrgSwitcher, setShowOrgSwitcher] = useState(false);
+
+  const { data: session } = trpc.auth.me.useQuery();
+  const { data: tenantList } = trpc.tenant.list.useQuery(undefined, { enabled: !!session?.user });
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery(undefined, { enabled: !!session?.user });
+
+  const selectTenantMutation = trpc.tenant.select.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      queryClient.invalidateQueries();
+      setShowOrgSwitcher(false);
+    },
+  });
+
+  const createOrgMutation = trpc.tenant.create.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      utils.tenant.list.invalidate();
+      queryClient.invalidateQueries();
+      setShowOrgSwitcher(false);
+    },
+  });
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: async () => {
@@ -96,6 +122,26 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Organization */}
+        {tenantList && tenantList.length > 0 && (
+          <TouchableOpacity
+            style={styles.orgCard}
+            onPress={() => setShowOrgSwitcher(true)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.orgAvatar}>
+              <Text style={styles.orgAvatarText}>
+                {(session?.tenantName ?? "O").charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.orgName} numberOfLines={1}>{session?.tenantName ?? "Organization"}</Text>
+              <Text style={styles.orgLabel}>Organization</Text>
+            </View>
+            <Ionicons name="chevron-expand-outline" size={16} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+
         {/* Settings List */}
         <View style={styles.settingsList}>
           {SETTINGS.map((item, index) => {
@@ -144,6 +190,18 @@ export default function SettingsScreen() {
         {/* Footer */}
         <Text style={styles.footer}>Hisaabo v0.1.0 — Open-source business management</Text>
       </ScrollView>
+
+      {/* Org Switcher Sheet */}
+      <OrgSwitcherSheet
+        visible={showOrgSwitcher}
+        onClose={() => setShowOrgSwitcher(false)}
+        orgs={tenantList ?? []}
+        activeTenantId={session?.tenantId ?? null}
+        onSwitch={(tenantId) => selectTenantMutation.mutate({ tenantId })}
+        canCreateOrg={canCreateOrg ?? false}
+        onCreateNew={() => createOrgMutation.mutate()}
+        isCreating={createOrgMutation.isPending}
+      />
     </SafeAreaView>
   );
 }
@@ -217,6 +275,42 @@ const styles = StyleSheet.create({
   settingLabel: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   settingLabelDanger: { color: colors.danger },
   settingDescription: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+
+  // Org card
+  orgCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    marginBottom: 16,
+  },
+  orgAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.brand,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  orgAvatarText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  orgName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  orgLabel: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
 
   footer: {
     textAlign: "center",

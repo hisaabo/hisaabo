@@ -56,6 +56,11 @@ export default function AppLayout() {
     [setBusiness, utils],
   );
 
+  // Plan limit: hide "Create New Business" when at limit
+  const { data: canCreateBiz } = trpc.business.canCreate.useQuery(undefined, {
+    enabled: !!session?.user && !!session?.tenantId,
+  });
+
   const handleCreateNewBusiness = useCallback(() => {
     router.push("/(app)/create-business");
   }, [router]);
@@ -123,7 +128,7 @@ export default function AppLayout() {
       businesses={businesses ?? []}
       activeBusinessId={businessId ?? ""}
       onSwitch={handleSwitchBusiness}
-      onCreateNew={handleCreateNewBusiness}
+      onCreateNew={canCreateBiz ? handleCreateNewBusiness : undefined}
     >
       <Tabs
         screenOptions={{
