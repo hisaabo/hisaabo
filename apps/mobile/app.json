@@ -17,7 +17,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0f0f1a"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#5b5bd6"
       },
       "package": "in.hisaabo.app"
     },
