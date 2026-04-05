@@ -78,7 +78,7 @@ export function BusinessSwitcherSheet({
 
   const handleCreateNew = () => {
     haptic.light();
-    onCreateNew();
+    onCreateNew?.();
   };
 
   const screenHeight = Dimensions.get("window").height;

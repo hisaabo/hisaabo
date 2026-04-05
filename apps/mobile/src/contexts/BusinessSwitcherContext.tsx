@@ -50,7 +50,7 @@ export function BusinessSwitcherProvider({
 
   const handleCreateNew = useCallback(() => {
     setShowSwitcher(false);
-    onCreateNew();
+    onCreateNew?.();
   }, [onCreateNew]);
 
   return (

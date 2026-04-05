@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq, and } from "drizzle-orm";
-import { sessions, tenantMembers, tenants, invitations, magicLinkTokens } from "@hisaabo/db";
+import { sessions, tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
 import { createHash, randomUUID } from "crypto";
 import {
   createUser,
@@ -966,7 +966,6 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
   });
 
   it("free plan user who already owns 1 org cannot create a second", async () => {
-    const db = getControlDb();
     const email = `limit.hit.${randomUUID().slice(0, 8)}@test.in`;
     const limitUser = await createUser({ email, name: "Limit Hit" });
     const limitSession = await createSession(limitUser.id);
