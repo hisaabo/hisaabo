@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBusinessStore } from "../../../../src/stores/business";
 import { colors } from "../../../../src/lib/theme";
@@ -476,6 +476,14 @@ const fieldStyles = StyleSheet.create({
 // Store Items Modal
 // ---------------------------------------------------------------------------
 
+type FilterTab = "all" | "in_store" | "not_in_store";
+
+const FILTER_TABS: { key: FilterTab; label: string }[] = [
+  { key: "all", label: "All Items" },
+  { key: "in_store", label: "In Store" },
+  { key: "not_in_store", label: "Not in Store" },
+];
+
 function StoreItemsModal({
   visible,
   onClose,
@@ -487,15 +495,38 @@ function StoreItemsModal({
 }) {
   const utils = trpc.useUtils();
   const [search, setSearch] = useState("");
+  const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
 
   const debouncedSearch = useDebounce(search, 300);
 
+  // Build the storeEnabled filter based on active tab
+  const storeEnabledFilter =
+    activeTab === "in_store" ? true : activeTab === "not_in_store" ? false : undefined;
+
   const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery(
-    { limit: 100, page: 1, search: debouncedSearch || undefined },
+    {
+      limit: 100,
+      page: 1,
+      search: debouncedSearch || undefined,
+      storeEnabled: storeEnabledFilter,
+    },
     { enabled: visible && !!businessId },
   );
   const items: any[] = itemsResponse?.data ?? [];
+
+  // Fetch counts for each tab (lightweight queries with limit: 1)
+  const { data: allCountResp } = trpc.store.listStoreItems.useQuery(
+    { limit: 1, page: 1 },
+    { enabled: visible && !!businessId },
+  );
+  const { data: enabledCountResp } = trpc.store.listStoreItems.useQuery(
+    { limit: 1, page: 1, storeEnabled: true },
+    { enabled: visible && !!businessId },
+  );
+  const totalItemCount = allCountResp?.total ?? 0;
+  const enabledItemCount = enabledCountResp?.total ?? 0;
+  const disabledItemCount = totalItemCount - enabledItemCount;
 
   const toggleMut = trpc.store.bulkToggleItems.useMutation({
     onSuccess: () => {
@@ -515,6 +546,20 @@ function StoreItemsModal({
     [pendingChanges],
   );
 
+  // Sort items: store-enabled first in "All Items" tab, then alphabetical
+  const sortedItems = useMemo(() => {
+    const sorted = [...items];
+    sorted.sort((a, b) => {
+      if (activeTab === "all") {
+        const aEnabled = getEffectiveEnabled(a);
+        const bEnabled = getEffectiveEnabled(b);
+        if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
+      }
+      return (a.name as string).localeCompare(b.name as string);
+    });
+    return sorted;
+  }, [items, activeTab, getEffectiveEnabled]);
+
   const toggleItem = useCallback((id: string, currentlyEnabled: boolean) => {
     setPendingChanges((prev) => {
       const next = new Map(prev);
@@ -528,6 +573,16 @@ function StoreItemsModal({
   }, []);
 
   const changeCount = pendingChanges.size;
+
+  // Compute effective summary counts accounting for pending changes
+  const effectiveEnabledCount = useMemo(() => {
+    let count = enabledItemCount;
+    for (const [, willEnable] of pendingChanges) {
+      if (willEnable) count += 1;
+      else count -= 1;
+    }
+    return Math.max(0, count);
+  }, [enabledItemCount, pendingChanges]);
 
   const applyChanges = async () => {
     const toEnable = [...pendingChanges.entries()]
@@ -552,13 +607,28 @@ function StoreItemsModal({
   const handleClose = () => {
     setPendingChanges(new Map());
     setSearch("");
+    setActiveTab("all");
     onClose();
+  };
+
+  const getEmptyMessage = (): string => {
+    if (search) return "No items match your search";
+    if (activeTab === "in_store") return "No items are in the store yet. Switch to \"All Items\" to add some.";
+    if (activeTab === "not_in_store") return "All items are already in the store!";
+    return "No items found. Create items first to add them to your store.";
+  };
+
+  const getTabCount = (tab: FilterTab): number => {
+    if (tab === "all") return totalItemCount;
+    if (tab === "in_store") return enabledItemCount;
+    return disabledItemCount;
   };
 
   const renderItem = useCallback(
     ({ item }: { item: any }) => {
       const isEnabled = getEffectiveEnabled(item);
       const isPending = pendingChanges.has(item.id);
+      const isProduct = item.itemType === "product";
 
       return (
         <TouchableOpacity
@@ -569,31 +639,39 @@ function StoreItemsModal({
           onPress={() => toggleItem(item.id, item.storeEnabled)}
           activeOpacity={0.7}
         >
-          <View
-            style={[
-              modalStyles.checkbox,
-              isEnabled && modalStyles.checkboxActive,
-            ]}
-          >
-            {isEnabled && (
-              <Ionicons name="checkmark" size={14} color={colors.textPrimary} />
-            )}
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={modalStyles.itemName} numberOfLines={1}>
-              {item.name}
-            </Text>
-            <Text style={modalStyles.itemMeta} numberOfLines={1}>
-              {item.category || "Uncategorized"} · Rs.{item.salePrice ?? "0"} / {item.unit}
-            </Text>
-          </View>
-          {isPending && (
-            <View style={modalStyles.pendingBadge}>
-              <Text style={modalStyles.pendingBadgeText}>
-                {isEnabled ? "Adding" : "Removing"}
+          {/* Checkbox icon */}
+          <Ionicons
+            name={isEnabled ? "checkbox" : "square-outline"}
+            size={24}
+            color={isEnabled ? colors.brand : colors.textMuted}
+          />
+
+          {/* Item details */}
+          <View style={modalStyles.itemContent}>
+            <View style={modalStyles.itemNameRow}>
+              <Text style={modalStyles.itemName} numberOfLines={1}>
+                {item.name}
               </Text>
+              {isPending && (
+                <View style={modalStyles.modifiedBadge}>
+                  <Text style={modalStyles.modifiedBadgeText}>Modified</Text>
+                </View>
+              )}
             </View>
-          )}
+            <View style={modalStyles.itemMetaRow}>
+              <View style={[modalStyles.typeBadge, isProduct ? modalStyles.typeBadgeProduct : modalStyles.typeBadgeService]}>
+                <Text style={[modalStyles.typeBadgeText, isProduct ? modalStyles.typeBadgeTextProduct : modalStyles.typeBadgeTextService]}>
+                  {isProduct ? "Product" : "Service"}
+                </Text>
+              </View>
+              <Text style={modalStyles.itemMeta} numberOfLines={1}>
+                Rs.{item.salePrice ?? "0"} / {item.unit}
+              </Text>
+              {!isPending && isEnabled && (
+                <View style={modalStyles.inStoreDot} />
+              )}
+            </View>
+          </View>
         </TouchableOpacity>
       );
     },
@@ -603,94 +681,134 @@ function StoreItemsModal({
   return (
     <Modal
       visible={visible}
-      transparent
+      transparent={false}
       animationType="slide"
       onRequestClose={handleClose}
     >
-      <View style={modalStyles.overlay}>
-        <View style={modalStyles.sheet}>
-          {/* Header */}
-          <View style={modalStyles.header}>
-            <Text style={modalStyles.title}>Manage Store Items</Text>
-            <TouchableOpacity onPress={handleClose} style={modalStyles.closeBtn}>
-              <Ionicons name="close" size={22} color={colors.textMuted} />
+      <SafeAreaView style={modalStyles.fullScreen}>
+        {/* Header */}
+        <View style={modalStyles.header}>
+          <TouchableOpacity onPress={handleClose} style={modalStyles.closeBtn}>
+            <Ionicons name="close" size={24} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <Text style={modalStyles.title}>Manage Store Items</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Search */}
+        <View style={modalStyles.searchWrapper}>
+          <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
+          <TextInput
+            style={modalStyles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search items..."
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch("")} hitSlop={8}>
+              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Filter tabs */}
+        <View style={modalStyles.tabBar}>
+          {FILTER_TABS.map((tab) => {
+            const isActive = activeTab === tab.key;
+            const count = getTabCount(tab.key);
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                style={[modalStyles.tab, isActive && modalStyles.tabActive]}
+                onPress={() => setActiveTab(tab.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[modalStyles.tabText, isActive && modalStyles.tabTextActive]}>
+                  {tab.label}
+                </Text>
+                <View style={[modalStyles.tabCountBadge, isActive && modalStyles.tabCountBadgeActive]}>
+                  <Text style={[modalStyles.tabCountText, isActive && modalStyles.tabCountTextActive]}>
+                    {count}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* Item list */}
+        {isLoading ? (
+          <View style={{ padding: 20 }}>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} width="100%" height={56} borderRadius={10} style={{ marginBottom: 8 }} />
+            ))}
+          </View>
+        ) : sortedItems.length === 0 ? (
+          <View style={modalStyles.emptyState}>
+            <Ionicons
+              name={activeTab === "not_in_store" ? "checkmark-done-circle-outline" : "cube-outline"}
+              size={40}
+              color={colors.textMuted}
+            />
+            <Text style={modalStyles.emptyText}>{getEmptyMessage()}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={sortedItems}
+            renderItem={renderItem}
+            keyExtractor={(item) => item.id}
+            style={modalStyles.list}
+            contentContainerStyle={modalStyles.listContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          />
+        )}
+
+        {/* Summary bar + apply button */}
+        <View style={modalStyles.footer}>
+          <View style={modalStyles.summaryRow}>
+            <Ionicons name="storefront-outline" size={16} color={colors.textMuted} />
+            <Text style={modalStyles.summaryText}>
+              {effectiveEnabledCount} of {totalItemCount} items in store
+            </Text>
+            {changeCount > 0 && (
+              <View style={modalStyles.changesBadge}>
+                <Text style={modalStyles.changesBadgeText}>
+                  {changeCount} change{changeCount !== 1 ? "s" : ""}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View style={modalStyles.footerActions}>
+            <TouchableOpacity
+              style={modalStyles.cancelBtn}
+              onPress={handleClose}
+              disabled={toggleMut.isPending}
+            >
+              <Text style={modalStyles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                modalStyles.applyBtn,
+                (changeCount === 0 || toggleMut.isPending) && { opacity: 0.4 },
+              ]}
+              onPress={applyChanges}
+              disabled={changeCount === 0 || toggleMut.isPending}
+            >
+              {toggleMut.isPending ? (
+                <ActivityIndicator size="small" color={colors.textPrimary} />
+              ) : (
+                <Text style={modalStyles.applyBtnText}>
+                  Apply {changeCount > 0 ? `${changeCount} ` : ""}Change{changeCount !== 1 ? "s" : ""}
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
-
-          {/* Search */}
-          <View style={modalStyles.searchWrapper}>
-            <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
-            <TextInput
-              style={modalStyles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search items..."
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </View>
-
-          {/* Item list */}
-          {isLoading ? (
-            <View style={{ padding: 20 }}>
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} width="100%" height={48} borderRadius={10} style={{ marginBottom: 8 }} />
-              ))}
-            </View>
-          ) : items.length === 0 ? (
-            <View style={modalStyles.emptyState}>
-              <Ionicons name="cube-outline" size={32} color={colors.textMuted} />
-              <Text style={modalStyles.emptyText}>
-                {search ? "No items match your search" : "No items found"}
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              data={items}
-              renderItem={renderItem}
-              keyExtractor={(item) => item.id}
-              style={modalStyles.list}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            />
-          )}
-
-          {/* Footer */}
-          <View style={modalStyles.footer}>
-            <Text style={modalStyles.footerText}>
-              {changeCount > 0
-                ? `${changeCount} change${changeCount > 1 ? "s" : ""} pending`
-                : "Tap items to add or remove"}
-            </Text>
-            <View style={modalStyles.footerActions}>
-              <TouchableOpacity
-                style={modalStyles.cancelBtn}
-                onPress={handleClose}
-                disabled={toggleMut.isPending}
-              >
-                <Text style={modalStyles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  modalStyles.applyBtn,
-                  (changeCount === 0 || toggleMut.isPending) && { opacity: 0.4 },
-                ]}
-                onPress={applyChanges}
-                disabled={changeCount === 0 || toggleMut.isPending}
-              >
-                {toggleMut.isPending ? (
-                  <ActivityIndicator size="small" color={colors.textPrimary} />
-                ) : (
-                  <Text style={modalStyles.applyBtnText}>
-                    Apply {changeCount > 0 ? changeCount : ""} Change{changeCount !== 1 ? "s" : ""}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
         </View>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -700,24 +818,18 @@ function StoreItemsModal({
 // ---------------------------------------------------------------------------
 
 const modalStyles = StyleSheet.create({
-  overlay: {
+  fullScreen: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "80%",
+    backgroundColor: colors.bg,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   title: {
     fontSize: 18,
@@ -725,20 +837,21 @@ const modalStyles = StyleSheet.create({
     color: colors.textPrimary,
   },
   closeBtn: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
   },
   searchWrapper: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.bg,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 12,
-    marginHorizontal: 20,
-    marginBottom: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
     paddingHorizontal: 12,
   },
   searchInput: {
@@ -747,19 +860,78 @@ const modalStyles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
   },
-  list: {
-    paddingHorizontal: 20,
+  // Filter tabs
+  tabBar: {
+    flexDirection: "row",
+    marginHorizontal: 16,
+    marginBottom: 4,
+    gap: 6,
   },
-  emptyState: {
+  tab: {
+    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 48,
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  tabActive: {
+    backgroundColor: colors.brandLight,
+    borderColor: colors.brand,
+  },
+  tabText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  tabTextActive: {
+    color: colors.brand,
+  },
+  tabCountBadge: {
+    backgroundColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    minWidth: 22,
+    alignItems: "center",
+  },
+  tabCountBadgeActive: {
+    backgroundColor: colors.brand,
+  },
+  tabCountText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.textMuted,
+  },
+  tabCountTextActive: {
+    color: colors.textPrimary,
+  },
+  // List
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: 16,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
     gap: 12,
   },
   emptyText: {
     fontSize: 14,
     color: colors.textMuted,
+    textAlign: "center",
+    lineHeight: 20,
   },
+  // Item row
   itemRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -772,54 +944,111 @@ const modalStyles = StyleSheet.create({
     backgroundColor: colors.brandLight,
     marginHorizontal: -8,
     paddingHorizontal: 8,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderBottomColor: "transparent",
   },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: colors.border,
+  itemContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itemNameRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-  },
-  checkboxActive: {
-    backgroundColor: colors.brand,
-    borderColor: colors.brand,
+    gap: 8,
   },
   itemName: {
     fontSize: 14,
     fontWeight: "600",
     color: colors.textPrimary,
+    flexShrink: 1,
+  },
+  itemMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  typeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  typeBadgeProduct: {
+    backgroundColor: colors.infoBg,
+  },
+  typeBadgeService: {
+    backgroundColor: colors.warningBg,
+  },
+  typeBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  typeBadgeTextProduct: {
+    color: colors.info,
+  },
+  typeBadgeTextService: {
+    color: colors.warning,
   },
   itemMeta: {
     fontSize: 11,
     color: colors.textMuted,
-    marginTop: 2,
+    flexShrink: 1,
   },
-  pendingBadge: {
+  inStoreDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+  },
+  modifiedBadge: {
     backgroundColor: colors.amberBg,
     borderWidth: 1,
     borderColor: colors.amber + "40",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
     borderRadius: 6,
   },
-  pendingBadgeText: {
-    fontSize: 10,
-    fontWeight: "600",
+  modifiedBadgeText: {
+    fontSize: 9,
+    fontWeight: "700",
     color: colors.amber,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
+  // Footer
   footer: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  footerText: {
-    fontSize: 12,
-    color: colors.textMuted,
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
     marginBottom: 12,
+  },
+  summaryText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: "500",
+    flex: 1,
+  },
+  changesBadge: {
+    backgroundColor: colors.brandLight,
+    borderWidth: 1,
+    borderColor: colors.brand + "40",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  changesBadgeText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.brand,
   },
   footerActions: {
     flexDirection: "row",

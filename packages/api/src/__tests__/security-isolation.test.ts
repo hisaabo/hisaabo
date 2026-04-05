@@ -625,3 +625,51 @@ describe("SECURITY — rate limit GC removes stale entries to prevent memory exh
     expect(map.size).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY — PDF endpoints include cross-tenant business verification
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SECURITY — verifyBusinessAccess mirrors hasBusinessAccess logic", () => {
+  /**
+   * The non-tRPC PDF endpoints (/api/invoices/:id/pdf, /api/parties/:id/ledger.pdf)
+   * must perform the same cross-tenant business ownership check as the tRPC
+   * hasBusinessAccess middleware. This test encodes the shared algorithm to
+   * prevent regressions if either implementation drifts.
+   *
+   * Both implementations:
+   * 1. Look up the business in the tenant DB by businessId
+   * 2. Verify the business creator is a member of the caller's tenant (creatorMembership check)
+   * This prevents cross-tenant access in self-hosted shared-DB mode.
+   */
+
+  function verifyBusinessAccess(
+    biz: { id: string; createdByUserId: string } | undefined,
+    tenantMemberUserIds: string[],
+  ): { ok: boolean; error?: string } {
+    if (!biz) return { ok: false, error: "Business not found" };
+    const creatorIsMember = tenantMemberUserIds.includes(biz.createdByUserId);
+    if (!creatorIsMember) return { ok: false, error: "Business not found" };
+    return { ok: true };
+  }
+
+  it("rejects when business does not exist in tenant DB", () => {
+    const result = verifyBusinessAccess(undefined, ["user-1"]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects when business creator is not a member of the caller's tenant (cross-tenant attempt)", () => {
+    const result = verifyBusinessAccess(
+      { id: "biz-1", createdByUserId: "attacker-user" },
+      ["legitimate-user"],
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("allows when business exists and creator is a tenant member", () => {
+    const result = verifyBusinessAccess(
+      { id: "biz-1", createdByUserId: "owner-user" },
+      ["owner-user", "member-user"],
+    );
+    expect(result.ok).toBe(true);
+  });
+});

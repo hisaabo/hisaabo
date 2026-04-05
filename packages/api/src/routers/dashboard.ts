@@ -28,11 +28,15 @@ export const dashboardRouter = router({
     const fyYear = now.getMonth() < fyStartMonth ? now.getFullYear() - 1 : now.getFullYear();
     const fyStart = new Date(fyYear, fyStartMonth, 1);
 
-    // Use custom date range if provided, otherwise default to FY
+    // When no input is provided (All Time), skip date filtering entirely.
+    // When dates are provided, scope to that range. When only fromDate is
+    // provided (e.g. a preset like "This FY"), filter from that date onward.
+    const hasDateFilter = !!input?.fromDate || !!input?.toDate;
     const periodStart = input?.fromDate ? new Date(input.fromDate) : fyStart;
     const periodEnd = input?.toDate ? new Date(input.toDate) : undefined;
 
     const dateCondition = (dateCol: Parameters<typeof gte>[0]) => {
+      if (!hasDateFilter) return undefined; // All Time — no date filter
       if (periodEnd) return and(gte(dateCol, periodStart), lte(dateCol, periodEnd));
       return gte(dateCol, periodStart);
     };

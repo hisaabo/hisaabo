@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import Constants from "expo-constants";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
 import { colors } from "../../../../src/lib/theme";
@@ -111,17 +112,6 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* App Info */}
-        <View style={styles.appInfoCard}>
-          <View style={styles.appIconWrapper}>
-            <Ionicons name="calculator-outline" size={32} color={colors.brand} />
-          </View>
-          <View>
-            <Text style={styles.appName}>Hisaabo</Text>
-            <Text style={styles.appVersion}>Business Management</Text>
-          </View>
-        </View>
-
         {/* Organization */}
         {tenantList && tenantList.length > 0 && (
           <TouchableOpacity
@@ -188,7 +178,7 @@ export default function SettingsScreen() {
         </View>
 
         {/* Footer */}
-        <Text style={styles.footer}>Hisaabo v0.1.0 — Open-source business management</Text>
+        <Text style={styles.footer}>Hisaabo v{Constants.expoConfig?.version ?? "0.4.0"}</Text>
       </ScrollView>
 
       {/* Org Switcher Sheet */}
@@ -220,29 +210,6 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   title: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
   content: { padding: 16, paddingBottom: 48 },
-
-  // App Info Card
-  appInfoCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 20,
-    marginBottom: 24,
-  },
-  appIconWrapper: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: colors.brandLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  appName: { fontSize: 20, fontWeight: "700", color: colors.textPrimary },
-  appVersion: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
 
   // Settings List
   settingsList: {

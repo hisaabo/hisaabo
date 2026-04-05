@@ -8,6 +8,18 @@ import { useBusinessStore } from "../../../src/stores/business";
 import { useBiometricStore } from "../../../src/stores/biometric";
 import { useBusinessSwitcherContext } from "../../../src/contexts/BusinessSwitcherContext";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
+
+/** Whole-number currency for summary cards — paise are noise at this level */
+function formatSummary(value: string | number): string {
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  if (isNaN(num)) return "\u20B90";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(num);
+}
 import { colors } from "../../../src/lib/theme";
 import { StatusBadge, Skeleton, QueryError } from "../../../src/components/ui";
 import { BiometricSetupPrompt } from "../../../src/components/BiometricSetupPrompt";
@@ -126,12 +138,12 @@ export default function DashboardScreen() {
           <QueryError message="Could not load summary" onRetry={refetch} />
         ) : summary ? (
           <View style={s.grid}>
-            <SummaryCard label="Total Sales" value={formatCurrency(summary.totalSales)} color={colors.success} />
-            <SummaryCard label="Total Purchases" value={formatCurrency(summary.totalPurchases)} color={colors.info} />
-            <SummaryCard label="Receivable" value={formatCurrency(summary.receivable)} color={colors.warning} />
-            <SummaryCard label="Payable" value={formatCurrency(summary.payable)} color={colors.danger} />
-            <SummaryCard label="Cash in Hand" value={formatCurrency(summary.cashInHand)} color={colors.brand} />
-            <SummaryCard label="Expenses" value={formatCurrency(summary.totalExpenses)} color="#8b5cf6" />
+            <SummaryCard label="Total Sales" value={formatSummary(summary.totalSales)} color={colors.success} />
+            <SummaryCard label="Total Purchases" value={formatSummary(summary.totalPurchases)} color={colors.info} />
+            <SummaryCard label="Receivable" value={formatSummary(summary.receivable)} color={colors.warning} />
+            <SummaryCard label="Payable" value={formatSummary(summary.payable)} color={colors.danger} />
+            <SummaryCard label="Cash in Hand" value={formatSummary(summary.cashInHand)} color={colors.brand} />
+            <SummaryCard label="Expenses" value={formatSummary(summary.totalExpenses)} color="#8b5cf6" />
           </View>
         ) : (
           <View style={s.grid}>
