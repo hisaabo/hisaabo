@@ -1,4 +1,7 @@
 import { defineConfig } from "tsup";
+import { readFileSync } from "fs";
+
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8"));
 
 export default defineConfig({
   entry: ["src/bin/hisaabo.ts"],
@@ -7,7 +10,9 @@ export default defineConfig({
   banner: {
     js: "#!/usr/bin/env node",
   },
-  external: ["react", "ink", "@inkjs/ui"],
+  define: {
+    __CLI_VERSION__: JSON.stringify(pkg.version),
+  },
   outDir: "dist/bin",
   clean: true,
 });

@@ -689,14 +689,40 @@ export const paymentRouter = router({
         // Already soft-deleted — return early
         if (payment.deletedAt) return { success: true, payment: null };
 
-        // Reverse the invoice amount if linked
-        if (payment.invoiceId) {
-          await tx.update(invoices)
-            .set({
-              amountPaid: sql`GREATEST(${invoices.amountPaid}::numeric - ${payment.amount}::numeric, 0)`,
-              updatedAt: new Date(),
-            })
-            .where(eq(invoices.id, payment.invoiceId));
+        // Reverse invoice allocations (per-allocation for multi-invoice payments)
+        const existingAllocations = await tx.select({
+          invoiceId: paymentAllocations.invoiceId,
+          amount: paymentAllocations.amount,
+        }).from(paymentAllocations).where(eq(paymentAllocations.paymentId, payment.id));
+
+        if (existingAllocations.length > 0) {
+          for (const alloc of existingAllocations) {
+            await tx.execute(sql`
+              UPDATE invoices SET
+                amount_paid = GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0),
+                status = CASE
+                  WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'::invoice_status
+                  WHEN GREATEST(amount_paid::numeric - ${alloc.amount}::numeric, 0) > 0 THEN 'partial'::invoice_status
+                  ELSE 'sent'::invoice_status
+                END,
+                updated_at = NOW()
+              WHERE id = ${alloc.invoiceId} AND business_id = ${ctx.businessId}
+            `);
+          }
+          await tx.delete(paymentAllocations).where(eq(paymentAllocations.paymentId, payment.id));
+        } else if (payment.invoiceId) {
+          // Legacy fallback: no allocation rows, reverse full amount on single invoice
+          await tx.execute(sql`
+            UPDATE invoices SET
+              amount_paid = GREATEST(amount_paid::numeric - ${payment.amount}::numeric, 0),
+              status = CASE
+                WHEN GREATEST(amount_paid::numeric - ${payment.amount}::numeric, 0) >= total_amount::numeric THEN 'paid'::invoice_status
+                WHEN GREATEST(amount_paid::numeric - ${payment.amount}::numeric, 0) > 0 THEN 'partial'::invoice_status
+                ELSE 'sent'::invoice_status
+              END,
+              updated_at = NOW()
+            WHERE id = ${payment.invoiceId} AND business_id = ${ctx.businessId}
+          `);
         }
 
         // Reverse gateway operations before the main bank txn reversal

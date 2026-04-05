@@ -75,7 +75,13 @@ export function registerTenantTools(server: McpServer, client: HisaaboClient) {
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(result, null, 2),
+          text: JSON.stringify({
+            success: true,
+            email: input.email,
+            role: input.role,
+            expiresAt: result.expiresAt,
+            note: "Invitation sent. Deliver the invitation link to the recipient through a secure channel (not this conversation).",
+          }, null, 2),
         }],
       };
     })

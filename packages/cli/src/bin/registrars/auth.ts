@@ -5,6 +5,78 @@ import { setConfig, requireAuth } from "../../config.js";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { fatalError, success, EXIT, outputJSON } from "../../output.js";
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function ask(rl: readline.Interface, q: string): Promise<string> {
+  return new Promise<string>((res) => rl.question(q, res));
+}
+
+/**
+ * Prompt for a secret value (password, API token) with input hidden.
+ * Characters are replaced with '*' as the user types.
+ */
+function askSecret(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, terminal: true });
+    process.stdout.write(prompt);
+
+    const chars: string[] = [];
+
+    const cleanup = () => {
+      process.stdin.removeListener("data", onData);
+      process.stdin.setRawMode?.(false);
+      process.stdin.pause();
+    };
+
+    // Restore terminal on unexpected signals
+    const onSignal = () => { cleanup(); process.exit(130); };
+    process.once("SIGTERM", onSignal);
+    process.once("SIGHUP", onSignal);
+
+    const onData = (key: Buffer) => {
+      const ch = key.toString();
+      if (ch === "\n" || ch === "\r") {
+        process.removeListener("SIGTERM", onSignal);
+        process.removeListener("SIGHUP", onSignal);
+        cleanup();
+        process.stdout.write("\n");
+        rl.close();
+        const result = chars.join("");
+        chars.length = 0; // clear password from array
+        resolve(result);
+      } else if (ch === "\x7f" || ch === "\b") {
+        // Backspace
+        if (chars.length > 0) {
+          chars.pop();
+          process.stdout.write("\b \b");
+        }
+      } else if (ch === "\x03") {
+        // Ctrl+C
+        cleanup();
+        process.stdout.write("\n");
+        process.exit(130);
+      } else if (ch.charCodeAt(0) >= 32) {
+        chars.push(ch);
+        process.stdout.write("*");
+      }
+    };
+
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      process.stdin.on("data", onData);
+    } else {
+      // Non-interactive: read line normally (piped input)
+      rl.question("", (answer) => {
+        rl.close();
+        resolve(answer.trim());
+      });
+    }
+  });
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────────
+
 export function registerAuthCommands(program: Command): void {
   // ── login ─────────────────────────────────────────────────────────────────
 
@@ -13,8 +85,8 @@ export function registerAuthCommands(program: Command): void {
     .description("Authenticate and configure your Hisaabo server")
     .option("--api-url <url>", "Server URL")
     .option("--email <email>", "Email address")
-    .option("--password <password>", "Password")
-    .option("--token <token>", "API key (hisaabo_key_...) for passwordless auth")
+    .option("--password <password>", "Password (visible in shell history — prefer interactive prompt)")
+    .option("--token <token>", "API key (visible in shell history — prefer HISAABO_TOKEN env var)")
     .action(async (opts) => {
       let apiUrl = opts.apiUrl;
 
@@ -22,9 +94,8 @@ export function registerAuthCommands(program: Command): void {
       if (opts.token) {
         if (!apiUrl) {
           const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-          const ask = (q: string) => new Promise<string>((res) => rl.question(q, res));
           console.log("\n  Hisaabo CLI\n  " + "─".repeat(11) + "\n");
-          const u = await ask("  Server URL [http://localhost:3000]: ");
+          const u = await ask(rl, "  Server URL [http://localhost:3000]: ");
           rl.close();
           apiUrl = u.trim() || "http://localhost:3000";
         }
@@ -38,18 +109,16 @@ export function registerAuthCommands(program: Command): void {
 
       if (!apiUrl || !email || !password) {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const ask = (q: string) => new Promise<string>((res) => rl.question(q, res));
         console.log("\n  Hisaabo CLI\n  " + "─".repeat(11) + "\n");
         if (!apiUrl) {
-          const u = await ask("  Server URL [http://localhost:3000]: ");
+          const u = await ask(rl, "  Server URL [http://localhost:3000]: ");
           apiUrl = u.trim() || "http://localhost:3000";
         }
-        if (!email) email = (await ask("  Email: ")).trim();
-        if (!password) {
-          // Hide password input if possible
-          password = (await ask("  Password: ")).trim();
-        }
+        if (!email) email = (await ask(rl, "  Email: ")).trim();
         rl.close();
+        if (!password) {
+          password = await askSecret("  Password: ");
+        }
         console.log("\n  Tip: Generate an API key at Settings → API Keys for passwordless CLI access.\n");
       }
 

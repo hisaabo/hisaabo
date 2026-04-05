@@ -317,17 +317,6 @@ export default function BusinessSettingsScreen() {
               onSubmitEditing={handleSave}
             />
 
-            <View style={styles.divider} />
-
-            <TouchableOpacity
-              style={styles.createBizBtn}
-              onPress={() => router.push("/(app)/create-business")}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
-              <Text style={styles.createBizBtnText}>Create New Business</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} style={{ marginLeft: "auto" }} />
-            </TouchableOpacity>
           </>
         )}
       </ScrollView>
@@ -465,29 +454,5 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     gap: 12,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: "#2d2d44",
-    marginVertical: 24,
-    marginHorizontal: 16,
-  },
-  createBizBtn: {
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#6366f1",
-    backgroundColor: "rgba(99, 102, 241, 0.12)",
-  },
-  createBizBtnText: {
-    fontSize: 15,
-    fontWeight: "600" as const,
-    color: "#6366f1",
   },
 });

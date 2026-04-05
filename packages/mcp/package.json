@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/mcp",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "repository": {
@@ -12,9 +12,10 @@
     "hisaabo-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm",
+    "build": "tsup",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@hisaabo/shared": "workspace:*",
@@ -26,6 +27,7 @@
     "@types/node": "^22.0.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
   }
 }

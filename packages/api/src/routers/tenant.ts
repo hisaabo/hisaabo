@@ -1,20 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { controlDb, tenants, tenantMembers, invitations, users, sessions } from "@hisaabo/db";
+import { controlDb, tenants, tenantMembers, invitations, users, sessions, provisionTenantDatabase } from "@hisaabo/db";
 import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
-import { router, protectedProcedure, tenantProcedure } from "../trpc.js";
-import { invalidateSessionCache } from "../context.js";
+import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
+import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
 import { emailService } from "../lib/email.js";
-import { enforceTeamMemberLimit } from "../lib/plan-limits.js";
+import { enforceTeamMemberLimit, enforceOrgCreationLimit, getLimits } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 async function autoSelectTenantInSession(req: Request, tenantId: string): Promise<string> {
-  const sessionId = getCookieFromRequest(req, "session_id");
+  const sessionId = getSessionIdFromRequest(req);
   if (sessionId) {
     await controlDb.update(sessions)
       .set({ tenantId })
@@ -28,7 +28,106 @@ async function autoSelectTenantInSession(req: Request, tenantId: string): Promis
   return tenant?.name ?? "Organization";
 }
 
+function generateSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) + "-" + nanoid(6);
+}
+
 export const tenantRouter = router({
+  // Create a new organization for the authenticated user.
+  // User becomes the owner. In self-hosted mode, joins the default tenant instead.
+  create: protectedProcedure.mutation(async ({ ctx }) => {
+    await enforceOrgCreationLimit(ctx.user.id);
+    const displayName = ctx.user.name ?? ctx.user.email.split("@")[0];
+
+    if (process.env.MULTI_TENANT === "true") {
+      const tenantName = `${displayName}'s Organization`;
+      const slug = generateSlug(tenantName);
+
+      // 1. Create the tenant row
+      const [tenant] = await controlDb.insert(tenants).values({
+        name: tenantName,
+        slug,
+      }).returning({ id: tenants.id });
+
+      // 2. Provision the tenant database (CREATE DATABASE, user, schema push)
+      let dbConfig: Awaited<ReturnType<typeof provisionTenantDatabase>>;
+      try {
+        dbConfig = await provisionTenantDatabase(tenant.id, slug);
+      } catch (err) {
+        // Roll back orphaned tenant row so a retry can succeed
+        await controlDb.delete(tenants).where(eq(tenants.id, tenant.id));
+        throw err;
+      }
+
+      // 3. Persist DB connection details
+      await controlDb.update(tenants)
+        .set({
+          dbName: dbConfig.dbName,
+          dbHost: dbConfig.dbHost,
+          dbPort: dbConfig.dbPort,
+          dbUser: dbConfig.dbUser,
+          dbPassword: dbConfig.dbPassword,
+          updatedAt: new Date(),
+        })
+        .where(eq(tenants.id, tenant.id));
+
+      // 4. Create owner membership
+      await controlDb.insert(tenantMembers).values({
+        tenantId: tenant.id,
+        userId: ctx.user.id,
+        role: "owner",
+        acceptedAt: new Date(),
+      });
+
+      // Auto-select the new tenant in session
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, tenant.id);
+      return { tenantId: tenant.id, tenantName: tenantNameResult };
+    } else {
+      // Self-hosted: join/create default tenant
+      let [defaultTenant] = await controlDb.select({ id: tenants.id })
+        .from(tenants).where(eq(tenants.slug, "default")).limit(1);
+      if (!defaultTenant) {
+        [defaultTenant] = await controlDb.insert(tenants).values({
+          name: "Default Organization", slug: "default",
+        }).returning({ id: tenants.id });
+      }
+
+      const memberCount = await controlDb.select({ id: tenantMembers.id })
+        .from(tenantMembers).where(eq(tenantMembers.tenantId, defaultTenant.id));
+      const role = memberCount.length === 0 ? "owner" : "member";
+
+      await controlDb.insert(tenantMembers).values({
+        tenantId: defaultTenant.id, userId: ctx.user.id,
+        role, acceptedAt: new Date(),
+      });
+
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenant.id);
+      return { tenantId: defaultTenant.id, tenantName: tenantNameResult };
+    }
+  }),
+
+  // Check if the user can create a new org (plan limit not reached).
+  canCreateOrg: protectedProcedure.query(async ({ ctx }) => {
+    const ownedOrgs = await controlDb.select({ plan: tenants.plan })
+      .from(tenantMembers)
+      .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+      .where(and(
+        eq(tenantMembers.userId, ctx.user.id),
+        eq(tenantMembers.role, "owner"),
+      ));
+
+    const planRank: Record<string, number> = { free: 0, pro: 1, business: 2, enterprise: 3 };
+    let bestPlan = "free";
+    for (const org of ownedOrgs) {
+      if ((planRank[org.plan ?? "free"] ?? 0) > (planRank[bestPlan] ?? 0)) {
+        bestPlan = org.plan ?? "free";
+      }
+    }
+
+    const limits = getLimits(bestPlan);
+    return limits.maxOwnedOrgs === Infinity || ownedOrgs.length < limits.maxOwnedOrgs;
+  }),
+
   // List user's tenant memberships
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await controlDb.select({
@@ -47,6 +146,76 @@ export const tenantRouter = router({
     return memberships;
   }),
 
+  // Pending invitations for the authenticated user's email.
+  // Used by the NoOrgScreen to show "You've been invited to [Org]".
+  myInvitations: protectedProcedure.query(async ({ ctx }) => {
+    const pending = await controlDb.select({
+      id: invitations.id,
+      tenantName: tenants.name,
+      role: invitations.role,
+    })
+      .from(invitations)
+      .innerJoin(tenants, eq(tenants.id, invitations.tenantId))
+      .where(and(
+        eq(invitations.email, ctx.user.email.toLowerCase()),
+        isNull(invitations.acceptedAt),
+        gt(invitations.expiresAt, new Date()),
+      ));
+    return pending;
+  }),
+
+  // Accept invitation by ID (for users who see their pending invites in-app,
+  // without having clicked the email link). Same logic as acceptInvitation
+  // but looks up by ID + email match instead of raw token.
+  acceptById: protectedProcedure
+    .input(z.object({ invitationId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const [invitation] = await controlDb.select()
+        .from(invitations)
+        .where(and(
+          eq(invitations.id, input.invitationId),
+          eq(invitations.email, ctx.user.email.toLowerCase()),
+          isNull(invitations.acceptedAt),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (!invitation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found or expired" });
+      }
+
+      // Check if already a member
+      const [existingMember] = await controlDb.select({ id: tenantMembers.id })
+        .from(tenantMembers)
+        .where(and(
+          eq(tenantMembers.tenantId, invitation.tenantId),
+          eq(tenantMembers.userId, ctx.user.id),
+        ))
+        .limit(1);
+
+      if (existingMember) {
+        await controlDb.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invitation.id));
+        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+        return { tenantId: invitation.tenantId, tenantName };
+      }
+
+      await controlDb.transaction(async (tx) => {
+        await tx.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
+        await tx.update(invitations)
+          .set({ acceptedAt: new Date() })
+          .where(eq(invitations.id, invitation.id));
+      });
+
+      const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+      return { tenantId: invitation.tenantId, tenantName };
+    }),
+
   // Select/switch tenant — updates session's tenantId
   select: protectedProcedure
     .input(z.object({ tenantId: z.string().uuid() }))
@@ -64,8 +233,8 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this organization" });
       }
 
-      // Get session ID from cookie
-      const sessionId = getCookieFromRequest(ctx.req, "session_id");
+      // Get session ID from cookie or Bearer token (mobile uses Bearer)
+      const sessionId = getSessionIdFromRequest(ctx.req);
       if (!sessionId) throw new TRPCError({ code: "UNAUTHORIZED" });
 
       // Update session's tenantId
@@ -202,6 +371,40 @@ export const tenantRouter = router({
     }),
 
   // Accept an invitation
+  // Preview invitation details without accepting — used by the onboarding
+  // flow to show "Join [Org] or create your own?" before committing.
+  // Public because new users calling this may not have a session yet.
+  // Security: token is nanoid(32) (~192 bits entropy) — brute-force infeasible.
+  // Response deliberately omits email to avoid leaking PII via token possession.
+  peekInvitation: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .query(async ({ input }) => {
+      const tokenHash = hashInvitationToken(input.token);
+      const [invitation] = await controlDb.select({
+        role: invitations.role,
+        tenantId: invitations.tenantId,
+        acceptedAt: invitations.acceptedAt,
+      })
+        .from(invitations)
+        .where(and(
+          eq(invitations.token, tokenHash),
+          gt(invitations.expiresAt, new Date()),
+        ))
+        .limit(1);
+
+      if (!invitation || invitation.acceptedAt) return null;
+
+      const [tenant] = await controlDb.select({ name: tenants.name })
+        .from(tenants)
+        .where(eq(tenants.id, invitation.tenantId))
+        .limit(1);
+
+      return {
+        tenantName: tenant?.name ?? "Organization",
+        role: invitation.role,
+      };
+    }),
+
   acceptInvitation: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
@@ -218,15 +421,38 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Invalid or expired invitation" });
       }
 
-      if (invitation.acceptedAt) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invitation already accepted" });
-      }
-
       // Verify the invitation email matches the authenticated user
       const [currentUser] = await controlDb.select({ email: users.email })
         .from(users).where(eq(users.id, ctx.user.id)).limit(1);
       if (!currentUser || currentUser.email.toLowerCase() !== invitation.email.toLowerCase()) {
         throw new TRPCError({ code: "FORBIDDEN", message: "This invitation was sent to a different email address" });
+      }
+
+      // If already accepted, treat as idempotent — the user may be clicking
+      // an old link or retrying after a partial failure. Check membership and
+      // auto-select the tenant if they're already in.
+      if (invitation.acceptedAt) {
+        const [existingMember] = await controlDb.select({ id: tenantMembers.id })
+          .from(tenantMembers)
+          .where(and(
+            eq(tenantMembers.tenantId, invitation.tenantId),
+            eq(tenantMembers.userId, ctx.user.id),
+          ))
+          .limit(1);
+        if (existingMember) {
+          const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+          return { tenantId: invitation.tenantId, tenantName };
+        }
+        // Accepted but not a member (removed after accepting) — re-add them
+        await controlDb.insert(tenantMembers).values({
+          tenantId: invitation.tenantId,
+          userId: ctx.user.id,
+          role: invitation.role,
+          invitedBy: invitation.invitedBy ?? undefined,
+          acceptedAt: new Date(),
+        });
+        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
+        return { tenantId: invitation.tenantId, tenantName };
       }
 
       // Check if already a member (e.g. double-click)
@@ -352,6 +578,27 @@ export const tenantRouter = router({
           eq(tenantMembers.userId, input.userId),
         ));
 
+      // Revoke the removed user's access immediately: clear the tenantId from
+      // their sessions so the next request can't piggyback on the cached session.
+      const affectedSessions = await controlDb.select({ id: sessions.id })
+        .from(sessions)
+        .where(and(
+          eq(sessions.userId, input.userId),
+          eq(sessions.tenantId, ctx.tenantId),
+        ));
+
+      if (affectedSessions.length > 0) {
+        await controlDb.update(sessions)
+          .set({ tenantId: null })
+          .where(and(
+            eq(sessions.userId, input.userId),
+            eq(sessions.tenantId, ctx.tenantId),
+          ));
+        for (const s of affectedSessions) {
+          invalidateSessionCache(s.id);
+        }
+      }
+
       return { success: true };
     }),
 
@@ -398,9 +645,3 @@ export const tenantRouter = router({
     }),
 });
 
-function getCookieFromRequest(req: Request, name: string): string | null {
-  const cookies = req.headers.get("cookie");
-  if (!cookies) return null;
-  const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : null;
-}

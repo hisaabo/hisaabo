@@ -8,7 +8,7 @@ import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, in
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
-import { invalidateSessionCache } from "../context.js";
+import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 
@@ -119,14 +119,10 @@ async function createSessionForUser(
   return sessionId;
 }
 
-// ── Shared helper: extract session ID from cookie or Bearer header ──
+// Session ID extraction uses the canonical getSessionIdFromRequest from context.ts
+// which correctly skips API keys (hisaabo_key_ prefix).
 function getSessionIdFromContext(ctx: { req: Request }): string | null {
-  const cookies = ctx.req.headers.get("cookie") || "";
-  const cookieMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-  if (cookieMatch) return decodeURIComponent(cookieMatch[1]);
-  const authHeader = ctx.req.headers.get("authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
-  return null;
+  return getSessionIdFromRequest(ctx.req);
 }
 
 // ── Shared helper: auto-create tenant for a new user ───────────

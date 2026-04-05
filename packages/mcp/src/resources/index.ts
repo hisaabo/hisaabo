@@ -38,6 +38,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "business_current",
     "business://current",
+    { description: "Active business profile: name, GSTIN, GST registration type, currency, financial year start, address." },
     async (_uri) => {
       const biz = await client.business.get();
       return {
@@ -56,6 +57,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "parties_customers",
     "parties://customers",
+    { description: "Top 50 customers sorted by name. Includes ID, name, phone, and outstanding balance." },
     async (_uri) => {
       const result = await client.party.list({
         type: "customer",
@@ -79,6 +81,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "parties_suppliers",
     "parties://suppliers",
+    { description: "Top 50 suppliers sorted by name. Includes ID, name, phone, and outstanding balance." },
     async (_uri) => {
       const result = await client.party.list({
         type: "supplier",
@@ -103,6 +106,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "items_inventory",
     "items://inventory",
+    { description: "Up to 100 inventory items with current stock, prices, and low-stock flags." },
     async (_uri) => {
       // Fetch up to 100 items — for context seeding, not exhaustive listing
       const result = await client.item.list({ limit: 100, page: 1 });
@@ -121,6 +125,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "invoices_recent",
     "invoices://recent",
+    { description: "Last 10 sale invoices for quick status overview: number, party, amount, status." },
     async (_uri) => {
       const result = await client.invoice.list({
         type: "sale",
@@ -143,6 +148,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "dashboard_summary",
     "dashboard://summary",
+    { description: "Current financial year summary: total sales, purchases, expenses, receivables, payables, cash in hand." },
     async (_uri) => {
       // No date range = API defaults to current financial year
       const summary = await client.dashboard.summary();
@@ -162,6 +168,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "bank_accounts",
     "bank://accounts",
+    { description: "All bank, cash, and UPI accounts with current balances and account details." },
     async (_uri) => {
       const accounts = await client.bankAccount.list();
       return {
@@ -179,6 +186,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "shipments_recent",
     "shipments://recent",
+    { description: "Last 10 shipments with tracking status, carrier, and delivery dates." },
     async (_uri) => {
       const result = await client.shipment.list({ page: 1, limit: 10 });
       return {
@@ -197,6 +205,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
   server.resource(
     "targets_active",
     "targets://active",
+    { description: "Active sales targets with real-time progress: target amount, achieved, percentage, period." },
     async (_uri) => {
       const targets = await client.target.list({ active: true, withProgress: true });
       return {

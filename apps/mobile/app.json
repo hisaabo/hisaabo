@@ -2,7 +2,7 @@
   "expo": {
     "name": "Hisaabo",
     "slug": "hisaabo",
-    "version": "0.3.3",
+    "version": "0.4.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "hisaabo",
@@ -17,7 +17,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0f0f1a"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#5b5bd6"
       },
       "package": "in.hisaabo.app"
     },

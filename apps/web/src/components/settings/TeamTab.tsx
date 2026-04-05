@@ -4,12 +4,13 @@ import { Modal } from "@/components/ui/Modal";
 import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
 import { cn, formatDate } from "@/lib/utils";
+import { formatRole } from "@/lib/roles";
 
 const roleOptions = [
-  { value: "admin", label: "Admin" },
-  { value: "seller_manager", label: "Seller Manager" },
-  { value: "seller", label: "Seller" },
-  { value: "accountant", label: "Accountant" },
+  { value: "admin", label: formatRole("admin") },
+  { value: "seller_manager", label: formatRole("seller_manager") },
+  { value: "seller", label: formatRole("seller") },
+  { value: "accountant", label: formatRole("accountant") },
 ];
 
 function TeamSection() {
@@ -55,7 +56,7 @@ function TeamSection() {
 
   return (
     <>
-      <div className="card overflow-hidden">
+      <div className="card overflow-visible">
         <div className="px-6 py-4 flex items-center justify-between border-b border-border-light">
           <div>
             <h3 className="text-sm font-semibold text-text-primary">Team Members</h3>
@@ -97,7 +98,7 @@ function TeamSection() {
                           ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
                           : "bg-surface-2 text-text-secondary",
                       )}>
-                        {inv.role}
+                        {formatRole(inv.role)}
                       </span>
                     </td>
                     <td className="text-text-secondary text-xs">
@@ -153,7 +154,7 @@ function TeamSection() {
                             : "bg-surface-2 text-text-secondary",
                       )}
                     >
-                      {m.role === "owner" ? "superadmin" : m.role}
+                      {formatRole(m.role)}
                     </span>
                   </td>
                   <td className="text-text-secondary text-xs">

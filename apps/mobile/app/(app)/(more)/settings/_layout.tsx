@@ -14,6 +14,7 @@ export default function SettingsLayout() {
       <Stack.Screen name="account" options={{ headerShown: false }} />
       <Stack.Screen name="documents" options={{ headerShown: false }} />
       <Stack.Screen name="api-keys" options={{ headerShown: false }} />
+      <Stack.Screen name="store" options={{ headerShown: false }} />
     </Stack>
   );
 }

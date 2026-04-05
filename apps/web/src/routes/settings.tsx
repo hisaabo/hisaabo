@@ -31,7 +31,11 @@ function SettingsPage() {
     () => new URLSearchParams(window.location.search).get("action") === "create-business",
   );
   const biz = businesses?.[0];
-  const canCreateBusiness = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
+  const hasRole = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
+  const { data: canCreateBizPlan } = trpc.business.canCreate.useQuery(undefined, {
+    enabled: !!session?.tenantId && hasRole,
+  });
+  const canCreateBusiness = hasRole && (canCreateBizPlan ?? true);
 
   // Listen for "create-business" event from BusinessSwitcher (when already on settings)
   useEffect(() => {
@@ -49,8 +53,25 @@ function SettingsPage() {
     );
   }
 
-  // First-run: no business yet — show creation form full-width
+  // First-run: no business yet
   if (!biz && !showWhatsNext) {
+    if (!canCreateBusiness) {
+      // Invited user (seller, accountant, etc.) — they can't create businesses.
+      // Show a waiting message instead of the creation form.
+      return (
+        <div>
+          <PageHeader title="Welcome!" description="" />
+          <div className="card px-6 py-8 text-center">
+            <p className="text-sm text-text-primary font-medium mb-1">
+              No business has been set up yet.
+            </p>
+            <p className="text-sm text-text-tertiary">
+              Your organization admin needs to create a business first. You'll see it here once it's ready.
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div>
         <PageHeader title="Almost there!" description="Set up your business to start creating invoices" />

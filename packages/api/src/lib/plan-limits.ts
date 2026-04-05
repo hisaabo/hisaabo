@@ -8,7 +8,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, and, gt, count } from "drizzle-orm";
+import { eq, and, gt, isNull, count } from "drizzle-orm";
 import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
@@ -16,6 +16,7 @@ import { businesses } from "@hisaabo/db";
 // ── Plan limit definitions ────────────────────────────────────────────────────
 
 export interface PlanLimits {
+  maxOwnedOrgs: number;         // orgs a user can own (across all their tenants)
   maxBusinesses: number;        // businesses per tenant
   maxTeamMembers: number;       // members + pending invites per tenant
   maxConcurrentSessions: number;
@@ -29,6 +30,7 @@ export interface PlanLimits {
 
 const PLAN_LIMITS: Record<string, PlanLimits> = {
   free: {
+    maxOwnedOrgs: 1,
     maxBusinesses: 1,
     maxTeamMembers: 3,
     maxConcurrentSessions: 3,
@@ -40,6 +42,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     pdfBranding: true,
   },
   pro: {
+    maxOwnedOrgs: 3,
     maxBusinesses: 5,
     maxTeamMembers: 15,
     maxConcurrentSessions: 10,
@@ -51,6 +54,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     pdfBranding: false,
   },
   business: {
+    maxOwnedOrgs: Infinity,
     maxBusinesses: Infinity,
     maxTeamMembers: Infinity,
     maxConcurrentSessions: Infinity,
@@ -62,6 +66,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     pdfBranding: false,
   },
   enterprise: {
+    maxOwnedOrgs: Infinity,
     maxBusinesses: Infinity,
     maxTeamMembers: Infinity,
     maxConcurrentSessions: Infinity,
@@ -92,6 +97,41 @@ async function getTenantPlan(tenantId: string): Promise<string> {
     .where(eq(tenants.id, tenantId))
     .limit(1);
   return row?.plan ?? "free";
+}
+
+/**
+ * Enforce org creation limit.
+ * Counts orgs the user owns and checks against the highest plan they have.
+ * A user's effective plan is the best plan across all orgs they own.
+ */
+export async function enforceOrgCreationLimit(userId: string): Promise<void> {
+  // Count orgs this user owns
+  const ownedOrgs = await controlDb.select({ tenantId: tenantMembers.tenantId, plan: tenants.plan })
+    .from(tenantMembers)
+    .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+    .where(and(
+      eq(tenantMembers.userId, userId),
+      eq(tenantMembers.role, "owner"),
+    ));
+
+  // Effective plan = best plan across all owned orgs
+  const planRank: Record<string, number> = { free: 0, pro: 1, business: 2, enterprise: 3 };
+  let bestPlan = "free";
+  for (const org of ownedOrgs) {
+    if ((planRank[org.plan ?? "free"] ?? 0) > (planRank[bestPlan] ?? 0)) {
+      bestPlan = org.plan ?? "free";
+    }
+  }
+
+  const limits = getLimits(bestPlan);
+  if (limits.maxOwnedOrgs === Infinity) return;
+
+  if (ownedOrgs.length >= limits.maxOwnedOrgs) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Your plan allows up to ${limits.maxOwnedOrgs} organization${limits.maxOwnedOrgs === 1 ? "" : "s"}. Upgrade to create more.`,
+    });
+  }
 }
 
 /**
@@ -131,6 +171,7 @@ export async function enforceTeamMemberLimit(tenantId: string): Promise<void> {
       .where(and(
         eq(invitations.tenantId, tenantId),
         gt(invitations.expiresAt, new Date()),
+        isNull(invitations.acceptedAt),
       )),
   ]);
 

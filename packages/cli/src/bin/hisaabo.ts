@@ -26,10 +26,13 @@ import { registerSessionCommands } from "./registrars/session.js";
 
 const program = new Command();
 
+declare const __CLI_VERSION__: string | undefined;
+const cliVersion = typeof __CLI_VERSION__ !== "undefined" ? __CLI_VERSION__ : "dev";
+
 program
   .name("hisaabo")
   .description("Hisaabo CLI — Invoicing and business management")
-  .version("0.1.0");
+  .version(cliVersion);
 
 // ── Register all command groups ───────────────────────────────────────────
 

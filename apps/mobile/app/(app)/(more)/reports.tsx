@@ -11,6 +11,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import { trpc } from "../../../src/lib/trpc";
+import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { Card, QueryError, Skeleton, DatePickerField } from "../../../src/components/ui";
@@ -99,6 +100,7 @@ const barStyles = StyleSheet.create({
 
 export default function ReportsScreen() {
   const router = useRouter();
+  const { businessId } = useBusinessStore();
   const [period, setPeriod] = useState<Period>("fy");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo, setCustomTo] = useState<Date | null>(null);
@@ -111,7 +113,7 @@ export default function ReportsScreen() {
     isError: plError,
     refetch: refetchPL,
     isRefetching: plRefetching,
-  } = trpc.dashboard.profitAndLoss.useQuery(dates);
+  } = trpc.dashboard.profitAndLoss.useQuery(dates, { enabled: !!businessId });
 
   const {
     data: agingData,
@@ -119,7 +121,7 @@ export default function ReportsScreen() {
     isError: agingError,
     refetch: refetchAging,
     isRefetching: agingRefetching,
-  } = trpc.dashboard.receivablesAging.useQuery(undefined);
+  } = trpc.dashboard.receivablesAging.useQuery(undefined, { enabled: !!businessId });
 
   const {
     data: expenseData,
@@ -127,7 +129,7 @@ export default function ReportsScreen() {
     isError: expenseError,
     refetch: refetchExpenses,
     isRefetching: expenseRefetching,
-  } = trpc.dashboard.expensesByCategory.useQuery(dates);
+  } = trpc.dashboard.expensesByCategory.useQuery(dates, { enabled: !!businessId });
 
   const {
     data: statusData,
@@ -135,7 +137,7 @@ export default function ReportsScreen() {
     isError: statusError,
     refetch: refetchStatus,
     isRefetching: statusRefetching,
-  } = trpc.dashboard.invoiceStatusBreakdown.useQuery(dates);
+  } = trpc.dashboard.invoiceStatusBreakdown.useQuery(dates, { enabled: !!businessId });
 
   const isRefreshing = plRefetching || agingRefetching || expenseRefetching || statusRefetching;
 

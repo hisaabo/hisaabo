@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
+import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
@@ -19,6 +20,7 @@ type PartyType = "customer" | "supplier";
 
 export default function PartiesScreen() {
   const router = useRouter();
+  const { businessId } = useBusinessStore();
   const [activeTab, setActiveTab] = useState<PartyType>("customer");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -33,7 +35,7 @@ export default function PartiesScreen() {
         page,
         limit: 20,
       },
-      { placeholderData: (prev) => prev }
+      { enabled: !!businessId, placeholderData: (prev) => prev }
     );
 
   const total = data?.total ?? 0;

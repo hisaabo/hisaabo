@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/Modal";
 import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
+import { formatRole } from "@/lib/roles";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -74,7 +75,7 @@ const navSections = [
   {
     label: "OVERVIEW",
     items: [
-      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true, resource: "Business", action: "read" },
+      { to: "/", label: "Dashboard", icon: DashboardIcon, exact: true, resource: "Report", action: "read" },
     ],
   },
   {
@@ -118,13 +119,138 @@ const navSections = [
       { to: "/reports", label: "Reports", icon: ReportsIcon, resource: "Report", action: "read" },
     ],
   },
-  {
-    label: "ACCOUNT",
-    items: [
-      { to: "/settings", label: "Settings", icon: SettingsIcon, resource: "Business", action: "manage" },
-    ],
-  },
 ];
+
+// ── NoOrgScreen — shown when user has zero memberships ─────────
+
+function NoOrgScreen() {
+  const navigate = useNavigate();
+  const utils = trpc.useUtils();
+  const { data: pendingInvites, isLoading: invitesLoading } = trpc.tenant.myInvitations.useQuery();
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery();
+
+  const acceptByIdMutation = trpc.tenant.acceptById.useMutation({
+    onSuccess: async (data) => {
+      await utils.auth.me.refetch();
+      await utils.tenant.list.refetch();
+      await utils.business.list.refetch();
+      navigate({ to: "/", search: { joined: data.tenantName } });
+    },
+  });
+
+  const createOrgMutation = trpc.tenant.create.useMutation({
+    onSuccess: async () => {
+      await utils.auth.me.refetch();
+      await utils.tenant.list.refetch();
+      await utils.business.list.refetch();
+    },
+  });
+
+  const isActing = acceptByIdMutation.isPending || createOrgMutation.isPending;
+  const error = acceptByIdMutation.error?.message ?? createOrgMutation.error?.message;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
+      <div className="w-full max-w-[400px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light">
+        <div className="flex items-center justify-center gap-2.5 mb-6">
+          <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
+            <span className="text-white font-bold text-base">H</span>
+          </div>
+          <span className="font-semibold text-lg tracking-tight text-text-primary">Hisaabo</span>
+        </div>
+
+        {invitesLoading ? (
+          <div className="text-center py-4">
+            <div className="w-5 h-5 mx-auto border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : pendingInvites && pendingInvites.length > 0 ? (
+          <>
+            <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">
+              You've been invited!
+            </h2>
+            <p className="text-sm text-text-tertiary mb-5 text-center">
+              Pick an organization to get started.
+            </p>
+
+            {error && (
+              <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-2 mb-4">
+              {pendingInvites.map((inv) => (
+                <button
+                  key={inv.id}
+                  onClick={() => acceptByIdMutation.mutate({ invitationId: inv.id })}
+                  disabled={isActing}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 border-brand-200 bg-brand-50/50 hover:border-brand-400 hover:bg-brand-50 transition-colors text-left group dark:border-brand-600/30 dark:bg-brand-600/10 dark:hover:border-brand-500"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-brand-600 flex items-center justify-center text-white font-semibold text-lg shrink-0">
+                    {inv.tenantName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-text-primary group-hover:text-brand-700 dark:group-hover:text-brand-400 truncate">
+                      Join {inv.tenantName}
+                    </p>
+                    <p className="text-xs text-text-tertiary">
+                      as {formatRole(inv.role)}
+                    </p>
+                  </div>
+                  {acceptByIdMutation.isPending && acceptByIdMutation.variables?.invitationId === inv.id && (
+                    <div className="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {canCreateOrg && (
+              <>
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
+                  <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
+                </div>
+
+                <button
+                  onClick={() => createOrgMutation.mutate()}
+                  disabled={isActing}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
+                >
+                  {createOrgMutation.isPending ? "Creating..." : "I want my own organization instead"}
+                </button>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">No organization found</h2>
+            <p className="text-sm text-text-tertiary mb-6 text-center">
+              {canCreateOrg
+                ? "Create an organization to get started, or ask your team admin to send you an invitation."
+                : "Ask your team admin to send you an invitation to join their organization."}
+            </p>
+
+            {error && (
+              <div className="mb-4 px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400">
+                {error}
+              </div>
+            )}
+
+            {canCreateOrg && (
+              <button
+                onClick={() => createOrgMutation.mutate()}
+                disabled={createOrgMutation.isPending}
+                className="btn-primary w-full py-2.5"
+              >
+                {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── TenantPicker ───────────────────────────────────────────────
 
@@ -138,13 +264,17 @@ type TenantMembership = {
 function TenantPicker({
   tenants,
   onSelect,
+  onCreateNew,
+  onClose,
 }: {
   tenants: TenantMembership[];
   onSelect: (tenantId: string) => void;
+  onCreateNew?: () => void;
+  onClose?: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-      <div className="w-full max-w-sm rounded-xl bg-surface-0 border border-border-light shadow-modal p-6 animate-scale-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-xl bg-surface-0 border border-border-light shadow-modal p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-base font-semibold text-text-primary mb-1">
           Select Organization
         </h2>
@@ -176,10 +306,26 @@ function TenantPicker({
                       : "bg-surface-2 text-text-secondary",
                 )}
               >
-                {t.role}
+                {formatRole(t.role)}
               </span>
             </button>
           ))}
+
+          {onCreateNew && (
+            <button
+              onClick={onCreateNew}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-border-medium hover:border-brand-400 hover:bg-brand-600/5 transition-colors text-left group"
+            >
+              <div className="w-8 h-8 rounded-lg bg-surface-2 flex items-center justify-center text-text-secondary group-hover:text-brand-600 shrink-0">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              </div>
+              <span className="text-sm font-medium text-text-secondary group-hover:text-brand-700 transition-colors">
+                Create new organization
+              </span>
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -192,9 +338,16 @@ function RootLayout() {
   const utils = trpc.useUtils();
   const { data: session, isLoading: sessionLoading, isFetching: sessionFetching } = trpc.auth.me.useQuery();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
-    enabled: !!session?.user && !session?.tenantId,
+    enabled: !!session?.user,
   });
-  const { data: businesses, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
+  const { data: businesses, isLoading: businessesLoading, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
+    enabled: !!session?.user && !!session?.tenantId,
+  });
+
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery(undefined, {
+    enabled: !!session?.user,
+  });
+  const { data: canCreateBiz } = trpc.business.canCreate.useQuery(undefined, {
     enabled: !!session?.user && !!session?.tenantId,
   });
 
@@ -204,6 +357,8 @@ function RootLayout() {
   const [showPalette, setShowPalette] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showTenantPicker, setShowTenantPicker] = useState(false);
+
+  const createOrgMutation = trpc.tenant.create.useMutation();
   const [currentBusinessId, setCurrentBusinessId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -287,12 +442,31 @@ function RootLayout() {
       return;
     }
 
+    // Priority 2.5: Pending invite token in localStorage → accept it
+    // This handles the case where an existing user (has name) clicked an
+    // invite link, was redirected to login, and is now back. The invite
+    // page stored the token before redirecting; we pick it up here.
+    if (!session.tenantId) {
+      const pendingToken = localStorage.getItem("pendingInviteToken");
+      if (pendingToken && !pathname.startsWith("/invite")) {
+        navigate({ to: `/invite/${pendingToken}` });
+        return;
+      }
+    }
+
     // Priority 3: Authenticated with name but no business → settings
-    // Skip redirect while businesses are refetching (e.g. after a tenant switch via invite)
-    if (session?.tenantId && businesses !== undefined && businesses.length === 0 && !businessesFetching) {
+    // Guard: only redirect AFTER businesses query has completed its initial load.
+    // businessesLoading is true when the query is enabled but has no data yet.
+    // This prevents redirecting to /settings before we know if businesses exist.
+    if (session?.tenantId && !businessesLoading && !businessesFetching && Array.isArray(businesses) && businesses.length === 0) {
       if (pathname !== "/settings") {
         navigate({ to: "/settings" });
       }
+      return;
+    }
+    // Priority 4: On dashboard but role can't access it → first accessible page
+    if (pathname === "/" && session?.role && !canAccess(session.role, "Report", "read")) {
+      navigate({ to: "/invoices" });
       return;
     }
   }, [sessionLoading, sessionFetching, session, businesses, navigate, pathname]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -330,19 +504,21 @@ function RootLayout() {
 
   // Authenticated but no tenant selected
   if (!session.tenantId) {
+    // Auth flow pages (complete-profile, invite) handle tenant resolution
+    // themselves — let them render even with zero memberships.
+    const authFlowPaths = ["/auth/complete-profile", "/invite"];
+    const isAuthFlow = authFlowPaths.some((p) => pathname.startsWith(p));
+    if (isAuthFlow) return <Outlet />;
+
     if (!tenantList) return loadingSpinner;
 
     if (tenantList.length === 0) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-surface-1">
-          <div className="text-center">
-            <p className="text-text-primary font-medium">No organization found</p>
-            <p className="text-text-tertiary text-sm mt-1">
-              Please contact support or try logging in again.
-            </p>
-          </div>
-        </div>
-      );
+      // If a pending invite token exists, show spinner — the redirect useEffect
+      // will navigate to /invite/$token momentarily.
+      const hasPendingInvite = !!localStorage.getItem("pendingInviteToken");
+      if (hasPendingInvite) return loadingSpinner;
+
+      return <NoOrgScreen />;
     }
 
     if (tenantList.length === 1) {
@@ -363,9 +539,18 @@ function RootLayout() {
       <TenantPicker
         tenants={tenantList}
         onSelect={(tenantId) => selectTenantMutation.mutate({ tenantId })}
+        onCreateNew={canCreateOrg ? async () => {
+          await createOrgMutation.mutateAsync();
+          await utils.auth.me.refetch();
+          await utils.tenant.list.refetch();
+        } : undefined}
       />
     );
   }
+
+  // Tenant selected but businesses still loading — show spinner, don't render
+  // the main layout yet (prevents flash of /settings "Set up your business")
+  if (session.tenantId && businessesLoading) return loadingSpinner;
 
   const displayName = session.user.name || session.user.email.split("@")[0];
   const initials = displayName
@@ -418,21 +603,6 @@ function RootLayout() {
               Hisaabo
             </span>
           </div>
-          {hasMultipleTenants && (
-            <button
-              type="button"
-              onClick={() => setShowTenantPicker(true)}
-              className="mt-2 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-text-secondary hover:bg-surface-1 hover:text-text-primary transition-colors text-left"
-            >
-              <span className="w-5 h-5 rounded-md bg-brand-100 dark:bg-brand-900 flex items-center justify-center text-brand-700 dark:text-brand-300 text-[10px] font-semibold shrink-0">
-                {tenantName.charAt(0).toUpperCase()}
-              </span>
-              <span className="flex-1 min-w-0 text-xs font-medium truncate">{tenantName}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-tertiary">
-                <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
-              </svg>
-            </button>
-          )}
         </div>
 
         {/* Nav sections */}
@@ -478,11 +648,28 @@ function RootLayout() {
           })}
         </nav>
 
-        {/* Version — sticky bottom */}
-        <div className="shrink-0 px-4 py-2 border-t border-border-light">
-          <span className="text-[10px] text-text-tertiary/50 select-none">
-            v{__APP_VERSION__}
-          </span>
+        {/* Sidebar footer: org name + version */}
+        <div className="shrink-0 border-t border-border-light">
+          {hasMultipleTenants ? (
+            <button
+              type="button"
+              onClick={() => setShowTenantPicker(true)}
+              className="w-full px-4 py-2.5 text-left group"
+            >
+              <p className="flex items-center gap-1.5 text-[11px] font-medium text-text-tertiary/60 group-hover:text-text-secondary transition-colors">
+                <span className="truncate">{tenantName}</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-tertiary/40 group-hover:text-text-secondary transition-colors">
+                  <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
+                </svg>
+              </p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 tabular-nums">v{__APP_VERSION__}</p>
+            </button>
+          ) : (
+            <div className="px-4 py-2.5">
+              <p className="text-[11px] text-text-tertiary/50 truncate select-none">{tenantName}</p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 select-none tabular-nums">v{__APP_VERSION__}</p>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -513,6 +700,19 @@ function RootLayout() {
             <span className="font-mono text-xs">?</span>
           </button>
 
+          {/* Settings gear */}
+          <button
+            onClick={() => navigate({ to: "/settings" })}
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-1 transition-colors border border-border-light shrink-0"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+
           {/* Business switcher + User info — pushed to the right */}
           <div className="ml-auto flex items-center gap-3 min-w-0">
             {/* Business switcher */}
@@ -521,14 +721,13 @@ function RootLayout() {
                 businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
                 activeBusinessId={currentBusinessId ?? businesses[0].id}
                 onSwitch={handleBusinessSwitch}
-                onCreateNew={() => {
+                onCreateNew={canCreateBiz && canAccess(session?.role, "Business", "manage") ? () => {
                   if (pathname === "/settings") {
-                    // Already on settings — trigger create via custom event
                     window.dispatchEvent(new CustomEvent("create-business"));
                   } else {
                     navigate({ to: "/settings", search: { action: "create-business" } });
                   }
-                }}
+                } : undefined}
               />
             )}
 
@@ -573,13 +772,21 @@ function RootLayout() {
       <ShortcutIndicator />
 
       {/* Tenant picker overlay — shown when user clicks the tenant name */}
-      {showTenantPicker && tenantList && tenantList.length > 1 && (
+      {showTenantPicker && (
         <TenantPicker
-          tenants={tenantList}
+          tenants={tenantList ?? []}
           onSelect={(tenantId) => {
             setShowTenantPicker(false);
             selectTenantMutation.mutate({ tenantId });
           }}
+          onCreateNew={canCreateOrg ? async () => {
+            setShowTenantPicker(false);
+            await createOrgMutation.mutateAsync();
+            await utils.auth.me.refetch();
+            await utils.tenant.list.refetch();
+            await utils.business.list.refetch();
+          } : undefined}
+          onClose={() => setShowTenantPicker(false)}
         />
       )}
     </div>
@@ -627,19 +834,9 @@ const roleStyles: Record<string, string> = {
   accountant: "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
 };
 
-const roleLabels: Record<string, string> = {
-  owner: "Owner",
-  superadmin: "Super Admin",
-  admin: "Admin",
-  seller_manager: "Seller Manager",
-  member: "Member",
-  seller: "Seller",
-  accountant: "Accountant",
-};
-
 function RoleBadge({ role }: { role: string }) {
   const style = roleStyles[role] ?? "bg-surface-2 text-text-secondary";
-  const label = roleLabels[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+  const label = formatRole(role);
   return (
     <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 leading-none", style)}>
       {label}
@@ -876,15 +1073,6 @@ function ReportsIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 12.5V4l3 3 3-3.5L11 6l3-3" />
       <path d="M2 14.5h12" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="2" />
-      <path d="M8 1.5v2M8 12.5v2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M1.5 8h2M12.5 8h2M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
     </svg>
   );
 }

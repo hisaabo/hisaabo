@@ -353,6 +353,28 @@ describe("tenant.removeMember", () => {
       message: "Only owners and admins can remove members",
     });
   });
+
+  it("removing a member clears tenantId from their sessions and invalidates cache", async () => {
+    const db = getControlDb();
+
+    const target = await createUser({ email: "sessionclear@acme.in", name: "Session Clear" });
+    await addMember(tenant1.id, target.id, "seller");
+    const targetSession = await createSession(target.id, tenant1.id);
+
+    // Verify session has tenantId before removal
+    const [before] = await db.select({ tenantId: sessions.tenantId })
+      .from(sessions).where(eq(sessions.id, targetSession.id)).limit(1);
+    expect(before?.tenantId).toBe(tenant1.id);
+
+    // Remove the member
+    const caller = callerForTenant(rameshSession.id, ramesh, tenant1.id);
+    await caller.tenant.removeMember({ userId: target.id });
+
+    // Session's tenantId should now be null
+    const [after] = await db.select({ tenantId: sessions.tenantId })
+      .from(sessions).where(eq(sessions.id, targetSession.id)).limit(1);
+    expect(after?.tenantId).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

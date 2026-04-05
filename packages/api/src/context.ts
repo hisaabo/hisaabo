@@ -10,6 +10,8 @@ const SESSION_CACHE_TTL = 60_000;
 const SESSION_CACHE_MAX = 1000;
 
 export async function createContext(opts: FetchCreateContextFnOptions) {
+  // NOTE: we intentionally do NOT use getSessionIdFromRequest() here because
+  // createContext needs the raw token to detect the API key prefix on line 27.
   let sessionId = getCookie(opts.req, "session_id");
 
   if (!sessionId) {
@@ -123,4 +125,21 @@ function getCookie(req: Request, name: string): string | null {
   if (!cookies) return null;
   const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Extract the session ID from a request — checks both cookie and Bearer token.
+ * Mobile clients use Bearer tokens while web uses cookies; this helper
+ * normalises the two paths so callers don't need to care.
+ */
+export function getSessionIdFromRequest(req: Request): string | null {
+  const fromCookie = getCookie(req, "session_id");
+  if (fromCookie) return fromCookie;
+  const authHeader = req.headers.get("authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    // API keys are not session IDs — skip them
+    if (!token.startsWith("hisaabo_key_")) return token;
+  }
+  return null;
 }

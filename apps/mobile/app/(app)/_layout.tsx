@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useMemo, useRef } from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from "react-native";
 import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -41,12 +41,31 @@ export default function AppLayout() {
   const setBusiness = useBusinessStore((s) => s.setBusiness);
   const businessId = useBusinessStore((s) => s.businessId);
 
-  // Auto-select first business
+  // True once the businessId has been verified against the business list.
+  // Used as the single source of truth for both layout guard and query `enabled` flags.
+  const businessValidated = useMemo(
+    () => !!businessId && businesses !== undefined && businesses.some((b) => b.id === businessId),
+    [businessId, businesses],
+  );
+
+  // Validate hydrated businessId against the actual business list.
+  // SecureStore may hold a stale ID from a previous tenant or deleted business.
+  // Also auto-select the first business when none is selected.
+  // The ref prevents an invalidation loop: correction → invalidate → refetch list → re-trigger.
+  const correctedRef = useRef(false);
   useEffect(() => {
-    if (businesses && businesses.length > 0 && !businessId) {
+    if (!businesses || businesses.length === 0) return;
+
+    if (!businessId) {
       setBusiness(businesses[0].id, businesses[0].name);
+    } else if (!businessValidated && !correctedRef.current) {
+      if (__DEV__) console.log("[AppLayout] Stale businessId", businessId, "— correcting to", businesses[0].id);
+      correctedRef.current = true;
+      setBusiness(businesses[0].id, businesses[0].name);
+      // Invalidate any queries that may have fired with the stale businessId
+      queryClient.invalidateQueries();
     }
-  }, [businesses, businessId]);
+  }, [businesses, businessId, businessValidated]);
 
   const handleSwitchBusiness = useCallback(
     async (id: string, name: string) => {
@@ -56,13 +75,18 @@ export default function AppLayout() {
     [setBusiness, utils],
   );
 
+  // Plan limit: hide "Create New Business" when at limit
+  const { data: canCreateBiz } = trpc.business.canCreate.useQuery(undefined, {
+    enabled: !!session?.user && !!session?.tenantId,
+  });
+
   const handleCreateNewBusiness = useCallback(() => {
     router.push("/(app)/create-business");
   }, [router]);
 
-  // Low stock badge (only when business is ready)
+  // Low stock badge (only when business is validated against the business list)
   const { data: _lowStockCount } = trpc.item.lowStockCount.useQuery(undefined, {
-    enabled: !!businessId,
+    enabled: businessValidated,
   });
 
   // Not logged in — the root layout's auth gate handles the login redirect.
@@ -77,9 +101,12 @@ export default function AppLayout() {
     );
   }
 
-  // Wait until business is ready before rendering any screens
-  // This prevents child screens from firing queries without x-business-id
-  if (!businessId) {
+  // Wait until business is ready AND validated before rendering any screens.
+  // The businessId from SecureStore may be stale (from a previous tenant or
+  // deleted business). We must wait for business.list to confirm validity,
+  // otherwise child screens fire queries with a stale x-business-id header
+  // and get "Business not found" errors from the server.
+  if (!businessValidated) {
     // If tenant is ready and businesses list loaded but empty — prompt to create one
     const bizListReady = !!session?.tenantId && businesses !== undefined;
     const noBusiness = bizListReady && businesses.length === 0;
@@ -123,7 +150,7 @@ export default function AppLayout() {
       businesses={businesses ?? []}
       activeBusinessId={businessId ?? ""}
       onSwitch={handleSwitchBusiness}
-      onCreateNew={handleCreateNewBusiness}
+      onCreateNew={canCreateBiz ? handleCreateNewBusiness : undefined}
     >
       <Tabs
         screenOptions={{

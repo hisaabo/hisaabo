@@ -22,7 +22,7 @@ interface BusinessSwitcherSheetProps {
   businesses: Array<{ id: string; name: string }>;
   activeBusinessId: string;
   onSwitch: (id: string, name: string) => void;
-  onCreateNew: () => void;
+  onCreateNew?: () => void;
 }
 
 function getInitials(name: string): string {
@@ -78,7 +78,7 @@ export function BusinessSwitcherSheet({
 
   const handleCreateNew = () => {
     haptic.light();
-    onCreateNew();
+    onCreateNew?.();
   };
 
   const screenHeight = Dimensions.get("window").height;
@@ -140,16 +140,20 @@ export function BusinessSwitcherSheet({
             })}
           </ScrollView>
 
-          {/* Divider */}
-          <View style={styles.divider} />
+          {onCreateNew && (
+            <>
+              {/* Divider */}
+              <View style={styles.divider} />
 
-          {/* Create new business row */}
-          <TouchableOpacity style={styles.bizRow} onPress={handleCreateNew} activeOpacity={0.7}>
-            <View style={styles.createAvatar}>
-              <Ionicons name="add" size={20} color={colors.textSecondary} />
-            </View>
-            <Text style={styles.createText}>Create New Business</Text>
-          </TouchableOpacity>
+              {/* Create new business row */}
+              <TouchableOpacity style={styles.bizRow} onPress={handleCreateNew} activeOpacity={0.7}>
+                <View style={styles.createAvatar}>
+                  <Ionicons name="add" size={20} color={colors.textSecondary} />
+                </View>
+                <Text style={styles.createText}>Create New Business</Text>
+              </TouchableOpacity>
+            </>
+          )}
 
           {/* Safe area bottom padding */}
           <SafeAreaView edges={["bottom"]} />

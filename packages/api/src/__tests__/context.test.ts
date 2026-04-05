@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { getSessionIdFromRequest } from "../context.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cookie parsing — getCookie helper
@@ -121,6 +122,78 @@ describe("session ID extraction — cookie takes priority over Bearer header", (
       headers: { authorization: "Token some-api-key" },
     });
     expect(extractSessionId(req)).toBe(null);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getSessionIdFromRequest — shared helper used by tenant.select and others
+// ─────────────────────────────────────────────────────────────────────────────
+describe("getSessionIdFromRequest — extracts session ID from cookie OR Bearer token", () => {
+  /**
+   * This helper was introduced to fix a critical mobile bug: tenant.select and
+   * autoSelectTenantInSession only read the cookie, but mobile clients send a
+   * Bearer token. The shared helper normalises both paths.
+   *
+   * We import the real function to guard against regressions.
+   */
+
+  it("extracts session ID from a cookie", () => {
+    const req = new Request("http://localhost/", {
+      headers: { cookie: "session_id=cookie-session-abc" },
+    });
+    expect(getSessionIdFromRequest(req)).toBe("cookie-session-abc");
+  });
+
+  it("extracts session ID from a Bearer token (mobile path)", () => {
+    const req = new Request("http://localhost/", {
+      headers: { authorization: "Bearer mobile-session-xyz" },
+    });
+    expect(getSessionIdFromRequest(req)).toBe("mobile-session-xyz");
+  });
+
+  it("prefers cookie over Bearer token when both are present", () => {
+    const req = new Request("http://localhost/", {
+      headers: {
+        cookie: "session_id=cookie-wins",
+        authorization: "Bearer bearer-loses",
+      },
+    });
+    expect(getSessionIdFromRequest(req)).toBe("cookie-wins");
+  });
+
+  it("returns null when neither cookie nor Bearer token is present", () => {
+    const req = new Request("http://localhost/");
+    expect(getSessionIdFromRequest(req)).toBeNull();
+  });
+
+  it("skips API keys (hisaabo_key_ prefix) — those are not session IDs", () => {
+    const req = new Request("http://localhost/", {
+      headers: { authorization: "Bearer hisaabo_key_abc123def456" },
+    });
+    expect(getSessionIdFromRequest(req)).toBeNull();
+  });
+
+  it("returns null for malformed Authorization header (no Bearer prefix)", () => {
+    const req = new Request("http://localhost/", {
+      headers: { authorization: "Token some-token" },
+    });
+    expect(getSessionIdFromRequest(req)).toBeNull();
+  });
+
+  it("returns null for 'Bearer ' with no token value (trimmed by Request API)", () => {
+    const req = new Request("http://localhost/", {
+      headers: { authorization: "Bearer " },
+    });
+    // Request API trims trailing whitespace → "Bearer" doesn't match "Bearer " prefix
+    expect(getSessionIdFromRequest(req)).toBeNull();
+  });
+
+  it("returns null for cookie with empty value (empty string is falsy)", () => {
+    const req = new Request("http://localhost/", {
+      headers: { cookie: "session_id=" },
+    });
+    // getCookie returns "" which is falsy → falls through to Bearer → no Bearer → null
+    expect(getSessionIdFromRequest(req)).toBeNull();
   });
 });
 

@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
@@ -121,6 +122,7 @@ function UntrackedBanner() {
 
 export default function PaymentsScreen() {
   const router = useRouter();
+  const { businessId } = useBusinessStore();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [allPayments, setAllPayments] = useState<NonNullable<typeof data>["data"]>([]);
@@ -132,7 +134,7 @@ export default function PaymentsScreen() {
       limit: PAGE_SIZE,
       search: search.length > 0 ? search : undefined,
     },
-    { placeholderData: (prev) => prev }
+    { enabled: !!businessId, placeholderData: (prev) => prev }
   );
 
   // Accumulate pages — reset on page 1, append on subsequent pages

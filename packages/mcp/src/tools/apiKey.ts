@@ -57,7 +57,7 @@ export function registerApiKeyTools(server: McpServer, client: HisaaboClient) {
           type: "text" as const,
           text: JSON.stringify({
             ...result,
-            warning: "Save this key immediately — it will not be shown again.",
+            SECURITY_WARNING: "This API key is a credential. Copy it NOW and store it securely. It cannot be retrieved again. Clear this conversation after saving the key.",
           }, null, 2),
         }],
       };
