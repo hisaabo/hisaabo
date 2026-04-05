@@ -5,7 +5,7 @@ interface BusinessSwitcherProps {
   businesses: Array<{ id: string; name: string }>;
   activeBusinessId: string;
   onSwitch: (id: string) => void;
-  onCreateNew: () => void;
+  onCreateNew?: () => void;
 }
 
 export function BusinessSwitcher({
@@ -183,27 +183,31 @@ export function BusinessSwitcher({
             })}
           </div>
 
-          {/* Divider */}
-          <div className="h-px bg-border-light mx-0" aria-hidden="true" />
+          {onCreateNew && (
+            <>
+              {/* Divider */}
+              <div className="h-px bg-border-light mx-0" aria-hidden="true" />
 
-          {/* Create New Business */}
-          <div className="py-1">
-            <button
-              type="button"
-              role="menuitem"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                close();
-                onCreateNew();
-              }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-surface-1 hover:text-text-primary transition-colors text-left"
-            >
-              <span className="w-5 h-5 rounded-md border border-dashed border-border flex items-center justify-center shrink-0">
-                <PlusIcon />
-              </span>
-              <span>Create New Business</span>
-            </button>
-          </div>
+              {/* Create New Business */}
+              <div className="py-1">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    close();
+                    onCreateNew();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-surface-1 hover:text-text-primary transition-colors text-left"
+                >
+                  <span className="w-5 h-5 rounded-md border border-dashed border-border flex items-center justify-center shrink-0">
+                    <PlusIcon />
+                  </span>
+                  <span>Create New Business</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

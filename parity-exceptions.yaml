@@ -126,6 +126,16 @@ exceptions:
       # better suited to web/desktop; mobile shows templates only.
       - recurringInvoice.suggestions
 
+      # --- Onboarding / Org Management ---
+      # Web-only onboarding flows for invite acceptance and org creation
+      # limit checks. Mobile uses invite deep links and has its own onboarding.
+      - tenant.canCreateOrg
+      - tenant.myInvitations
+      - tenant.acceptById
+      - tenant.peekInvitation
+      - tenant.create
+      - business.canCreate
+
   cli:
     not-applicable:
       # --- Auth ---
@@ -135,9 +145,18 @@ exceptions:
       - auth.verifyMagicLink
 
       # --- Tenant ---
-      # Invite acceptance is a browser/mobile flow (click link → auth → accept).
-      # CLI users don't accept invitations via the terminal.
+      # Invite acceptance and org management are browser/mobile flows.
+      # CLI authenticates via API key; doesn't accept invitations or create orgs.
       - tenant.acceptInvitation
+      - tenant.acceptById
+      - tenant.canCreateOrg
+      - tenant.create
+      - tenant.myInvitations
+      - tenant.peekInvitation
+
+      # --- Business ---
+      # Plan limit check — CLI doesn't create businesses.
+      - business.canCreate
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow. CLI uses transfer
@@ -176,8 +195,18 @@ exceptions:
       - auth.verifyMagicLink
 
       # --- Tenant ---
-      # Invite acceptance is a browser/mobile flow. MCP agents don't accept invitations.
+      # Invite acceptance and org management are browser/mobile flows.
+      # MCP agents don't accept invitations or create orgs.
       - tenant.acceptInvitation
+      - tenant.acceptById
+      - tenant.canCreateOrg
+      - tenant.create
+      - tenant.myInvitations
+      - tenant.peekInvitation
+
+      # --- Business ---
+      # Plan limit check — MCP agents don't create businesses.
+      - business.canCreate
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow.

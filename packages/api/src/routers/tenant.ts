@@ -106,6 +106,29 @@ export const tenantRouter = router({
     }
   }),
 
+  // Check if the user can create a new org (plan limit not reached).
+  canCreateOrg: protectedProcedure.query(async ({ ctx }) => {
+    const ownedOrgs = await controlDb.select({ plan: tenants.plan })
+      .from(tenantMembers)
+      .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+      .where(and(
+        eq(tenantMembers.userId, ctx.user.id),
+        eq(tenantMembers.role, "owner"),
+      ));
+
+    const planRank: Record<string, number> = { free: 0, pro: 1, business: 2, enterprise: 3 };
+    let bestPlan = "free";
+    for (const org of ownedOrgs) {
+      if ((planRank[org.plan ?? "free"] ?? 0) > (planRank[bestPlan] ?? 0)) {
+        bestPlan = org.plan ?? "free";
+      }
+    }
+
+    const { getLimits } = await import("../lib/plan-limits.js");
+    const limits = getLimits(bestPlan);
+    return limits.maxOwnedOrgs === Infinity || ownedOrgs.length < limits.maxOwnedOrgs;
+  }),
+
   // List user's tenant memberships
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await controlDb.select({

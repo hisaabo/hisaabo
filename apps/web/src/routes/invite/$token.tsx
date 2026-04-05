@@ -14,6 +14,7 @@ function InviteAcceptPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const { data: session, isLoading: sessionLoading } = trpc.auth.me.useQuery();
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery(undefined, { enabled: !!session?.user });
   const calledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<AcceptedInfo | null>(null);
@@ -150,18 +151,22 @@ function InviteAcceptPage() {
                 </div>
               </button>
 
-              <div className="relative my-1">
-                <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
-                <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
-              </div>
+              {canCreateOrg && (
+                <>
+                  <div className="relative my-1">
+                    <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
+                    <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
+                  </div>
 
-              <button
-                onClick={handleCreateOwn}
-                disabled={isActing}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
-              >
-                {createOrgMutation.isPending ? "Creating..." : "I also want my own organization"}
-              </button>
+                  <button
+                    onClick={handleCreateOwn}
+                    disabled={isActing}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
+                  >
+                    {createOrgMutation.isPending ? "Creating..." : "I also want my own organization"}
+                  </button>
+                </>
+              )}
             </div>
           </>
         ) : (

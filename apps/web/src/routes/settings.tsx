@@ -31,7 +31,11 @@ function SettingsPage() {
     () => new URLSearchParams(window.location.search).get("action") === "create-business",
   );
   const biz = businesses?.[0];
-  const canCreateBusiness = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
+  const hasRole = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
+  const { data: canCreateBizPlan } = trpc.business.canCreate.useQuery(undefined, {
+    enabled: !!session?.tenantId && hasRole,
+  });
+  const canCreateBusiness = hasRole && (canCreateBizPlan ?? true);
 
   // Listen for "create-business" event from BusinessSwitcher (when already on settings)
   useEffect(() => {

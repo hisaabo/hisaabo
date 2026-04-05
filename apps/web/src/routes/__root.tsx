@@ -133,6 +133,7 @@ function NoOrgScreen() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const { data: pendingInvites, isLoading: invitesLoading } = trpc.tenant.myInvitations.useQuery();
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery();
 
   const acceptByIdMutation = trpc.tenant.acceptById.useMutation({
     onSuccess: async (data) => {
@@ -209,24 +210,30 @@ function NoOrgScreen() {
               ))}
             </div>
 
-            <div className="relative my-4">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
-              <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
-            </div>
+            {canCreateOrg && (
+              <>
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border-light" /></div>
+                  <div className="relative flex justify-center"><span className="bg-surface-0 px-3 text-xs text-text-tertiary">or</span></div>
+                </div>
 
-            <button
-              onClick={() => createOrgMutation.mutate()}
-              disabled={isActing}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
-            >
-              {createOrgMutation.isPending ? "Creating..." : "I want my own organization instead"}
-            </button>
+                <button
+                  onClick={() => createOrgMutation.mutate()}
+                  disabled={isActing}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border-light hover:border-border-medium hover:bg-surface-1 transition-colors text-sm font-medium text-text-secondary"
+                >
+                  {createOrgMutation.isPending ? "Creating..." : "I want my own organization instead"}
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>
             <h2 className="text-lg font-semibold text-text-primary mb-1 text-center">No organization found</h2>
             <p className="text-sm text-text-tertiary mb-6 text-center">
-              Create an organization to get started, or ask your team admin to send you an invitation.
+              {canCreateOrg
+                ? "Create an organization to get started, or ask your team admin to send you an invitation."
+                : "Ask your team admin to send you an invitation to join their organization."}
             </p>
 
             {error && (
@@ -235,13 +242,15 @@ function NoOrgScreen() {
               </div>
             )}
 
-            <button
-              onClick={() => createOrgMutation.mutate()}
-              disabled={createOrgMutation.isPending}
-              className="btn-primary w-full py-2.5"
-            >
-              {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
-            </button>
+            {canCreateOrg && (
+              <button
+                onClick={() => createOrgMutation.mutate()}
+                disabled={createOrgMutation.isPending}
+                className="btn-primary w-full py-2.5"
+              >
+                {createOrgMutation.isPending ? "Creating..." : "Create Organization"}
+              </button>
+            )}
           </>
         )}
       </div>
@@ -338,6 +347,13 @@ function RootLayout() {
     enabled: !!session?.user,
   });
   const { data: businesses, isLoading: businessesLoading, isFetching: businessesFetching } = trpc.business.list.useQuery(undefined, {
+    enabled: !!session?.user && !!session?.tenantId,
+  });
+
+  const { data: canCreateOrg } = trpc.tenant.canCreateOrg.useQuery(undefined, {
+    enabled: !!session?.user,
+  });
+  const { data: canCreateBiz } = trpc.business.canCreate.useQuery(undefined, {
     enabled: !!session?.user && !!session?.tenantId,
   });
 
@@ -529,11 +545,11 @@ function RootLayout() {
       <TenantPicker
         tenants={tenantList}
         onSelect={(tenantId) => selectTenantMutation.mutate({ tenantId })}
-        onCreateNew={async () => {
+        onCreateNew={canCreateOrg ? async () => {
           await createOrgMutation.mutateAsync();
           await utils.auth.me.refetch();
           await utils.tenant.list.refetch();
-        }}
+        } : undefined}
       />
     );
   }
@@ -696,14 +712,13 @@ function RootLayout() {
                 businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
                 activeBusinessId={currentBusinessId ?? businesses[0].id}
                 onSwitch={handleBusinessSwitch}
-                onCreateNew={() => {
+                onCreateNew={canCreateBiz && canAccess(session?.role, "Business", "manage") ? () => {
                   if (pathname === "/settings") {
-                    // Already on settings — trigger create via custom event
                     window.dispatchEvent(new CustomEvent("create-business"));
                   } else {
                     navigate({ to: "/settings", search: { action: "create-business" } });
                   }
-                }}
+                } : undefined}
               />
             )}
 
@@ -755,13 +770,13 @@ function RootLayout() {
             setShowTenantPicker(false);
             selectTenantMutation.mutate({ tenantId });
           }}
-          onCreateNew={async () => {
+          onCreateNew={canCreateOrg ? async () => {
             setShowTenantPicker(false);
-            const result = await createOrgMutation.mutateAsync();
+            await createOrgMutation.mutateAsync();
             await utils.auth.me.refetch();
             await utils.tenant.list.refetch();
             await utils.business.list.refetch();
-          }}
+          } : undefined}
           onClose={() => setShowTenantPicker(false)}
         />
       )}

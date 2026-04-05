@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq, and } from "drizzle-orm";
-import { sessions, tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
+import { sessions, tenantMembers, tenants, invitations, magicLinkTokens } from "@hisaabo/db";
 import { createHash, randomUUID } from "crypto";
 import {
   createUser,
@@ -933,12 +933,58 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
     expect(memberships[0]!.role).toBe("owner");
   });
 
-  it("create allows users who already have memberships to create a new org", async () => {
-    // Admin already has a membership — should still be able to create a second org
-    const caller = callerNoTenant(adminSession.id, admin);
+  it("REGRESSION: invite-only user removed from org can create their first org", async () => {
+    // User was invited, joined, then removed. They own 0 orgs.
+    // Free plan limit is 1 owned org — they should be able to create.
+    const db = getControlDb();
+    const email = `invite.only.removed.${randomUUID().slice(0, 8)}@test.in`;
+    const inviteOnlyUser = await createUser({ email, name: "Invite Only" });
+
+    // Simulate: was a member (not owner) of tenant1, then removed
+    // They never owned any org — ownedOrgs count = 0
+    const inviteOnlySession = await createSession(inviteOnlyUser.id);
+    const caller = callerNoTenant(inviteOnlySession.id, inviteOnlyUser);
+
+    // canCreateOrg should be true (0 owned < 1 max)
+    const canCreate = await caller.tenant.canCreateOrg();
+    expect(canCreate).toBe(true);
+
+    // Creating should succeed
     const result = await caller.tenant.create();
     expect(result.tenantId).toBeDefined();
     expect(result.tenantName).toBeDefined();
+
+    // User should be a member of the new tenant
+    const [membership] = await db.select({ role: tenantMembers.role })
+      .from(tenantMembers)
+      .where(and(
+        eq(tenantMembers.tenantId, result.tenantId),
+        eq(tenantMembers.userId, inviteOnlyUser.id),
+      ))
+      .limit(1);
+    expect(membership).toBeDefined();
+  });
+
+  it("free plan user who already owns 1 org cannot create a second", async () => {
+    const db = getControlDb();
+    const email = `limit.hit.${randomUUID().slice(0, 8)}@test.in`;
+    const limitUser = await createUser({ email, name: "Limit Hit" });
+    const limitSession = await createSession(limitUser.id);
+    const caller = callerNoTenant(limitSession.id, limitUser);
+
+    // Manually create a free-plan tenant owned by this user
+    const freeTenant = await createTenant({ name: "Limit Test Org", plan: "free" });
+    await addMember(freeTenant.id, limitUser.id, "owner");
+
+    // canCreateOrg should now be false (owns 1, free limit = 1)
+    const canCreate = await caller.tenant.canCreateOrg();
+    expect(canCreate).toBe(false);
+
+    // Second create should fail
+    await expect(caller.tenant.create()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Upgrade"),
+    });
   });
 
   it("new user WITHOUT pending invitation still gets auto-created tenant", async () => {

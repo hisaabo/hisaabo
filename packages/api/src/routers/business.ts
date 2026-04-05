@@ -31,6 +31,18 @@ export const businessRouter = router({
     return ctx.db.select().from(businesses);
   }),
 
+  // Check if more businesses can be created in this tenant (plan limit).
+  canCreate: tenantProcedure.query(async ({ ctx }) => {
+    const { getLimits } = await import("../lib/plan-limits.js");
+    const { controlDb: cdb, tenants } = await import("@hisaabo/db");
+    const { eq } = await import("drizzle-orm");
+    const [row] = await cdb.select({ plan: tenants.plan }).from(tenants).where(eq(tenants.id, ctx.tenantId)).limit(1);
+    const limits = getLimits(row?.plan ?? "free");
+    if (limits.maxBusinesses === Infinity) return true;
+    const [{ count: bizCount }] = await ctx.db.select({ count: count() }).from(businesses);
+    return bizCount < limits.maxBusinesses;
+  }),
+
   getById: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
