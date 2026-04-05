@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { controlDb, tenants, tenantMembers, invitations, users, sessions } from "@hisaabo/db";
+import { controlDb, tenants, tenantMembers, invitations, users, sessions, provisionTenantDatabase } from "@hisaabo/db";
 import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { invalidateSessionCache } from "../context.js";
 import { emailService } from "../lib/email.js";
-import { enforceTeamMemberLimit } from "../lib/plan-limits.js";
+import { enforceTeamMemberLimit, enforceOrgCreationLimit } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -36,17 +36,42 @@ export const tenantRouter = router({
   // Create a new organization for the authenticated user.
   // User becomes the owner. In self-hosted mode, joins the default tenant instead.
   create: protectedProcedure.mutation(async ({ ctx }) => {
+    await enforceOrgCreationLimit(ctx.user.id);
     const displayName = ctx.user.name ?? ctx.user.email.split("@")[0];
 
     if (process.env.MULTI_TENANT === "true") {
       const tenantName = `${displayName}'s Organization`;
       const slug = generateSlug(tenantName);
 
+      // 1. Create the tenant row
       const [tenant] = await controlDb.insert(tenants).values({
         name: tenantName,
         slug,
       }).returning({ id: tenants.id });
 
+      // 2. Provision the tenant database (CREATE DATABASE, user, schema push)
+      let dbConfig: Awaited<ReturnType<typeof provisionTenantDatabase>>;
+      try {
+        dbConfig = await provisionTenantDatabase(tenant.id, slug);
+      } catch (err) {
+        // Roll back orphaned tenant row so a retry can succeed
+        await controlDb.delete(tenants).where(eq(tenants.id, tenant.id));
+        throw err;
+      }
+
+      // 3. Persist DB connection details
+      await controlDb.update(tenants)
+        .set({
+          dbName: dbConfig.dbName,
+          dbHost: dbConfig.dbHost,
+          dbPort: dbConfig.dbPort,
+          dbUser: dbConfig.dbUser,
+          dbPassword: dbConfig.dbPassword,
+          updatedAt: new Date(),
+        })
+        .where(eq(tenants.id, tenant.id));
+
+      // 4. Create owner membership
       await controlDb.insert(tenantMembers).values({
         tenantId: tenant.id,
         userId: ctx.user.id,
