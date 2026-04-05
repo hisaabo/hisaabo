@@ -15,8 +15,16 @@ export const queryClient = new QueryClient({
     },
   },
   queryCache: new QueryCache({
-    onError: (error) => {
+    onError: (error, query) => {
       const trpcError = error as any;
+      if (__DEV__) {
+        console.warn("[QueryCache error]", {
+          queryKey: query.queryKey,
+          code: trpcError?.data?.code,
+          message: trpcError?.message,
+          httpStatus: trpcError?.data?.httpStatus,
+        });
+      }
       if (trpcError?.data?.code === "UNAUTHORIZED") {
         SecureStore.setItemAsync("sessionExpired", "1");
         useAuthStore.getState().logout();

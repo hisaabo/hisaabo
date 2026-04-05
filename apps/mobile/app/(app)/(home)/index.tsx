@@ -9,10 +9,14 @@ import { useBiometricStore } from "../../../src/stores/biometric";
 import { useBusinessSwitcherContext } from "../../../src/contexts/BusinessSwitcherContext";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
-import { StatusBadge, Skeleton } from "../../../src/components/ui";
+import { StatusBadge, Skeleton, QueryError } from "../../../src/components/ui";
 import { BiometricSetupPrompt } from "../../../src/components/BiometricSetupPrompt";
 
 /* ── Period helpers ──────────────────────────────────────────── */
+// CRITICAL: Use Date.UTC() instead of new Date(y,m,d) to avoid IST timezone
+// shifting. In IST (UTC+5:30), new Date(2025,3,1).toISOString() produces
+// "2025-03-31T18:30:00Z" — March 31 UTC, not April 1. Aligned with web's
+// useDateRange hook.
 
 type Period = "month" | "quarter" | "fy" | "all";
 
@@ -23,25 +27,34 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "all", label: "All Time" },
 ];
 
+function utcDate(y: number, m: number, d: number, h = 0, min = 0, s = 0): string {
+  return new Date(Date.UTC(y, m, d, h, min, s)).toISOString();
+}
+
 function getPeriodDates(period: Period): { fromDate?: string; toDate?: string } {
-  const now = new Date();
   if (period === "all") return {};
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = now.getUTCMonth();
+  const toDate = now.toISOString();
   if (period === "month") {
-    return { fromDate: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(), toDate: now.toISOString() };
+    return { fromDate: utcDate(yyyy, mm, 1), toDate };
   }
   if (period === "quarter") {
-    const q = Math.floor(now.getMonth() / 3);
-    return { fromDate: new Date(now.getFullYear(), q * 3, 1).toISOString(), toDate: now.toISOString() };
+    const q = Math.floor(mm / 3);
+    return { fromDate: utcDate(yyyy, q * 3, 1), toDate };
   }
-  const fyYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-  return { fromDate: new Date(fyYear, 3, 1).toISOString(), toDate: now.toISOString() };
+  // Indian FY: April (month 3) to March
+  const fyYear = mm >= 3 ? yyyy : yyyy - 1;
+  return { fromDate: utcDate(fyYear, 3, 1), toDate };
 }
 
 /* ── Dashboard ──────────────────────────────────────────────── */
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { businessName } = useBusinessStore();
+  const businessName = useBusinessStore((s) => s.businessName);
+  const businessId = useBusinessStore((s) => s.businessId);
   const { openSwitcher } = useBusinessSwitcherContext();
   const [period, setPeriod] = useState<Period>("month");
   const dates = useMemo(() => getPeriodDates(period), [period]);
@@ -61,14 +74,15 @@ export default function DashboardScreen() {
     }
   }, [setupPrompted, biometricEnabled, pinEnabled]);
 
-  // businessId is guaranteed by _layout.tsx — no need for `enabled` gates
-  const { data: summary, refetch, isRefetching } = trpc.dashboard.summary.useQuery(
+  const { data: summary, refetch, isRefetching, isError: summaryError } = trpc.dashboard.summary.useQuery(
     dates.fromDate ? { fromDate: dates.fromDate, toDate: dates.toDate } : undefined,
+    { enabled: !!businessId },
   );
 
-  const { data: recentInvoices } = trpc.invoice.list.useQuery({
-    page: 1, limit: 5, documentType: "invoice",
-  });
+  const { data: recentInvoices, isError: invoicesError, refetch: refetchInvoices } = trpc.invoice.list.useQuery(
+    { page: 1, limit: 5, documentType: "invoice" },
+    { enabled: !!businessId },
+  );
 
   return (
     <SafeAreaView style={s.container} edges={["top"]}>
@@ -108,7 +122,9 @@ export default function DashboardScreen() {
 
         {/* Summary cards */}
         <Text style={s.sectionTitle}>Financial Overview</Text>
-        {summary ? (
+        {summaryError ? (
+          <QueryError message="Could not load summary" onRetry={refetch} />
+        ) : summary ? (
           <View style={s.grid}>
             <SummaryCard label="Total Sales" value={formatCurrency(summary.totalSales)} color={colors.success} />
             <SummaryCard label="Total Purchases" value={formatCurrency(summary.totalPurchases)} color={colors.info} />
@@ -127,7 +143,9 @@ export default function DashboardScreen() {
 
         {/* Recent invoices */}
         <Text style={[s.sectionTitle, { marginTop: 24 }]}>Recent Invoices</Text>
-        {recentInvoices?.data && recentInvoices.data.length > 0 ? (
+        {invoicesError ? (
+          <QueryError message="Could not load invoices" onRetry={refetchInvoices} />
+        ) : recentInvoices?.data && recentInvoices.data.length > 0 ? (
           <View style={s.invoiceList}>
             {recentInvoices.data.map((inv) => (
               <TouchableOpacity

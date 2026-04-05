@@ -1,12 +1,12 @@
 import { eq, and, sql, desc, gte, lte, inArray, count } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { businesses, bankAccounts, controlDb, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
+import { businesses, bankAccounts, controlDb, tenants, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
-import { enforceBusinessLimit, enforceDataExport } from "../lib/plan-limits.js";
+import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -33,10 +33,7 @@ export const businessRouter = router({
 
   // Check if more businesses can be created in this tenant (plan limit).
   canCreate: tenantProcedure.query(async ({ ctx }) => {
-    const { getLimits } = await import("../lib/plan-limits.js");
-    const { controlDb: cdb, tenants } = await import("@hisaabo/db");
-    const { eq } = await import("drizzle-orm");
-    const [row] = await cdb.select({ plan: tenants.plan }).from(tenants).where(eq(tenants.id, ctx.tenantId)).limit(1);
+    const [row] = await controlDb.select({ plan: tenants.plan }).from(tenants).where(eq(tenants.id, ctx.tenantId)).limit(1);
     const limits = getLimits(row?.plan ?? "free");
     if (limits.maxBusinesses === Infinity) return true;
     const [{ count: bizCount }] = await ctx.db.select({ count: count() }).from(businesses);

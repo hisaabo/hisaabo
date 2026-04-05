@@ -65,7 +65,10 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
 // AND that the business belongs to the caller's tenant (critical in self-hosted
 // mode where all tenants share a single database).
 const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.businessId) throw new TRPCError({ code: "BAD_REQUEST", message: "No business selected" });
+  if (!ctx.businessId) {
+    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: no businessId in ctx. Headers received x-business-id:", ctx.req.headers.get("x-business-id"));
+    throw new TRPCError({ code: "BAD_REQUEST", message: "No business selected" });
+  }
 
   // Verify business exists in this tenant's database (ctx.db injected by hasTenantAccess)
   const [biz] = await (ctx as unknown as TenantCtx).db.select({
@@ -76,7 +79,10 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
     .where(eq(businesses.id, ctx.businessId))
     .limit(1);
 
-  if (!biz) throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+  if (!biz) {
+    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: business not found in tenant DB. businessId:", ctx.businessId, "tenantId:", ctx.tenantId);
+    throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+  }
 
   // In self-hosted mode all businesses live in the same DB. Verify the business
   // creator is a member of the caller's tenant to prevent cross-tenant access.
@@ -90,6 +96,7 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
     .limit(1);
 
   if (!creatorMembership) {
+    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: creator not a tenant member. businessId:", ctx.businessId, "createdByUserId:", biz.createdByUserId, "tenantId:", ctx.tenantId);
     throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
   }
 

@@ -5,16 +5,16 @@ import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
-import { invalidateSessionCache } from "../context.js";
+import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
 import { emailService } from "../lib/email.js";
-import { enforceTeamMemberLimit, enforceOrgCreationLimit } from "../lib/plan-limits.js";
+import { enforceTeamMemberLimit, enforceOrgCreationLimit, getLimits } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 async function autoSelectTenantInSession(req: Request, tenantId: string): Promise<string> {
-  const sessionId = getCookieFromRequest(req, "session_id");
+  const sessionId = getSessionIdFromRequest(req);
   if (sessionId) {
     await controlDb.update(sessions)
       .set({ tenantId })
@@ -124,7 +124,6 @@ export const tenantRouter = router({
       }
     }
 
-    const { getLimits } = await import("../lib/plan-limits.js");
     const limits = getLimits(bestPlan);
     return limits.maxOwnedOrgs === Infinity || ownedOrgs.length < limits.maxOwnedOrgs;
   }),
@@ -234,8 +233,8 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this organization" });
       }
 
-      // Get session ID from cookie
-      const sessionId = getCookieFromRequest(ctx.req, "session_id");
+      // Get session ID from cookie or Bearer token (mobile uses Bearer)
+      const sessionId = getSessionIdFromRequest(ctx.req);
       if (!sessionId) throw new TRPCError({ code: "UNAUTHORIZED" });
 
       // Update session's tenantId
@@ -625,9 +624,3 @@ export const tenantRouter = router({
     }),
 });
 
-function getCookieFromRequest(req: Request, name: string): string | null {
-  const cookies = req.headers.get("cookie");
-  if (!cookies) return null;
-  const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : null;
-}

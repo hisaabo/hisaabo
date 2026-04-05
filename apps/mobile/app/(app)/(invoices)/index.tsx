@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
+import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import {
@@ -38,6 +39,7 @@ const PAGE_SIZE = 20;
 
 export default function InvoicesScreen() {
   const router = useRouter();
+  const { businessId } = useBusinessStore();
   const [invoiceType, setInvoiceType] = useState<InvoiceType>("sale");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -54,7 +56,7 @@ export default function InvoicesScreen() {
   };
 
   const { data, isLoading, isFetching, isError, refetch, isRefetching } =
-    trpc.invoice.list.useQuery(queryInput, { placeholderData: (prev) => prev });
+    trpc.invoice.list.useQuery(queryInput, { enabled: !!businessId, placeholderData: (prev) => prev });
 
   const total = data?.total ?? 0;
   const hasMore = allInvoices.length < total;

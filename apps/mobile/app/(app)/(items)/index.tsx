@@ -12,6 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
 import { colors } from "../../../src/lib/theme";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
@@ -20,6 +21,7 @@ type ItemTypeFilter = "product" | "service" | null;
 
 export default function ItemsScreen() {
   const router = useRouter();
+  const { businessId } = useBusinessStore();
   const [search, setSearch] = useState("");
   const [itemType, setItemType] = useState<ItemTypeFilter>(null);
   const [lowStock, setLowStock] = useState(false);
@@ -35,7 +37,7 @@ export default function ItemsScreen() {
       page,
       limit: 20,
     },
-    { placeholderData: (prev) => prev }
+    { enabled: !!businessId, placeholderData: (prev) => prev }
   );
 
   const total = data?.total ?? 0;
