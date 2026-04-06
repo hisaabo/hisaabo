@@ -17,7 +17,8 @@
     "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
     "test:web": "pnpm --filter @hisaabo/web test",
     "test:mobile": "pnpm --filter @hisaabo/mobile test",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "release:tag": "bash scripts/release-tag.sh"
   },
   "devDependencies": {
     "oxlint": "^1.56.0",
@@ -34,5 +35,5 @@
       "react-dom": "19.2.0"
     }
   },
-  "version": "0.4.0"
+  "version": "0.5.0"
 }

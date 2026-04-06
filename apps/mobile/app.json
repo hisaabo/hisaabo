@@ -2,7 +2,7 @@
   "expo": {
     "name": "Hisaabo",
     "slug": "hisaabo",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "hisaabo",
@@ -14,7 +14,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "in.hisaabo.app",
-      "associatedDomains": ["applinks:app.hisaabo.in"]
+      "associatedDomains": [
+        "applinks:app.hisaabo.in"
+      ]
     },
     "android": {
       "adaptiveIcon": {
@@ -32,7 +34,10 @@
               "host": "app.hisaabo.in"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
