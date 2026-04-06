@@ -35,8 +35,8 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
         .describe("sale = customer invoices, purchase = supplier bills. Omit to return both."),
       document_type: z.enum(DOCUMENT_TYPE).optional()
         .describe("Filter by document type (default: invoice). Use 'quotation' for quotes, 'credit_note' for credits."),
-      status: z.enum(INVOICE_STATUS).optional()
-        .describe("Filter by status. Common values: 'sent' (awaiting payment), 'paid', 'overdue', 'draft'."),
+      status: z.union([z.enum(INVOICE_STATUS), z.array(z.enum(INVOICE_STATUS))]).optional()
+        .describe("Filter by status. Pass a single value or array (e.g. ['sent','partial','overdue'] for all unpaid). Common values: 'sent', 'paid', 'overdue', 'draft'."),
       party_id: z.string().uuid().optional()
         .describe("UUID of a specific customer or supplier to filter by."),
       from_date: z.string().datetime().optional()

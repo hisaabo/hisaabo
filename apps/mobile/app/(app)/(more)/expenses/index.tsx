@@ -62,7 +62,7 @@ export default function ExpensesScreen() {
   }, []);
 
   const expenses = data?.data ?? [];
-  const categories = categoriesData ?? [];
+  const categories = (categoriesData ?? []).filter(Boolean);
   const summary = summaryData ?? [];
   const totalExpenses = summary.reduce((acc, s) => acc + parseFloat(s.total || "0"), 0);
 

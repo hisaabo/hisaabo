@@ -14,7 +14,7 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -520,6 +520,7 @@ export default function InvoiceDetailScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
@@ -538,6 +539,7 @@ export default function InvoiceDetailScreen() {
   if (!invoice) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
@@ -565,6 +567,7 @@ export default function InvoiceDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
+      <Stack.Screen options={{ headerShown: false }} />
       {/* Top bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -818,27 +821,29 @@ export default function InvoiceDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Delete */}
-        <View style={[styles.actionGroup, styles.dangerGroup]}>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.dangerBtn]}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-            disabled={deleteInvoice.isPending}
-          >
-            {deleteInvoice.isPending ? (
-              <ActivityIndicator size="small" color={colors.danger} style={styles.actionIcon} />
-            ) : (
-              <Ionicons
-                name="trash-outline"
-                size={18}
-                color={colors.danger}
-                style={styles.actionIcon}
-              />
-            )}
-            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete Invoice</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Delete — hidden when any payment has been recorded */}
+        {amountPaid <= 0 && (
+          <View style={[styles.actionGroup, styles.dangerGroup]}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.dangerBtn]}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+              disabled={deleteInvoice.isPending}
+            >
+              {deleteInvoice.isPending ? (
+                <ActivityIndicator size="small" color={colors.danger} style={styles.actionIcon} />
+              ) : (
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color={colors.danger}
+                  style={styles.actionIcon}
+                />
+              )}
+              <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete Invoice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

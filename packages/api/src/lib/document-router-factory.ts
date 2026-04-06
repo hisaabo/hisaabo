@@ -82,7 +82,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
       .input(
         z.object({
           type: z.enum(["sale", "purchase"]).optional(),
-          status: z.enum(allowedStatusEnum).optional(),
+          status: z.union([z.enum(allowedStatusEnum), z.array(z.enum(allowedStatusEnum))]).optional(),
           partyId: z.string().uuid().optional(),
           fromDate: z.string().datetime().optional(),
           toDate: z.string().datetime().optional(),
@@ -100,9 +100,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
         if (input.type) conditions.push(eq(invoices.type, input.type));
         if (input.status) {
-          conditions.push(
-            eq(invoices.status, input.status as InvoiceStatus)
-          );
+          if (Array.isArray(input.status)) {
+            conditions.push(inArray(invoices.status, input.status as InvoiceStatus[]));
+          } else {
+            conditions.push(eq(invoices.status, input.status as InvoiceStatus));
+          }
         }
         if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
         if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));

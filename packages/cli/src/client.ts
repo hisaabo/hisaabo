@@ -1002,7 +1002,7 @@ export interface InvoiceDetail extends InvoiceSummary {
 
 export interface InvoiceListInput {
   type?: "sale" | "purchase" | null;
-  status?: InvoiceStatus | null;
+  status?: InvoiceStatus | InvoiceStatus[] | null;
   documentType?: DocumentType;
   partyId?: string | null;
   fromDate?: string | null;

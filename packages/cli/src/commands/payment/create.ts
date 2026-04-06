@@ -57,9 +57,7 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
         console.log(`\n  Party: ${selected.name}\n`);
 
         // Show unpaid invoices
-        const invoices = await client.invoice.list({ partyId, status: "sent", limit: 10 });
-        const partial = await client.invoice.list({ partyId, status: "partial", limit: 10 });
-        const unpaid = [...invoices.data, ...partial.data];
+        const { data: unpaid } = await client.invoice.list({ partyId, status: ["sent", "partial", "overdue"], limit: 20 });
 
         if (unpaid.length > 0) {
           console.log("  Unpaid Invoices:");
