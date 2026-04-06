@@ -14,7 +14,7 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -33,7 +33,7 @@ async function sharePDF(
   invoiceId: string,
   invoiceNumber: string,
   businessId: string | null,
-  format: "a4" | "thermal" = "a4"
+  format: "a4" | "a5" | "thermal" = "a5"
 ) {
   const token = getTokenSync();
   const url = `${getApiUrl()}/api/invoices/${invoiceId}/pdf?format=${format}`;
@@ -59,20 +59,6 @@ function getNextStatuses(current: string): NextStatus[] {
   switch (current) {
     case "draft":
       return [{ label: "Mark as Sent", status: "sent", color: colors.info }];
-    case "sent":
-    case "unfulfilled":
-      return [
-        { label: "Mark as Paid", status: "paid", color: colors.success },
-        { label: "Mark as Partial", status: "partial", color: colors.warning },
-        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
-      ];
-    case "partial":
-      return [
-        { label: "Mark as Paid", status: "paid", color: colors.success },
-        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
-      ];
-    case "overdue":
-      return [{ label: "Mark as Paid", status: "paid", color: colors.success }];
     default:
       return [];
   }
@@ -519,7 +505,7 @@ export default function InvoiceDetailScreen() {
     );
   };
 
-  const handleSharePDF = async (format: "a4" | "thermal") => {
+  const handleSharePDF = async (format: "a4" | "a5" | "thermal") => {
     if (!invoice) return;
     setSharingPDF(true);
     try {
@@ -534,6 +520,7 @@ export default function InvoiceDetailScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
@@ -552,6 +539,7 @@ export default function InvoiceDetailScreen() {
   if (!invoice) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.topBar}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
@@ -571,12 +559,15 @@ export default function InvoiceDetailScreen() {
     (sum, li) => sum + parseFloat(li.taxAmount ?? "0"),
     0
   );
+  const isGST = taxTotal > 0;
+  const defaultFormat = isGST ? "a4" : "a5";
   const amountPaid = parseFloat(invoice.amountPaid ?? "0");
   const total = parseFloat(invoice.totalAmount ?? "0");
   const balance = total - amountPaid;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
+      <Stack.Screen options={{ headerShown: false }} />
       {/* Top bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -760,6 +751,23 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
+        {/* Record Payment (for unpaid invoices) */}
+        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={[styles.actionBtn, { borderColor: colors.success + "60" }]}
+              onPress={() => router.push({
+                pathname: "/(payments)/create",
+                params: { partyId: invoice.partyId, partyName: invoice.party?.name ?? "", invoiceId: invoice.id },
+              })}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="card-outline" size={18} color={colors.success} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.success }]}>Record Payment</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Edit Invoice (only for draft/sent) */}
         {(invoice.status === "draft" || invoice.status === "sent") && (
           <View style={styles.actionGroup}>
@@ -783,7 +791,7 @@ export default function InvoiceDetailScreen() {
         <View style={styles.actionGroup}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => handleSharePDF("a4")}
+            onPress={() => handleSharePDF(defaultFormat)}
             activeOpacity={0.7}
             disabled={sharingPDF}
           >
@@ -798,7 +806,7 @@ export default function InvoiceDetailScreen() {
               />
             )}
             <Text style={[styles.actionBtnText, { color: colors.brand }]}>
-              {sharingPDF ? "Generating PDF..." : "Share PDF (A4)"}
+              {sharingPDF ? "Generating PDF..." : `Share PDF (${isGST ? "A4" : "A5"})`}
             </Text>
           </TouchableOpacity>
 
@@ -813,27 +821,29 @@ export default function InvoiceDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Delete */}
-        <View style={[styles.actionGroup, styles.dangerGroup]}>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.dangerBtn]}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-            disabled={deleteInvoice.isPending}
-          >
-            {deleteInvoice.isPending ? (
-              <ActivityIndicator size="small" color={colors.danger} style={styles.actionIcon} />
-            ) : (
-              <Ionicons
-                name="trash-outline"
-                size={18}
-                color={colors.danger}
-                style={styles.actionIcon}
-              />
-            )}
-            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete Invoice</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Delete — hidden when any payment has been recorded */}
+        {amountPaid <= 0 && (
+          <View style={[styles.actionGroup, styles.dangerGroup]}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.dangerBtn]}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+              disabled={deleteInvoice.isPending}
+            >
+              {deleteInvoice.isPending ? (
+                <ActivityIndicator size="small" color={colors.danger} style={styles.actionIcon} />
+              ) : (
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color={colors.danger}
+                  style={styles.actionIcon}
+                />
+              )}
+              <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete Invoice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

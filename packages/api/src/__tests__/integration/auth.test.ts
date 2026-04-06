@@ -18,7 +18,7 @@
  * header so the session-ID extraction path in auth.ts is exercised.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
@@ -33,6 +33,7 @@ import { getControlDb, truncateAllTables, closeTestDb } from "../helpers/test-db
 import { createTestContext } from "../helpers/test-context.js";
 import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
+import { emailService } from "../../lib/email.js";
 
 // ── Caller factory ────────────────────────────────────────────────────────────
 
@@ -432,6 +433,58 @@ describe("auth.logout", () => {
     await expect(caller.auth.logout()).rejects.toMatchObject({
       code: "UNAUTHORIZED",
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// auth.requestMagicLink — deep link URL correctness
+//
+// Regression: deep link was `hisaabo://auth/verify?token=...` but Expo Router
+// uses (auth) as a layout group, so the actual route is /verify. Desktop Tauri
+// handler translates /verify → /auth/verify for the webview.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.requestMagicLink — deep link URLs", () => {
+  const sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
+
+  afterAll(() => {
+    sendSpy.mockRestore();
+  });
+
+  it("web source: primary is https, secondary is hisaabo://verify deep link", async () => {
+    sendSpy.mockClear();
+    const caller = unauthCaller();
+    await caller.auth.sendMagicLink({ email: "deeplink-web@vyapar.in", source: "web" });
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
+    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
+    // Must NOT contain /auth/ in the deep link path
+    expect(secondaryUrl).not.toContain("hisaabo://auth/");
+  });
+
+  it("mobile source: primary is hisaabo://verify deep link, secondary is https", async () => {
+    sendSpy.mockClear();
+    const caller = unauthCaller();
+    await caller.auth.sendMagicLink({ email: "deeplink-mobile@vyapar.in", source: "mobile" });
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
+    expect(primaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
+    expect(primaryUrl).not.toContain("hisaabo://auth/");
+    expect(secondaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+  });
+
+  it("desktop source: same deep link as mobile (hisaabo://verify)", async () => {
+    sendSpy.mockClear();
+    const caller = unauthCaller();
+    await caller.auth.sendMagicLink({ email: "deeplink-desktop@vyapar.in", source: "desktop" });
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    const [, primaryUrl] = sendSpy.mock.calls[0]!;
+    expect(primaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
+    expect(primaryUrl).not.toContain("hisaabo://auth/");
   });
 });
 

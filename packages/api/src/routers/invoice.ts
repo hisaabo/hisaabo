@@ -12,7 +12,10 @@ export const invoiceRouter = router({
   list: viewerProcedure
     .input(z.object({
       type: z.enum(["sale", "purchase"]).nullish(),
-      status: z.enum(["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]).nullish(),
+      status: z.union([
+        z.enum(["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"]),
+        z.array(z.enum(["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"])),
+      ]).nullish(),
       partyId: z.string().uuid().nullish(),
       documentType: z.enum(documentTypes).default("invoice"),
       fromDate: z.string().datetime().nullish(),
@@ -31,7 +34,9 @@ export const invoiceRouter = router({
         isNull(invoices.deletedAt),
       ];
       if (input.type) conditions.push(eq(invoices.type, input.type));
-      if (input.status === "overdue") {
+      if (Array.isArray(input.status)) {
+        conditions.push(inArray(invoices.status, input.status));
+      } else if (input.status === "overdue") {
         // Overdue is computed: due date has passed AND invoice is not paid/cancelled/draft
         conditions.push(sql`${invoices.dueDate} < NOW()`);
         conditions.push(sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`);

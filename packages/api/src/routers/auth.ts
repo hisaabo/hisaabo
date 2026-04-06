@@ -345,7 +345,7 @@ export const authRouter = router({
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
     const tokenParam = `token=${encodeURIComponent(rawToken)}`;
     const webUrl = `${baseUrl}/auth/verify?${tokenParam}`;
-    const deepLinkUrl = `hisaabo://auth/verify?${tokenParam}`;
+    const deepLinkUrl = `hisaabo://verify?${tokenParam}`;
 
     // Primary link matches the initiator: desktop/mobile get the deep link,
     // web gets the regular HTTPS link. The other is shown as secondary.

@@ -337,7 +337,7 @@ export const expenseRouter = router({
       .from(expenses)
       .where(and(eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)))
       .orderBy(expenses.category);
-    return result.map((r) => r.category);
+    return result.map((r) => r.category).filter(Boolean);
   }),
 
   summary: viewerProcedure

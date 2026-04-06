@@ -1,27 +1,23 @@
 import { Stack } from "expo-router";
-import { colors } from "../../../src/lib/theme";
-
-const headerStyle = { backgroundColor: colors.bg };
-const headerTintColor = colors.textPrimary;
 
 export default function MoreLayout() {
   return (
-    <Stack screenOptions={{ headerStyle, headerTintColor, headerShadowVisible: false }}>
-      <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="payments" options={{ headerShown: false }} />
-      <Stack.Screen name="expenses" options={{ headerShown: false }} />
-      <Stack.Screen name="bank" options={{ headerShown: false }} />
-      <Stack.Screen name="settings" options={{ headerShown: false }} />
-      <Stack.Screen name="gst" options={{ headerTitle: "GST Returns" }} />
-      <Stack.Screen name="quotations" options={{ headerShown: false }} />
-      <Stack.Screen name="credit-notes" options={{ headerShown: false }} />
-      <Stack.Screen name="delivery-challans" options={{ headerShown: false }} />
-      <Stack.Screen name="proforma-invoices" options={{ headerShown: false }} />
-      <Stack.Screen name="sales-returns" options={{ headerShown: false }} />
-      <Stack.Screen name="store-orders" options={{ headerShown: false }} />
-      <Stack.Screen name="reports" options={{ headerShown: false }} />
-      <Stack.Screen name="shipments" options={{ headerShown: false }} />
-      <Stack.Screen name="automated-invoices" options={{ headerShown: false }} />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="payments" />
+      <Stack.Screen name="expenses" />
+      <Stack.Screen name="bank" />
+      <Stack.Screen name="settings" />
+      <Stack.Screen name="gst" />
+      <Stack.Screen name="quotations" />
+      <Stack.Screen name="credit-notes" />
+      <Stack.Screen name="delivery-challans" />
+      <Stack.Screen name="proforma-invoices" />
+      <Stack.Screen name="sales-returns" />
+      <Stack.Screen name="store-orders" />
+      <Stack.Screen name="reports" />
+      <Stack.Screen name="shipments" />
+      <Stack.Screen name="automated-invoices" />
     </Stack>
   );
 }

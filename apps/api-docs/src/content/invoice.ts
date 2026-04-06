@@ -16,7 +16,7 @@ export const invoiceEndpoints: EndpointGroup = {
       input: [
         { name: "documentType", type: "enum", required: false, description: "Document type to list", default: "invoice", enumValues: ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] },
         { name: "type", type: "enum", required: false, description: "Filter by invoice direction", enumValues: ["sale", "purchase"] },
-        { name: "status", type: "enum", required: false, description: "Filter by current status", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] },
+        { name: "status", type: "enum | enum[]", required: false, description: "Filter by current status. Pass a single value or an array to match multiple statuses (e.g. `[\"sent\", \"partial\", \"overdue\"]` for all unpaid).", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] },
         { name: "partyId", type: "string (UUID)", required: false, description: "Filter invoices for a specific party" },
         { name: "fromDate", type: "string (ISO 8601)", required: false, description: "Start of date range (inclusive)" },
         { name: "toDate", type: "string (ISO 8601)", required: false, description: "End of date range (inclusive)" },

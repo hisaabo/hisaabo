@@ -1,14 +1,10 @@
 import { Stack } from "expo-router";
-import { colors } from "../../../../src/lib/theme";
-
-const headerStyle = { backgroundColor: colors.bg };
-const headerTintColor = colors.textPrimary;
 
 export default function StoreOrdersLayout() {
   return (
-    <Stack screenOptions={{ headerStyle, headerTintColor, headerShadowVisible: false }}>
-      <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="[id]" options={{ headerShown: false }} />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="[id]" />
     </Stack>
   );
 }

@@ -1,20 +1,16 @@
 import { Stack } from "expo-router";
-import { colors } from "../../../../src/lib/theme";
-
-const headerStyle = { backgroundColor: colors.bg };
-const headerTintColor = colors.textPrimary;
 
 export default function SettingsLayout() {
   return (
-    <Stack screenOptions={{ headerStyle, headerTintColor, headerShadowVisible: false }}>
-      <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="business" options={{ headerShown: false }} />
-      <Stack.Screen name="team" options={{ headerShown: false }} />
-      <Stack.Screen name="profile" options={{ headerShown: false }} />
-      <Stack.Screen name="account" options={{ headerShown: false }} />
-      <Stack.Screen name="documents" options={{ headerShown: false }} />
-      <Stack.Screen name="api-keys" options={{ headerShown: false }} />
-      <Stack.Screen name="store" options={{ headerShown: false }} />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="business" />
+      <Stack.Screen name="team" />
+      <Stack.Screen name="profile" />
+      <Stack.Screen name="account" />
+      <Stack.Screen name="documents" />
+      <Stack.Screen name="api-keys" />
+      <Stack.Screen name="store" />
     </Stack>
   );
 }

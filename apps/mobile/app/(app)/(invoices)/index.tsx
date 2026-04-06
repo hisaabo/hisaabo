@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
@@ -23,10 +23,13 @@ import {
 } from "../../../src/components/ui";
 
 type InvoiceType = "sale" | "purchase";
-type StatusFilter = "all" | "draft" | "sent" | "partial" | "overdue" | "paid" | "cancelled";
+type StatusFilter = "all" | "unpaid" | "draft" | "sent" | "partial" | "overdue" | "paid" | "cancelled";
+
+const UNPAID_STATUSES = ["sent", "partial", "overdue"] as const;
 
 const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "unpaid", label: "Unpaid" },
   { key: "draft", label: "Draft" },
   { key: "sent", label: "Sent" },
   { key: "partial", label: "Partial" },
@@ -39,16 +42,23 @@ const PAGE_SIZE = 20;
 
 export default function InvoicesScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ type?: string; status?: string }>();
   const { businessId } = useBusinessStore();
-  const [invoiceType, setInvoiceType] = useState<InvoiceType>("sale");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>((params.type as InvoiceType) || "sale");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>((params.status as StatusFilter) || "all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [allInvoices, setAllInvoices] = useState<NonNullable<typeof data>["data"]>([]);
 
+  // Sync route params to state when navigating from other screens (e.g. home dashboard)
+  useEffect(() => {
+    if (params.type) setInvoiceType(params.type as InvoiceType);
+    if (params.status) setStatusFilter(params.status as StatusFilter);
+  }, [params.type, params.status]);
+
   const queryInput = {
     type: invoiceType,
-    status: statusFilter === "all" ? undefined : (statusFilter as Exclude<StatusFilter, "all">),
+    status: statusFilter === "all" ? undefined : statusFilter === "unpaid" ? [...UNPAID_STATUSES] : (statusFilter as Exclude<StatusFilter, "all" | "unpaid">),
     search: search.length > 0 ? search : undefined,
     page,
     limit: PAGE_SIZE,
