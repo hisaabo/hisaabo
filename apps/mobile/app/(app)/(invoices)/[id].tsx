@@ -505,9 +505,6 @@ export default function InvoiceDetailScreen() {
     );
   };
 
-  const isGST = taxTotal > 0;
-  const defaultFormat = isGST ? "a4" : "a5";
-
   const handleSharePDF = async (format: "a4" | "a5" | "thermal") => {
     if (!invoice) return;
     setSharingPDF(true);
@@ -560,6 +557,8 @@ export default function InvoiceDetailScreen() {
     (sum, li) => sum + parseFloat(li.taxAmount ?? "0"),
     0
   );
+  const isGST = taxTotal > 0;
+  const defaultFormat = isGST ? "a4" : "a5";
   const amountPaid = parseFloat(invoice.amountPaid ?? "0");
   const total = parseFloat(invoice.totalAmount ?? "0");
   const balance = total - amountPaid;
