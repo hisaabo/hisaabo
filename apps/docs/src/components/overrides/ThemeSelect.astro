@@ -1,0 +1,13 @@
+---
+/**
+ * Starlight ThemeSelect override — injects the DeviceSwitcher
+ * next to the theme toggle in the header.
+ */
+import type { Props } from '@astrojs/starlight/props';
+import Default from '@astrojs/starlight/components/ThemeSelect.astro';
+import DeviceSwitcher from '../DeviceSwitcher.astro';
+---
+<div class="sl-flex" style="gap: 0.25rem; align-items: center;">
+  <DeviceSwitcher />
+  <Default {...Astro.props}><slot /></Default>
+</div>

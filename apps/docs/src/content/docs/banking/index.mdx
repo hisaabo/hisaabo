@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 The Banking section lets you track the balances in your business bank accounts, UPI accounts, and cash. When you link a payment to a bank account, Hisaabo automatically records the corresponding deposit or withdrawal.
 
 ## Account types
@@ -19,7 +22,13 @@ The Banking section lets you track the balances in your business bank accounts, 
 
 ## Adding a bank account
 
-Go to **Banking** in the left navigation and click **Add Account**.
+<ForDesktop>
+Go to **Cash & Bank** in the sidebar and click **+ Add Account**. A form opens where you enter the account details.
+</ForDesktop>
+
+<ForMobile>
+Tap **More** in the bottom tab bar, then tap **Bank**. Tap the floating **+** button to open a full-screen form for entering the account details.
+</ForMobile>
 
 | Field | Required | Notes |
 |---|---|---|
@@ -34,6 +43,16 @@ Go to **Banking** in the left navigation and click **Add Account**.
 ## Default account
 
 Set one account as your default. The default account is pre-selected whenever you record a payment or expense, saving time. Change the default in the account settings.
+
+## Banking layout
+
+<ForDesktop>
+The Banking page opens with 3 summary cards at the top showing your total balance across all accounts, total deposits, and total withdrawals. Below, a split view shows the account list on the left and the selected account's transactions on the right. Click an account in the left panel to view its transaction history in the right panel. Use the date range tabs at the top of the transaction panel to filter by period.
+</ForDesktop>
+
+<ForMobile>
+The Banking page opens with a summary card at the top showing your total balance across all accounts. Below, a vertical list of account cards shows each account's name, type, and current balance. Tap an account card to open its full-screen transaction history with a date filter at the top.
+</ForMobile>
 
 ## How balances are tracked
 
@@ -52,7 +71,13 @@ Expenses are not directly linked to bank accounts. To track an expense paid from
 
 ## Viewing transactions
 
-Click an account to open its transaction history. Each row shows:
+<ForDesktop>
+Click an account in the left panel to view its transaction history in the right panel. Each row shows:
+</ForDesktop>
+
+<ForMobile>
+Tap an account card to open a full-screen transaction history. Each row shows:
+</ForMobile>
 
 | Column | Meaning |
 |---|---|
@@ -64,7 +89,14 @@ Click an account to open its transaction history. Each row shows:
 
 ## Bank transfers
 
-You can transfer money between accounts using the **Transfer** feature. This creates:
+<ForDesktop>
+Click the **Transfer** button to open a slide-over panel. Select the source account, destination account, enter the amount, and confirm. This creates:
+</ForDesktop>
+
+<ForMobile>
+Tap the **Transfer** icon in the header to open a full-screen form. Tap each account field to open an account picker modal where you select the source and destination accounts. Enter the amount and confirm. This creates:
+</ForMobile>
+
 - A withdrawal transaction in the source account
 - A deposit transaction in the destination account
 

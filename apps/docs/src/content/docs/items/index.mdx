@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 An **item** in Hisaabo is a product or service that you sell or purchase. Items appear in your invoice line items, and stock quantities are automatically adjusted when you create invoices.
 
 ## Item types
@@ -24,13 +27,29 @@ Hisaabo supports three item modes. Choose the right mode when creating the item:
 |---|---|
 | **Simple** | Single unit, single price. Most items fit here. |
 | **Alternate Units** | Same item sold or purchased in different units (e.g. cloth sold by metre but tracked in rolls) |
-| **Variants** | Same item with multiple configurations (e.g. t-shirt in S/M/L × Red/Blue) |
+| **Variants** | Same item with multiple configurations (e.g. t-shirt in S/M/L x Red/Blue) |
 
 See [Variants](/items/variants) and [Units & Conversions](/items/units-and-conversions) for the advanced modes.
 
+:::note[Mobile limitation]
+The mobile app only supports creating **Simple** mode items. To create items with variants or alternate units, use the web app. Once created, variant and alternate-unit items can be viewed and used on invoices from the mobile app.
+:::
+
 ## Adding an item
 
-Go to **Items** in the left navigation and click **New Item**.
+<ForDesktop>
+Go to **Items** in the sidebar and click **+ Add Item** (or press <kbd>N</kbd>). A slide-over panel opens with collapsible Disclosure sections for each group of fields: Item Type, Basic Info, Pricing, Unit, and Stock.
+</ForDesktop>
+
+<ForMobile>
+Tap **Items** in the bottom tab bar (if visible) or navigate to the Items section, then tap the floating **+** button. A full-screen form opens with stacked cards for each section:
+
+- **Item Type** — Product or Service toggle
+- **Basic Info** — Name, SKU, category, description
+- **Pricing** — Sale price, purchase price, and tax preset chips (0%, 5%, 12%, 18%, 28%) for quick GST rate selection
+- **Unit** — Tap to open a unit picker modal with the full list of supported units
+- **Stock** — Opening stock quantity and low-stock alert threshold
+</ForMobile>
 
 ### Required fields
 
@@ -65,6 +84,16 @@ Go to **Items** in the left navigation and click **New Item**.
 | **Category** | Free-text category for grouping items (e.g. "Electronics", "Clothing", "Services"). |
 | **Description** | Internal notes about the item. Not shown on invoices. |
 
+## Filtering and searching items
+
+<ForDesktop>
+The items list provides a search bar at the top and a **SegmentedControl** to filter by type: **All**, **Products**, or **Services**. Items with stock at or below the low-stock threshold display a low-stock badge next to the stock quantity. You can click the **Export** button to download the item list as a CSV file.
+</ForDesktop>
+
+<ForMobile>
+The items list provides a search bar at the top and horizontal chip filters for **All**, **Products**, **Services**, and **Low Stock**. Tap the **Low Stock** chip to see only items that need reordering. CSV export is not available on mobile.
+</ForMobile>
+
 ## How stock is tracked
 
 Stock is stored as `NUMERIC(15,3)` in the database — it supports fractional quantities (for example, 2.5 kg). The system updates stock atomically inside the same transaction as each invoice:
@@ -85,7 +114,15 @@ You can manually adjust stock outside of invoices. Common uses:
 - Physical inventory count correction
 - Writing off damaged or expired goods
 
-To adjust stock: open the item, click **Adjust Stock**, and enter:
+<ForDesktop>
+To adjust stock: open the item detail in the slide-over panel, then click **Adjust Stock** in the footer. A modal appears where you enter the adjustment details.
+</ForDesktop>
+
+<ForMobile>
+To adjust stock: open the item detail screen, then tap **Adjust Stock**. A modal appears where you enter the adjustment details.
+</ForMobile>
+
+Enter the following fields:
 - **Quantity change**: positive to add stock, negative to remove stock
 - **Reason**: for example, "Physical count correction" or "Goods damaged"
 - **Adjustment date**: defaults to today, but you can backdate the adjustment

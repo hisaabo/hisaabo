@@ -5,6 +5,9 @@ sidebar:
   order: 3
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 **Alternate units** let you sell or purchase the same item in different units of measurement, with automatic conversion to the base tracking unit for stock.
 
 ## When to use alternate units
@@ -56,10 +59,15 @@ When you sell 2 rolls of cloth on an invoice:
 
 ## Using alternate units on invoices
 
-When you select an alternate-unit item on an invoice line item, a **Unit** dropdown appears alongside the standard unit. Choose the unit you are selling or purchasing in:
+When you select an alternate-unit item on an invoice line item, you need to choose which unit you are selling or purchasing in:
 
-- The unit price fills in from the selected unit's configured sale/purchase price
-- Stock is converted to the base unit automatically (using the conversion factor)
+<ForDesktop>
+A **Unit** dropdown appears alongside the standard unit. Select the desired unit from the dropdown. The unit price fills in from the selected unit's configured sale or purchase price, and stock is converted to the base unit automatically using the conversion factor.
+</ForDesktop>
+
+<ForMobile>
+A row of horizontal scrollable **pill buttons** appears below the item name, showing each available unit along with its price (for example, "m - ₹80" | "roll - ₹3,800"). Tap the pill for the unit you want. The unit price fills in automatically, and stock is converted to the base unit using the conversion factor.
+</ForMobile>
 
 ## Stock display
 

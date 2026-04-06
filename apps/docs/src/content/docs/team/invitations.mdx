@@ -5,16 +5,38 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Hisaabo uses email-based invitations to add new members to your organization. This page covers the full invitation lifecycle, from sending to acceptance.
 
 ## Invitation lifecycle
 
 1. An Admin or Owner creates an invitation from **Settings → Team** by entering the invitee's email and selecting a role.
 2. An invitation email is sent automatically. A copyable link is also displayed in the UI as a fallback.
-3. The invitee clicks the link. The invitation token is stored in their browser and they are redirected to the login page.
+3. The invitee clicks the link.
+
+<ForDesktop>
+The invitation token is stored in the browser and the invitee is redirected to the login page.
+</ForDesktop>
+
+<ForMobile>
+If the Hisaabo app is installed, the invitation deep link opens the app directly. If the app is not installed, the link opens in the device's browser and prompts the invitee to download the app or continue on the web.
+</ForMobile>
+
 4. **New user:** signs up via magic link, completes their profile, and the invitation is auto-accepted. They land directly in the invited organization.
 5. **Existing user:** clicks the link, the invitation is accepted immediately, and the invited organization is auto-selected in their session.
 6. The invitation expires after **7 days** if not accepted.
+
+## Accepting invitations
+
+<ForDesktop>
+When you click an invitation link in your browser, the token is stored in your session. If you are already signed in, the invitation is accepted immediately and the invited organization appears in your business switcher. If you are not signed in, you are redirected to the login page — the invitation is accepted automatically after you sign in.
+</ForDesktop>
+
+<ForMobile>
+When you tap an invitation link on your phone, the Hisaabo app opens directly via deep linking (if installed). The invitation is accepted automatically after you sign in or complete sign-up. The invited organization is then selected as your active business. If the app is not installed, the link opens in your mobile browser where you can accept the invitation on the web.
+</ForMobile>
 
 ## Pending invitations
 

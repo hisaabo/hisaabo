@@ -5,6 +5,9 @@ sidebar:
   order: 4
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Every invoice in Hisaabo can be downloaded as a PDF and shared with your customer or supplier. PDFs are generated on the server using the NotoSans font family, which supports all Indic scripts.
 
 ## PDF formats
@@ -17,7 +20,13 @@ Three formats are available:
 | **A5 landscape** | Compact invoices for retail counters |
 | **80mm thermal** | Point-of-sale thermal printers (80mm roll) |
 
+<ForDesktop>
 Select the format from the **Download PDF** dropdown on the invoice detail page.
+</ForDesktop>
+
+<ForMobile>
+Select the format before sharing. The PDF is generated on the server and delivered to your device's native share sheet, so the output is identical regardless of which device you use.
+</ForMobile>
 
 ## What is included in the PDF
 
@@ -78,11 +87,19 @@ Go to Settings → Bank Accounts, edit your account, and enter the UPI ID (for e
 
 ## Downloading a PDF
 
+<ForDesktop>
 1. Open an invoice from the invoice list.
-2. Click the **Download PDF** button (or the dropdown arrow for format selection).
-3. The PDF is generated and downloaded to your device.
+2. Click the **Download PDF** button in the invoice detail view. If you want a specific format, click the dropdown arrow next to the button and select A4, A5, or thermal.
+3. The PDF is generated on the server and downloaded to your browser's default download location.
 
 You can also share the PDF directly by clicking **Share** — this copies a download link to the clipboard (requires the invoice to be accessible from your server's URL).
+</ForDesktop>
+
+<ForMobile>
+1. Open an invoice from the invoice list.
+2. Tap the **Share** button at the top of the invoice detail screen.
+3. The PDF is generated on the server and delivered to your device's native share sheet (powered by expo-sharing). From the share sheet, you can send the PDF via WhatsApp, email, save it to Files, AirDrop it, or use any other sharing option your device supports.
+</ForMobile>
 
 ## Fonts and script support
 

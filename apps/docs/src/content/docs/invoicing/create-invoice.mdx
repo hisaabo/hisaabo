@@ -5,99 +5,205 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 This guide walks you through creating a sale invoice from start to finish. Purchase invoices follow the same steps — the only difference is that you select a supplier instead of a customer, and stock increases rather than decreases.
+
+:::tip[This page adapts to your device]
+You're seeing instructions for the platform you're browsing on. Use the **Desktop / Mobile** toggle in the header to switch.
+:::
 
 ## Before you start
 
 Make sure you have:
 - At least one party (customer for sale, supplier for purchase) in your [Parties](/parties) list
-- At least one item in your [Items](/items) catalogue (optional — you can type a description directly on the line item)
+- At least one item in your [Items](/items) catalogue (on mobile, items must be selected from the catalogue; on desktop, you can also type a custom description directly)
 
 ## Step 1: Open the new invoice form
 
-From the left navigation, click **Invoices**, then click **New Invoice**. You can also press the keyboard shortcut `N` from the invoice list.
+<ForDesktop>
+From the **Invoices** page, click the **+ New Invoice** button in the top-right corner. You can also press the keyboard shortcut `N` from anywhere on the invoice list.
+
+A slide-over panel opens on the right side of the screen with the invoice form.
+</ForDesktop>
+
+<ForMobile>
+Open the **Invoices** tab, then tap the floating **+** button at the bottom-right corner of the screen.
+
+This opens a full-screen invoice form.
+</ForMobile>
 
 ## Step 2: Select the invoice type and party
 
-1. Choose **Sale** or **Purchase** from the type selector at the top of the form.
-2. Click the **Party** field and start typing the customer's or supplier's name. The dropdown shows matching parties. Select the one you want.
+<ForDesktop>
+1. Use the **Sales / Purchases** segmented control at the top of the invoice list to set the type before opening the form. The creator inherits the active type.
+2. In the slide-over, the **Customer** (or **Supplier**) field is a searchable combobox at the top-left. Start typing to filter your parties, then select one from the dropdown.
+</ForDesktop>
 
-If the party does not exist yet, you can create them inline by clicking **+ Add new party** in the dropdown. This opens a quick-add modal where you enter at minimum the party name.
+<ForMobile>
+1. At the top of the form, tap **Sale** or **Purchase** in the type toggle.
+2. Tap the **Select party...** field below. A full-screen modal opens showing:
+   - **Your Parties** — existing customers or suppliers, with a search bar at the top
+   - **Phone Contacts** — contacts from your phone that don't already match a party (requires contacts permission)
+
+   Select a party by tapping their name, or create one inline by tapping **Create "name" as new customer/supplier** at the bottom of the list.
+</ForMobile>
+
+<ForMobile>
+:::tip[Phone contacts]
+On first use, Hisaabo asks for contacts permission. Allowing it lets you create parties directly from your phone's contact list — their name and phone number are pre-filled automatically.
+:::
+</ForMobile>
 
 ## Step 3: Set the invoice date and due date
 
-- **Invoice date** — defaults to today. Change it if you are backdating an invoice.
-- **Due date** — optional. If set, the invoice status changes to `overdue` after this date if it is still unpaid.
+<ForDesktop>
+The **Date** and **Due date** fields sit next to the party selector in a three-column layout. Both accept a standard date picker. The invoice date defaults to today; the due date is optional.
+
+If you have set a **credit period** on the selected party, the due date is auto-calculated when you pick the party.
+</ForDesktop>
+
+<ForMobile>
+Below the party selector, two date cards sit side by side:
+- **Invoice Date** — defaults to today. Tap to open the date picker.
+- **Due Date** — defaults to 30 days from today. Tap to change.
+
+If the selected party has a **credit period** configured, the due date adjusts automatically after party selection.
+</ForMobile>
 
 ## Step 4: Add line items
 
-Each line item represents one product or service on the invoice. Click **Add Line Item** or press `Tab` after the last field of an existing line item.
+<ForDesktop>
+Each line item is displayed as a card inside the slide-over. Click the **Product** combobox to search your items catalogue, or type a custom description.
 
 For each line item, fill in:
 
-| Field | Required | Notes |
-|---|---|---|
-| Description | Yes | Type to search your items catalogue. Selecting an item auto-fills unit price, tax rate, and HSN. Or type a custom description. |
-| Quantity | Yes | Number of units. Supports decimals (for example, `2.5` for 2.5 kg). |
-| Unit | No | The unit this quantity is in. Defaults to the item's base unit. For alternate-unit items, you can switch to the alternate unit and the conversion is applied automatically. |
-| Unit Price | Yes | Price per unit in INR. |
-| Tax % | No | GST rate. Auto-filled from the item, but you can override it. |
-| Discount % | No | Line-level discount. Calculated before tax. |
+| Field | Notes |
+|---|---|
+| Product | Searchable dropdown. Selecting an item auto-fills unit price, tax rate, and HSN. |
+| Qty | Number of units. Supports decimals. |
+| Rate | Price per unit in INR. |
+| GST % | Auto-filled from the item. Override if needed. |
+| Discount % | Line-level discount, calculated before tax. |
 
-The **Total** column shows the computed amount for each line item: `(quantity × unitPrice × (1 - discount%)) × (1 + tax%)`.
+The four numeric fields (Qty, Rate, GST %, Discount %) are arranged in a single row for quick entry. The computed **Amount** is shown at the end of each line item card.
+
+To add more items, click **+ Add line item** below the existing items. Remove a line item by clicking the **×** button on its card.
+</ForDesktop>
+
+<ForMobile>
+Each line item appears as a stacked card. Tap **"Tap to select item..."** to open the item picker modal, which shows your items catalogue with search. Selecting an item auto-fills the price, tax rate, and description.
+
+For each line item card:
+
+| Field | Notes |
+|---|---|
+| Item | Tap to open the searchable item picker. Items with variants or alternate units show badges. |
+| Qty | Top-left field. Supports decimals. |
+| Rate (₹) | Top-right field. Price per unit. |
+| GST % | Bottom-left field. Auto-filled from the item. |
+| Disc % | Bottom-right field. Line-level discount. |
+
+The computed **Amount** is shown at the bottom of each card.
+
+Tap the **Add** button next to the "Items" section header to add another line item. New items appear at the top of the list. Remove a line item by tapping the red **×** icon.
+</ForMobile>
 
 ### Selecting item variants
 
-If an item has variants (for example, a t-shirt in multiple sizes and colours), a **Variant** dropdown appears after you select the item. Choose the specific variant. The variant's stock is tracked separately from the parent item.
+If an item has variants (for example, a t-shirt in multiple sizes and colours), a **Variant** selector appears after you select the item.
 
-### Reordering line items
+<ForDesktop>
+A dropdown appears below the product combobox showing available variants.
+</ForDesktop>
 
-Drag and drop line items using the handle on the left edge of each row to reorder them. The order is preserved in the PDF.
+<ForMobile>
+A variant picker pill appears below the item name on the line item card. Tap it to open a modal showing all available variants with their attribute values and prices. The description updates to include the selected variant (e.g. "T-Shirt - Red / XL").
+</ForMobile>
+
+### Alternate units
+
+If an item has alternate units (for example, "dozen" alongside individual "pieces"), a unit selector appears.
+
+<ForDesktop>
+A dropdown appears below the product combobox letting you switch between the base unit and alternate units. The price updates based on the unit's configured conversion factor.
+</ForDesktop>
+
+<ForMobile>
+Horizontal scrollable pills appear below the item name, showing each available unit with its price. Tap a pill to switch units — the rate and description update automatically.
+</ForMobile>
 
 ## Step 5: Apply discounts and additional charges
 
-Below the line items table, you can add:
+<ForDesktop>
+Below the line items section:
 
-### Invoice-level discount
+- **Invoice-level discount** — enter a flat amount in INR or a percentage of the subtotal.
+- **Additional charges** — click **+ Add charge** and enter a label and amount (e.g. "Delivery - ₹200").
+- **Round-off** — enter a positive (round up) or negative (round down) value to round the total.
+</ForDesktop>
 
-An additional discount applied to the invoice total (after line-item discounts). You can enter it as:
-- A flat **amount** in INR (for example, ₹500 off)
-- A **percentage** of the subtotal (for example, 2%)
+<ForMobile>
+The mobile form supports line-item-level discounts (the **Disc %** field on each item card). Invoice-level discounts, additional charges, and round-off are not yet available on mobile — use the web app for invoices that require these.
+</ForMobile>
 
-### Additional charges
+## Step 6: Add notes
 
-Custom charges added on top of the invoice total — for example, delivery charges, packing fees, or handling charges. Click **Add Charge** and enter a label and amount. You can add multiple charges.
+<ForDesktop>
+Two text areas at the bottom of the slide-over:
+- **Notes** — printed on the invoice PDF (e.g. "Thank you for your business").
+- **Terms and Conditions** — payment terms printed at the bottom of the PDF.
+</ForDesktop>
 
-### Round-off
+<ForMobile>
+A single **Notes** field at the bottom of the form lets you add payment terms, delivery notes, or any other text. This is printed on the invoice PDF.
+</ForMobile>
 
-If you want to round the invoice total to the nearest whole rupee (or any value), enter the round-off amount in the **Round Off** field. This can be positive (round up) or negative (round down).
+## Step 7: Review the total
 
-## Step 6: Add notes and terms
-
-- **Notes** — internal or customer-facing notes printed on the invoice PDF (for example, "Thank you for your business").
-- **Terms and Conditions** — your standard payment terms printed at the bottom of the PDF.
-
-## Step 7: Preview the total
-
-The invoice summary panel on the right (or below the form on mobile) shows:
+<ForDesktop>
+The totals section at the bottom of the slide-over shows:
 
 | Field | Meaning |
 |---|---|
 | Subtotal | Sum of all line item amounts before tax |
-| Tax Amount | Total GST (split into CGST/SGST or IGST on the PDF) |
+| Tax | Total GST (split into CGST/SGST or IGST on the PDF) |
 | Discount | Total discount applied |
-| Additional Charges | Sum of extra charges |
+| Charges | Sum of additional charges |
 | Round Off | Round-off amount |
-| **Total** | The amount due from the customer |
+| **Total** | The final amount due |
+</ForDesktop>
+
+<ForMobile>
+A **Summary** card at the bottom of the form shows:
+
+| Field | Meaning |
+|---|---|
+| Discount | Total line-item discounts (shown only if > 0) |
+| Subtotal | Sum of all line item amounts |
+| Tax | Total GST (shown only if > 0) |
+| **Total** | The final amount due |
+
+A running total is also shown next to the "Items" section header so you can track the amount as you add items.
+</ForMobile>
 
 ## Step 8: Save the invoice
 
-Click **Create Invoice**. The invoice is saved with status `draft` and a sequential invoice number is assigned (for example, `INV-00001`).
+<ForDesktop>
+Click **Create Invoice** in the footer of the slide-over. The panel closes and the new invoice appears in your list with status `draft` and an auto-assigned sequential number (e.g. `INV-00001`).
+</ForDesktop>
+
+<ForMobile>
+Tap the sticky **Create Invoice** button at the bottom of the screen. After creation, you're taken directly to the invoice detail view.
+
+If the invoice total is ₹0, an alert asks you to confirm before creating.
+</ForMobile>
 
 From the invoice detail view, you can:
 - [Download the PDF](/invoicing/invoice-pdf)
 - [Record a payment](/payments)
-- Change the status (for example, mark as `sent` after you email it)
+- Change the status (e.g. mark as `sent` after you email it)
 - Edit the invoice if the status is not `paid`
 
 :::caution[Cannot edit paid invoices]
@@ -129,7 +235,14 @@ total             = subtotal + taxTotal - invoiceDiscount + chargesTotal + round
 ## Frequently asked questions
 
 **Can I add a line item without linking it to an item in my catalogue?**
-Yes. Type any text in the Description field without selecting from the dropdown. The line item will have no item link and will not affect stock quantities.
+
+<ForDesktop>
+Yes. Type any text in the Product combobox without selecting from the dropdown. The line item will have no item link and will not affect stock quantities.
+</ForDesktop>
+
+<ForMobile>
+Yes, though on mobile you currently need to select an item from the picker. Custom free-text line items are supported on the web app.
+</ForMobile>
 
 **What happens to stock when I create an invoice?**
 Stock is updated inside the same database transaction as the invoice. Sale invoices reduce stock; purchase invoices increase stock. If you have alternate units, the quantity is converted to the base unit first.

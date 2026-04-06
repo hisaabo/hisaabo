@@ -14,6 +14,9 @@ export default defineConfig({
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/hisaabo/hisaabo" },
       ],
+      components: {
+        ThemeSelect: "./src/components/overrides/ThemeSelect.astro",
+      },
       customCss: ["./src/styles/custom.css"],
       sidebar: [
         {
@@ -103,6 +106,10 @@ export default defineConfig({
         {
           tag: "meta",
           attrs: { name: "robots", content: "index, follow" },
+        },
+        {
+          tag: "script",
+          content: `(function(){var s=localStorage.getItem('hisaabo-docs-platform');if(s==='desktop'||s==='mobile'){document.documentElement.setAttribute('data-platform',s)}else{var m=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||window.innerWidth<768;document.documentElement.setAttribute('data-platform',m?'mobile':'desktop')}})();`,
         },
       ],
     }),

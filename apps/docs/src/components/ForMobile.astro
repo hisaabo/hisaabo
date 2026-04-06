@@ -1,0 +1,11 @@
+---
+/**
+ * Wraps content only shown when docs are in "mobile" mode.
+ * Usage in MDX:
+ *   import ForMobile from '../../components/ForMobile.astro';
+ *   <ForMobile>Tap the **+** button at the bottom of the screen.</ForMobile>
+ */
+---
+<div class="platform-mobile">
+  <slot />
+</div>

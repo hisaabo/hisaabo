@@ -227,11 +227,14 @@ jobs:
         working-directory: apps/mobile/android
         run: ./gradlew assembleRelease --no-daemon
 
+      - name: Rename APK
+        run: mv apps/mobile/android/app/build/outputs/apk/release/*.apk apps/mobile/android/app/build/outputs/apk/release/hisaabo-${{ github.ref_name }}.apk
+
       - name: Upload APK to release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: apps/mobile/android/app/build/outputs/apk/release/*.apk
+          files: apps/mobile/android/app/build/outputs/apk/release/hisaabo-${{ github.ref_name }}.apk
           tag_name: ${{ github.ref_name }}
 
   # ── CLI (npm publish) ──────────────────────────────────────────

@@ -5,7 +5,18 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 When you sign in to Hisaabo for the first time, you are prompted to create a business. This page explains each setting so you configure it correctly from the start. Getting the GST state code right is especially important — it drives automatic CGST/SGST versus IGST calculation on every invoice.
+
+<ForDesktop>
+The business creation form opens as a centered page after your first sign-in. Fill in each section and click **Create Business** at the bottom.
+</ForDesktop>
+
+<ForMobile>
+The business creation form opens as a full-screen scrollable form after your first sign-in. Fill in each section and tap **Create Business** at the bottom.
+</ForMobile>
 
 ## Step 1: Basic details
 
@@ -100,9 +111,25 @@ Once you save, you will land on the dashboard. Your next steps are:
 2. **Add your items** — create the products and services you sell or buy. See [Items & Inventory](/items).
 3. **Create your first invoice** — See [Create an Invoice](/invoicing/create-invoice).
 
+<ForDesktop>
+All three sections are accessible from the left sidebar: click **Parties**, **Items**, or **Invoices** to get started.
+</ForDesktop>
+
+<ForMobile>
+You can find **Parties** and **Invoices** in the bottom tab bar. For **Items**, tap the **More** tab and then select **Items**.
+</ForMobile>
+
 ## Managing multiple businesses
 
-You can create additional businesses from the business switcher in the navigation bar. Each business has completely separate data — parties, items, invoices, and settings are not shared between businesses.
+You can create additional businesses from the business switcher. Each business has completely separate data — parties, items, invoices, and settings are not shared between businesses.
+
+<ForDesktop>
+The business switcher is located in the top navigation bar. Click your current business name to open the dropdown, then select **Create new business** or switch to an existing one.
+</ForDesktop>
+
+<ForMobile>
+The business switcher is located in the **More** tab under your profile area. Tap your current business name to see a list of your businesses, then tap **Create new business** or select an existing one.
+</ForMobile>
 
 ## Frequently asked questions
 
