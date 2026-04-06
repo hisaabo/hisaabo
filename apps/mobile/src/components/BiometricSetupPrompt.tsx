@@ -45,10 +45,14 @@ export function BiometricSetupPrompt({ visible, onDismiss }: Props) {
     if (visible) {
       checkHardware().then(({ available, types }) => {
         setHardwareAvailable(available);
-        if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
-          setBiometricType("Face ID");
+        const hasFace = types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION);
+        const hasFingerprint = types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT);
+        if (hasFace) {
+          setBiometricType(Platform.OS === "ios" ? "Face ID" : "Face Unlock");
+        } else if (hasFingerprint) {
+          setBiometricType(Platform.OS === "ios" ? "Touch ID" : "Fingerprint");
         } else {
-          setBiometricType("Fingerprint");
+          setBiometricType("Biometric");
         }
       });
       Animated.spring(slideAnim, {

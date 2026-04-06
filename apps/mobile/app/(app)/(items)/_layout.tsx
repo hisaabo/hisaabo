@@ -8,7 +8,7 @@ export default function ItemsLayout() {
   return (
     <Stack screenOptions={{ headerStyle, headerTintColor, headerShadowVisible: false }}>
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="[id]" options={{ headerTitle: "", headerBackTitle: "Items" }} />
+      <Stack.Screen name="[id]" options={{ headerShown: false }} />
       <Stack.Screen name="create" options={{ headerTitle: "New Item", presentation: "modal" }} />
       <Stack.Screen name="edit" options={{ headerTitle: "Edit Item", presentation: "modal" }} />
     </Stack>

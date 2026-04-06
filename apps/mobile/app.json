@@ -13,14 +13,28 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "in.hisaabo.app"
+      "bundleIdentifier": "in.hisaabo.app",
+      "associatedDomains": ["applinks:app.hisaabo.in"]
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#5b5bd6"
       },
-      "package": "in.hisaabo.app"
+      "package": "in.hisaabo.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "app.hisaabo.in"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "plugins": [
       "expo-router",

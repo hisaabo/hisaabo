@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
@@ -39,9 +39,10 @@ const PAGE_SIZE = 20;
 
 export default function InvoicesScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ type?: string; status?: string }>();
   const { businessId } = useBusinessStore();
-  const [invoiceType, setInvoiceType] = useState<InvoiceType>("sale");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>((params.type as InvoiceType) || "sale");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>((params.status as StatusFilter) || "all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [allInvoices, setAllInvoices] = useState<NonNullable<typeof data>["data"]>([]);

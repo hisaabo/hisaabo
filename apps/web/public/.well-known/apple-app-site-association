@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TEAM_ID.in.hisaabo.app",
+        "paths": [
+          "/auth/verify*",
+          "/invite/*"
+        ]
+      }
+    ]
+  }
+}

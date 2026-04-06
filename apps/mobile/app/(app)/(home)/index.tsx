@@ -138,12 +138,18 @@ export default function DashboardScreen() {
           <QueryError message="Could not load summary" onRetry={refetch} />
         ) : summary ? (
           <View style={s.grid}>
-            <SummaryCard label="Total Sales" value={formatSummary(summary.totalSales)} color={colors.success} />
-            <SummaryCard label="Total Purchases" value={formatSummary(summary.totalPurchases)} color={colors.info} />
-            <SummaryCard label="Receivable" value={formatSummary(summary.receivable)} color={colors.warning} />
-            <SummaryCard label="Payable" value={formatSummary(summary.payable)} color={colors.danger} />
-            <SummaryCard label="Cash in Hand" value={formatSummary(summary.cashInHand)} color={colors.brand} />
-            <SummaryCard label="Expenses" value={formatSummary(summary.totalExpenses)} color="#8b5cf6" />
+            <SummaryCard label="Total Sales" value={formatSummary(summary.totalSales)} color={colors.success}
+              onPress={() => router.push({ pathname: "/(invoices)", params: { type: "sale" } })} />
+            <SummaryCard label="Total Purchases" value={formatSummary(summary.totalPurchases)} color={colors.info}
+              onPress={() => router.push({ pathname: "/(invoices)", params: { type: "purchase" } })} />
+            <SummaryCard label="Receivable" value={formatSummary(summary.receivable)} color={colors.warning}
+              onPress={() => router.push({ pathname: "/(invoices)", params: { type: "sale", status: "sent" } })} />
+            <SummaryCard label="Payable" value={formatSummary(summary.payable)} color={colors.danger}
+              onPress={() => router.push({ pathname: "/(invoices)", params: { type: "purchase", status: "sent" } })} />
+            <SummaryCard label="Cash in Hand" value={formatSummary(summary.cashInHand)} color={colors.brand}
+              onPress={() => router.push("/(more)/bank")} />
+            <SummaryCard label="Expenses" value={formatSummary(summary.totalExpenses)} color="#8b5cf6"
+              onPress={() => router.push("/(more)/expenses")} />
           </View>
         ) : (
           <View style={s.grid}>
@@ -206,14 +212,28 @@ export default function DashboardScreen() {
 
 /* ── Summary card ───────────────────────────────────────────── */
 
-function SummaryCard({ label, value, color }: { label: string; value: string; color: string }) {
+function SummaryCard({ label, value, color, onPress }: { label: string; value: string; color: string; onPress?: () => void }) {
+  const content = (
+    <>
+      <View style={[s.cardDot, { backgroundColor: color }]} />
+      <Text style={s.cardLabel}>{label}</Text>
+      <Text style={s.cardValue}>{value}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <View style={s.cardHalf}>
+        <TouchableOpacity style={s.card} onPress={onPress} activeOpacity={0.7}>
+          {content}
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={s.cardHalf}>
-      <View style={s.card}>
-        <View style={[s.cardDot, { backgroundColor: color }]} />
-        <Text style={s.cardLabel}>{label}</Text>
-        <Text style={s.cardValue}>{value}</Text>
-      </View>
+      <View style={s.card}>{content}</View>
     </View>
   );
 }

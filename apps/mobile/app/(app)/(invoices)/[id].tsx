@@ -33,7 +33,7 @@ async function sharePDF(
   invoiceId: string,
   invoiceNumber: string,
   businessId: string | null,
-  format: "a4" | "thermal" = "a4"
+  format: "a4" | "a5" | "thermal" = "a5"
 ) {
   const token = getTokenSync();
   const url = `${getApiUrl()}/api/invoices/${invoiceId}/pdf?format=${format}`;
@@ -59,20 +59,6 @@ function getNextStatuses(current: string): NextStatus[] {
   switch (current) {
     case "draft":
       return [{ label: "Mark as Sent", status: "sent", color: colors.info }];
-    case "sent":
-    case "unfulfilled":
-      return [
-        { label: "Mark as Paid", status: "paid", color: colors.success },
-        { label: "Mark as Partial", status: "partial", color: colors.warning },
-        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
-      ];
-    case "partial":
-      return [
-        { label: "Mark as Paid", status: "paid", color: colors.success },
-        { label: "Mark as Overdue", status: "overdue", color: colors.danger },
-      ];
-    case "overdue":
-      return [{ label: "Mark as Paid", status: "paid", color: colors.success }];
     default:
       return [];
   }
@@ -519,7 +505,10 @@ export default function InvoiceDetailScreen() {
     );
   };
 
-  const handleSharePDF = async (format: "a4" | "thermal") => {
+  const isGST = taxTotal > 0;
+  const defaultFormat = isGST ? "a4" : "a5";
+
+  const handleSharePDF = async (format: "a4" | "a5" | "thermal") => {
     if (!invoice) return;
     setSharingPDF(true);
     try {
@@ -760,6 +749,23 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
+        {/* Record Payment (for unpaid invoices) */}
+        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={[styles.actionBtn, { borderColor: colors.success + "60" }]}
+              onPress={() => router.push({
+                pathname: "/(payments)/create",
+                params: { partyId: invoice.partyId, partyName: invoice.party?.name ?? "", invoiceId: invoice.id },
+              })}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="card-outline" size={18} color={colors.success} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.success }]}>Record Payment</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Edit Invoice (only for draft/sent) */}
         {(invoice.status === "draft" || invoice.status === "sent") && (
           <View style={styles.actionGroup}>
@@ -783,7 +789,7 @@ export default function InvoiceDetailScreen() {
         <View style={styles.actionGroup}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={() => handleSharePDF("a4")}
+            onPress={() => handleSharePDF(defaultFormat)}
             activeOpacity={0.7}
             disabled={sharingPDF}
           >
@@ -798,7 +804,7 @@ export default function InvoiceDetailScreen() {
               />
             )}
             <Text style={[styles.actionBtnText, { color: colors.brand }]}>
-              {sharingPDF ? "Generating PDF..." : "Share PDF (A4)"}
+              {sharingPDF ? "Generating PDF..." : `Share PDF (${isGST ? "A4" : "A5"})`}
             </Text>
           </TouchableOpacity>
 

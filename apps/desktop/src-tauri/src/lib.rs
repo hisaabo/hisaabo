@@ -14,12 +14,15 @@ pub fn run() {
                 )?;
             }
 
-            // Listen for deep link events (hisaabo://auth/verify?token=xxx)
+            // Listen for deep link events (hisaabo://verify?token=xxx)
+            // The deep link scheme uses /verify (matching Expo Router's layout
+            // group path), but the webview runs the web app which uses
+            // /auth/verify (TanStack Router).
             let handle = app.handle().clone();
             app.listen("deep-link://new-url", move |event: tauri::Event| {
                 if let Some(urls) = serde_json::from_str::<Vec<String>>(event.payload()).ok() {
                     for url in urls {
-                        if url.contains("/auth/verify") {
+                        if url.contains("/verify") {
                             if let Some(window) = handle.get_webview_window("main") {
                                 let query = url.split('?').nth(1).unwrap_or("");
                                 let js = format!(

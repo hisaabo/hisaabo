@@ -12,7 +12,7 @@ import {
   FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
@@ -111,10 +111,13 @@ function allocateChronologically(
 
 export default function CreatePaymentScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ partyId?: string; partyName?: string; invoiceId?: string }>();
   const utils = trpc.useUtils();
 
   // Form state
-  const [selectedParty, setSelectedParty] = useState<SelectedParty | null>(null);
+  const [selectedParty, setSelectedParty] = useState<SelectedParty | null>(
+    params.partyId && params.partyName ? { id: params.partyId, name: params.partyName } : null
+  );
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");
@@ -153,6 +156,19 @@ export default function CreatePaymentScreen() {
     { partyId: selectedParty?.id ?? "" },
     { enabled: !!selectedParty }
   );
+
+  // ── Auto-check invoice when prefilled from invoice detail ──────────────
+
+  const prefillApplied = useRef(false);
+  useEffect(() => {
+    if (params.invoiceId && unpaidInvoices && !prefillApplied.current) {
+      const match = unpaidInvoices.find((inv) => inv.id === params.invoiceId);
+      if (match) {
+        setCheckedInvoices(new Set([match.id]));
+        prefillApplied.current = true;
+      }
+    }
+  }, [params.invoiceId, unpaidInvoices]);
 
   // ── Auto-select default account (re-evaluates when party changes) ──────
 
