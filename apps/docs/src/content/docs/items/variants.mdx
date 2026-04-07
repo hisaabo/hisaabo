@@ -5,6 +5,9 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Item variants let you sell the same product in multiple configurations — for example, a t-shirt in sizes Small, Medium, and Large with colours Red, Blue, and Green. Each combination is a separate variant with its own stock level and price.
 
 ## When to use variants
@@ -72,7 +75,15 @@ Variants:
 
 ## Using variants on invoices
 
-When you type the item name on an invoice line item and select the parent item, a **Variant** dropdown appears. Select the specific variant. The variant's sale price fills in automatically.
+When you type the item name on an invoice line item and select the parent item, you need to pick the specific variant before the line item is complete. The variant's sale price fills in automatically.
+
+<ForDesktop>
+A **Variant** dropdown appears directly below the item combobox. Select the specific variant from the dropdown list. The list shows each variant's attribute values and its sale price.
+</ForDesktop>
+
+<ForMobile>
+A **Variant** pill button appears below the item name. Tap it to open a full-screen modal showing all available variants in a scrollable list. Each row displays the variant's attribute values, SKU, and sale price. Tap a variant to select it.
+</ForMobile>
 
 Stock is decremented from the selected variant, not the parent item.
 
@@ -82,7 +93,13 @@ On the item list, variant items show:
 - **Variant count**: how many variants are defined
 - **Total stock**: sum of all variants' stock quantities
 
-Click into the item to see a breakdown by variant, including each variant's stock and low-stock status.
+<ForDesktop>
+Click into the item to open its detail slide-over on the right side of the screen. The slide-over shows a breakdown table of every variant, including each variant's attribute values, SKU, current stock quantity, and low-stock status.
+</ForDesktop>
+
+<ForMobile>
+Tap the item to open its detail screen. Scroll down to see a breakdown of every variant, including each variant's attribute values, SKU, current stock quantity, and low-stock status.
+</ForMobile>
 
 ## Variants in the online store
 

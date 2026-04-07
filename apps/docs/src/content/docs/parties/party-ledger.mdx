@@ -5,13 +5,24 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 The party ledger is a chronological statement of all transactions with a specific customer or supplier. It gives you the full picture of what is owed and by whom.
 
 ## Opening the ledger
 
-1. Go to **Parties** in the left navigation.
-2. Click on a party name to open their profile.
-3. Click the **Ledger** tab.
+<ForDesktop>
+1. Go to **Parties** in the sidebar.
+2. Click on a party name to open their profile in a slide-over panel.
+3. Click the **Ledger** tab at the top of the slide-over.
+</ForDesktop>
+
+<ForMobile>
+1. Tap **Parties** in the bottom tab bar.
+2. Tap a party name to open their detail page.
+3. Tap the **Ledger** tab in the sticky tab header at the top.
+</ForMobile>
 
 ## Reading the ledger
 
@@ -48,11 +59,23 @@ The final balance in the ledger is the current outstanding amount:
 
 ## Filtering the ledger
 
-You can filter the ledger by date range to see transactions within a specific period. The opening balance is always shown at the top regardless of the date filter.
+<ForDesktop>
+Use the date range filter at the top of the ledger to narrow the view to a specific period. Select a start date and end date to see only transactions that fall within that range. The opening balance is always shown at the top regardless of the date filter.
+</ForDesktop>
+
+<ForMobile>
+Tap the date filter toggle at the top of the ledger to reveal **From** and **To** date fields. Set the dates to narrow the view to a specific period. The opening balance is always shown at the top regardless of the date filter.
+</ForMobile>
 
 ## Exporting the ledger
 
+<ForDesktop>
 Click **Export** on the ledger view to download the statement as a CSV file. The CSV contains all visible rows including the opening balance entry.
+</ForDesktop>
+
+<ForMobile>
+Tap the **Share** button on the ledger view to open the native share sheet with the ledger data as CSV. You can share the statement via WhatsApp, email, or save it to your device.
+</ForMobile>
 
 ## How the balance is calculated
 
@@ -79,4 +102,11 @@ This usually means the payments were not recorded against the correct party, or 
 Yes. It means you have received more money from the customer than the total of their invoices — an overpayment or advance. You may want to apply the excess as a credit against their next invoice.
 
 **How do I print or share the ledger statement with a party?**
+
+<ForDesktop>
 Export the ledger as CSV and format it in a spreadsheet tool (Excel or Google Sheets) before sharing. PDF export of the ledger statement is not currently supported in the app.
+</ForDesktop>
+
+<ForMobile>
+Tap the Share button to send the ledger data as CSV via the native share sheet. You can share directly through WhatsApp, email, or any other app. PDF export of the ledger statement is not currently supported in the app.
+</ForMobile>

@@ -1,0 +1,11 @@
+---
+/**
+ * Wraps content only shown when docs are in "desktop" mode.
+ * Usage in MDX:
+ *   import ForDesktop from '../../components/ForDesktop.astro';
+ *   <ForDesktop>Click **New Invoice** from the sidebar.</ForDesktop>
+ */
+---
+<div class="platform-desktop">
+  <slot />
+</div>

@@ -5,7 +5,18 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Settings is where you configure your business profile, invoice numbering, team access, and personal account preferences.
+
+<ForDesktop>
+Access settings from the sidebar: **Settings → Business Profile**, **Settings → Team**, or **Settings → Account**.
+</ForDesktop>
+
+<ForMobile>
+Access settings from the **More** tab at the bottom, then tap **Settings**.
+</ForMobile>
 
 ## Business Profile
 
@@ -59,12 +70,72 @@ Manage team members from **Settings → Team**. See [Team & Roles](/team) for th
 
 ## Account
 
+<ForDesktop>
 Personal account settings and security, found in **Settings → Account**.
 
 - **Profile** — your display name and email. Changing email requires re-verification.
 - **Sessions** — view all active sessions across devices with browser, OS, IP address, and last activity. Revoke individual sessions or sign out all other devices.
 - **API Keys** — create and manage programmatic access tokens for the CLI and MCP server. Available on paid plans only.
 - **Activity Log** — audit trail of all actions (invoice creation, payment recording, party updates, etc.) with user attribution and time filtering (This Week, This Month, All Time).
+</ForDesktop>
+
+<ForMobile>
+Personal account settings, found in **More → Settings → Profile**.
+
+- **Profile** — your display name and email. Changing email requires re-verification.
+- **App Lock** — biometric unlock and PIN lock (see below).
+</ForMobile>
+
+## App Lock (Mobile)
+
+<ForDesktop>
+App lock is a mobile-only feature. Switch to the **Mobile** view using the toggle in the header to see the full guide.
+</ForDesktop>
+
+<ForMobile>
+Hisaabo can lock the app when it's not in use, requiring fingerprint, face recognition, or a 4-digit PIN to unlock. This prevents unauthorized access to your business data if someone else picks up your phone.
+
+### First-time setup prompt
+
+After your first login, Hisaabo shows a **"Secure your app"** bottom sheet on the dashboard. You have three options:
+
+1. **Enable Fingerprint / Face ID** — authenticates with your device's biometric sensor. After enabling, you're optionally asked to also set a backup PIN.
+2. **Set up PIN instead** — creates a 4-digit numeric PIN for unlocking. Useful if your device doesn't support biometrics or you prefer a PIN.
+3. **Skip for now** — dismisses the prompt. The app remains unlocked. You won't be prompted again automatically.
+
+### Enabling app lock later
+
+If you skipped the initial prompt, you can enable app lock at any time:
+
+1. Go to **More → Settings → Profile**
+2. Scroll to the **Security** section
+3. Toggle **Fingerprint** (or **Face ID**) on — the system biometric prompt appears to verify your identity
+4. Optionally, tap **Set PIN** to add a backup PIN
+
+### How unlocking works
+
+When the app launches (or returns from background), the lock screen appears:
+
+- **Biometric mode** — a fingerprint icon is shown. Tap it to authenticate. If biometric fails 3 times and you have a PIN configured, the app switches to PIN mode automatically.
+- **PIN mode** — a numeric keypad appears. Enter your 4-digit PIN to unlock.
+- You can switch between biometric and PIN modes using the links on the lock screen.
+- A **Sign out** link at the bottom lets you sign out entirely if needed.
+
+### Managing app lock
+
+From **More → Settings → Profile → Security**:
+
+| Action | How |
+|---|---|
+| Enable biometrics | Toggle the **Fingerprint / Face ID** switch on |
+| Disable biometrics | Toggle the switch off |
+| Set or change PIN | Tap **Set PIN** (or **Change PIN**) and enter a new 4-digit PIN twice |
+| Remove PIN | Tap **Remove PIN** and confirm |
+
+:::tip[Privacy, not security]
+App lock is a local privacy feature — it prevents casual access to your phone. Your actual account security is handled by your session token stored in the device's secure keychain. App lock does not encrypt your data; it adds a visual barrier to opening the app.
+:::
+</ForMobile>
 
 ## Frequently asked questions
 

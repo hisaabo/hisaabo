@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Hisaabo supports multiple users per business with role-based access control. You can invite staff members and assign them roles that match their job responsibilities.
 
 ## Roles
@@ -45,10 +48,24 @@ Hisaabo supports multiple users per business with role-based access control. You
 
 ## Inviting a team member
 
-1. Go to **Settings → Team** (or the Team section in the navigation).
-2. Click **Invite Member**.
-3. Enter the team member's email address and select their role.
+<ForDesktop>
+1. Go to **Settings → Team** from the left sidebar.
+2. Click the **Invite Member** button.
+3. Enter the team member's email address and select their role from the dropdown.
 4. Click **Send Invitation**.
+
+The invitation form appears as a slide-over panel on the right side of the screen.
+</ForDesktop>
+
+<ForMobile>
+1. Tap the **More** tab in the bottom navigation bar.
+2. Go to **Settings → Team**.
+3. Tap the **Invite Member** button.
+4. Enter the team member's email address and select their role.
+5. Tap **Send Invitation**.
+
+The invitation form opens as a full-screen form.
+</ForMobile>
 
 The invitee receives an email with a link to accept the invitation. Once accepted, they can sign in and access your business with the assigned role.
 
@@ -70,7 +87,13 @@ For more details on the invitation lifecycle, see [Invitations](/team/invitation
 
 ## Changing a member's role
 
+<ForDesktop>
 Open the Team settings, click the three-dot menu next to the member, and select **Change Role**. Role changes take effect immediately — the member does not need to sign out and sign back in.
+</ForDesktop>
+
+<ForMobile>
+Open the Team settings from **More → Settings → Team**, tap the member's name, and select **Change Role**. Role changes take effect immediately.
+</ForMobile>
 
 ## Removing a member
 

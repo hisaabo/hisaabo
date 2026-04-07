@@ -5,11 +5,20 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 The Expenses section lets you record all business outgoings that are not purchase invoices — for example, rent, utilities, salaries, office supplies, travel, and advertising.
 
 ## Adding an expense
 
-Go to **Expenses** in the left navigation and click **New Expense**.
+<ForDesktop>
+Go to **Expenses** in the sidebar and click **+ New Expense** (or press <kbd>N</kbd>). A slide-over panel opens with a 2-column grid layout for entering expense details.
+</ForDesktop>
+
+<ForMobile>
+Tap **More** in the bottom tab bar, then tap **Expenses**. Tap the floating **+** button to open a full-screen form with a vertical stack layout. The category field shows live autocomplete suggestions from commonly used categories as you type.
+</ForMobile>
 
 ## Expense fields
 
@@ -41,9 +50,23 @@ Categories are free-text labels you create as you go. Common categories used by 
 - GST Paid (for non-deductible GST)
 - Miscellaneous
 
+<ForMobile>
+On mobile, the category field provides live autocomplete suggestions from the list of categories you have used before. Tap a suggestion to select it, or continue typing to enter a new category.
+</ForMobile>
+
 :::tip
 Use consistent category names to get clean summaries in reports. Avoid variations like "Rent", "Office Rent", and "rent" — pick one and stick to it.
 :::
+
+## Viewing expenses
+
+<ForDesktop>
+The Expenses page displays a table with search, category pill filters, and a date range bar at the top. You can filter by category and date range to narrow the list. Click **Export** to download the expense list as a CSV file.
+</ForDesktop>
+
+<ForMobile>
+The Expenses page displays a summary card at the top showing the total expense amount and the top 3 categories by spend. Below the summary, horizontal category filter chips let you narrow the list. Expenses are shown as cards with infinite scroll. Date range filtering and CSV export are not available on mobile.
+</ForMobile>
 
 ## Expenses in the dashboard
 

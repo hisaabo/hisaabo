@@ -5,11 +5,20 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 A **party** in Hisaabo is any person or company you do business with — either a customer (you sell to them) or a supplier (you buy from them). All invoices and payments are linked to a party.
 
 ## Adding a party
 
-Go to **Parties** in the left navigation and click **New Party**.
+<ForDesktop>
+Go to **Parties** in the sidebar and click **+ Add Party** (or press <kbd>N</kbd>). A slide-over panel opens on the right side of the screen with a tabbed form. Collapsible sections — Tax & Identity, Address, Contact Person, and Bank Details — let you fill in only what you need.
+</ForDesktop>
+
+<ForMobile>
+Tap **Parties** in the bottom tab bar, then tap the floating **+** button. A full-screen form opens with sections for Party Type, Basic Info, Tax Info, and Address.
+</ForMobile>
 
 ### Required fields
 
@@ -52,9 +61,27 @@ The opening balance represents the amount outstanding before you started using H
 
 The opening balance is included in the party's running balance calculation.
 
+## Viewing a party
+
+<ForDesktop>
+Click any row in the party list to open a slide-over detail panel on the right. The panel has tabs for **Overview**, **Ledger**, **Invoices**, **Payments**, and **Top Items**, so you can review all activity without leaving the list page.
+</ForDesktop>
+
+<ForMobile>
+Tap a party to open a full-screen detail page. At the top you see the party's avatar, outstanding balance card, and a stats row. Below that are action buttons for **Call**, **Edit**, and **New Invoice**. A sticky tab header lets you switch between **Ledger**, **Top Items**, and **Report**.
+</ForMobile>
+
 ## Viewing a party's ledger
 
-Open a party and click the **Ledger** tab. The ledger shows every transaction affecting the party's balance in chronological order:
+<ForDesktop>
+Open a party's detail panel and click the **Ledger** tab.
+</ForDesktop>
+
+<ForMobile>
+Open a party and switch to the **Ledger** tab. You can toggle a date filter to narrow the range. To share or export the ledger, use the share button — it opens the device Share API.
+</ForMobile>
+
+The ledger shows every transaction affecting the party's balance in chronological order:
 
 | Column | Meaning |
 |---|---|
@@ -73,20 +100,39 @@ A positive running balance means the party owes you money. A negative running ba
 
 ## Filtering the party list
 
-From the Parties page you can filter by:
-- **Type**: Show only customers or only suppliers
-- **Search**: Filter by name (partial match)
-- **Category**: Filter by party category
+<ForDesktop>
+The party list is a paginated table with sortable columns for Name and Balance. Use the filter pills at the top to switch between **All**, **Customers**, and **Suppliers**. A search field lets you filter by name (partial match). You can also export all parties as a CSV file using the export button in the header.
+</ForDesktop>
+
+<ForMobile>
+The party list uses tabs at the top to switch between **Customers** and **Suppliers**. A search bar lets you filter by name. The list supports infinite scroll and pull-to-refresh.
+</ForMobile>
 
 ## Editing a party
 
-Open the party and click **Edit**. All fields can be updated. Note:
+<ForDesktop>
+Open the party's detail panel and click **Edit**. The same slide-over form used to create the party opens with all existing values pre-filled.
+</ForDesktop>
+
+<ForMobile>
+Open the party's detail page and tap the **Edit** action button. A full-screen form opens with all existing values pre-filled.
+</ForMobile>
+
+All fields can be updated. Note:
 - Changing the state code takes effect on future invoices only; existing invoices are not recalculated.
 - You cannot change a party's type (customer vs supplier) after it has invoices. Create a new party instead.
 
 ## Deleting a party
 
 A party cannot be deleted if it has any invoices or payments linked to it (the database enforces this with a `RESTRICT` foreign key). To remove a party, first delete or cancel all associated invoices and payments.
+
+<ForDesktop>
+To delete, use the row action menu on the party list and confirm in the dialog that appears.
+</ForDesktop>
+
+<ForMobile>
+To delete, open the party's detail page, tap the action in the header, and confirm in the native alert dialog.
+</ForMobile>
 
 ## Frequently asked questions
 

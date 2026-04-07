@@ -1,0 +1,71 @@
+---
+/**
+ * Device switcher toggle — auto-detects user's device (desktop/mobile)
+ * and lets them override manually. Persists choice in localStorage.
+ * Placed next to the theme toggle via ThemeSelect override.
+ */
+---
+
+<div class="device-switcher" role="radiogroup" aria-label="View docs for">
+  <button
+    class="device-switcher-btn"
+    data-platform-target="desktop"
+    aria-pressed="false"
+    title="Desktop guide"
+  >
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+      <line x1="8" y1="21" x2="16" y2="21"></line>
+      <line x1="12" y1="17" x2="12" y2="21"></line>
+    </svg>
+    <span>Desktop</span>
+  </button>
+  <button
+    class="device-switcher-btn"
+    data-platform-target="mobile"
+    aria-pressed="false"
+    title="Mobile guide"
+  >
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+      <line x1="12" y1="18" x2="12.01" y2="18"></line>
+    </svg>
+    <span>Mobile</span>
+  </button>
+</div>
+
+<script>
+  function getDefaultPlatform(): 'desktop' | 'mobile' {
+    const stored = localStorage.getItem('hisaabo-docs-platform');
+    if (stored === 'desktop' || stored === 'mobile') return stored;
+    const isMobile =
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      window.innerWidth < 768;
+    return isMobile ? 'mobile' : 'desktop';
+  }
+
+  function setPlatform(platform: 'desktop' | 'mobile') {
+    document.documentElement.setAttribute('data-platform', platform);
+    localStorage.setItem('hisaabo-docs-platform', platform);
+    document.querySelectorAll<HTMLButtonElement>('.device-switcher-btn').forEach((btn) => {
+      const target = btn.getAttribute('data-platform-target');
+      const isActive = target === platform;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+    });
+  }
+
+  function initSwitcher() {
+    setPlatform(getDefaultPlatform());
+    document.querySelectorAll<HTMLButtonElement>('.device-switcher-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-platform-target') as 'desktop' | 'mobile';
+        if (target) setPlatform(target);
+      });
+    });
+  }
+
+  // Runs on initial load + Astro page transitions (Starlight uses View Transitions)
+  initSwitcher();
+  document.addEventListener('astro:after-swap', initSwitcher);
+</script>

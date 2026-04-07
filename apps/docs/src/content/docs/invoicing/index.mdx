@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Invoicing is the core of Hisaabo. Every sale or purchase you make flows through an invoice. This page gives you a map of the invoicing system so you know which feature to reach for in each situation.
 
 ## Invoice types
@@ -32,6 +35,12 @@ Within sale and purchase, Hisaabo supports multiple **document types**. Each has
 :::tip
 Change the default prefixes for each document type in Settings → Business Profile. You can also configure the starting number if you are migrating from another app.
 :::
+
+<ForMobile>
+:::note[Mobile document types]
+The mobile app supports Invoice, Quotation, Proforma Invoice, Delivery Challan, Credit Note, and Sales Return. **Debit Notes** and **Purchase Returns** are currently available on the web app only.
+:::
+</ForMobile>
 
 ### Stock effects by document type
 
@@ -117,6 +126,14 @@ You can link documents to each other using the **Reference Document** field. For
 This linkage appears in the invoice detail view and in GSTR-1 reports (credit and debit notes show the original invoice number).
 
 ## Next steps
+
+<ForDesktop>
+You can access all invoicing features from the **Invoices** section in the left sidebar. Use the **Sales / Purchases** toggle and the **Document type** dropdown to filter your view.
+</ForDesktop>
+
+<ForMobile>
+Tap the **Invoices** tab in the bottom navigation bar to access your invoices. Use the filter controls at the top of the list to switch between sales and purchases and to filter by document type.
+</ForMobile>
 
 - [Create an Invoice](/invoicing/create-invoice) — step-by-step walkthrough
 - [GST on Invoices](/invoicing/gst-on-invoices) — understanding CGST, SGST, and IGST

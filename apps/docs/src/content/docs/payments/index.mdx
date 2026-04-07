@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 Payments in Hisaabo record money moving between you and a party — either money you receive from a customer or money you pay to a supplier.
 
 ## Recording a payment
@@ -13,11 +16,23 @@ There are two ways to record a payment:
 
 ### From an invoice
 
-Open an invoice and click **Record Payment**. The amount field is pre-filled with the outstanding balance. This is the fastest method for recording payment against a single invoice.
+<ForDesktop>
+Open an invoice and click **Record Payment**. A slide-over panel opens with the amount field pre-filled with the outstanding balance. This is the fastest method for recording payment against a single invoice.
+</ForDesktop>
+
+<ForMobile>
+Open an invoice and tap **Record Payment**. A full-screen form opens with the amount field pre-filled with the outstanding balance. This is the fastest method for recording payment against a single invoice.
+</ForMobile>
 
 ### From the Payments section
 
-Go to **Payments** in the left navigation and click **New Payment**. This lets you record a payment and optionally allocate it across multiple invoices.
+<ForDesktop>
+Go to **Payments** in the sidebar and click **+ Record Payment** (or press <kbd>N</kbd>). A slide-over panel opens where you can record a payment and optionally allocate it across multiple invoices.
+</ForDesktop>
+
+<ForMobile>
+Tap **Payments** in the bottom tab bar, then tap the floating **+** button. A full-screen form opens where you can record a payment and optionally allocate it across multiple invoices.
+</ForMobile>
 
 ## Payment fields
 
@@ -42,13 +57,32 @@ Go to **Payments** in the left navigation and click **New Payment**. This lets y
 | `cheque` | Cheque payment. Enter the cheque number in Reference Number. |
 | `other` | Any other mode not covered above |
 
+## Selecting a bank account
+
+<ForDesktop>
+The bank account selector displays your accounts as a card grid, showing the account name, type, and current balance for each account. Click a card to select it.
+</ForDesktop>
+
+<ForMobile>
+The bank account selector displays your accounts as horizontal scrollable chip buttons. Tap a chip to select the account for this payment.
+</ForMobile>
+
 ## Allocating a payment to multiple invoices
 
 A single payment can be split across multiple outstanding invoices. This is useful when a customer pays a round-sum amount that clears several bills at once.
 
-1. In the **New Payment** form, select the party.
+<ForDesktop>
+1. In the payment form, select the party.
 2. After entering the amount, an **Allocate to Invoices** section appears showing all unpaid/partially-paid invoices for that party.
-3. Enter how much of the payment applies to each invoice. The total allocation must equal the payment amount.
+3. Each invoice row has a tri-state checkbox and a progress bar showing the paid vs. outstanding amount. You can edit the allocation amount inline for each invoice.
+4. By default, invoices are auto-allocated oldest-first. The total allocation must equal the payment amount.
+</ForDesktop>
+
+<ForMobile>
+1. In the payment form, select the party.
+2. After entering the amount, an **Allocate to Invoices** section appears showing all unpaid/partially-paid invoices for that party.
+3. Each invoice row has a simple checkbox. Invoices are auto-allocated oldest-first. The total allocation must equal the payment amount.
+</ForMobile>
 
 If you do not allocate the payment to specific invoices, it is recorded as an unallocated payment against the party.
 
@@ -63,6 +97,16 @@ When a payment is recorded:
 ## Payment number
 
 Each payment gets a sequential number formatted as `PAY-00001`, `PAY-00002`, etc. The prefix and starting number can be configured in Settings → Business Profile.
+
+## Viewing payments
+
+<ForDesktop>
+The Payments page displays a paginated table with a date range bar at the top for filtering by period. You can sort by date, amount, or party. Click **Export** to download the payment list as a CSV file.
+</ForDesktop>
+
+<ForMobile>
+The Payments page displays a card list with a search bar at the top. The list supports infinite scroll and pull-to-refresh. Date range filtering and CSV export are not available on mobile.
+</ForMobile>
 
 ## Deleting a payment
 

@@ -115,3 +115,61 @@ nav.sidebar a[aria-current="page"] {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* ── Platform-aware content ─────────────────────────────────── */
+
+/* Hide opposite-platform content (no FOUC — data-platform is set in <head>) */
+html[data-platform="mobile"] .platform-desktop {
+  display: none !important;
+}
+
+html[data-platform="desktop"] .platform-mobile {
+  display: none !important;
+}
+
+/* ── Device switcher toggle ─────────────────────────────────── */
+
+.device-switcher {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 9999px;
+  overflow: hidden;
+  font-size: 0.75rem;
+}
+
+.device-switcher-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-family: var(--sl-font);
+  font-size: inherit;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.device-switcher-btn:hover {
+  color: var(--sl-color-white);
+  background: var(--sl-color-gray-5);
+}
+
+.device-switcher-btn.active {
+  background: var(--sl-color-accent);
+  color: var(--sl-color-black);
+}
+
+/* Hide label text on very small screens, keep icons */
+@media (max-width: 30rem) {
+  .device-switcher-btn span {
+    display: none;
+  }
+  .device-switcher-btn {
+    padding: 0.3rem;
+  }
+}

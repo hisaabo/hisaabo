@@ -5,6 +5,9 @@ sidebar:
   order: 2
 ---
 
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
 ## What are Payment Gateway Accounts?
 
 When customers pay through gateways like Razorpay, PayU, or PhonePe, the gateway deducts charges before settling to your bank. Hisaabo tracks this automatically.
@@ -17,22 +20,38 @@ Example: Customer pays ₹1,000 via credit card through Razorpay (2% charge).
 
 ## Setup (60 seconds)
 
-1. Go to **Cash & Bank** → **Add Account**
-2. Select **Payment Gateway** as account type
-3. Enter name (e.g., "Razorpay")
-4. Select your settlement bank account
+<ForDesktop>
+1. Go to **Cash & Bank** in the sidebar and click **+ Add Account**.
+2. Select **Payment Gateway** as the account type.
+3. Enter a name (e.g., "Razorpay").
+4. Select your settlement bank account.
 5. Set charge rates per payment mode:
    - Credit Card: 2%
    - Debit Card: 1.5%
    - UPI: 0%
    - Net Banking: 2%
-6. Click **Create**
+6. Click **Create**.
+</ForDesktop>
+
+<ForMobile>
+1. Tap **More** in the bottom tab bar, then tap **Bank**.
+2. Tap the floating **+** button.
+3. Select **Payment Gateway** as the account type.
+4. Enter a name (e.g., "Razorpay").
+5. Select your settlement bank account.
+6. Set charge rates per payment mode:
+   - Credit Card: 2%
+   - Debit Card: 1.5%
+   - UPI: 0%
+   - Net Banking: 2%
+7. Tap **Create**.
+</ForMobile>
 
 ## How It Works
 
 When you record a payment and select a gateway account:
 
-1. Select the payment mode (Credit Card, Debit Card, UPI, etc.)
+1. Select the payment mode (Credit Card, Debit Card, UPI, etc.) using the chip buttons.
 2. The system shows the charge preview: "Gateway charge: ₹20 (2%). Net ₹980"
 3. On confirmation:
    - Full amount deposited to gateway account
