@@ -7,12 +7,13 @@ echo "[entrypoint] Node $(node --version) | ENV=${NODE_ENV}"
 # ── Run database migrations ────────────────────────────────────
 echo "[entrypoint] Running database migrations..."
 cd /app/packages/db
-npx drizzle-kit migrate 2>&1 || {
-  echo "[entrypoint] WARNING: Migration failed! Starting server anyway for health checks."
+if ! npx drizzle-kit migrate 2>&1; then
+  echo "[entrypoint] FATAL: Migration failed! Refusing to start with potentially inconsistent DB."
   echo "[entrypoint] Check DATABASE_URL and migration files."
-}
+  exit 1
+fi
 cd /app
 
 # ── Start the API server ───────────────────────────────────────
 echo "[entrypoint] Starting Hisaabo API server on port ${PORT:-3000}..."
-exec npx tsx packages/api/dist/server.js
+exec node packages/api/dist/server.js

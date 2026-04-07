@@ -178,35 +178,25 @@ export async function generateInvoiceFromTemplate(
       );
     }
 
-    // Update stock for sale/purchase
-    const itemStockMap = new Map<string, number>();
-    const variantStockMap = new Map<string, number>();
+    // Update stock per line item using PostgreSQL NUMERIC arithmetic
+    // to avoid JS floating-point drift in intermediate accumulation
     for (const li of template.lineItems) {
       if (li.variantId) {
-        const qty = parseFloat(li.quantity);
-        variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+        await tx.update(itemVariants).set({
+          stockQuantity: template.type === "sale"
+            ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
+            : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
+          updatedAt: new Date(),
+        }).where(eq(itemVariants.id, li.variantId));
       } else if (li.itemId) {
-        const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-        itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
+        const cf = li.conversionFactor || "1";
+        await tx.update(items).set({
+          stockQuantity: template.type === "sale"
+            ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
+            : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
+          updatedAt: new Date(),
+        }).where(eq(items.id, li.itemId));
       }
-    }
-    for (const [itemId, totalQty] of itemStockMap) {
-      const qtyStr = totalQty.toFixed(3);
-      await tx.update(items).set({
-        stockQuantity: template.type === "sale"
-          ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
-          : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
-        updatedAt: new Date(),
-      }).where(eq(items.id, itemId));
-    }
-    for (const [variantId, totalQty] of variantStockMap) {
-      const qtyStr = totalQty.toFixed(3);
-      await tx.update(itemVariants).set({
-        stockQuantity: template.type === "sale"
-          ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
-          : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
-        updatedAt: new Date(),
-      }).where(eq(itemVariants.id, variantId));
     }
 
     // Record execution

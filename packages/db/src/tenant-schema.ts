@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, numeric, integer, boolean, uuid, pgEnum, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
 
@@ -45,6 +45,12 @@ export const businesses = pgTable("businesses", {
   nextQuotationNumber: integer("next_quotation_number").default(1).notNull(),
   creditNotePrefix: text("credit_note_prefix").default("CN").notNull(),
   nextCreditNoteNumber: integer("next_credit_note_number").default(1).notNull(),
+  debitNotePrefix: text("debit_note_prefix").default("DN").notNull(),
+  nextDebitNoteNumber: integer("next_debit_note_number").default(1).notNull(),
+  salesReturnPrefix: text("sales_return_prefix").default("SR").notNull(),
+  nextSalesReturnNumber: integer("next_sales_return_number").default(1).notNull(),
+  purchaseReturnPrefix: text("purchase_return_prefix").default("PR").notNull(),
+  nextPurchaseReturnNumber: integer("next_purchase_return_number").default(1).notNull(),
   deliveryChallanPrefix: text("delivery_challan_prefix").default("DC").notNull(),
   nextDeliveryChallanNumber: integer("next_delivery_challan_number").default(1).notNull(),
   proformaPrefix: text("proforma_prefix").default("PI").notNull(),
@@ -210,6 +216,9 @@ export const invoices = pgTable("invoices", {
   index("invoices_doc_type_idx").on(t.businessId, t.documentType),
   index("invoices_party_date_idx").on(t.businessId, t.partyId, t.invoiceDate),
   index("invoices_ref_doc_idx").on(t.referenceDocumentId),
+  // Partial indexes for active records — nearly every query filters deletedAt IS NULL
+  index("invoices_active_idx").on(t.businessId, t.invoiceDate).where(sql`deleted_at IS NULL`),
+  index("invoices_active_type_idx").on(t.businessId, t.type, t.documentType, t.invoiceDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Invoice Line Items ─────────────────────────────────────────
@@ -261,6 +270,7 @@ export const payments = pgTable("payments", {
   index("payments_party_idx").on(t.partyId),
   index("payments_date_idx").on(t.businessId, t.paymentDate),
   index("payments_party_date_idx").on(t.businessId, t.partyId, t.paymentDate),
+  index("payments_active_idx").on(t.businessId, t.paymentDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Payment Allocations (M:N link between payments and invoices) ──
@@ -296,6 +306,7 @@ export const expenses = pgTable("expenses", {
   index("expenses_business_idx").on(t.businessId),
   index("expenses_date_idx").on(t.businessId, t.expenseDate),
   index("expenses_category_idx").on(t.businessId, t.category),
+  index("expenses_active_idx").on(t.businessId, t.expenseDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Bank Accounts ──────────────────────────────────────────────

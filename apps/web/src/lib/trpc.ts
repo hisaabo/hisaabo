@@ -22,7 +22,9 @@ function commonOptions() {
   return {
     transformer: superjson,
     headers() {
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {
+        "X-Requested-With": "hisaabo",
+      };
       if (currentBusinessId) {
         headers["x-business-id"] = currentBusinessId;
       }

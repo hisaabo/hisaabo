@@ -243,15 +243,16 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of effectiveAllocations) {
-        // Overpayment guard: fetch invoice before applying allocation
+        // Overpayment guard: lock invoice row with FOR UPDATE to prevent
+        // concurrent payments from both passing the balance check
         const [invBefore] = await tx.select({
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
-        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1);
+        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1).for("update");
 
         if (invBefore) {
           const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
-          if (money.toNumber(alloc.amount) > money.toNumber(balance)) {
+          if (money.compare(alloc.amount, balance) > 0) {
             throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
           }
         }
