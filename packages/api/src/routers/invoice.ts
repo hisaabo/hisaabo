@@ -1,12 +1,14 @@
 import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments } from "@hisaabo/db";
+import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { IRPClient, IRPError } from "../lib/irp-client.js";
+import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -326,6 +328,49 @@ export const invoiceRouter = router({
         }
       }
 
+      // Auto-create ITC (Input Tax Credit) ledger entry for purchase invoices
+      // with GST. ITC is not available for composition scheme businesses.
+      if (input.type === "purchase" && parseFloat(totals.taxTotal) > 0) {
+        const [bizForItc] = await tx.select({
+          gstRegistrationType: businesses.gstRegistrationType,
+          stateCode: businesses.stateCode,
+        }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
+
+        if (bizForItc?.gstRegistrationType !== "composition") {
+          const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
+          const returnPeriod = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, "0")}`;
+
+          const sameState = !!(bizForItc?.stateCode && partyCheck.stateCode && bizForItc.stateCode === partyCheck.stateCode);
+
+          // Use integer paise arithmetic to avoid floating-point rounding errors
+          const taxPaise = Math.round(parseFloat(totals.taxTotal) * 100);
+          let cgst = "0";
+          let sgst = "0";
+          let igst = "0";
+
+          if (sameState) {
+            const halfPaise = Math.floor(taxPaise / 2);
+            const remainderPaise = taxPaise - halfPaise;
+            cgst = (halfPaise / 100).toFixed(2);
+            sgst = (remainderPaise / 100).toFixed(2);
+          } else {
+            igst = (taxPaise / 100).toFixed(2);
+          }
+
+          await tx.insert(itcLedgerEntries).values({
+            businessId: ctx.businessId,
+            invoiceId: invoice.id,
+            returnPeriod,
+            status: "available",
+            cgst,
+            sgst,
+            igst,
+            cess: "0",
+            isReverseCharge: input.isReverseCharge ?? false,
+          });
+        }
+      }
+
       return invoice;
     });
 
@@ -338,6 +383,156 @@ export const invoiceRouter = router({
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
       ipAddress,
     });
+
+    // ── Async e-invoice submission (fire-and-forget) ───────────────────────
+    // Invoice creation MUST NOT fail due to IRP errors. We check eligibility
+    // synchronously but submit asynchronously so the HTTP response is returned
+    // immediately while the IRP call happens in the background.
+    // Eligibility: sale invoice, B2B (party has GSTIN), tax > 0, e-invoicing enabled.
+    if (
+      input.type === "sale" &&
+      input.documentType !== "quotation" &&
+      input.documentType !== "delivery_challan" &&
+      input.documentType !== "proforma" &&
+      parseFloat(invoice.taxAmount) > 0
+    ) {
+      // Capture everything needed for the async task before returning
+      const invoiceId = invoice.id;
+      const businessId = ctx.businessId;
+      const db = ctx.db;
+
+      // Non-blocking: check e-invoice config + party GSTIN
+      setTimeout(async () => {
+        try {
+          const [config] = await db
+            .select()
+            .from(eInvoiceConfigs)
+            .where(and(eq(eInvoiceConfigs.businessId, businessId), eq(eInvoiceConfigs.isEnabled, true)))
+            .limit(1);
+
+          if (!config) return; // E-invoicing not configured/enabled
+
+          // Fetch the full invoice with party
+          const [inv] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+          if (!inv) return;
+
+          const [party] = await db.select().from(parties).where(eq(parties.id, inv.partyId)).limit(1);
+          if (!party?.gstin) return; // B2C — skip
+
+          const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
+          if (!biz) return;
+
+          const lineItemRows = await db
+            .select({
+              description: invoiceItems.description,
+              quantity: invoiceItems.quantity,
+              unitPrice: invoiceItems.unitPrice,
+              taxPercent: invoiceItems.taxPercent,
+              taxAmount: invoiceItems.taxAmount,
+              discountPercent: invoiceItems.discountPercent,
+              totalAmount: invoiceItems.totalAmount,
+              selectedUnit: invoiceItems.selectedUnit,
+              itemType: items.itemType,
+              itemHsn: items.hsn,
+            })
+            .from(invoiceItems)
+            .leftJoin(items, eq(items.id, invoiceItems.itemId))
+            .where(eq(invoiceItems.invoiceId, invoiceId))
+            .orderBy(invoiceItems.sortOrder);
+
+          // Mark as pending
+          await db
+            .update(invoices)
+            .set({ eInvoiceStatus: "pending", updatedAt: new Date() })
+            .where(eq(invoices.id, invoiceId));
+
+          const irpJson = mapInvoiceToIRP(
+            {
+              invoiceNumber: inv.invoiceNumber,
+              invoiceDate: inv.invoiceDate,
+              type: inv.type,
+              documentType: inv.documentType,
+              subtotal: inv.subtotal,
+              taxAmount: inv.taxAmount,
+              discountAmount: inv.discountAmount,
+              additionalCharges: inv.additionalCharges,
+              roundOff: inv.roundOff,
+              totalAmount: inv.totalAmount,
+              isReverseCharge: inv.isReverseCharge ?? false,
+            },
+            lineItemRows.map((li) => ({
+              description: li.description,
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent,
+              taxAmount: li.taxAmount,
+              discountPercent: li.discountPercent,
+              totalAmount: li.totalAmount,
+              selectedUnit: li.selectedUnit,
+              itemType: li.itemType,
+              itemHsn: li.itemHsn,
+            })),
+            {
+              gstin: party.gstin,
+              name: party.name,
+              billingAddress: party.billingAddress,
+              city: party.city,
+              state: party.state,
+              stateCode: party.stateCode,
+              pincode: party.pincode,
+              phone: party.phone,
+              email: party.email,
+            },
+            {
+              gstin: biz.gstin,
+              legalName: biz.legalName,
+              name: biz.name,
+              address: biz.address,
+              city: biz.city,
+              state: biz.state,
+              stateCode: biz.stateCode,
+              pincode: biz.pincode,
+              phone: biz.phone,
+              email: biz.email,
+            },
+          );
+
+          const client = new IRPClient(config, db);
+          const result = await client.generateIRN(irpJson);
+
+          await db
+            .update(invoices)
+            .set({
+              irn: result.irn,
+              irnAckNumber: result.ackNo,
+              irnAckDate: result.ackDt,
+              signedQrCode: result.signedQrCode,
+              signedInvoice: { signedInvoice: result.signedInvoice },
+              eInvoiceStatus: "generated",
+              eInvoiceError: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(invoices.id, invoiceId));
+        } catch (err) {
+          // IRP errors must not bubble up — just log and mark as failed
+          const isRetryable = err instanceof IRPError && err.isRetryable;
+          const errorMsg = err instanceof Error ? err.message : "Unknown IRP error";
+          if (process.env.NODE_ENV !== "test") {
+            console.error("[e-invoice auto-submit]", errorMsg);
+          }
+          await db
+            .update(invoices)
+            .set({
+              eInvoiceStatus: isRetryable ? "pending" : "failed",
+              eInvoiceError: errorMsg,
+              eInvoiceRetryCount: sql`COALESCE(${invoices.eInvoiceRetryCount}, 0) + 1`,
+              updatedAt: new Date(),
+            })
+            .where(eq(invoices.id, invoiceId))
+            .catch(() => {/* swallow DB errors in background task */});
+        }
+      }, 0);
+    }
 
     return invoice;
   }),
@@ -376,6 +571,17 @@ export const invoiceRouter = router({
 
       if (!invoice) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
+      // Auto-reverse ITC when a purchase invoice is cancelled
+      if (input.status === "cancelled" && invoice.type === "purchase" && invoice.documentType === "invoice") {
+        await ctx.db.update(itcLedgerEntries)
+          .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
+          .where(and(
+            eq(itcLedgerEntries.invoiceId, input.id),
+            eq(itcLedgerEntries.businessId, ctx.businessId),
+            inArray(itcLedgerEntries.status, ["available", "blocked"]),
+          ));
       }
 
       logAudit(ctx.db, {
@@ -610,7 +816,7 @@ export const invoiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Invoice");
 
-      const [inv] = await ctx.db.select({ status: invoices.status, type: invoices.type, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
+      const [inv] = await ctx.db.select({ status: invoices.status, type: invoices.type, documentType: invoices.documentType, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
         .from(invoices)
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .limit(1);
@@ -656,6 +862,17 @@ export const invoiceRouter = router({
               updatedAt: new Date(),
             }).where(eq(items.id, li.itemId));
           }
+        }
+
+        // Auto-reverse ITC when a purchase invoice is deleted
+        if (inv.type === "purchase" && inv.documentType === "invoice") {
+          await tx.update(itcLedgerEntries)
+            .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
+            .where(and(
+              eq(itcLedgerEntries.invoiceId, input.id),
+              eq(itcLedgerEntries.businessId, ctx.businessId),
+              inArray(itcLedgerEntries.status, ["available", "blocked"]),
+            ));
         }
 
         // Soft delete

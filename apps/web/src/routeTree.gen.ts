@@ -19,7 +19,12 @@ import { Route as ProformaInvoicesRouteImport } from './routes/proforma-invoices
 import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as PartiesRouteImport } from './routes/parties'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as JournalEntriesRouteImport } from './routes/journal-entries'
 import { Route as ItemsRouteImport } from './routes/items'
+import { Route as EwayBillsRouteImport } from './routes/eway-bills'
+import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
+import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
+import { Route as ItcRouteImport } from './routes/itc'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as GstRouteImport } from './routes/gst'
 import { Route as ExpensesRouteImport } from './routes/expenses'
@@ -82,9 +87,34 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const JournalEntriesRoute = JournalEntriesRouteImport.update({
+  id: '/journal-entries',
+  path: '/journal-entries',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ItemsRoute = ItemsRouteImport.update({
   id: '/items',
   path: '/items',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EwayBillsRoute = EwayBillsRouteImport.update({
+  id: '/eway-bills',
+  path: '/eway-bills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EInvoicingRoute = EInvoicingRouteImport.update({
+  id: '/e-invoicing',
+  path: '/e-invoicing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BankReconciliationRoute = BankReconciliationRouteImport.update({
+  id: '/bank-reconciliation',
+  path: '/bank-reconciliation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ItcRoute = ItcRouteImport.update({
+  id: '/itc',
+  path: '/itc',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InvoicesRoute = InvoicesRouteImport.update({
@@ -146,13 +176,18 @@ const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/automated-invoices': typeof AutomatedInvoicesRoute
+  '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/e-invoicing': typeof EInvoicingRoute
+  '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
+  '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
+  '/journal-entries': typeof JournalEntriesRoute
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
@@ -170,13 +205,18 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/automated-invoices': typeof AutomatedInvoicesRoute
+  '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/e-invoicing': typeof EInvoicingRoute
+  '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
+  '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
+  '/journal-entries': typeof JournalEntriesRoute
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
@@ -195,13 +235,18 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/automated-invoices': typeof AutomatedInvoicesRoute
+  '/bank-reconciliation': typeof BankReconciliationRoute
   '/cash-and-bank': typeof CashAndBankRoute
   '/credit-notes': typeof CreditNotesRoute
   '/delivery-challans': typeof DeliveryChallansRoute
+  '/e-invoicing': typeof EInvoicingRoute
+  '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
   '/invoices': typeof InvoicesRoute
+  '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
+  '/journal-entries': typeof JournalEntriesRoute
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
@@ -221,13 +266,18 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/automated-invoices'
+    | '/bank-reconciliation'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/e-invoicing'
+    | '/eway-bills'
     | '/expenses'
     | '/gst'
     | '/invoices'
+    | '/itc'
     | '/items'
+    | '/journal-entries'
     | '/login'
     | '/parties'
     | '/payments'
@@ -245,13 +295,18 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/automated-invoices'
+    | '/bank-reconciliation'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/e-invoicing'
+    | '/eway-bills'
     | '/expenses'
     | '/gst'
     | '/invoices'
+    | '/itc'
     | '/items'
+    | '/journal-entries'
     | '/login'
     | '/parties'
     | '/payments'
@@ -269,13 +324,18 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/automated-invoices'
+    | '/bank-reconciliation'
     | '/cash-and-bank'
     | '/credit-notes'
     | '/delivery-challans'
+    | '/e-invoicing'
+    | '/eway-bills'
     | '/expenses'
     | '/gst'
     | '/invoices'
+    | '/itc'
     | '/items'
+    | '/journal-entries'
     | '/login'
     | '/parties'
     | '/payments'
@@ -294,13 +354,18 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AutomatedInvoicesRoute: typeof AutomatedInvoicesRoute
+  BankReconciliationRoute: typeof BankReconciliationRoute
   CashAndBankRoute: typeof CashAndBankRoute
   CreditNotesRoute: typeof CreditNotesRoute
   DeliveryChallansRoute: typeof DeliveryChallansRoute
+  EInvoicingRoute: typeof EInvoicingRoute
+  EwayBillsRoute: typeof EwayBillsRoute
   ExpensesRoute: typeof ExpensesRoute
   GstRoute: typeof GstRoute
   InvoicesRoute: typeof InvoicesRoute
+  ItcRoute: typeof ItcRoute
   ItemsRoute: typeof ItemsRoute
+  JournalEntriesRoute: typeof JournalEntriesRoute
   LoginRoute: typeof LoginRoute
   PartiesRoute: typeof PartiesRoute
   PaymentsRoute: typeof PaymentsRoute
@@ -318,6 +383,27 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/bank-reconciliation': {
+      id: '/bank-reconciliation'
+      path: '/bank-reconciliation'
+      fullPath: '/bank-reconciliation'
+      preLoaderRoute: typeof BankReconciliationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/e-invoicing': {
+      id: '/e-invoicing'
+      path: '/e-invoicing'
+      fullPath: '/e-invoicing'
+      preLoaderRoute: typeof EInvoicingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/eway-bills': {
+      id: '/eway-bills'
+      path: '/eway-bills'
+      fullPath: '/eway-bills'
+      preLoaderRoute: typeof EwayBillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/store-orders': {
       id: '/store-orders'
       path: '/store-orders'
@@ -388,11 +474,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/journal-entries': {
+      id: '/journal-entries'
+      path: '/journal-entries'
+      fullPath: '/journal-entries'
+      preLoaderRoute: typeof JournalEntriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/items': {
       id: '/items'
       path: '/items'
       fullPath: '/items'
       preLoaderRoute: typeof ItemsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/itc': {
+      id: '/itc'
+      path: '/itc'
+      fullPath: '/itc'
+      preLoaderRoute: typeof ItcRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/invoices': {
@@ -478,13 +578,18 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AutomatedInvoicesRoute: AutomatedInvoicesRoute,
+  BankReconciliationRoute: BankReconciliationRoute,
   CashAndBankRoute: CashAndBankRoute,
   CreditNotesRoute: CreditNotesRoute,
   DeliveryChallansRoute: DeliveryChallansRoute,
+  EInvoicingRoute: EInvoicingRoute,
+  EwayBillsRoute: EwayBillsRoute,
   ExpensesRoute: ExpensesRoute,
   GstRoute: GstRoute,
   InvoicesRoute: InvoicesRoute,
+  ItcRoute: ItcRoute,
   ItemsRoute: ItemsRoute,
+  JournalEntriesRoute: JournalEntriesRoute,
   LoginRoute: LoginRoute,
   PartiesRoute: PartiesRoute,
   PaymentsRoute: PaymentsRoute,

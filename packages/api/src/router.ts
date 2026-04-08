@@ -30,6 +30,10 @@ import { recurringInvoiceRouter } from "./routers/recurringInvoice.js";
 import { accountRouter } from "./routers/account.js";
 import { hsnRouter } from "./routers/hsn.js";
 import { journalRouter } from "./routers/journal.js";
+import { itcRouter } from "./routers/itc.js";
+import { eInvoiceRouter } from "./routers/eInvoice.js";
+import { ewayBillRouter } from "./routers/ewayBill.js";
+import { bankReconRouter } from "./routers/bankRecon.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -61,6 +65,10 @@ export const appRouter = router({
   account: accountRouter,
   hsn: hsnRouter,
   journal: journalRouter,
+  itc: itcRouter,
+  eInvoice: eInvoiceRouter,
+  ewayBill: ewayBillRouter,
+  bankRecon: bankReconRouter,
 });
 
 export type AppRouter = typeof appRouter;

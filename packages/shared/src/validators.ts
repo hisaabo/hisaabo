@@ -502,6 +502,151 @@ export const createJournalEntrySchema = z.object({
   return Math.abs(totalDebit - totalCredit) < 0.01;
 }, { message: "Journal entry must be balanced (total debits = total credits)" });
 
+export const updateJournalEntrySchema = z.object({
+  id: z.string().uuid(),
+  entryDate: z.string().datetime().optional(),
+  narration: z.string().max(2000).optional(),
+  lines: z.array(journalEntryLineSchema).min(2).optional(),
+}).refine(data => {
+  if (!data.lines) return true;
+  const totalDebit = data.lines.reduce((s, l) => s + parseFloat(l.debit), 0);
+  const totalCredit = data.lines.reduce((s, l) => s + parseFloat(l.credit), 0);
+  return Math.abs(totalDebit - totalCredit) < 0.01;
+}, { message: "Journal entry must be balanced (total debits = total credits)" });
+
+export const voidJournalEntrySchema = z.object({
+  id: z.string().uuid(),
+});
+
+export const journalEntryTemplateLineSchema = z.object({
+  accountId: z.string().uuid(),
+  accountCode: z.string(),
+  accountName: z.string(),
+  debit: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  credit: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  narration: z.string().max(500).optional(),
+});
+
+export const createJournalEntryTemplateSchema = z.object({
+  name: z.string().min(1).max(200),
+  narration: z.string().max(2000).optional(),
+  lines: z.array(journalEntryTemplateLineSchema).min(2),
+});
+
+// ── ITC Tracking ──────────────────────────────────────────────
+
+export const itcBlockReasons = [
+  "motor_vehicle", "food_beverage", "personal", "membership",
+  "travel_benefits", "works_contract", "construction", "telecom",
+  "other",
+] as const;
+
+export const itcReversalReasons = [
+  "section_16_4_180_days", "rule_42", "rule_43", "section_17_5",
+  "invoice_cancelled", "other",
+] as const;
+
+export const markItcBlockedSchema = z.object({
+  invoiceId: z.string().uuid(),
+  blockReason: z.enum(itcBlockReasons),
+  notes: z.string().max(500).optional(),
+});
+
+export const markItcEligibleSchema = z.object({
+  invoiceId: z.string().uuid(),
+});
+
+export const recordItcUtilizationSchema = z.object({
+  returnPeriod: z.string().regex(/^\d{4}-\d{2}$/), // "2026-04"
+  cgstUtilized: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  sgstUtilized: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  igstUtilizedAgainstCgst: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  igstUtilizedAgainstSgst: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  igstUtilizedAgainstIgst: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  notes: z.string().max(500).optional(),
+});
+
+// ── Bank Reconciliation ──────────────────────────────────────
+
+export const bankReconColumnMappingSchema = z.object({
+  date: z.number().int().min(0),
+  narration: z.number().int().min(0),
+  debit: z.number().int().min(0).optional(),
+  credit: z.number().int().min(0).optional(),
+  amount: z.number().int().min(0).optional(),
+  type: z.number().int().min(0).optional(),
+  reference: z.number().int().min(0).optional(),
+  balance: z.number().int().min(0).optional(),
+  dateFormat: z.string().default("DD/MM/YYYY"),
+  skipRows: z.number().int().min(0).default(1),
+  amountSignConvention: z.enum(["debit_positive", "credit_positive"]).optional(),
+});
+
+export const confirmBankMappingSchema = z.object({
+  importId: z.string().uuid(),
+  columnMapping: bankReconColumnMappingSchema,
+});
+
+export const bankCategorizationRuleSchema = z.object({
+  bankAccountId: z.string().uuid().optional(),
+  matchField: z.enum(["narration", "reference"]),
+  matchType: z.enum(["contains", "starts_with", "exact", "regex"]),
+  matchValue: z.string().min(1).max(500),
+  action: z.enum(["create_expense", "ignore", "tag_party"]),
+  expenseCategory: z.string().max(100).optional(),
+  partyId: z.string().uuid().optional(),
+  priority: z.number().int().min(0).default(0),
+});
+
+// ── E-Invoicing ──────────────────────────────────────────────
+
+export const eInvoiceConfigSchema = z.object({
+  gstin: z.string().length(15),
+  clientId: z.string().min(1).max(200),
+  clientSecret: z.string().min(1).max(500),
+  username: z.string().min(1).max(100),
+  password: z.string().min(1).max(200),
+  isSandbox: z.boolean().default(true),
+  isEnabled: z.boolean().default(false),
+  thresholdCrore: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).default("5"),
+});
+
+export const eInvoiceCancelReasons = ["1", "2", "3", "4"] as const; // 1=Duplicate, 2=Data entry mistake, 3=Order cancelled, 4=Others
+
+export const cancelEInvoiceSchema = z.object({
+  invoiceId: z.string().uuid(),
+  cancelReason: z.enum(eInvoiceCancelReasons),
+  cancelRemarks: z.string().max(100).optional(),
+});
+
+// ── E-Way Bill ───────────────────────────────────────────────
+
+export const generateEwayBillSchema = z.object({
+  invoiceId: z.string().uuid(),
+  transporterId: z.string().max(15).optional(),
+  transporterName: z.string().max(200).optional(),
+  vehicleNumber: z.string().max(20),
+  vehicleType: z.enum(["regular", "over_dimensional"]).default("regular"),
+  transportMode: z.enum(["road", "rail", "air", "ship"]).default("road"),
+  distance: z.number().int().min(1).max(4000),
+  fromAddress: z.string().max(500).optional(),
+  fromPincode: z.string().length(6).optional(),
+  toAddress: z.string().max(500).optional(),
+  toPincode: z.string().length(6).optional(),
+});
+
+export const cancelEwayBillSchema = z.object({
+  ewayBillId: z.string().uuid(),
+  cancelReason: z.string().max(250),
+});
+
+export const updateEwbVehicleSchema = z.object({
+  ewayBillId: z.string().uuid(),
+  vehicleNumber: z.string().max(20),
+  fromPlace: z.string().max(200).optional(),
+  reason: z.enum(["breakdown", "transshipment", "first_time", "others"]).default("others"),
+});
+
 // ── HSN Search ────────────────────────────────────────────────
 
 export const hsnSearchSchema = z.object({

@@ -32,6 +32,8 @@ import {
   parties,
   businesses,
   chartOfAccounts,
+  journalEntries,
+  journalEntryLines,
 } from "@hisaabo/db";
 
 // ── Public types ────────────────────────────────────────────────
@@ -530,4 +532,97 @@ export async function deriveLedger(
   entries.sort((a, b) => a.date.getTime() - b.date.getTime());
 
   return entries;
+}
+
+// ── Full ledger (operational + journal entries) ─────────────────
+
+/**
+ * Returns the union of derived operational entries (invoices, payments,
+ * expenses) and persisted manual/system journal entries for the given
+ * date range.  This is the function reports should call when they need
+ * the complete picture including manual journals.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function deriveFullLedger(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  businessId: string,
+  fromDate: Date,
+  toDate: Date,
+): Promise<DerivedEntry[]> {
+  // 1. Get operational entries via the existing deriveLedger
+  const entries = await deriveLedger(db, businessId, fromDate, toDate);
+
+  // 2. Query persisted journal entry lines (including voided entries and
+  //    their reversals — the pair naturally nets to zero in reports).
+  const jeRows: Array<{
+    journalEntryId: string;
+    entryNumber: string;
+    entryDate: Date;
+    narration: string | null;
+    accountId: string;
+    debit: string;
+    credit: string;
+    accountCode: string;
+    accountName: string;
+  }> = await db
+    .select({
+      journalEntryId: journalEntries.id,
+      entryNumber: journalEntries.entryNumber,
+      entryDate: journalEntries.entryDate,
+      narration: journalEntries.narration,
+      accountId: journalEntryLines.accountId,
+      debit: journalEntryLines.debit,
+      credit: journalEntryLines.credit,
+      accountCode: chartOfAccounts.code,
+      accountName: chartOfAccounts.name,
+    })
+    .from(journalEntryLines)
+    .innerJoin(
+      journalEntries,
+      eq(journalEntries.id, journalEntryLines.journalEntryId),
+    )
+    .innerJoin(
+      chartOfAccounts,
+      eq(chartOfAccounts.id, journalEntryLines.accountId),
+    )
+    .where(
+      and(
+        eq(journalEntries.businessId, businessId),
+        gte(journalEntries.entryDate, fromDate),
+        lte(journalEntries.entryDate, toDate),
+      ),
+    );
+
+  // 3. Group rows by journal_entry_id → DerivedEntry[]
+  const jeMap = new Map<string, DerivedEntry>();
+
+  for (const row of jeRows) {
+    let entry = jeMap.get(row.journalEntryId);
+    if (!entry) {
+      entry = {
+        date: row.entryDate,
+        narration: row.narration ?? `Journal ${row.entryNumber}`,
+        sourceType: "journal",
+        sourceId: row.journalEntryId,
+        sourceNumber: row.entryNumber,
+        lines: [],
+      };
+      jeMap.set(row.journalEntryId, entry);
+    }
+
+    entry.lines.push({
+      accountId: row.accountId,
+      accountCode: row.accountCode,
+      accountName: row.accountName,
+      debit: parseFloat(row.debit).toFixed(2),
+      credit: parseFloat(row.credit).toFixed(2),
+    });
+  }
+
+  // 4. Merge and sort chronologically
+  const all = entries.concat([...jeMap.values()]);
+  all.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  return all;
 }

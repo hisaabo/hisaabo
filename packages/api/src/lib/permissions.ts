@@ -10,7 +10,8 @@ export type Resource =
   | "BankAccount" | "BankTransaction"
   | "Business" | "Team" | "Import" | "Report" | "GstReport"
   | "Store" | "SalesTarget" | "RecurringInvoice"
-  | "Account"
+  | "Account" | "ITC"
+  | "BankReconciliation" | "EInvoice" | "EWayBill"
   | "all";
 
 export type AppAbility = PureAbility<[Action, Resource]>;
@@ -108,6 +109,10 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("manage", "BankAccount");
       can("manage", "BankTransaction");
       can("manage", "Account");
+      can("manage", "ITC");
+      can("manage", "BankReconciliation");
+      can("read", "EInvoice");
+      can("read", "EWayBill");
       can("read", "Report");
       can("read", "GstReport");
       // Read-only on non-financial

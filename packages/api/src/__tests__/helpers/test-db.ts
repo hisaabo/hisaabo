@@ -55,6 +55,16 @@ import {
   chartOfAccounts,
   journalEntries,
   journalEntryLines,
+  journalEntryTemplates,
+  itcLedgerEntries,
+  itcUtilizations,
+  bankStatementTemplates,
+  bankStatementImports,
+  bankStatementLines,
+  bankCategorizationRules,
+  eInvoiceConfigs,
+  ewayBills,
+  ewayBillVehicleUpdates,
 } from "@hisaabo/db";
 
 // Reconstruct schema objects for Drizzle so each instance has only its tables
@@ -90,6 +100,16 @@ const tenantSchema = {
   chartOfAccounts,
   journalEntries,
   journalEntryLines,
+  journalEntryTemplates,
+  itcLedgerEntries,
+  itcUtilizations,
+  bankStatementTemplates,
+  bankStatementImports,
+  bankStatementLines,
+  bankCategorizationRules,
+  eInvoiceConfigs,
+  ewayBills,
+  ewayBillVehicleUpdates,
 };
 
 // Re-export the Drizzle type aliases so callers don't need to import drizzle directly.
@@ -173,6 +193,16 @@ export async function truncateAllTables(): Promise<void> {
   await client`
     TRUNCATE TABLE
       -- Tenant schema (leaf tables first)
+      eway_bill_vehicle_updates,
+      eway_bills,
+      e_invoice_configs,
+      bank_categorization_rules,
+      bank_statement_lines,
+      bank_statement_imports,
+      bank_statement_templates,
+      itc_utilizations,
+      itc_ledger_entries,
+      journal_entry_templates,
       journal_entry_lines,
       journal_entries,
       chart_of_accounts,

@@ -116,6 +116,8 @@ const navSections = [
     label: "COMPLIANCE",
     items: [
       { to: "/gst", label: "__REPORTS__", icon: GSTIcon, resource: "GstReport", action: "read" }, // label set dynamically based on GST status
+      { to: "/itc", label: "Input Tax Credit", icon: ReportsIcon, resource: "ITC", action: "read" },
+      { to: "/eway-bills", label: "E-Way Bills", icon: ReportsIcon, resource: "EWayBill", action: "read" },
       { to: "/reports", label: "Reports", icon: ReportsIcon, resource: "Report", action: "read" },
     ],
   },

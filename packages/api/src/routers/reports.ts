@@ -15,7 +15,7 @@ import {
   journalEntries,
   journalEntryLines,
 } from "@hisaabo/db";
-import { deriveLedger } from "../lib/derive-ledger.js";
+import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
 import {
   daybookInputSchema,
   outstandingInputSchema,
@@ -1260,7 +1260,7 @@ export const reportsRouter = router({
         ? new Date(input.fromDate)
         : new Date(fyYear, fyStartMonth, 1);
 
-      const entries = await deriveLedger(ctx.db, ctx.businessId, from, asOf);
+      const entries = await deriveFullLedger(ctx.db, ctx.businessId, from, asOf);
 
       // Aggregate debits and credits per account code
       const accountMap = new Map<
@@ -1326,7 +1326,7 @@ export const reportsRouter = router({
       // Derive all entries from the beginning of time up to asOf.
       // Balance sheet is cumulative — income/expense flows accumulate as net income
       // in equity (this system has no year-end closing entries).
-      const allEntries = await deriveLedger(
+      const allEntries = await deriveFullLedger(
         ctx.db,
         ctx.businessId,
         new Date("2000-01-01"),
@@ -1454,7 +1454,7 @@ export const reportsRouter = router({
       const from = new Date(input.fromDate);
       const to = new Date(input.toDate);
 
-      const entries = await deriveLedger(ctx.db, ctx.businessId, from, to);
+      const entries = await deriveFullLedger(ctx.db, ctx.businessId, from, to);
 
       // Fetch CoA for type information
       const coaRows = await ctx.db
