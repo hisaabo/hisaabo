@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { allEndpointGroups } from "../content";
+import { allSections, allEndpointGroups } from "../content";
+import { PersonaPill } from "./PersonaSelector";
 
 interface Props {
   onNavigate?: () => void;
@@ -29,10 +30,23 @@ export function Sidebar({ onNavigate }: Props) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(groupId ? [groupId] : [allEndpointGroups[0]?.id])
   );
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
   const toggleGroup = (id: string) => {
     setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSection = (id: string) => {
+    setCollapsedSections((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
@@ -60,7 +74,7 @@ export function Sidebar({ onNavigate }: Props) {
       .filter((g) => g.endpoints.length > 0);
   }, [searchQuery]);
 
-  const displayGroups = filteredGroups ?? allEndpointGroups;
+  const isSearching = !!searchQuery.trim();
 
   return (
     <nav
@@ -138,7 +152,7 @@ export function Sidebar({ onNavigate }: Props) {
       </div>
 
       {/* Overview link */}
-      {!searchQuery && (
+      {!isSearching && (
         <div className="px-3 pt-3 pb-1 flex-shrink-0">
           <Link
             to="/"
@@ -155,78 +169,31 @@ export function Sidebar({ onNavigate }: Props) {
         </div>
       )}
 
-      {/* Section label */}
-      {!searchQuery && (
-        <div className="px-4 pb-1.5 pt-3 flex-shrink-0">
-          <span className="section-label">Endpoints</span>
-        </div>
-      )}
-
-      {searchQuery && (
+      {isSearching && (
         <div className="px-4 py-2 flex-shrink-0">
           <span className="section-label">
-            {displayGroups.reduce((acc, g) => acc + g.endpoints.length, 0)} result{displayGroups.reduce((acc, g) => acc + g.endpoints.length, 0) !== 1 ? "s" : ""}
+            {filteredGroups
+              ? `${filteredGroups.reduce((acc, g) => acc + g.endpoints.length, 0)} result${filteredGroups.reduce((acc, g) => acc + g.endpoints.length, 0) !== 1 ? "s" : ""}`
+              : ""}
           </span>
         </div>
       )}
 
-      {/* Endpoint groups */}
+      {/* Endpoint groups organized by section */}
       <div className="flex-1 overflow-y-auto px-3 pb-4">
-        {displayGroups.length === 0 && searchQuery && (
-          <div className="px-3 py-6 text-center">
-            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>No endpoints found</p>
-          </div>
-        )}
-
-        {displayGroups.map((group) => {
-          const isExpanded = searchQuery ? true : expandedGroups.has(group.id);
-          const isActiveGroup = groupId === group.id;
-
-          return (
-            <div key={group.id} className="mb-0.5">
-              {/* Group header */}
-              {!searchQuery && (
-                <button
-                  onClick={() => {
-                    toggleGroup(group.id);
-                    navigate(`/group/${group.id}`);
-                    onNavigate?.();
-                  }}
-                  className={`sidebar-item flex items-center justify-between w-full px-3 py-1.5 rounded-md text-[13px] text-left
-                    ${isActiveGroup
-                      ? "text-white font-medium"
-                      : "hover:bg-[#1a1a2e]"
-                    }`}
-                  style={{ color: isActiveGroup ? "#fff" : "var(--text-secondary)" }}
-                >
-                  <span>{group.title}</span>
-                  <svg
-                    className="w-3 h-3 flex-shrink-0 transition-transform duration-200"
-                    style={{
-                      color: "var(--text-muted)",
-                      transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
-                    }}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              )}
-
-              {searchQuery && (
+        {isSearching ? (
+          <>
+            {filteredGroups && filteredGroups.length === 0 && (
+              <div className="px-3 py-6 text-center">
+                <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>No endpoints found</p>
+              </div>
+            )}
+            {filteredGroups?.map((group) => (
+              <div key={group.id} className="mb-1">
                 <div className="px-3 py-1 mt-1">
                   <span className="section-label">{group.title}</span>
                 </div>
-              )}
-
-              {/* Endpoint list */}
-              {isExpanded && (
-                <div
-                  className={`${searchQuery ? "" : "ml-2 pl-3"} mt-0.5`}
-                  style={searchQuery ? {} : { borderLeft: "1px solid var(--border-mid)" }}
-                >
+                <div>
                   {group.endpoints.map((ep) => {
                     const isActive = endpointId === ep.id;
                     return (
@@ -244,10 +211,102 @@ export function Sidebar({ onNavigate }: Props) {
                     );
                   })}
                 </div>
-              )}
-            </div>
-          );
-        })}
+              </div>
+            ))}
+          </>
+        ) : (
+          allSections.map((section) => {
+            const isSectionCollapsed = collapsedSections.has(section.id);
+            return (
+              <div key={section.id} className="mt-3">
+                {/* Section header */}
+                <button
+                  onClick={() => toggleSection(section.id)}
+                  className="flex items-center justify-between w-full px-3 py-1.5 mb-0.5"
+                >
+                  <span className="section-label">{section.title}</span>
+                  <svg
+                    className="w-3 h-3 flex-shrink-0 transition-transform duration-200"
+                    style={{
+                      color: "var(--text-muted)",
+                      transform: isSectionCollapsed ? "rotate(0deg)" : "rotate(90deg)",
+                    }}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+
+                {!isSectionCollapsed && section.groups.map((group) => {
+                  const isExpanded = expandedGroups.has(group.id);
+                  const isActiveGroup = groupId === group.id;
+
+                  return (
+                    <div key={group.id} className="mb-0.5">
+                      {/* Group header */}
+                      <button
+                        onClick={() => {
+                          toggleGroup(group.id);
+                          navigate(`/group/${group.id}`);
+                          onNavigate?.();
+                        }}
+                        className={`sidebar-item flex items-center justify-between w-full px-3 py-1.5 rounded-md text-[13px] text-left
+                          ${isActiveGroup
+                            ? "text-white font-medium"
+                            : "hover:bg-[#1a1a2e]"
+                          }`}
+                        style={{ color: isActiveGroup ? "#fff" : "var(--text-secondary)" }}
+                      >
+                        <span className="truncate">{group.title}</span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                            {group.endpoints.length}
+                          </span>
+                          <svg
+                            className="w-3 h-3 transition-transform duration-200"
+                            style={{
+                              color: "var(--text-muted)",
+                              transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                            }}
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </button>
+
+                      {/* Endpoint list */}
+                      {isExpanded && (
+                        <div className="ml-2 pl-3 mt-0.5" style={{ borderLeft: "1px solid var(--border-mid)" }}>
+                          {group.endpoints.map((ep) => {
+                            const isActive = endpointId === ep.id;
+                            return (
+                              <Link
+                                key={ep.id}
+                                to={`/group/${group.id}/endpoint/${ep.id}`}
+                                onClick={onNavigate}
+                                className={`sidebar-item flex items-center gap-2 px-2 py-[5px] rounded-md text-[12px] my-0.5 relative
+                                  ${isActive ? "sidebar-item-active" : "hover:bg-[#1a1a2e]"}`}
+                                style={{ color: isActive ? "var(--brand-light)" : "var(--text-tertiary)" }}
+                              >
+                                <MethodPill method={ep.method} />
+                                <span className="truncate leading-tight">{ep.title}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Footer links */}
@@ -255,6 +314,9 @@ export function Sidebar({ onNavigate }: Props) {
         className="flex-shrink-0 px-4 py-3"
         style={{ borderTop: "1px solid var(--border)" }}
       >
+        <div className="flex items-center justify-between mb-2">
+          <PersonaPill />
+        </div>
         <div className="flex items-center gap-4">
           <a
             href="https://github.com/hisaabo"

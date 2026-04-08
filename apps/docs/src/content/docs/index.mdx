@@ -15,9 +15,40 @@ hero:
       variant: minimal
 ---
 
+import ForCA from '../../components/ForCA.astro';
+import ForBusiness from '../../components/ForBusiness.astro';
+import ForDev from '../../components/ForDev.astro';
+
+:::tip[Who are you?]
+Use the **CA / Business / Dev** toggle in the top-right header to personalize these docs. The content adapts to show the most relevant guides and FAQ for your role.
+:::
+
 ## Quick Start
+
+<ForBusiness>
+**For business owners:**
 
 1. **[Sign up free](https://hisaabo.in)** or **[self-host with Docker](/getting-started/self-hosting/)** — your choice
 2. **[Create your business](/getting-started/create-business/)** — set up your company profile, GST details, and bank info
 3. **[Create your first invoice](/invoicing/create-invoice/)** — generate a GST-compliant invoice with automatic tax calculation
 4. **[Import existing data](/getting-started/import-data/)** — bring in your parties, items, and invoices from MyBillBook or CSV
+</ForBusiness>
+
+<ForCA>
+**For CA firms:**
+
+1. **[Self-host](/getting-started/self-hosting/)** or use **[Hisaabo Cloud](https://hisaabo.in)** — one instance for all your clients
+2. **[Create a business per client](/getting-started/create-business/)** — GST details, state code, and Chart of Accounts auto-seed
+3. **[Invite your client](/team/invitations/)** — they create invoices from their phone, you see the data live
+4. **[Import bank statements](/banking/)** — auto-match 70%+ of transactions across 10 Indian banks
+5. **[Generate GST returns](/gst/)** — GSTR-1 and GSTR-3B auto-generate from invoice data
+</ForCA>
+
+<ForDev>
+**For developers:**
+
+1. **Clone and run locally** — `git clone`, `docker compose up -d`, `pnpm install && pnpm db:push && pnpm dev`
+2. **Explore the API** — 200+ typed tRPC endpoints at `localhost:3000`. Full reference at [api.hisaabo.in](https://api.hisaabo.in)
+3. **Connect an AI agent** — install `@hisaabo/mcp` for Claude Desktop, or use the [CLI](/ai/cli/) for terminal automation
+4. **Read the architecture** — [Hono + tRPC + Drizzle + PostgreSQL](/getting-started/) with typed contracts end-to-end
+</ForDev>

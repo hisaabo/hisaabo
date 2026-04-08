@@ -1,0 +1,201 @@
+---
+title: Frequently Asked Questions
+description: Common questions about Hisaabo, organized by role. Select your role in the header to see the most relevant answers.
+sidebar:
+  order: 99
+---
+
+import ForCA from '../../components/ForCA.astro';
+import ForBusiness from '../../components/ForBusiness.astro';
+import ForDev from '../../components/ForDev.astro';
+
+:::tip
+Select your role using the **CA / Business / Dev** toggle in the header. The FAQ below will adapt to show the most relevant questions for you.
+:::
+
+## Getting Started
+
+### How do I get started with Hisaabo?
+
+<ForBusiness>
+**For business owners:** [Sign up free](https://hisaabo.in) or [self-host with Docker](/getting-started/self-hosting/). Create your business profile with GST details, add your first customer, and create an invoice — all in under 15 minutes. If you're migrating from MyBillBook or Vyapar, use the [import tool](/getting-started/import-data/) to bring your existing data.
+</ForBusiness>
+
+<ForCA>
+**For CA firms:** Create an account and set up one business per client. Invite each client with `Seller` or `Admin` access so they can create invoices from their phone. You get a single dashboard to see all clients. See [the CA workflow guide](/getting-started/) for the full monthly and year-end process.
+</ForCA>
+
+<ForDev>
+**For developers:** Clone the repo, run `docker compose up -d && pnpm install && pnpm db:push && pnpm dev`. The API runs at `localhost:3000`, web at `localhost:5173`. All 200+ endpoints are documented at [api.hisaabo.in](https://api.hisaabo.in). Use tRPC client or raw HTTP calls.
+</ForDev>
+
+### Is Hisaabo free?
+
+Yes. Hisaabo is open-source software under the [O'Saasy License](/). Self-hosted is completely free with no feature gates. Hisaabo Cloud offers a hosted version with mobile apps and additional convenience features.
+
+### Does Hisaabo work offline?
+
+Once self-hosted on your server, Hisaabo runs entirely on your network. Your data never leaves your infrastructure unless you configure email delivery.
+
+---
+
+## Invoicing & GST
+
+<ForBusiness>
+### How does GST calculation work?
+
+When you create an invoice, Hisaabo automatically determines the tax split based on the state codes configured on your business and the customer:
+- **Same state** (e.g., both Maharashtra): CGST + SGST (half-half)
+- **Different states** (e.g., Maharashtra to Gujarat): IGST (full rate)
+
+You set the tax rate per item (0%, 5%, 12%, 18%, 28%) and Hisaabo does the rest. See [GST on Invoices](/invoicing/gst-on-invoices/).
+</ForBusiness>
+
+<ForCA>
+### How do I generate GSTR-1 and GSTR-3B for a client?
+
+Both reports auto-generate from invoice data — no manual entry needed.
+
+1. Switch to the client's business
+2. Go to **Reports > GST > GSTR-1** and select the month
+3. Review B2B, B2C, HSN summary, and credit/debit note sections
+4. Export as JSON for direct upload to the GST portal, or CSV for review
+
+GSTR-3B works the same way — outward supplies, ITC, RCM, and net payable are all calculated automatically.
+
+### How does ITC tracking work?
+
+ITC entries are auto-created from purchase invoices. The ITC dashboard shows available, utilized, and blocked credit. You'll see alerts when credits approach the 180-day reversal deadline (Section 16(4)). Blocked ITC under Section 17(5) can be marked explicitly.
+</ForCA>
+
+<ForBusiness>
+### Can I create invoices from my phone?
+
+Yes. The web app is fully responsive — open your Hisaabo URL in any mobile browser. On Hisaabo Cloud, there's also a native Android/iOS app with barcode scanning and WhatsApp sharing.
+</ForBusiness>
+
+<ForDev>
+### How do I create an invoice via the API?
+
+```javascript
+const invoice = await trpc.invoice.create.mutate({
+  partyId: "customer-uuid",
+  type: "sale",
+  lineItems: [{
+    description: "Basmati Rice 25kg",
+    quantity: "20.000",
+    unitPrice: "1250.00",
+    taxPercent: "5.00",
+    itemId: "rice-item-uuid",
+  }],
+});
+// invoice.invoiceNumber → "INV-0043"
+// invoice.totalAmount → "26250.00" (₹25,000 + ₹1,250 GST)
+```
+
+The API atomically generates the invoice number, calculates GST split, and adjusts stock. See the [API Reference](https://api.hisaabo.in/#/group/invoices/endpoint/invoice-create).
+</ForDev>
+
+---
+
+## Payments & Banking
+
+<ForBusiness>
+### How do I record a payment?
+
+Go to the invoice and click **Record Payment**, or navigate to **Payments > New**. Choose the payment mode (cash, bank, UPI, cheque) and enter the amount. You can allocate one payment across multiple invoices. The invoice status updates automatically (partial → paid).
+
+### How do I reconcile my bank statement?
+
+Upload your bank statement CSV (supports SBI, HDFC, ICICI, Axis, Kotak, and 5 more banks). Hisaabo auto-detects the format and matches 70%+ of transactions automatically. Review the unmatched items — create expenses, match to payments, or mark as timing differences.
+</ForBusiness>
+
+<ForCA>
+### How does bank reconciliation work across clients?
+
+Each business has its own bank accounts. When you switch to a client's business, you see only their accounts. Upload their CSV, and the 4-tier matching engine (exact, strong, narration parse, partial) handles most entries. Auto-categorization rules carry forward — "NEFT-SALARY" categorized once applies to future imports.
+
+### Can I export to Tally for audit?
+
+Yes. **Reports > Tally Export** generates a clean XML file that imports directly into Tally Prime. All invoices, payments, and journal entries are included with proper voucher types.
+</ForCA>
+
+---
+
+## Team & Access
+
+<ForBusiness>
+### How do I share access with my CA?
+
+Go to **Settings > Team > Invite Member**. Enter your CA's email and assign the **Accountant** role. They get full access to payments, expenses, bank accounts, reports, and GST — but read-only on invoices, parties, and items. No password sharing needed.
+
+### What roles are available?
+
+| Role | Can do |
+|------|--------|
+| **Admin** | Everything within the business |
+| **Seller Manager** | Create/edit invoices, parties, items. Limited delete. |
+| **Seller** | Create invoices and payments only |
+| **Accountant** | Financial access: payments, expenses, bank, reports, GST |
+
+See [Team & Roles](/team/) for full details.
+</ForBusiness>
+
+<ForCA>
+### How do I manage access for articled clerks?
+
+Invite clerks with the **Seller** or **Seller Manager** role, scoped to specific businesses. Sellers can only create invoices and payments — they can't delete anything or access financial reports. You can revoke access instantly if a clerk leaves.
+
+### Can I see all my clients from one dashboard?
+
+Yes. Your account shows all businesses in the organization. Switch between clients from the top navigation. Each business is completely isolated — data from one client is never visible in another's context.
+</ForCA>
+
+---
+
+## Developer & Integration
+
+<ForDev>
+### How do I authenticate API calls?
+
+Call `auth.login` to get a session token. Then include it as `Authorization: Bearer <token>` in every request. For business-scoped endpoints, also include the `x-business-id: <uuid>` header. The tRPC client handles batching and SuperJSON serialization automatically.
+
+### How do monetary values work in the API?
+
+All money values are **strings** (e.g., `"12500.00"`), backed by PostgreSQL `NUMERIC(15,2)`. Never use `parseFloat()` or `Number()` for arithmetic — you'll lose precision. The `@hisaabo/shared` package has safe money utilities.
+
+### Can I connect AI agents?
+
+Yes. Install `@hisaabo/mcp` and add it to Claude Desktop's config. The MCP server exposes every API endpoint as a callable tool. There's also a CLI (`@hisaabo/cli`) for terminal-based automation. See [AI & Automation](/ai/).
+
+### What's the rate limit?
+
+| Origin | Auth | Limit/min |
+|--------|------|-----------|
+| Same origin | Authenticated | 120 |
+| Same origin | Unauthenticated | 60 |
+| External | Authenticated | 60 |
+| External | Unauthenticated | 10 |
+
+Exceeding returns `429 Too Many Requests` with `Retry-After: 60`.
+
+### Where are the full API docs?
+
+The complete API reference with 200+ endpoints, code examples (JavaScript, cURL, Python), and interactive documentation is at **[api.hisaabo.in](https://api.hisaabo.in)**.
+</ForDev>
+
+---
+
+## Data & Privacy
+
+### Where is my data stored?
+
+On **your server**. Hisaabo is self-hosted — the PostgreSQL database runs on your infrastructure. Nothing is sent to Hisaabo's servers unless you're using Hisaabo Cloud (which runs the same open-source code on managed infrastructure).
+
+### Can I export my data?
+
+Yes. Every report supports CSV export. Full business data export is available via the API (`business.exportData`). Tally XML export is available for statutory audit handoff.
+
+### Can I import data from other tools?
+
+Yes. Hisaabo supports bulk import of parties, items, invoices, and payments from CSV files. There's also a dedicated MyBillBook import flow. See [Import Data](/getting-started/import-data/).

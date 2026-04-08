@@ -39,3 +39,9 @@ export interface EndpointGroup {
   description: string;
   endpoints: EndpointDef[];
 }
+
+export interface EndpointSection {
+  id: string;
+  title: string;
+  groups: EndpointGroup[];
+}

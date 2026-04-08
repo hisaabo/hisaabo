@@ -100,6 +100,10 @@ export default defineConfig({
             },
           ],
         },
+        {
+          label: "FAQ",
+          slug: "faq",
+        },
       ],
       defaultLocale: "en",
       head: [
@@ -109,7 +113,7 @@ export default defineConfig({
         },
         {
           tag: "script",
-          content: `(function(){var s=localStorage.getItem('hisaabo-docs-platform');if(s==='desktop'||s==='mobile'){document.documentElement.setAttribute('data-platform',s)}else{var m=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||window.innerWidth<768;document.documentElement.setAttribute('data-platform',m?'mobile':'desktop')}})();`,
+          content: `(function(){var s=localStorage.getItem('hisaabo-docs-platform');if(s==='desktop'||s==='mobile'){document.documentElement.setAttribute('data-platform',s)}else{var m=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||window.innerWidth<768;document.documentElement.setAttribute('data-platform',m?'mobile':'desktop')}var p=localStorage.getItem('hisaabo-docs-persona');document.documentElement.setAttribute('data-persona',p||'all')})();`,
         },
       ],
     }),
