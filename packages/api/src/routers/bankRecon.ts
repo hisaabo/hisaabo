@@ -11,13 +11,15 @@
  * Permission checks use requireCan() from @casl-based permissions.
  */
 
-import { eq, and, sql, desc, isNull, gte, lte, or } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, gte, lte, or, ilike, asc } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
   bankStatementImports,
   bankStatementLines,
   bankCategorizationRules,
+  bankStatementTemplates,
   bankAccounts,
   payments,
   expenses,
@@ -33,6 +35,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { escapeLike } from "../lib/escape-like.js";
 import {
   parseCSV,
   detectColumnMapping,
@@ -44,6 +47,12 @@ import {
   applyCategorizationRules,
   type CategorizationRule,
 } from "../lib/bank-reconciliation.js";
+import {
+  seedBankTemplates,
+  detectBankTemplate,
+  preprocessRows,
+  type DetectionResult,
+} from "../lib/bank-templates/index.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -99,8 +108,45 @@ export const bankReconRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "CSV file is empty or has no data rows" });
       }
 
+      // Lazy seed built-in templates (idempotent)
+      await seedBankTemplates(ctx.db, ctx.businessId);
+
+      // Fetch all active templates for this business
+      const dbTemplates = await ctx.db
+        .select()
+        .from(bankStatementTemplates)
+        .where(and(
+          eq(bankStatementTemplates.businessId, ctx.businessId),
+          eq(bankStatementTemplates.isActive, true),
+        ));
+
+      // Get bank account IFSC / name for detection hints
+      const [acctHints] = await ctx.db
+        .select({ ifsc: bankAccounts.ifsc, bankName: bankAccounts.bankName })
+        .from(bankAccounts)
+        .where(and(
+          eq(bankAccounts.id, input.bankAccountId),
+          eq(bankAccounts.businessId, ctx.businessId),
+        ))
+        .limit(1);
+
+      const hints = {
+        ifsc: acctHints?.ifsc ?? undefined,
+        bankName: acctHints?.bankName ?? undefined,
+      };
+
+      // Auto-detect template
+      const detectedTemplate: DetectionResult | null = detectBankTemplate(rows, dbTemplates, hints);
+
       const headers = rows[0] ?? [];
-      const detectedMapping = detectColumnMapping(headers);
+
+      // Use template's column mapping if detected, otherwise fall back to heuristics
+      const detectedMapping = detectedTemplate
+        ? (() => {
+            const tmpl = dbTemplates.find((t) => t.id === detectedTemplate.templateId);
+            return tmpl?.columnMapping ?? detectColumnMapping(headers);
+          })()
+        : detectColumnMapping(headers);
 
       // Preview: first 5 data rows (after header)
       const previewRows = rows.slice(1, 6);
@@ -124,6 +170,7 @@ export const bankReconRouter = router({
         headers,
         previewRows,
         detectedMapping,
+        detectedTemplate,
         totalRows: rows.length - 1,
       };
     }),
@@ -135,6 +182,7 @@ export const bankReconRouter = router({
   confirmMapping: adminProcedure
     .input(confirmBankMappingSchema.extend({
       csvContent: z.string().min(1).max(10_000_000),
+      templateId: z.string().uuid().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "BankReconciliation");
@@ -157,7 +205,35 @@ export const bankReconRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Import is not in a mappable state" });
       }
 
-      const rows = parseCSV(input.csvContent);
+      // Resolve template if provided
+      let resolvedTemplateId: string | null = null;
+      let resolvedTemplateVersion: number | null = null;
+
+      let rows = parseCSV(input.csvContent);
+
+      if (input.templateId) {
+        const [tmpl] = await ctx.db
+          .select()
+          .from(bankStatementTemplates)
+          .where(and(
+            eq(bankStatementTemplates.id, input.templateId),
+            eq(bankStatementTemplates.businessId, ctx.businessId),
+          ))
+          .limit(1);
+
+        if (!tmpl) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+        }
+
+        // Apply preprocessing rules before column mapping
+        if (tmpl.preprocessRules) {
+          rows = preprocessRows(rows, tmpl.preprocessRules);
+        }
+
+        resolvedTemplateId = tmpl.id;
+        resolvedTemplateVersion = tmpl.version;
+      }
+
       const colMapping = toColumnMapping(input.columnMapping);
       const parsedLines = parseStatementLines(rows, colMapping);
 
@@ -322,6 +398,8 @@ export const bankReconRouter = router({
         .set({
           status: "review",
           columnMapping: input.columnMapping,
+          templateId: resolvedTemplateId,
+          templateVersion: resolvedTemplateVersion,
           totalLines: parsedLines.length,
           matchedLines: matchedCount,
           unmatchedLines: parsedLines.length - matchedCount,
@@ -748,6 +826,248 @@ export const bankReconRouter = router({
         unmatchedCredits,
         import: latestImport ?? null,
       };
+    }),
+
+  // ── Bank Statement Templates ─────────────────────────────────────────────────
+
+  /**
+   * List all templates for this business (seeded + custom/forked).
+   */
+  templateList: viewerProcedure
+    .input(z.object({ search: z.string().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "BankReconciliation");
+
+      const conditions = [eq(bankStatementTemplates.businessId, ctx.businessId)];
+      if (input?.search) {
+        conditions.push(
+          ilike(bankStatementTemplates.bankDisplayName, `%${escapeLike(input.search)}%`),
+        );
+      }
+
+      const templates = await ctx.db
+        .select({
+          id: bankStatementTemplates.id,
+          bankSlug: bankStatementTemplates.bankSlug,
+          bankDisplayName: bankStatementTemplates.bankDisplayName,
+          version: bankStatementTemplates.version,
+          label: bankStatementTemplates.label,
+          isSeeded: bankStatementTemplates.isSeeded,
+          forkedFromId: bankStatementTemplates.forkedFromId,
+          fileFormat: bankStatementTemplates.fileFormat,
+          isActive: bankStatementTemplates.isActive,
+          createdAt: bankStatementTemplates.createdAt,
+        })
+        .from(bankStatementTemplates)
+        .where(and(...conditions))
+        .orderBy(asc(bankStatementTemplates.bankDisplayName), desc(bankStatementTemplates.version));
+
+      return templates;
+    }),
+
+  /**
+   * Create a custom (non-seeded) template.
+   */
+  templateCreate: adminProcedure
+    .input(z.object({
+      bankSlug: z.string().max(100).optional(),
+      bankDisplayName: z.string().min(1).max(255),
+      columnMapping: bankReconColumnMappingSchema,
+      preprocessRules: z.object({
+        extraHeaderRows: z.number().int().min(0).optional(),
+        skipRowPatterns: z.array(z.string()).optional(),
+        amountParsingMode: z.enum(["standard", "dr_cr_suffix", "parentheses_negative", "signed"]).optional(),
+        skipSubtotalRows: z.boolean().optional(),
+        encoding: z.string().optional(),
+      }).optional(),
+      detectionRules: z.object({
+        headerPatterns: z.array(z.string()).optional(),
+        columnCount: z.object({ min: z.number(), max: z.number() }).optional(),
+        firstRowPatterns: z.array(z.string()).optional(),
+        ifscPrefix: z.string().optional(),
+      }).optional(),
+      label: z.string().max(255).optional(),
+      fileFormat: z.enum(["csv", "xlsx", "pdf"]).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankReconciliation");
+
+      const bankSlug = input.bankSlug ?? `custom_${randomUUID()}`;
+
+      const [template] = await ctx.db
+        .insert(bankStatementTemplates)
+        .values({
+          businessId: ctx.businessId,
+          bankSlug,
+          bankDisplayName: input.bankDisplayName,
+          version: 1,
+          label: input.label ?? null,
+          isSeeded: false,
+          forkedFromId: null,
+          columnMapping: input.columnMapping,
+          preprocessRules: input.preprocessRules ?? null,
+          detectionRules: input.detectionRules ?? null,
+          fileFormat: input.fileFormat ?? "csv",
+          isActive: true,
+        })
+        .returning();
+
+      return template!;
+    }),
+
+  /**
+   * Fork a seeded or existing template into a user-editable copy.
+   */
+  templateFork: adminProcedure
+    .input(z.object({
+      templateId: z.string().uuid(),
+      label: z.string().max(255).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "create", "BankReconciliation");
+
+      const [source] = await ctx.db
+        .select()
+        .from(bankStatementTemplates)
+        .where(and(
+          eq(bankStatementTemplates.id, input.templateId),
+          eq(bankStatementTemplates.businessId, ctx.businessId),
+        ))
+        .limit(1);
+
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+      }
+
+      // Find highest existing version for this bankSlug to bump it
+      const [maxRow] = await ctx.db
+        .select({ maxVersion: sql<number>`MAX(${bankStatementTemplates.version})::int` })
+        .from(bankStatementTemplates)
+        .where(and(
+          eq(bankStatementTemplates.businessId, ctx.businessId),
+          eq(bankStatementTemplates.bankSlug, source.bankSlug),
+        ));
+
+      const newVersion = (maxRow?.maxVersion ?? source.version) + 1;
+
+      const [forked] = await ctx.db
+        .insert(bankStatementTemplates)
+        .values({
+          businessId: ctx.businessId,
+          bankSlug: source.bankSlug,
+          bankDisplayName: source.bankDisplayName,
+          version: newVersion,
+          label: input.label ?? source.label ?? null,
+          isSeeded: false,
+          forkedFromId: source.id,
+          columnMapping: source.columnMapping,
+          preprocessRules: source.preprocessRules ?? null,
+          detectionRules: source.detectionRules ?? null,
+          fileFormat: source.fileFormat,
+          isActive: true,
+        })
+        .returning();
+
+      return forked!;
+    }),
+
+  /**
+   * Update a custom/forked template. Seeded templates cannot be modified.
+   */
+  templateUpdate: adminProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      columnMapping: bankReconColumnMappingSchema.optional(),
+      preprocessRules: z.object({
+        extraHeaderRows: z.number().int().min(0).optional(),
+        skipRowPatterns: z.array(z.string()).optional(),
+        amountParsingMode: z.enum(["standard", "dr_cr_suffix", "parentheses_negative", "signed"]).optional(),
+        skipSubtotalRows: z.boolean().optional(),
+        encoding: z.string().optional(),
+      }).optional(),
+      detectionRules: z.object({
+        headerPatterns: z.array(z.string()).optional(),
+        columnCount: z.object({ min: z.number(), max: z.number() }).optional(),
+        firstRowPatterns: z.array(z.string()).optional(),
+        ifscPrefix: z.string().optional(),
+      }).optional(),
+      label: z.string().max(255).optional(),
+      isActive: z.boolean().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "update", "BankReconciliation");
+
+      const [existing] = await ctx.db
+        .select()
+        .from(bankStatementTemplates)
+        .where(and(
+          eq(bankStatementTemplates.id, input.id),
+          eq(bankStatementTemplates.businessId, ctx.businessId),
+        ))
+        .limit(1);
+
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+      }
+
+      if (existing.isSeeded) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot edit a seeded template. Fork it first to create an editable copy.",
+        });
+      }
+
+      const updateData: Partial<typeof bankStatementTemplates.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (input.columnMapping !== undefined) updateData.columnMapping = input.columnMapping;
+      if (input.preprocessRules !== undefined) updateData.preprocessRules = input.preprocessRules;
+      if (input.detectionRules !== undefined) updateData.detectionRules = input.detectionRules;
+      if (input.label !== undefined) updateData.label = input.label;
+      if (input.isActive !== undefined) updateData.isActive = input.isActive;
+
+      const [updated] = await ctx.db
+        .update(bankStatementTemplates)
+        .set(updateData)
+        .where(eq(bankStatementTemplates.id, input.id))
+        .returning();
+
+      return updated!;
+    }),
+
+  /**
+   * Delete a custom/forked template. Seeded templates cannot be deleted.
+   */
+  templateDelete: adminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "delete", "BankReconciliation");
+
+      const [existing] = await ctx.db
+        .select()
+        .from(bankStatementTemplates)
+        .where(and(
+          eq(bankStatementTemplates.id, input.id),
+          eq(bankStatementTemplates.businessId, ctx.businessId),
+        ))
+        .limit(1);
+
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+      }
+
+      if (existing.isSeeded) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot delete a seeded template.",
+        });
+      }
+
+      await ctx.db
+        .delete(bankStatementTemplates)
+        .where(eq(bankStatementTemplates.id, input.id));
+
+      return { success: true };
     }),
 
   // ── Categorization Rules ────────────────────────────────────────────────────

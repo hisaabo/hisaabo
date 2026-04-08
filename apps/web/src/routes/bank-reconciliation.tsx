@@ -20,7 +20,7 @@ export const Route = createFileRoute("/bank-reconciliation")({
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-type Tab = "hub" | "upload" | "review" | "summary" | "rules";
+type Tab = "hub" | "upload" | "review" | "summary" | "rules" | "templates";
 
 const TABS: Array<{ value: Tab; label: string }> = [
   { value: "hub", label: "Reconciliation Hub" },
@@ -28,6 +28,7 @@ const TABS: Array<{ value: Tab; label: string }> = [
   { value: "review", label: "Review Matches" },
   { value: "summary", label: "Summary (BRS)" },
   { value: "rules", label: "Rules" },
+  { value: "templates", label: "Templates" },
 ];
 
 const MATCH_STATUS_OPTIONS = [
@@ -148,6 +149,9 @@ function BankReconciliationPage() {
       )}
       {activeTab === "rules" && (
         <RulesTab />
+      )}
+      {activeTab === "templates" && (
+        <TemplatesTab />
       )}
     </div>
   );
@@ -314,6 +318,15 @@ type MappingState = {
   skipRows: string;
 };
 
+type DetectedTemplate = {
+  templateId: string;
+  bankSlug: string;
+  bankDisplayName: string;
+  version: number;
+  confidence: number;
+  reason: string;
+} | null;
+
 function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
   const [step, setStep] = useState<"upload" | "mapping">("upload");
   const [isDragging, setIsDragging] = useState(false);
@@ -323,6 +336,11 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
   const [importId, setImportId] = useState<string>("");
   const [headers, setHeaders] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<string[][]>([]);
+  const [detectedTemplate, setDetectedTemplate] = useState<DetectedTemplate>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [saveTemplateLabel, setSaveTemplateLabel] = useState("");
   const [mapping, setMapping] = useState<MappingState>({
     date: "",
     narration: "",
@@ -338,6 +356,7 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: accounts } = trpc.bankAccount.list.useQuery();
+  const { data: templateList } = trpc.bankRecon.templateList.useQuery();
   const utils = trpc.useUtils();
 
   const uploadMutation = trpc.bankRecon.uploadCSV.useMutation({
@@ -345,6 +364,7 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
       setImportId(data.importId);
       setHeaders(data.headers);
       setPreviewRows(data.previewRows);
+      setDetectedTemplate(data.detectedTemplate ?? null);
 
       const dm = data.detectedMapping;
       setMapping({
@@ -369,6 +389,17 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
       utils.bankRecon.importList.invalidate();
       toast.success(`Parsed ${data.totalLines} lines. ${data.matchedLines} auto-matched, ${data.unmatchedLines} unmatched.`);
       onSuccess(data.importId);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const saveTemplateMutation = trpc.bankRecon.templateCreate.useMutation({
+    onSuccess: () => {
+      utils.bankRecon.templateList.invalidate();
+      setShowSaveTemplateModal(false);
+      setSaveTemplateName("");
+      setSaveTemplateLabel("");
+      toast.success("Template saved");
     },
     onError: (err) => toast.error(err.message),
   });
@@ -405,13 +436,39 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
     });
   }
 
-  function handleConfirm() {
+  function handleConfirm(overrideTemplateId?: string) {
     if (!csvContent) return;
 
     const mapInt = (v: string) => v !== "" ? parseInt(v, 10) : undefined;
+    const tmplId = overrideTemplateId ?? selectedTemplateId ?? undefined;
     confirmMutation.mutate({
       importId,
       csvContent,
+      templateId: tmplId || undefined,
+      columnMapping: {
+        date: parseInt(mapping.date, 10),
+        narration: parseInt(mapping.narration, 10),
+        debit: mapInt(mapping.debit),
+        credit: mapInt(mapping.credit),
+        amount: mapInt(mapping.amount),
+        type: mapInt(mapping.type),
+        reference: mapInt(mapping.reference),
+        balance: mapInt(mapping.balance),
+        dateFormat: mapping.dateFormat,
+        skipRows: parseInt(mapping.skipRows, 10),
+      },
+    });
+  }
+
+  function handleSaveTemplate() {
+    if (!saveTemplateName.trim()) {
+      toast.error("Bank name is required");
+      return;
+    }
+    const mapInt = (v: string) => v !== "" ? parseInt(v, 10) : undefined;
+    saveTemplateMutation.mutate({
+      bankDisplayName: saveTemplateName.trim(),
+      label: saveTemplateLabel.trim() || undefined,
       columnMapping: {
         date: parseInt(mapping.date, 10),
         narration: parseInt(mapping.narration, 10),
@@ -442,6 +499,51 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
           <p className="text-sm text-text-secondary">
             We auto-detected these mappings. Review and adjust if needed.
           </p>
+        </div>
+
+        {/* Template detection banner */}
+        {detectedTemplate && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-emerald-600/[0.08] border border-emerald-500/30">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-600 text-white">
+              Detected
+            </span>
+            <span className="text-sm text-emerald-800 dark:text-emerald-300 font-medium flex-1">
+              {detectedTemplate.bankDisplayName} v{detectedTemplate.version}
+              <span className="ml-2 text-xs font-normal opacity-75">
+                ({Math.round(detectedTemplate.confidence * 100)}% match via {detectedTemplate.reason})
+              </span>
+            </span>
+            <button
+              className="btn-primary text-xs py-1 px-3"
+              onClick={() => handleConfirm(detectedTemplate.templateId)}
+              disabled={confirmMutation.isPending}
+            >
+              Use Template
+            </button>
+            <button
+              className="btn-secondary text-xs py-1 px-3"
+              onClick={() => setDetectedTemplate(null)}
+            >
+              Manual Mapping
+            </button>
+          </div>
+        )}
+
+        {/* Template selector */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1">Apply a saved template (optional)</label>
+          <Listbox
+            value={selectedTemplateId}
+            onChange={setSelectedTemplateId}
+            options={[
+              { value: "", label: "— no template —" },
+              ...(templateList?.map((t) => ({
+                value: t.id,
+                label: `${t.bankDisplayName} v${t.version}${t.label ? ` — ${t.label}` : ""}${t.isSeeded ? "" : " (custom)"}`,
+              })) ?? []),
+            ]}
+            placeholder="Select template"
+          />
         </div>
 
         {/* Mapping fields */}
@@ -581,12 +683,53 @@ function UploadTab({ onSuccess }: { onSuccess: (importId: string) => void }) {
           </button>
           <button
             className="btn-primary"
-            onClick={handleConfirm}
+            onClick={() => handleConfirm()}
             disabled={confirmMutation.isPending || !mapping.date || !mapping.narration}
           >
             {confirmMutation.isPending ? <><Spinner size="sm" /> Processing...</> : "Confirm & Auto-Match"}
           </button>
+          <button
+            className="btn-secondary"
+            onClick={() => setShowSaveTemplateModal(true)}
+          >
+            Save as Template
+          </button>
         </div>
+
+        {/* Save-as-template modal */}
+        <Modal
+          open={showSaveTemplateModal}
+          title="Save as Template"
+          onClose={() => setShowSaveTemplateModal(false)}
+        >
+          <div className="space-y-4 p-1">
+            <p className="text-sm text-text-secondary">
+              Save the current column mapping as a reusable template for future imports.
+            </p>
+            <InputField
+              label="Bank Name *"
+              value={saveTemplateName}
+              onChange={(e) => setSaveTemplateName(e.target.value)}
+              placeholder="e.g. HDFC Bank"
+            />
+            <InputField
+              label="Label (optional)"
+              value={saveTemplateLabel}
+              onChange={(e) => setSaveTemplateLabel(e.target.value)}
+              placeholder="e.g. Savings account format"
+            />
+            <div className="flex gap-3 pt-1">
+              <button className="btn-secondary flex-1" onClick={() => setShowSaveTemplateModal(false)}>Cancel</button>
+              <button
+                className="btn-primary flex-1"
+                onClick={handleSaveTemplate}
+                disabled={saveTemplateMutation.isPending}
+              >
+                {saveTemplateMutation.isPending ? <Spinner size="sm" /> : "Save Template"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       </div>
     );
   }
@@ -1507,6 +1650,141 @@ function RulesTab() {
         open={!!deleteId}
         title="Delete Rule"
         description="Are you sure you want to delete this rule?"
+        confirmLabel="Delete"
+        onConfirm={() => { if (deleteId) deleteMutation.mutate({ id: deleteId }); }}
+        onCancel={() => setDeleteId(null)}
+      />
+    </div>
+  );
+}
+
+// ── Templates Tab ──────────────────────────────────────────────────────────────
+
+function templateTypeBadge(t: { isSeeded: boolean; forkedFromId: string | null }) {
+  if (t.isSeeded) return { label: "Built-in", cls: "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400" };
+  if (t.forkedFromId) return { label: "Forked", cls: "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400" };
+  return { label: "Custom", cls: "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400" };
+}
+
+function TemplatesTab() {
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const utils = trpc.useUtils();
+
+  const { data: templates, isLoading } = trpc.bankRecon.templateList.useQuery(
+    search ? { search } : undefined,
+  );
+
+  const forkMutation = trpc.bankRecon.templateFork.useMutation({
+    onSuccess: () => {
+      utils.bankRecon.templateList.invalidate();
+      toast.success("Template forked — you can now edit the copy");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteMutation = trpc.bankRecon.templateDelete.useMutation({
+    onSuccess: () => {
+      utils.bankRecon.templateList.invalidate();
+      setDeleteId(null);
+      toast.success("Template deleted");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 max-w-xs">
+          <InputField
+            label=""
+            placeholder="Search by bank name..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <p className="text-xs text-text-tertiary">
+          Built-in templates cannot be edited — fork them to create a custom copy.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-10"><Spinner /></div>
+      ) : templates && templates.length > 0 ? (
+        <div className="card overflow-hidden">
+          <table className="table-auto w-full text-sm">
+            <thead>
+              <tr className="border-b border-border-light bg-surface-1">
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Bank</th>
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Version</th>
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Type</th>
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Format</th>
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Label</th>
+                <th className="text-left px-4 py-3 text-text-secondary font-medium">Status</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {templates.map((t) => {
+                const badge = templateTypeBadge(t);
+                return (
+                  <tr key={t.id} className="border-b border-border-light last:border-0 hover:bg-surface-hover">
+                    <td className="px-4 py-3 font-medium text-text-primary">{t.bankDisplayName}</td>
+                    <td className="px-4 py-3 text-text-secondary">v{t.version}</td>
+                    <td className="px-4 py-3">
+                      <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium", badge.cls)}>
+                        {badge.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-text-secondary uppercase text-xs">{t.fileFormat}</td>
+                    <td className="px-4 py-3 text-text-secondary text-xs">{t.label ?? "—"}</td>
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium",
+                        t.isActive
+                          ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
+                          : "bg-surface-2 text-text-secondary",
+                      )}>
+                        {t.isActive ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-3 justify-end">
+                        {t.isSeeded ? (
+                          <button
+                            className="text-brand-600 hover:text-brand-700 text-xs font-medium"
+                            onClick={() => forkMutation.mutate({ templateId: t.id })}
+                            disabled={forkMutation.isPending}
+                          >
+                            Fork
+                          </button>
+                        ) : (
+                          <button
+                            className="text-red-500 hover:text-red-600 text-xs font-medium"
+                            onClick={() => setDeleteId(t.id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState
+          title="No templates"
+          description="Templates are seeded on first bank statement upload"
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!deleteId}
+        title="Delete Template"
+        description="Are you sure you want to delete this template? This cannot be undone."
         confirmLabel="Delete"
         onConfirm={() => { if (deleteId) deleteMutation.mutate({ id: deleteId }); }}
         onCancel={() => setDeleteId(null)}
