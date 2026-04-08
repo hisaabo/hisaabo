@@ -1,12 +1,12 @@
 # Hisaabo
 
-> The first agent-native financial operating system for India.
+> Agent-native financial operating system for India.
 
 [![CI](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1809_passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-1844_passing-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Expo](https://img.shields.io/badge/Expo-55-000020?logo=expo&logoColor=white)](https://expo.dev/)
@@ -21,9 +21,22 @@
 
 **Hisaab, pakka.** (Honest accounting.)
 
-Hisaabo is not accounting software with an AI add-on. It is a financial operating system where humans and AI agents operate on the same structured primitives -- creating invoices, reconciling bank statements, filing GST returns, closing books. The web dashboard, mobile app, CLI, and MCP server are all equal clients of the same API. There is no "AI layer." The entire system is the AI interface.
+Hisaabo is not accounting software with an AI add-on. It is a financial operating system where humans and AI agents operate on the same structured primitives -- creating invoices, reconciling bank statements, filing GST returns, closing books. The web dashboard, mobile app, CLI, and MCP server are all equal clients of the same API. There is no "AI layer." The entire system is the AI interface. In practice, this means your books update themselves, your GST returns are always ready, and your team never shares bank credentials again.
 
 Open source. Self-hostable. Free forever. Built India-first.
+
+---
+
+## Why Now
+
+Four things became true at the same time:
+
+1. **LLMs can reliably execute structured tools.** Not chat -- deterministic function calls with typed inputs and validated outputs. This is the difference between "ask the AI" and "the AI operates the system."
+2. **MCP standardizes agent interaction.** A single protocol for any AI to discover and call financial operations. No custom integrations per agent.
+3. **Indian accounting workflows are still manual and fragmented.** 63 million MSMEs. Most run on paper, WhatsApp, and a CA who shows up once a year. The gap between what technology can do and what businesses actually use has never been wider.
+4. **GST compliance demands deterministic systems.** E-invoicing, ITC tracking, GSTR-2B reconciliation, 180-day reversal rules -- these are not suggestions. They are rules that must execute correctly every time. LLM-generated suggestions are not enough. Validated financial actions are.
+
+This combination did not exist two years ago. It does now.
 
 ---
 
@@ -41,7 +54,7 @@ That is what makes this a financial operating system, not an accounting app.
 
 ## Financial Actions
 
-Hisaabo does not expose spreadsheets and forms. It exposes structured financial operations.
+Every accounting workflow reduces to a small set of deterministic financial actions. Hisaabo does not expose spreadsheets and forms. It exposes these operations directly.
 
 | Action | What happens |
 |---|---|
@@ -55,7 +68,7 @@ Hisaabo does not expose spreadsheets and forms. It exposes structured financial 
 
 Every action is: deterministic (same input, same output), auditable (traced to a user or agent), and executable identically by a human clicking a button or an AI agent calling an endpoint.
 
-This is the design constraint that makes everything else possible.
+Unlike AI tools that generate suggestions, Hisaabo executes validated financial operations with guaranteed accounting correctness. This is the design constraint that makes everything else possible.
 
 ---
 
@@ -292,7 +305,7 @@ Hisaabo is not a side project. It is production-hardened financial software.
 
 | Dimension | What is in place |
 |---|---|
-| **Testing** | 1,809 automated tests (unit + integration against real PostgreSQL) |
+| **Testing** | 1,844 automated tests (unit + integration against real PostgreSQL) |
 | **Logging** | Structured JSON logging (pino) with request-ID correlation across the full request lifecycle |
 | **Security** | CSRF protection, rate limiting (general + PDF-specific), session cookies with HttpOnly/Secure/SameSite=Lax, Argon2id password hashing |
 | **Data Integrity** | All money as NUMERIC(15,2), `FOR UPDATE` row locking on payment allocation, PostgreSQL NUMERIC arithmetic for stock (no JS floats) |
@@ -504,7 +517,7 @@ pnpm --filter @hisaabo/store dev    # Online store only
 ### Testing
 
 ```bash
-# Run all tests (1,809 tests)
+# Run all tests (1,844 tests)
 pnpm --filter @hisaabo/api test
 
 # Watch mode during development
@@ -621,7 +634,7 @@ Contributions are welcome. Before opening a PR:
 pnpm typecheck   # Must pass
 pnpm lint        # Must pass (oxlint --deny-warnings)
 pnpm build       # Must pass
-pnpm --filter @hisaabo/api test  # 1,809 tests must pass
+pnpm --filter @hisaabo/api test  # 1,844 tests must pass
 ```
 
 Key guidelines:

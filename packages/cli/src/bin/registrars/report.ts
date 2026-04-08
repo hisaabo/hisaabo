@@ -5,6 +5,8 @@ import {
   reportSalesRegisterCommand, reportPurchaseRegisterCommand,
   reportPartyStatementCommand, reportPaymentSummaryCommand,
   reportCashFlowCommand, reportCollectionEfficiencyCommand,
+  reportTrialBalanceCommand, reportBalanceSheetCommand,
+  reportCashFlowStatementCommand, reportGeneralLedgerCommand,
 } from "../../commands/report/index.js";
 
 export function registerReportCommands(program: Command): void {
@@ -138,5 +140,47 @@ export function registerReportCommands(program: Command): void {
     .option("--this-fy", "Current financial year")
     .action(async (opts) => {
       await reportCollectionEfficiencyCommand(opts);
+    });
+
+  report
+    .command("trial-balance")
+    .description("Trial balance report")
+    .option("--json", "JSON output")
+    .option("--to <date>", "As of date")
+    .option("--this-fy", "Current financial year")
+    .action(async (opts) => {
+      await reportTrialBalanceCommand(opts);
+    });
+
+  report
+    .command("balance-sheet")
+    .description("Balance sheet")
+    .option("--json", "JSON output")
+    .option("--to <date>", "As of date")
+    .option("--this-fy", "Current financial year")
+    .action(async (opts) => {
+      await reportBalanceSheetCommand(opts);
+    });
+
+  report
+    .command("cash-flow-statement")
+    .description("Cash flow statement (operating/investing/financing)")
+    .option("--json", "JSON output")
+    .option("--from <date>", "From date")
+    .option("--to <date>", "To date")
+    .option("--this-fy", "Current financial year")
+    .action(async (opts) => {
+      await reportCashFlowStatementCommand(opts);
+    });
+
+  report
+    .command("general-ledger <accountId>")
+    .description("General ledger for a specific account")
+    .option("--json", "JSON output")
+    .option("--from <date>", "From date")
+    .option("--to <date>", "To date")
+    .option("--this-fy", "Current financial year")
+    .action(async (accountId: string, opts) => {
+      await reportGeneralLedgerCommand(accountId, opts);
     });
 }

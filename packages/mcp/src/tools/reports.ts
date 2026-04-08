@@ -2,13 +2,21 @@
  * Business report tools — financial analysis and summaries.
  *
  * Tools registered:
- *   report_daybook         — daily transaction log (invoices + payments + expenses)
- *   report_outstanding     — outstanding receivables/payables with aging buckets
- *   report_tax_summary     — tax collected/paid summary by rate
- *   report_item_sales      — item-wise sales analysis with revenue and quantity
- *   report_stock_summary   — current stock levels and values
- *   report_party_statement — party balance statement with transaction history
- *   report_payment_summary — payment trends by mode and type
+ *   report_daybook                  — daily transaction log (invoices + payments + expenses)
+ *   report_outstanding              — outstanding receivables/payables with aging buckets
+ *   report_tax_summary              — tax collected/paid summary by rate
+ *   report_item_sales               — item-wise sales analysis with revenue and quantity
+ *   report_stock_summary            — current stock levels and values
+ *   report_party_statement          — party balance statement with transaction history
+ *   report_payment_summary          — payment trends by mode and type
+ *   report_trial_balance            — trial balance as of a date
+ *   report_balance_sheet            — balance sheet (assets, liabilities, equity)
+ *   report_profit_and_loss          — P&L statement for a period
+ *   report_cash_flow_statement      — cash flow (operating/investing/financing)
+ *   report_general_ledger           — general ledger for a specific account
+ *   report_comparative_trial_balance      — comparative trial balance (two periods)
+ *   report_comparative_balance_sheet      — comparative balance sheet
+ *   report_comparative_profit_and_loss    — comparative P&L
  */
 
 import { z } from "zod";
@@ -240,6 +248,188 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
           type: "text" as const,
           text: JSON.stringify(result, null, 2),
         }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_trial_balance",
+    [
+      "Get a trial balance as of a specific date.",
+      "Returns all accounts with their debit and credit balances.",
+      "Use this to verify that total debits equal total credits and to prepare financial statements.",
+    ].join(" "),
+    {
+      as_of_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Date for the trial balance in YYYY-MM-DD format. Defaults to today."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.trialBalance({ asOfDate: input.as_of_date });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_balance_sheet",
+    [
+      "Get a balance sheet as of a specific date.",
+      "Returns assets, liabilities, and equity broken down by category.",
+      "Use this to answer 'What is our net worth?' or 'What is the total value of our assets?'",
+    ].join(" "),
+    {
+      as_of_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Date for the balance sheet in YYYY-MM-DD format. Defaults to today."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.balanceSheet({ asOfDate: input.as_of_date });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_profit_and_loss",
+    [
+      "Get a Profit & Loss (income statement) for a date range.",
+      "Returns revenue, cost of goods sold, gross profit, expenses, and net profit.",
+      "Use this to answer 'What was our profit this quarter?' or 'What are our top expense categories?'",
+    ].join(" "),
+    {
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Start date in YYYY-MM-DD format."),
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("End date in YYYY-MM-DD format."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.profitAndLoss({ fromDate: input.from_date, toDate: input.to_date });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_cash_flow_statement",
+    [
+      "Get a cash flow statement for a date range.",
+      "Returns operating activities (collections, payments), investing activities (asset purchases/sales), and financing activities (loans, equity).",
+      "Use this to answer 'How much cash did we generate from operations?' or 'What was our net cash position?'",
+    ].join(" "),
+    {
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Start date in YYYY-MM-DD format."),
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("End date in YYYY-MM-DD format."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.cashFlowStatement({ fromDate: input.from_date, toDate: input.to_date });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_general_ledger",
+    [
+      "Get the general ledger for a specific account showing all transactions.",
+      "Returns opening balance, all debit/credit entries, and closing balance.",
+      "Use this to trace every transaction affecting a specific account — e.g. 'Show all entries in the bank account'.",
+    ].join(" "),
+    {
+      account_id: z.string().uuid()
+        .describe("Account UUID (from account_list or trial balance)."),
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Start date in YYYY-MM-DD format."),
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("End date in YYYY-MM-DD format."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.generalLedger({
+        accountId: input.account_id,
+        fromDate: input.from_date,
+        toDate: input.to_date,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_comparative_trial_balance",
+    [
+      "Get a comparative trial balance comparing two periods side by side.",
+      "Use this to analyze changes in account balances between two dates.",
+    ].join(" "),
+    {
+      period1_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("First period end date in YYYY-MM-DD format."),
+      period2_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Second period end date in YYYY-MM-DD format. Defaults to today."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.comparativeTrialBalance({
+        period1Date: input.period1_date,
+        period2Date: input.period2_date,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_comparative_balance_sheet",
+    [
+      "Get a comparative balance sheet comparing two dates side by side.",
+      "Use this to analyze how assets, liabilities, and equity have changed.",
+    ].join(" "),
+    {
+      period1_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("First period date in YYYY-MM-DD format."),
+      period2_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Second period date in YYYY-MM-DD format. Defaults to today."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.comparativeBalanceSheet({
+        period1Date: input.period1_date,
+        period2Date: input.period2_date,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    })
+  );
+
+  server.tool(
+    "report_comparative_profit_and_loss",
+    [
+      "Get a comparative P&L comparing two periods side by side.",
+      "Use this to answer 'How did our profit compare between this quarter and last quarter?'",
+    ].join(" "),
+    {
+      period1_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("First period start date in YYYY-MM-DD format."),
+      period1_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("First period end date in YYYY-MM-DD format."),
+      period2_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Second period start date in YYYY-MM-DD format."),
+      period2_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+        .describe("Second period end date in YYYY-MM-DD format."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.reports.comparativeProfitAndLoss({
+        period1From: input.period1_from,
+        period1To: input.period1_to,
+        period2From: input.period2_from,
+        period2To: input.period2_to,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     })
   );
