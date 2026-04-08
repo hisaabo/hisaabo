@@ -660,5 +660,424 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.paymentSummary?input=
       ],
       relatedEndpoints: ["reports-daybook"],
     },
+    {
+      id: "reports-trial-balance",
+      method: "query",
+      path: "reports.trialBalance",
+      title: "Trial Balance",
+      description: "Chart of Accounts-based trial balance showing debit and credit totals per account for a period. Accounts are derived from operational transactions (invoices, payments, expenses) using the double-entry ledger derivation engine. If `fromDate` is omitted, defaults to the start of the financial year containing `asOfDate`.",
+      auth: "business",
+      input: [
+        { name: "asOfDate", type: "string (ISO datetime)", required: true, description: "End date of the trial balance period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start date. Defaults to the FY start containing asOfDate." },
+      ],
+      output: {
+        description: "Account-level debits, credits, and balances, plus aggregate totals.",
+        example: {
+          accounts: [
+            { accountCode: "1000", accountName: "Cash & Bank", accountType: "asset", debit: "245000.00", credit: "180000.00", balance: "65000.00" },
+            { accountCode: "4000", accountName: "Sales Revenue", accountType: "income", debit: "0.00", credit: "485000.00", balance: "-485000.00" },
+          ],
+          totalDebit: "485000.00",
+          totalCredit: "485000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.trialBalance?input=%7B%22json%22%3A%7B%22asOfDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const tb = await trpc.reports.trialBalance.query({
+  asOfDate: "2027-03-31T23:59:59.999Z",
+});
+console.log("Total Debit:", tb.totalDebit, "Total Credit:", tb.totalCredit);
+// These should be equal if the books are balanced`,
+        python: `params = urllib.parse.quote(json.dumps({
+    "json": {"asOfDate": "2027-03-31T23:59:59.999Z"}
+}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.trialBalance?input={params}", ...)`,
+      },
+      gotchas: [
+        "Accounts with zero debits and zero credits are excluded from the result.",
+        "If `fromDate` is omitted, the financial year start is calculated using the business's `financialYearStart` setting (default: April).",
+        "The `balance` field is `debit - credit`. For credit-normal accounts (income, liability, equity), a negative balance is expected.",
+      ],
+    },
+    {
+      id: "reports-balance-sheet",
+      method: "query",
+      path: "reports.balanceSheet",
+      title: "Balance Sheet",
+      description: "Cumulative balance sheet as of a specific date. Derives all entries from the beginning of time up to `asOfDate`. Returns three sections: assets (debit-normal), liabilities (credit-normal), and equity (credit-normal). Net income from accumulated income/expense flows is added to the equity section.",
+      auth: "business",
+      input: [
+        { name: "asOfDate", type: "string (ISO datetime)", required: true, description: "Balance sheet date" },
+      ],
+      output: {
+        description: "Assets, liabilities, and equity sections with totals.",
+        example: {
+          assets: [{ accountCode: "1000", accountName: "Cash & Bank", balance: "245000.00" }],
+          liabilities: [{ accountCode: "2000", accountName: "Accounts Payable", balance: "50000.00" }],
+          equity: [
+            { accountCode: "3000", accountName: "Owner's Capital", balance: "100000.00" },
+            { accountCode: "9999", accountName: "Net Income (Current Period)", balance: "95000.00" },
+          ],
+          totalAssets: "245000.00",
+          totalLiabilities: "50000.00",
+          totalEquity: "195000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.balanceSheet?input=%7B%22json%22%3A%7B%22asOfDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const bs = await trpc.reports.balanceSheet.query({
+  asOfDate: "2027-03-31T23:59:59.999Z",
+});
+// Accounting equation: Assets = Liabilities + Equity
+console.log("Assets:", bs.totalAssets);
+console.log("L+E:", money.add(bs.totalLiabilities, bs.totalEquity));`,
+        python: `params = urllib.parse.quote(json.dumps({
+    "json": {"asOfDate": "2027-03-31T23:59:59.999Z"}
+}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.balanceSheet?input={params}", ...)`,
+      },
+      gotchas: [
+        "The balance sheet is cumulative from the beginning of time \u2014 not just the current financial year.",
+        "Net Income (account code `9999`) is a synthetic row representing accumulated income minus expenses. There are no year-end closing entries.",
+        "Accounts with a zero balance are excluded from each section.",
+      ],
+      relatedEndpoints: ["reports-trial-balance", "reports-profit-and-loss"],
+    },
+    {
+      id: "reports-profit-and-loss",
+      method: "query",
+      path: "reports.profitAndLoss",
+      title: "Profit & Loss",
+      description: "Income statement (P&L) for a date range, based on the Chart of Accounts. Returns income and expense line items with gross profit and net profit calculations. Gross profit is calculated as Sales (4000) minus direct costs (5000 Purchases + 5100 Direct Expenses).",
+      auth: "business",
+      input: [
+        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
+        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the period" },
+      ],
+      output: {
+        description: "Income and expense accounts with gross and net profit.",
+        example: {
+          income: [{ accountCode: "4000", accountName: "Sales Revenue", amount: "485000.00" }],
+          expenses: [
+            { accountCode: "5000", accountName: "Purchases", amount: "290000.00" },
+            { accountCode: "6000", accountName: "Operating Expenses", amount: "45000.00" },
+          ],
+          totalIncome: "485000.00",
+          totalExpenses: "335000.00",
+          grossProfit: "195000.00",
+          netProfit: "150000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.profitAndLoss?input=%7B%22json%22%3A%7B%22fromDate%22%3A%222026-04-01T00%3A00%3A00.000Z%22%2C%22toDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const pl = await trpc.reports.profitAndLoss.query({
+  fromDate: "2026-04-01T00:00:00.000Z",
+  toDate: "2027-03-31T23:59:59.999Z",
+});
+console.log("Net Profit:", pl.netProfit);`,
+        python: `params = urllib.parse.quote(json.dumps({
+    "json": {"fromDate": "2026-04-01T00:00:00.000Z", "toDate": "2027-03-31T23:59:59.999Z"}
+}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.profitAndLoss?input={params}", ...)`,
+      },
+      gotchas: [
+        "Income accounts: `amount = credit - debit` (credit-normal). Expense accounts: `amount = debit - credit` (debit-normal).",
+        "`grossProfit = Sales (4000) - Sales Returns (4010) - Purchases (5000) - Direct Expenses (5100)`.",
+        "`netProfit = totalIncome - totalExpenses`.",
+      ],
+      relatedEndpoints: ["reports-balance-sheet"],
+    },
+    {
+      id: "reports-general-ledger",
+      method: "query",
+      path: "reports.generalLedger",
+      title: "General Ledger",
+      description: "Detailed transaction-level ledger for a single Chart of Accounts account. Combines derived entries (from invoices, payments, expenses) with manual journal entries. Each row shows the originating document, debit, credit, and running balance.",
+      auth: "business",
+      input: [
+        { name: "accountId", type: "string (UUID)", required: true, description: "Chart of Accounts account ID" },
+        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
+        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the period" },
+      ],
+      output: {
+        description: "Account details, transaction entries with running balance, and closing balance.",
+        example: {
+          accountId: "acc-uuid",
+          accountCode: "1000",
+          accountName: "Cash & Bank",
+          accountType: "asset",
+          entries: [
+            { date: "2026-04-01T00:00:00.000Z", narration: "Sale Invoice INV-0042 to Sharma Electronics", sourceType: "invoice", sourceId: "inv-uuid", sourceNumber: "INV-0042", debit: "15750.00", credit: "0.00", balance: "15750.00" },
+          ],
+          closingBalance: "65000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.generalLedger?input=%7B%22json%22%3A%7B%22accountId%22%3A%22acc-uuid%22%2C%22fromDate%22%3A%222026-04-01T00%3A00%3A00.000Z%22%2C%22toDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const gl = await trpc.reports.generalLedger.query({
+  accountId: "acc-uuid",
+  fromDate: "2026-04-01T00:00:00.000Z",
+  toDate: "2027-03-31T23:59:59.999Z",
+});
+console.log("Account:", gl.accountName, "Closing:", gl.closingBalance);`,
+        python: `params = urllib.parse.quote(json.dumps({
+    "json": {"accountId": "acc-uuid", "fromDate": "2026-04-01T00:00:00.000Z", "toDate": "2027-03-31T23:59:59.999Z"}
+}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.generalLedger?input={params}", ...)`,
+      },
+      gotchas: [
+        "Returns NOT_FOUND if the account does not belong to the active business.",
+        "Manual journal entries (from `journalEntries` table) are merged with derived entries and sorted by date.",
+        "`sourceType` can be: `invoice`, `payment`, `expense`, or `journal`.",
+        "Running balance: `previous + debit - credit`.",
+      ],
+    },
+    {
+      id: "reports-comparative-trial-balance",
+      method: "query",
+      path: "reports.comparativeTrialBalance",
+      title: "Comparative Trial Balance",
+      description: "Side-by-side trial balance comparing two financial year periods. Shows current and previous period debits, credits, balances, and variance (absolute + percentage) per account.",
+      auth: "business",
+      input: [
+        { name: "currentFYStart", type: "string (ISO datetime)", required: true, description: "Start of current FY" },
+        { name: "currentFYEnd", type: "string (ISO datetime)", required: true, description: "End of current FY" },
+        { name: "previousFYStart", type: "string (ISO datetime)", required: true, description: "Start of previous FY" },
+        { name: "previousFYEnd", type: "string (ISO datetime)", required: true, description: "End of previous FY" },
+      ],
+      output: {
+        description: "Per-account comparison with variance.",
+        example: {
+          accounts: [
+            { accountCode: "4000", accountName: "Sales Revenue", accountType: "income", currentDebit: "0.00", currentCredit: "485000.00", currentBalance: "-485000.00", previousDebit: "0.00", previousCredit: "380000.00", previousBalance: "-380000.00", variance: "-105000.00", variancePercent: "27.6" },
+          ],
+          currentTotalDebit: "485000.00", currentTotalCredit: "485000.00",
+          previousTotalDebit: "380000.00", previousTotalCredit: "380000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.comparativeTrialBalance?input=..." \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const ctb = await trpc.reports.comparativeTrialBalance.query({
+  currentFYStart: "2026-04-01T00:00:00.000Z",
+  currentFYEnd: "2027-03-31T23:59:59.999Z",
+  previousFYStart: "2025-04-01T00:00:00.000Z",
+  previousFYEnd: "2026-03-31T23:59:59.999Z",
+});
+ctb.accounts.forEach(a => {
+  if (a.variancePercent !== "N/A" && parseFloat(a.variancePercent) > 20) {
+    console.warn(a.accountName, "changed by", a.variancePercent + "%");
+  }
+});`,
+        python: `params = urllib.parse.quote(json.dumps({"json": {
+    "currentFYStart": "2026-04-01T00:00:00.000Z",
+    "currentFYEnd": "2027-03-31T23:59:59.999Z",
+    "previousFYStart": "2025-04-01T00:00:00.000Z",
+    "previousFYEnd": "2026-03-31T23:59:59.999Z",
+}}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.comparativeTrialBalance?input={params}", ...)`,
+      },
+      gotchas: [
+        "`variancePercent` is `'N/A'` when the previous period balance is zero (division by zero).",
+        "Accounts that appear in only one period still show with zero values for the other.",
+      ],
+      relatedEndpoints: ["reports-trial-balance"],
+    },
+    {
+      id: "reports-comparative-balance-sheet",
+      method: "query",
+      path: "reports.comparativeBalanceSheet",
+      title: "Comparative Balance Sheet",
+      description: "Side-by-side balance sheet comparing two points in time. Each account shows current balance, previous balance, and variance. Net income is calculated separately for each period and added to equity.",
+      auth: "business",
+      input: [
+        { name: "currentAsOf", type: "string (ISO datetime)", required: true, description: "Current period balance sheet date" },
+        { name: "previousAsOf", type: "string (ISO datetime)", required: true, description: "Previous period balance sheet date" },
+      ],
+      output: {
+        description: "Assets, liabilities, and equity with per-account current/previous/variance.",
+        example: {
+          assets: [{ accountCode: "1000", accountName: "Cash & Bank", currentBalance: "245000.00", previousBalance: "180000.00", variance: "65000.00", variancePercent: "36.1" }],
+          liabilities: [],
+          equity: [{ accountCode: "9999", accountName: "Net Income (Current Period)", currentBalance: "150000.00", previousBalance: "95000.00", variance: "55000.00", variancePercent: "57.9" }],
+          currentTotalAssets: "245000.00", previousTotalAssets: "180000.00",
+          currentTotalLiabilities: "0.00", previousTotalLiabilities: "0.00",
+          currentTotalEquity: "245000.00", previousTotalEquity: "180000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.comparativeBalanceSheet?input=..." \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const cbs = await trpc.reports.comparativeBalanceSheet.query({
+  currentAsOf: "2027-03-31T23:59:59.999Z",
+  previousAsOf: "2026-03-31T23:59:59.999Z",
+});`,
+        python: `params = urllib.parse.quote(json.dumps({"json": {
+    "currentAsOf": "2027-03-31T23:59:59.999Z",
+    "previousAsOf": "2026-03-31T23:59:59.999Z",
+}}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.comparativeBalanceSheet?input={params}", ...)`,
+      },
+      relatedEndpoints: ["reports-balance-sheet"],
+    },
+    {
+      id: "reports-comparative-profit-and-loss",
+      method: "query",
+      path: "reports.comparativeProfitAndLoss",
+      title: "Comparative Profit & Loss",
+      description: "Side-by-side P&L comparing two financial year periods. Shows current and previous amounts per income/expense account with variance. Includes aggregate totals and net profit comparison.",
+      auth: "business",
+      input: [
+        { name: "currentFYStart", type: "string (ISO datetime)", required: true, description: "Start of current FY" },
+        { name: "currentFYEnd", type: "string (ISO datetime)", required: true, description: "End of current FY" },
+        { name: "previousFYStart", type: "string (ISO datetime)", required: true, description: "Start of previous FY" },
+        { name: "previousFYEnd", type: "string (ISO datetime)", required: true, description: "End of previous FY" },
+      ],
+      output: {
+        description: "Income and expense accounts with current/previous/variance, plus net profit comparison.",
+        example: {
+          income: [{ accountCode: "4000", accountName: "Sales Revenue", currentAmount: "485000.00", previousAmount: "380000.00", variance: "105000.00", variancePercent: "27.6" }],
+          expenses: [{ accountCode: "5000", accountName: "Purchases", currentAmount: "290000.00", previousAmount: "240000.00", variance: "50000.00", variancePercent: "20.8" }],
+          currentTotalIncome: "485000.00", previousTotalIncome: "380000.00",
+          currentTotalExpenses: "335000.00", previousTotalExpenses: "285000.00",
+          currentNetProfit: "150000.00", previousNetProfit: "95000.00",
+          netProfitVariance: "55000.00", netProfitVariancePercent: "57.9",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.comparativeProfitAndLoss?input=..." \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const cpl = await trpc.reports.comparativeProfitAndLoss.query({
+  currentFYStart: "2026-04-01T00:00:00.000Z",
+  currentFYEnd: "2027-03-31T23:59:59.999Z",
+  previousFYStart: "2025-04-01T00:00:00.000Z",
+  previousFYEnd: "2026-03-31T23:59:59.999Z",
+});
+console.log("Net profit growth:", cpl.netProfitVariancePercent + "%");`,
+        python: `params = urllib.parse.quote(json.dumps({"json": {
+    "currentFYStart": "2026-04-01T00:00:00.000Z",
+    "currentFYEnd": "2027-03-31T23:59:59.999Z",
+    "previousFYStart": "2025-04-01T00:00:00.000Z",
+    "previousFYEnd": "2026-03-31T23:59:59.999Z",
+}}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.comparativeProfitAndLoss?input={params}", ...)`,
+      },
+      relatedEndpoints: ["reports-profit-and-loss"],
+    },
+    {
+      id: "reports-tally-export",
+      method: "query",
+      path: "reports.tallyExport",
+      title: "Tally Prime XML Export",
+      description: "Generates a Tally Prime-compatible XML file containing all double-entry vouchers for a date range. Combines derived entries (invoices, payments, expenses) with manual journal entries. Includes the full Chart of Accounts as Tally ledger groups.",
+      auth: "business",
+      input: [
+        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the export period" },
+        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the export period" },
+      ],
+      output: {
+        description: "XML string and suggested filename.",
+        example: {
+          xml: "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<ENVELOPE>...</ENVELOPE>",
+          filename: "tally-export-2026-04-01-to-2027-03-31.xml",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.tallyExport?input=%7B%22json%22%3A%7B%22fromDate%22%3A%222026-04-01T00%3A00%3A00.000Z%22%2C%22toDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const tally = await trpc.reports.tallyExport.query({
+  fromDate: "2026-04-01T00:00:00.000Z",
+  toDate: "2027-03-31T23:59:59.999Z",
+});
+const blob = new Blob([tally.xml], { type: "application/xml" });
+// trigger download with tally.filename`,
+        python: `params = urllib.parse.quote(json.dumps({"json": {
+    "fromDate": "2026-04-01T00:00:00.000Z",
+    "toDate": "2027-03-31T23:59:59.999Z",
+}}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.tallyExport?input={params}", ...)
+data = resp.json()["result"]["data"]["json"]
+with open(data["filename"], "w") as f:
+    f.write(data["xml"])`,
+      },
+      gotchas: [
+        "This produces XML format for Tally Prime import \u2014 not CSV. For CSV format, use `party.tallyExport`.",
+        "Manual journal entries are included alongside derived vouchers.",
+        "The business name is used as the Tally Company name in the XML.",
+      ],
+      relatedEndpoints: ["party-tally-export"],
+    },
+    {
+      id: "reports-cash-flow-statement",
+      method: "query",
+      path: "reports.cashFlowStatement",
+      title: "Cash Flow Statement",
+      description: "Cash flow statement using the indirect method. Starts with net income, adjusts for non-cash items (depreciation), and working capital changes (receivables, payables, inventory). Classifies cash flows into operating, investing, and financing activities.",
+      auth: "business",
+      input: [
+        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
+        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the period" },
+      ],
+      output: {
+        description: "Operating, investing, and financing cash flows with net change.",
+        example: {
+          operating: {
+            netIncome: "150000.00",
+            adjustments: [{ description: "Add: Depreciation", amount: "12000.00" }],
+            workingCapitalChanges: [
+              { description: "Increase in Receivables", amount: "-45000.00" },
+              { description: "Increase in Payables", amount: "20000.00" },
+            ],
+            totalOperating: "137000.00",
+          },
+          investing: {
+            items: [{ description: "Purchase of Fixed Assets", amount: "-25000.00" }],
+            totalInvesting: "-25000.00",
+          },
+          financing: {
+            items: [],
+            totalFinancing: "0.00",
+          },
+          netCashChange: "112000.00",
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/reports.cashFlowStatement?input=%7B%22json%22%3A%7B%22fromDate%22%3A%222026-04-01T00%3A00%3A00.000Z%22%2C%22toDate%22%3A%222027-03-31T23%3A59%3A59.999Z%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const cf = await trpc.reports.cashFlowStatement.query({
+  fromDate: "2026-04-01T00:00:00.000Z",
+  toDate: "2027-03-31T23:59:59.999Z",
+});
+console.log("Operating:", cf.operating.totalOperating);
+console.log("Net cash change:", cf.netCashChange);`,
+        python: `params = urllib.parse.quote(json.dumps({"json": {
+    "fromDate": "2026-04-01T00:00:00.000Z",
+    "toDate": "2027-03-31T23:59:59.999Z",
+}}))
+resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.cashFlowStatement?input={params}", ...)`,
+      },
+      gotchas: [
+        "Uses the indirect method: starts with net income and adjusts for non-cash items.",
+        "Working capital changes are derived from account movements: receivables (1100), payables (2000), inventory (1300).",
+        "Increase in receivables = negative cash flow (money tied up). Increase in payables = positive cash flow (deferred payments).",
+        "Depreciation (account 5900) is added back as a non-cash expense adjustment.",
+        "Investing activities include fixed asset movements (1500). Financing includes loan movements (2100) and equity changes (3000).",
+      ],
+      relatedEndpoints: ["reports-profit-and-loss", "reports-balance-sheet"],
+    },
   ],
 };

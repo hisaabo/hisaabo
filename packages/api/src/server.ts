@@ -6,10 +6,11 @@ import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 import QRCode from "qrcode";
 import { appRouter } from "./router.js";
 import { createContext, getSessionIdFromRequest } from "./context.js";
@@ -19,6 +20,22 @@ import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, pa
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
+import { logger } from "./lib/logger.js";
+import { validateEnv } from "./lib/env.js";
+
+// ── Process crash handlers ────────────────────────────────────
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ err: reason }, "Unhandled promise rejection — shutting down");
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "Uncaught exception — shutting down");
+  process.exit(1);
+});
+
+// ── Environment validation ────────────────────────────────────
+validateEnv();
 
 function escapeHtml(str: string): string {
   return str
@@ -34,13 +51,31 @@ const app = new Hono();
 // ── Security headers ───────────────────────────────────────────
 app.use("*", secureHeaders());
 
+// ── Request ID tracing ────────────────────────────────────────
+app.use("*", async (c: Context, next: Next) => {
+  const raw = c.req.header("x-request-id");
+  const requestId = (raw && raw.length <= 128) ? raw.replace(/[^a-zA-Z0-9\-_]/g, "") : randomUUID();
+  c.set("requestId", requestId);
+  c.header("x-request-id", requestId);
+  const start = Date.now();
+  await next();
+  const duration = Date.now() - start;
+  logger.info({
+    requestId,
+    method: c.req.method,
+    path: c.req.path,
+    status: c.res.status,
+    duration,
+  }, `${c.req.method} ${c.req.path} ${c.res.status} ${duration}ms`);
+});
+
 // ── CORS ───────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").split(",");
 
 app.use("*", cors({
   origin: allowedOrigins,
   credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id", "Authorization"],
+  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
 }));
@@ -125,6 +160,32 @@ setInterval(() => {
   }
 }, 5 * 60_000).unref();
 
+// ── CSRF protection ───────────────────────────────────────────
+// State-changing requests authenticated via cookies must include
+// the X-Requested-With: hisaabo header. This blocks cross-origin
+// form submissions and navigation-based CSRF attacks while allowing
+// mobile/CLI clients (which use Authorization header, not cookies).
+// GET/HEAD/OPTIONS are exempt — they must be side-effect-free by convention.
+app.use("*", async (c: Context, next: Next) => {
+  if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") {
+    return next();
+  }
+
+  // Only enforce for cookie-based auth — if no session cookie, skip
+  const hasCookie = c.req.header("cookie")?.includes("session_id=");
+  if (!hasCookie) {
+    return next();
+  }
+
+  // Cookie-authenticated state-changing request → require CSRF header
+  const xrw = c.req.header("x-requested-with");
+  if (xrw !== "hisaabo") {
+    return c.json({ error: "CSRF validation failed" }, 403);
+  }
+
+  return next();
+});
+
 // ── Health check ───────────────────────────────────────────────
 // ── UPI payment redirect ──────────────────────────────────────
 // HTTPS endpoint that redirects to upi:// deep link.
@@ -186,7 +247,22 @@ app.get("/pay/upi", async (c) => {
 </body></html>`);
 });
 
-app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+app.get("/health", async (c) => {
+  const deep = c.req.query("deep") === "true";
+  const result: Record<string, unknown> = { status: "ok", timestamp: new Date().toISOString() };
+
+  if (deep) {
+    try {
+      await controlDb.execute(sql`SELECT 1`);
+      result.db = "ok";
+    } catch {
+      result.status = "degraded";
+      result.db = "error";
+    }
+  }
+
+  return c.json(result, result.status === "ok" ? 200 : 503);
+});
 // ONCE health check — lenient during PG handover (rolling deploy)
 app.get("/up", async (c) => {
   try {
@@ -202,33 +278,64 @@ app.get("/up", async (c) => {
   }
 });
 
-async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): Promise<Buffer> {
-  const dir = path.dirname(fileURLToPath(import.meta.url));
-  const jsPath = path.resolve(dir, "lib/pdf-worker.js");
-  const fs = await import("node:fs");
-
-  if (fs.existsSync(jsPath)) {
-    // Production: built .js worker exists, run in a worker thread
+// ── PDF worker concurrency limiter ────────────────────────────
+// Cap concurrent PDF worker threads to prevent CPU saturation under load.
+class Semaphore {
+  private queue: Array<{ resolve: () => void; timer: ReturnType<typeof setTimeout> }> = [];
+  private active = 0;
+  constructor(private max: number, private timeoutMs = 30_000) {}
+  async acquire(): Promise<void> {
+    if (this.active < this.max) { this.active++; return; }
     return new Promise((resolve, reject) => {
-      const worker = new Worker(jsPath, { workerData: { data, format } });
-      worker.on("message", resolve);
-      worker.on("error", reject);
-      worker.on("exit", (code) => {
-        if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
-      });
+      const timer = setTimeout(() => {
+        const idx = this.queue.findIndex(e => e.timer === timer);
+        if (idx !== -1) this.queue.splice(idx, 1);
+        reject(new Error("Semaphore acquire timed out"));
+      }, this.timeoutMs);
+      this.queue.push({ resolve, timer });
     });
   }
+  release(): void {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) { clearTimeout(next.timer); this.active++; next.resolve(); }
+  }
+}
 
-  // Dev: no built worker, run in-process (tsx doesn't support worker threads well)
-  const { generateInvoicePDF } = await import("./lib/invoice-pdf.js");
-  return new Promise((resolve, reject) => {
-    const doc = generateInvoicePDF(data, format);
-    const chunks: Buffer[] = [];
-    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
-    doc.end();
-  });
+const pdfSemaphore = new Semaphore(os.cpus().length);
+
+async function generatePDFInWorker(data: any, format: "a5" | "a4" | "thermal"): Promise<Buffer> {
+  await pdfSemaphore.acquire();
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const jsPath = path.resolve(dir, "lib/pdf-worker.js");
+    const fs = await import("node:fs");
+
+    if (fs.existsSync(jsPath)) {
+      // Production: built .js worker exists, run in a worker thread
+      return await new Promise((resolve, reject) => {
+        const worker = new Worker(jsPath, { workerData: { data, format } });
+        worker.on("message", resolve);
+        worker.on("error", reject);
+        worker.on("exit", (code) => {
+          if (code !== 0) reject(new Error(`PDF worker exited with code ${code}`));
+        });
+      });
+    }
+
+    // Dev: no built worker, run in-process (tsx doesn't support worker threads well)
+    const { generateInvoicePDF } = await import("./lib/invoice-pdf.js");
+    return await new Promise((resolve, reject) => {
+      const doc = generateInvoicePDF(data, format);
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+      doc.end();
+    });
+  } finally {
+    pdfSemaphore.release();
+  }
 }
 
 // ── Shared business access check for non-tRPC endpoints ─────────
@@ -255,8 +362,36 @@ async function verifyBusinessAccess(
   return { ok: true, business: biz };
 }
 
+// ── PDF-specific rate limiting (per IP, 30/min) ──────────────
+const pdfRateMap = new Map<string, { count: number; reset: number }>();
+const PDF_RATE_LIMIT = 30; // per minute
+const PDF_RATE_WINDOW = 60_000;
+
+function checkPdfRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = pdfRateMap.get(ip);
+  if (!entry || now > entry.reset) {
+    pdfRateMap.set(ip, { count: 1, reset: now + PDF_RATE_WINDOW });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= PDF_RATE_LIMIT;
+}
+
+// Cleanup stale PDF rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of pdfRateMap) {
+    if (now > entry.reset) pdfRateMap.delete(ip);
+  }
+}, 300_000).unref();
+
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
+  if (!checkPdfRateLimit(getClientIp(c))) {
+    return c.json({ error: "Too many PDF requests. Try again later." }, 429);
+  }
+
   const invoiceId = c.req.param("id");
   const rawFormat = c.req.query("format") || "a5";
   // Accept legacy "a5-landscape" param from older clients and remap to "a5"
@@ -400,6 +535,10 @@ app.get("/api/invoices/:id/pdf", async (c) => {
 // ── Party Ledger PDF endpoint ─────────────────────────────────
 // GET /api/parties/:id/ledger.pdf?from=...&to=...
 app.get("/api/parties/:id/ledger.pdf", async (c) => {
+  if (!checkPdfRateLimit(getClientIp(c))) {
+    return c.json({ error: "Too many PDF requests. Try again later." }, 429);
+  }
+
   const partyId = c.req.param("id");
 
   // Auth check — same pattern as invoice PDF
@@ -1178,45 +1317,31 @@ app.post("/store/:slug/order", async (c) => {
 
       await tx.insert(invoiceItems).values(processedLineItems);
 
-      // Stock adjustment: separate items vs variants
-      const itemStockMap = new Map<string, number>();
-      const variantStockMap = new Map<string, number>();
+      // Stock adjustment per line item — use PostgreSQL NUMERIC arithmetic
+      // to avoid JS floating-point drift. Lock rows first for concurrency safety.
+      const itemIds = [...new Set(lineItemInputs.filter(li => !li.variantId).map(li => li.itemId))];
+      const variantIds = [...new Set(lineItemInputs.filter(li => li.variantId).map(li => li.variantId!))];
+      if (itemIds.length > 0) {
+        await tx.select({ id: items.id }).from(items)
+          .where(inArray(items.id, itemIds)).for("update");
+      }
+      if (variantIds.length > 0) {
+        await tx.select({ id: itemVariants.id }).from(itemVariants)
+          .where(inArray(itemVariants.id, variantIds)).for("update");
+      }
       for (const li of lineItemInputs) {
         if (li.variantId) {
-          variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + parseFloat(li.quantity));
+          await tx.update(itemVariants).set({
+            stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
+            updatedAt: new Date(),
+          }).where(eq(itemVariants.id, li.variantId));
         } else {
-          const factor = li.conversionFactor ? parseFloat(li.conversionFactor) : 1;
-          itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + parseFloat(li.quantity) * factor);
+          const cf = li.conversionFactor || "1";
+          await tx.update(items).set({
+            stockQuantity: sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
+            updatedAt: new Date(),
+          }).where(eq(items.id, li.itemId));
         }
-      }
-
-      // Acquire row-level locks before writing stock to prevent concurrent order races.
-      const itemIdsToLock = [...itemStockMap.keys()];
-      if (itemIdsToLock.length > 0) {
-        await tx.select({ id: items.id, stockQuantity: items.stockQuantity })
-          .from(items)
-          .where(inArray(items.id, itemIdsToLock))
-          .for("update");
-      }
-      const variantIdsToLock = [...variantStockMap.keys()];
-      if (variantIdsToLock.length > 0) {
-        await tx.select({ id: itemVariants.id, stockQuantity: itemVariants.stockQuantity })
-          .from(itemVariants)
-          .where(inArray(itemVariants.id, variantIdsToLock))
-          .for("update");
-      }
-
-      for (const [itemId, totalQty] of itemStockMap) {
-        await tx.update(items).set({
-          stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
-          updatedAt: new Date(),
-        }).where(eq(items.id, itemId));
-      }
-      for (const [variantId, totalQty] of variantStockMap) {
-        await tx.update(itemVariants).set({
-          stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
-          updatedAt: new Date(),
-        }).where(eq(itemVariants.id, variantId));
       }
 
       // Create the store order record
@@ -1247,7 +1372,7 @@ app.post("/store/:slug/order", async (c) => {
       message: "Order placed successfully! The business will confirm shortly.",
     }, 201);
   } catch (err) {
-    console.error("[store/order] Failed to create order:", err);
+    logger.error({ err }, "[store/order] Failed to create order");
     return c.json({ error: "Failed to place order. Please try again." }, 500);
   }
 });
@@ -1261,7 +1386,7 @@ app.use("/api/trpc/*", async (c) => {
     createContext,
     onError({ error, path }) {
       if (error.code === "INTERNAL_SERVER_ERROR") {
-        console.error(`[tRPC] ${path}:`, error);
+        logger.error({ path, err: error }, `[tRPC] ${path}`);
       }
     },
   });
@@ -1275,7 +1400,7 @@ const cleanupTimer = setInterval(async () => {
     await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
-    console.error("[session-cleanup] Failed:", e);
+    logger.error({ err: e }, "[session-cleanup] Failed");
   }
 }, 60 * 60 * 1000);
 cleanupTimer.unref();
@@ -1353,8 +1478,36 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
 
   // Resolve tenant from business ID and get DB connection
   const { shipments: shipmentsTable, shipmentEvents } = await import("@hisaabo/db");
-  // In single-tenant mode, use "single"; in multi-tenant, look up from business → tenant mapping
-  const db = await getTenantDb("single");
+  // In single-tenant mode, use "single"; in multi-tenant, scan active tenants to find the owner
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  let db: Awaited<ReturnType<typeof getTenantDb>>;
+
+  if (!isMultiTenant) {
+    db = await getTenantDb("single");
+  } else {
+    const activeTenants = await controlDb
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.status, "active"));
+
+    let resolvedDb: Awaited<ReturnType<typeof getTenantDb>> | undefined;
+    for (const t of activeTenants) {
+      const tdb = await getTenantDb(t.id);
+      const [biz] = await tdb
+        .select({ id: businesses.id })
+        .from(businesses)
+        .where(eq(businesses.id, businessId))
+        .limit(1);
+      if (biz) {
+        resolvedDb = tdb;
+        break;
+      }
+    }
+    if (!resolvedDb) {
+      return c.json({ error: "Business not found" }, 404);
+    }
+    db = resolvedDb;
+  }
 
   // Extract tracking number — carriers typically send it as `awb`, `tracking_id`, or `waybill`
   const trackingNumber = body.awb || body.tracking_id || body.waybill || body.trackingNumber || null;
@@ -1417,22 +1570,22 @@ app.notFound((c) => {
 const port = parseInt(process.env.PORT || "3000", 10);
 
 const server = serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Hisaabo API running on http://localhost:${info.port}`);
-  console.log(`  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
+  logger.info({ port: info.port }, `Hisaabo API running on http://localhost:${info.port}`);
+  logger.info({ port: info.port }, `  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
   startRecurringScheduler();
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────
 function shutdown(signal: string) {
-  console.log(`\n[${signal}] Shutting down...`);
+  logger.info({ signal }, `Shutting down (${signal})...`);
   stopRecurringScheduler();
   server.close(() => {
-    console.log("[shutdown] HTTP server closed");
+    logger.info("HTTP server closed");
     process.exit(0);
   });
   // Force kill if server doesn't close within 5 seconds
   setTimeout(() => {
-    console.error("[shutdown] Forced exit after timeout");
+    logger.error("Forced exit after timeout");
     process.exit(1);
   }, 5000).unref();
 }

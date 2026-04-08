@@ -796,10 +796,20 @@ describe("invoice.updateStatus", () => {
       baseSaleInput(world.party2.id, [{ description: "B2 item", quantity: "1", unitPrice: "200.00" }])
     );
 
-    // business1 caller attempts to update business2's invoice
-    const result = await callerB1.invoice.updateStatus({ id: b2Invoice.id, status: "sent" });
-    // The router returns undefined/null silently (WHERE clause filters it out)
-    expect(result).toBeUndefined();
+    // business1 caller attempts to update business2's invoice — now throws NOT_FOUND
+    await expect(
+      callerB1.invoice.updateStatus({ id: b2Invoice.id, status: "sent" })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it("updateStatus on non-existent invoice throws NOT_FOUND", async () => {
+    const caller = callerForRamesh();
+    await expect(
+      caller.invoice.updateStatus({
+        id: "00000000-0000-0000-0000-000000000000",
+        status: "sent",
+      })
+    ).rejects.toThrow(/not found/i);
   });
 });
 

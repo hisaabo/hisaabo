@@ -17,5 +17,12 @@ export default defineConfig({
     // env-setup.ts must be first — it sets DATABASE_URL before any module
     // (including @hisaabo/db) is evaluated and opens its postgres.js connections.
     setupFiles: ["./src/__tests__/helpers/env-setup.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      reportsDirectory: "./coverage",
+      include: ["src/**/*.ts"],
+      exclude: ["src/__tests__/**", "src/**/*.test.ts"],
+    },
   },
 });

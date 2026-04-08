@@ -1,0 +1,60 @@
+---
+/**
+ * Persona switcher — "I am a..." selector that adapts doc content.
+ * Uses the same data-attribute pattern as DeviceSwitcher.
+ * Sets `data-persona` on <html> and persists to localStorage.
+ */
+---
+
+<div class="persona-switcher" role="radiogroup" aria-label="I am a">
+  <button class="persona-btn" data-persona-target="ca" aria-pressed="false" title="I'm a CA / Accountant">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+    </svg>
+    <span>CA</span>
+  </button>
+  <button class="persona-btn" data-persona-target="business" aria-pressed="false" title="I'm a business owner">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z"></path>
+    </svg>
+    <span>Business</span>
+  </button>
+  <button class="persona-btn" data-persona-target="developer" aria-pressed="false" title="I'm a developer">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+    </svg>
+    <span>Dev</span>
+  </button>
+</div>
+
+<script>
+  function getDefaultPersona(): string {
+    return localStorage.getItem('hisaabo-docs-persona') || 'all';
+  }
+
+  function setPersona(persona: string) {
+    document.documentElement.setAttribute('data-persona', persona);
+    localStorage.setItem('hisaabo-docs-persona', persona);
+    document.querySelectorAll<HTMLButtonElement>('.persona-btn').forEach((btn) => {
+      const target = btn.getAttribute('data-persona-target');
+      const isActive = target === persona;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+    });
+  }
+
+  function initPersonaSwitcher() {
+    setPersona(getDefaultPersona());
+    document.querySelectorAll<HTMLButtonElement>('.persona-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-persona-target') as string;
+        const current = document.documentElement.getAttribute('data-persona');
+        // Toggle: clicking active persona resets to 'all'
+        setPersona(current === target ? 'all' : target);
+      });
+    });
+  }
+
+  initPersonaSwitcher();
+  document.addEventListener('astro:after-swap', initPersonaSwitcher);
+</script>

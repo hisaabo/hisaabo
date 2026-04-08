@@ -546,6 +546,32 @@ describe("item.delete", () => {
   });
 });
 
+// ── item.renameUnit (not-found guard) ────────────────────────────────────────
+
+describe("item.renameUnit not-found guard", () => {
+  it("renameUnit on non-existent item throws NOT_FOUND", async () => {
+    await expect(
+      callerRamesh.item.renameUnit({
+        id: "00000000-0000-0000-0000-000000000000",
+        oldUnit: "kg",
+        newUnit: "g",
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+// ── item.delete (not-found guard) ─────────────────────────────────────────────
+
+describe("item.delete not-found guard", () => {
+  it("delete on non-existent item throws NOT_FOUND", async () => {
+    await expect(
+      callerRamesh.item.delete({
+        id: "00000000-0000-0000-0000-000000000000",
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
 // ── N+1 detection ─────────────────────────────────────────────────────────────
 
 describe("item.list N+1 detection", () => {

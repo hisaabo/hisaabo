@@ -45,9 +45,9 @@ const bizColumns = {
     setCounter: (n: number) => ({ nextCreditNoteNumber: n }),
   },
   debit_note: {
-    prefix: businesses.creditNotePrefix,
-    counter: businesses.nextCreditNoteNumber,
-    setCounter: (n: number) => ({ nextCreditNoteNumber: n }),
+    prefix: businesses.debitNotePrefix,
+    counter: businesses.nextDebitNoteNumber,
+    setCounter: (n: number) => ({ nextDebitNoteNumber: n }),
   },
   delivery_challan: {
     prefix: businesses.deliveryChallanPrefix,
@@ -60,14 +60,14 @@ const bizColumns = {
     setCounter: (n: number) => ({ nextProformaNumber: n }),
   },
   sales_return: {
-    prefix: businesses.creditNotePrefix,
-    counter: businesses.nextCreditNoteNumber,
-    setCounter: (n: number) => ({ nextCreditNoteNumber: n }),
+    prefix: businesses.salesReturnPrefix,
+    counter: businesses.nextSalesReturnNumber,
+    setCounter: (n: number) => ({ nextSalesReturnNumber: n }),
   },
   purchase_return: {
-    prefix: businesses.creditNotePrefix,
-    counter: businesses.nextCreditNoteNumber,
-    setCounter: (n: number) => ({ nextCreditNoteNumber: n }),
+    prefix: businesses.purchaseReturnPrefix,
+    counter: businesses.nextPurchaseReturnNumber,
+    setCounter: (n: number) => ({ nextPurchaseReturnNumber: n }),
   },
 } as const;
 
@@ -319,41 +319,35 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           // Stock effects (adjusted for unit conversion)
           // Group by itemId and sum quantities to avoid redundant per-row updates.
           // skipStockAdjustment lets callers (e.g. challan→invoice conversion) opt out.
+          // Stock effects — one UPDATE per line item using PostgreSQL NUMERIC
+          // arithmetic to avoid JS floating-point drift in accumulation
           if (config.stockEffect !== "none" && !input.skipStockAdjustment) {
-            const itemStockMap = new Map<string, number>();
-            const variantStockMap = new Map<string, number>();
             for (const li of input.lineItems) {
               if (li.variantId) {
-                const qty = parseFloat(li.quantity);
-                variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+                await tx
+                  .update(itemVariants)
+                  .set({
+                    stockQuantity: config.stockEffect === "decrement"
+                      ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
+                      : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                    updatedAt: new Date(),
+                  })
+                  .where(and(
+                    eq(itemVariants.id, li.variantId),
+                    sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+                  ));
               } else if (li.itemId) {
-                const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-                itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
+                const cf = li.conversionFactor || "1";
+                await tx
+                  .update(items)
+                  .set({
+                    stockQuantity: config.stockEffect === "decrement"
+                      ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
+                      : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
+                    updatedAt: new Date(),
+                  })
+                  .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
               }
-            }
-            for (const [itemId, totalQty] of itemStockMap) {
-              const qtyStr = totalQty.toFixed(3);
-              await tx
-                .update(items)
-                .set({
-                  stockQuantity: config.stockEffect === "decrement"
-                    ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
-                    : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
-                  updatedAt: new Date(),
-                })
-                .where(and(eq(items.id, itemId), eq(items.businessId, ctx.businessId)));
-            }
-            for (const [variantId, totalQty] of variantStockMap) {
-              const qtyStr = totalQty.toFixed(3);
-              await tx
-                .update(itemVariants)
-                .set({
-                  stockQuantity: config.stockEffect === "decrement"
-                    ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
-                    : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
-                  updatedAt: new Date(),
-                })
-                .where(eq(itemVariants.id, variantId));
             }
           }
 
@@ -443,33 +437,26 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .from(invoiceItems)
               .where(eq(invoiceItems.invoiceId, input.id));
 
+            // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
             for (const li of lineItems) {
               if (li.variantId) {
-                const variantQty = parseFloat(li.quantity).toFixed(3);
-                if (config.stockEffect === "decrement") {
-                  await tx.update(itemVariants).set({
-                    stockQuantity: sql`${itemVariants.stockQuantity}::numeric + ${variantQty}::numeric`,
-                    updatedAt: new Date(),
-                  }).where(eq(itemVariants.id, li.variantId));
-                } else if (config.stockEffect === "increment") {
-                  await tx.update(itemVariants).set({
-                    stockQuantity: sql`${itemVariants.stockQuantity}::numeric - ${variantQty}::numeric`,
-                    updatedAt: new Date(),
-                  }).where(eq(itemVariants.id, li.variantId));
-                }
+                await tx.update(itemVariants).set({
+                  stockQuantity: config.stockEffect === "decrement"
+                    ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
+                    : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                  updatedAt: new Date(),
+                }).where(and(
+                  eq(itemVariants.id, li.variantId),
+                  sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+                ));
               } else if (li.itemId) {
-                const baseQty = (parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1")).toFixed(3);
-                if (config.stockEffect === "decrement") {
-                  await tx.update(items).set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric + ${baseQty}::numeric`,
-                    updatedAt: new Date(),
-                  }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
-                } else if (config.stockEffect === "increment") {
-                  await tx.update(items).set({
-                    stockQuantity: sql`${items.stockQuantity}::numeric - ${baseQty}::numeric`,
-                    updatedAt: new Date(),
-                  }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
-                }
+                const cf = li.conversionFactor ?? "1";
+                await tx.update(items).set({
+                  stockQuantity: config.stockEffect === "decrement"
+                    ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
+                    : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
+                  updatedAt: new Date(),
+                }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
               }
             }
           }

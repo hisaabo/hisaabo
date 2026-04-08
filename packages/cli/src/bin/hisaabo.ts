@@ -21,6 +21,11 @@ import { registerDocumentCommands } from "./registrars/document.js";
 import { registerTenantCommands } from "./registrars/tenant.js";
 import { registerApiKeyCommands } from "./registrars/api-key.js";
 import { registerSessionCommands } from "./registrars/session.js";
+import { registerJournalCommands } from "./registrars/journal.js";
+import { registerItcCommands } from "./registrars/itc.js";
+import { registerBankReconCommands } from "./registrars/bank-recon.js";
+import { registerEInvoiceCommands } from "./registrars/einvoice.js";
+import { registerEwbCommands } from "./registrars/ewb.js";
 
 // ── Program ───────────────────────────────────────────────────────────────
 
@@ -56,6 +61,11 @@ registerDocumentCommands(program);
 registerTenantCommands(program);
 registerApiKeyCommands(program);
 registerSessionCommands(program);
+registerJournalCommands(program);
+registerItcCommands(program);
+registerBankReconCommands(program);
+registerEInvoiceCommands(program);
+registerEwbCommands(program);
 
 // ── Run ────────────────────────────────────────────────────────────────────
 

@@ -44,7 +44,7 @@ interface PoolEntry {
 
 function createTenantDb(connectionString: string): { db: TenantDatabase; client: ReturnType<typeof postgres> } {
   const client = postgres(connectionString, {
-    max: 5,
+    max: parseInt(process.env.TENANT_POOL_PER_DB_MAX || "5", 10),
     idle_timeout: 20,
     connect_timeout: 10,
   });
@@ -67,7 +67,7 @@ function getSingleTenantDb(): TenantDatabase {
 }
 
 const tenantPools = new Map<string, PoolEntry>();
-const MAX_POOLS = 50;
+const MAX_POOLS = parseInt(process.env.TENANT_POOL_MAX || "50", 10);
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 // Evict idle pools periodically (FINDING 19: close connection on eviction)

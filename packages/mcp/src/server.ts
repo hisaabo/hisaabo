@@ -26,6 +26,12 @@ import { registerApiKeyTools } from "./tools/apiKey.js";
 import { registerAutomatedInvoiceTools } from "./tools/automatedInvoice.js";
 import { registerSessionTools } from "./tools/session.js";
 import { registerAuditTools } from "./tools/audit.js";
+import { registerJournalTools } from "./tools/journal.js";
+import { registerItcTools } from "./tools/itc.js";
+import { registerBankReconTools } from "./tools/bankRecon.js";
+import { registerEInvoiceTools } from "./tools/eInvoice.js";
+import { registerEwayBillTools } from "./tools/ewayBill.js";
+import { registerGstr2bTools } from "./tools/gstr2b.js";
 import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 
@@ -74,6 +80,18 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
 
   // Audit trail
   registerAuditTools(server, client);
+
+  // Accounting
+  registerJournalTools(server, client);
+  registerItcTools(server, client);
+
+  // Bank reconciliation
+  registerBankReconTools(server, client);
+
+  // GST compliance
+  registerEInvoiceTools(server, client);
+  registerEwayBillTools(server, client);
+  registerGstr2bTools(server, client);
 
   // Read-only context resources
   registerResources(server, client);

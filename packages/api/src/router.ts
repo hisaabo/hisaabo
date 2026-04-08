@@ -27,6 +27,14 @@ import { reportsRouter } from "./routers/reports.js";
 import { shipmentRouter } from "./routers/shipment.js";
 import { apiKeyRouter } from "./routers/apiKey.js";
 import { recurringInvoiceRouter } from "./routers/recurringInvoice.js";
+import { accountRouter } from "./routers/account.js";
+import { hsnRouter } from "./routers/hsn.js";
+import { journalRouter } from "./routers/journal.js";
+import { itcRouter } from "./routers/itc.js";
+import { eInvoiceRouter } from "./routers/eInvoice.js";
+import { ewayBillRouter } from "./routers/ewayBill.js";
+import { bankReconRouter } from "./routers/bankRecon.js";
+import { gstr2bRouter } from "./routers/gstr2b.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -55,6 +63,14 @@ export const appRouter = router({
   shipment: shipmentRouter,
   apiKey: apiKeyRouter,
   recurringInvoice: recurringInvoiceRouter,
+  account: accountRouter,
+  hsn: hsnRouter,
+  journal: journalRouter,
+  itc: itcRouter,
+  eInvoice: eInvoiceRouter,
+  ewayBill: ewayBillRouter,
+  bankRecon: bankReconRouter,
+  gstr2b: gstr2bRouter,
 });
 
 export type AppRouter = typeof appRouter;

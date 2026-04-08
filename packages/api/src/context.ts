@@ -1,5 +1,6 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { createHash } from "crypto";
+import { logger } from "./lib/logger.js";
 import { controlDb } from "@hisaabo/db";
 import { sessions, users, apiKeys } from "@hisaabo/db";
 import { eq, gt, and } from "drizzle-orm";
@@ -53,7 +54,7 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
           .update(apiKeys)
           .set({ lastUsedAt: new Date() })
           .where(eq(apiKeys.id, key.keyId))
-          .catch(() => { /* ignore update errors */ });
+          .catch((err) => { logger.warn({ err }, "Failed to update lastUsedAt"); });
       }
     } else {
       // ── Session path (cookie or Bearer session token) ──
@@ -95,7 +96,7 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
             .update(sessions)
             .set({ lastUsedAt: new Date() })
             .where(eq(sessions.id, sessionId))
-            .catch(() => { /* ignore update errors */ });
+            .catch((err) => { logger.warn({ err }, "Failed to update lastUsedAt"); });
         } else {
           sessionCache.delete(sessionId);
         }

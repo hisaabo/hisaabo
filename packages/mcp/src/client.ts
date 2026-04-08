@@ -386,6 +386,9 @@ export class HisaaboClient {
       gstr1CSV(input: GstReportInput) {
         return c.query<{ csv: string; filename: string }>("gst.gstr1CSV", input);
       },
+      gstr9(input: { financialYear: string }) {
+        return c.query<any>("gst.gstr9", input);
+      },
     };
   }
 
@@ -469,6 +472,30 @@ export class HisaaboClient {
       },
       paymentSummary(input: PaymentSummaryInput) {
         return c.query<PaymentSummaryResult>("reports.paymentSummary", input);
+      },
+      trialBalance(input?: Record<string, unknown>) {
+        return c.query<any>("reports.trialBalance", input ?? {});
+      },
+      balanceSheet(input?: Record<string, unknown>) {
+        return c.query<any>("reports.balanceSheet", input ?? {});
+      },
+      profitAndLoss(input?: Record<string, unknown>) {
+        return c.query<any>("reports.profitAndLoss", input ?? {});
+      },
+      cashFlowStatement(input?: Record<string, unknown>) {
+        return c.query<any>("reports.cashFlowStatement", input ?? {});
+      },
+      generalLedger(input: { accountId: string; fromDate?: string; toDate?: string }) {
+        return c.query<any>("reports.generalLedger", input);
+      },
+      comparativeTrialBalance(input?: Record<string, unknown>) {
+        return c.query<any>("reports.comparativeTrialBalance", input ?? {});
+      },
+      comparativeBalanceSheet(input?: Record<string, unknown>) {
+        return c.query<any>("reports.comparativeBalanceSheet", input ?? {});
+      },
+      comparativeProfitAndLoss(input?: Record<string, unknown>) {
+        return c.query<any>("reports.comparativeProfitAndLoss", input ?? {});
       },
     };
   }
@@ -799,6 +826,183 @@ export class HisaaboClient {
       },
       delete(id: string) {
         return c.mutate<{ success: boolean }>("purchaseReturn.delete", { id });
+      },
+    };
+  }
+
+  get journal() {
+    const c = this;
+    return {
+      list(input?: Record<string, unknown>) {
+        return c.query<any>("journal.list", input ?? {});
+      },
+      getById(id: string) {
+        return c.query<any>("journal.getById", { id });
+      },
+      create(input: Record<string, unknown>) {
+        return c.mutate<any>("journal.create", input);
+      },
+      update(input: Record<string, unknown>) {
+        return c.mutate<any>("journal.update", input);
+      },
+      void(id: string) {
+        return c.mutate<any>("journal.void", { id });
+      },
+      templateList() {
+        return c.query<any>("journal.templateList");
+      },
+      templateCreate(input: Record<string, unknown>) {
+        return c.mutate<any>("journal.templateCreate", input);
+      },
+      templateDelete(id: string) {
+        return c.mutate<any>("journal.templateDelete", { id });
+      },
+      createFromTemplate(input: Record<string, unknown>) {
+        return c.mutate<any>("journal.createFromTemplate", input);
+      },
+    };
+  }
+
+  get itc() {
+    const c = this;
+    return {
+      dashboard(input?: Record<string, unknown>) {
+        return c.query<any>("itc.dashboard", input ?? {});
+      },
+      ledger(input?: Record<string, unknown>) {
+        return c.query<any>("itc.ledger", input ?? {});
+      },
+      agingAlerts() {
+        return c.query<any>("itc.agingAlerts");
+      },
+      markBlocked(input: Record<string, unknown>) {
+        return c.mutate<any>("itc.markBlocked", input);
+      },
+      markEligible(input: Record<string, unknown>) {
+        return c.mutate<any>("itc.markEligible", input);
+      },
+      recordUtilization(input: Record<string, unknown>) {
+        return c.mutate<any>("itc.recordUtilization", input);
+      },
+      gstr3bTable4(input?: Record<string, unknown>) {
+        return c.query<any>("itc.gstr3bTable4", input ?? {});
+      },
+    };
+  }
+
+  get bankRecon() {
+    const c = this;
+    return {
+      importList(input?: Record<string, unknown>) {
+        return c.query<any>("bankRecon.importList", input ?? {});
+      },
+      lines(input: Record<string, unknown>) {
+        return c.query<any>("bankRecon.lines", input);
+      },
+      summary(importId: string) {
+        return c.query<any>("bankRecon.summary", { importId });
+      },
+      ruleList() {
+        return c.query<any>("bankRecon.ruleList");
+      },
+      ruleCreate(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.ruleCreate", input);
+      },
+      ruleUpdate(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.ruleUpdate", input);
+      },
+      ruleDelete(id: string) {
+        return c.mutate<any>("bankRecon.ruleDelete", { id });
+      },
+      templateList() {
+        return c.query<any>("bankRecon.templateList");
+      },
+      confirmMatch(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.confirmMatch", input);
+      },
+      manualMatch(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.manualMatch", input);
+      },
+      unmatch(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.unmatch", input);
+      },
+      createExpense(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.createExpense", input);
+      },
+      ignoreLine(input: Record<string, unknown>) {
+        return c.mutate<any>("bankRecon.ignoreLine", input);
+      },
+    };
+  }
+
+  get eInvoice() {
+    const c = this;
+    return {
+      dashboard(input?: Record<string, unknown>) {
+        return c.query<any>("eInvoice.dashboard", input ?? {});
+      },
+      generate(input: Record<string, unknown>) {
+        return c.mutate<any>("eInvoice.generate", input);
+      },
+      cancel(input: Record<string, unknown>) {
+        return c.mutate<any>("eInvoice.cancel", input);
+      },
+      retryFailed(input: Record<string, unknown>) {
+        return c.mutate<any>("eInvoice.retryFailed", input);
+      },
+      bulkRetry(input?: Record<string, unknown>) {
+        return c.mutate<any>("eInvoice.bulkRetry", input ?? {});
+      },
+      getStatus(invoiceId: string) {
+        return c.query<any>("eInvoice.getStatus", { invoiceId });
+      },
+    };
+  }
+
+  get ewayBill() {
+    const c = this;
+    return {
+      dashboard(input?: Record<string, unknown>) {
+        return c.query<any>("ewayBill.dashboard", input ?? {});
+      },
+      generate(input: Record<string, unknown>) {
+        return c.mutate<any>("ewayBill.generate", input);
+      },
+      cancel(input: Record<string, unknown>) {
+        return c.mutate<any>("ewayBill.cancel", input);
+      },
+      updateVehicle(input: Record<string, unknown>) {
+        return c.mutate<any>("ewayBill.updateVehicle", input);
+      },
+      extend(input: Record<string, unknown>) {
+        return c.mutate<any>("ewayBill.extend", input);
+      },
+      getByInvoice(invoiceId: string) {
+        return c.query<any>("ewayBill.getByInvoice", { invoiceId });
+      },
+      expiringList(input?: Record<string, unknown>) {
+        return c.query<any>("ewayBill.expiringList", input ?? {});
+      },
+    };
+  }
+
+  get gstr2b() {
+    const c = this;
+    return {
+      uploads(input?: Record<string, unknown>) {
+        return c.query<any>("gstr2b.uploads", input ?? {});
+      },
+      records(input: Record<string, unknown>) {
+        return c.query<any>("gstr2b.records", input);
+      },
+      summary(input: Record<string, unknown>) {
+        return c.query<any>("gstr2b.summary", input);
+      },
+      missingInBooks(input: Record<string, unknown>) {
+        return c.query<any>("gstr2b.missingInBooks", input);
+      },
+      missingIn2B(input: Record<string, unknown>) {
+        return c.query<any>("gstr2b.missingIn2B", input);
       },
     };
   }

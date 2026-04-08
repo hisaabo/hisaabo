@@ -4,6 +4,7 @@
  * Tools registered:
  *   gst_report     — generate GSTR1 or GSTR3B summary data for a given month/year
  *   gst_report_csv — get GSTR-1 data in CSV format ready for portal upload
+ *   gst_gstr9      — GSTR-9 annual return summary
  *
  * Note: PDF generation is intentionally excluded. AI agents cannot consume
  * binary content in tool responses. The JSON report is designed to let agents
@@ -83,6 +84,29 @@ export function registerGstTools(server: McpServer, client: HisaaboClient) {
             null,
             2
           ),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "gst_gstr9",
+    [
+      "Get GSTR-9 annual return summary for a financial year.",
+      "GSTR-9 is the annual GST return consolidating all monthly/quarterly filings.",
+      "Returns total turnover, tax paid, ITC claimed, and other annual summary data.",
+      "Financial year format: 'YYYY-YY' e.g. '2023-24' for FY 2023-2024 (April 2023 to March 2024).",
+    ].join(" "),
+    {
+      financial_year: z.string().regex(/^\d{4}-\d{2}$/)
+        .describe("Financial year in YYYY-YY format, e.g. '2023-24'."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.gst.gstr9({ financialYear: input.financial_year });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     })

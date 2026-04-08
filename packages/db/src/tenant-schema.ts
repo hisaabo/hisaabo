@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, numeric, integer, boolean, uuid, pgEnum, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
 
@@ -17,6 +17,7 @@ export const gstRegistrationTypeEnum = pgEnum("gst_registration_type", ["regular
 export const recurringFrequencyEnum = pgEnum("recurring_frequency", ["weekly", "biweekly", "monthly", "quarterly", "half_yearly", "yearly", "custom"]);
 export const recurringTemplateStatusEnum = pgEnum("recurring_template_status", ["active", "paused", "completed", "expired"]);
 export const recurringRunStatusEnum = pgEnum("recurring_run_status", ["success", "failed", "skipped_limit"]);
+export const accountTypeEnum = pgEnum("account_type", ["asset", "liability", "equity", "income", "expense"]);
 
 // ── Business ───────────────────────────────────────────────────
 
@@ -45,12 +46,19 @@ export const businesses = pgTable("businesses", {
   nextQuotationNumber: integer("next_quotation_number").default(1).notNull(),
   creditNotePrefix: text("credit_note_prefix").default("CN").notNull(),
   nextCreditNoteNumber: integer("next_credit_note_number").default(1).notNull(),
+  debitNotePrefix: text("debit_note_prefix").default("DN").notNull(),
+  nextDebitNoteNumber: integer("next_debit_note_number").default(1).notNull(),
+  salesReturnPrefix: text("sales_return_prefix").default("SR").notNull(),
+  nextSalesReturnNumber: integer("next_sales_return_number").default(1).notNull(),
+  purchaseReturnPrefix: text("purchase_return_prefix").default("PR").notNull(),
+  nextPurchaseReturnNumber: integer("next_purchase_return_number").default(1).notNull(),
   deliveryChallanPrefix: text("delivery_challan_prefix").default("DC").notNull(),
   nextDeliveryChallanNumber: integer("next_delivery_challan_number").default(1).notNull(),
   proformaPrefix: text("proforma_prefix").default("PI").notNull(),
   nextProformaNumber: integer("next_proforma_number").default(1).notNull(),
   financialYearStart: integer("financial_year_start_month").default(4).notNull(), // April
   currency: text("currency").default("INR").notNull(),
+  annualTurnover: numeric("annual_turnover", { precision: 15, scale: 2 }), // For HSN digit enforcement & e-invoicing threshold
   // ── Online Store settings ──
   storeEnabled: boolean("store_enabled").default(false).notNull(),
   storeSlug: text("store_slug"),
@@ -197,7 +205,18 @@ export const invoices = pgTable("invoices", {
   createdByUserId: uuid("created_by_user_id"),
   createdByName: text("created_by_name"), // denormalized for display + imports
   deliveryMethod: text("delivery_method").default("self_pickup"), // self_pickup, hand_delivery, courier, bus, transport, post
+  isReverseCharge: boolean("is_reverse_charge").default(false).notNull(),
   source: text("source"),
+  // E-Invoicing (IRP) fields
+  irn: text("irn"),
+  irnAckNumber: text("irn_ack_number"),
+  irnAckDate: timestamp("irn_ack_date", { withTimezone: true }),
+  signedQrCode: text("signed_qr_code"),
+  signedInvoice: jsonb("signed_invoice"),
+  eInvoiceStatus: text("e_invoice_status"),  // null | "pending" | "generated" | "cancelled" | "failed"
+  eInvoiceError: text("e_invoice_error"),
+  eInvoiceRetryCount: integer("e_invoice_retry_count").default(0),
+  eInvoiceCancelReason: text("e_invoice_cancel_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -210,6 +229,10 @@ export const invoices = pgTable("invoices", {
   index("invoices_doc_type_idx").on(t.businessId, t.documentType),
   index("invoices_party_date_idx").on(t.businessId, t.partyId, t.invoiceDate),
   index("invoices_ref_doc_idx").on(t.referenceDocumentId),
+  index("invoices_einvoice_status_idx").on(t.businessId, t.eInvoiceStatus),
+  // Partial indexes for active records — nearly every query filters deletedAt IS NULL
+  index("invoices_active_idx").on(t.businessId, t.invoiceDate).where(sql`deleted_at IS NULL`),
+  index("invoices_active_type_idx").on(t.businessId, t.type, t.documentType, t.invoiceDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Invoice Line Items ─────────────────────────────────────────
@@ -261,6 +284,7 @@ export const payments = pgTable("payments", {
   index("payments_party_idx").on(t.partyId),
   index("payments_date_idx").on(t.businessId, t.paymentDate),
   index("payments_party_date_idx").on(t.businessId, t.partyId, t.paymentDate),
+  index("payments_active_idx").on(t.businessId, t.paymentDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Payment Allocations (M:N link between payments and invoices) ──
@@ -296,6 +320,7 @@ export const expenses = pgTable("expenses", {
   index("expenses_business_idx").on(t.businessId),
   index("expenses_date_idx").on(t.businessId, t.expenseDate),
   index("expenses_category_idx").on(t.businessId, t.category),
+  index("expenses_active_idx").on(t.businessId, t.expenseDate).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Bank Accounts ──────────────────────────────────────────────
@@ -602,6 +627,387 @@ export const recurringInvoiceRuns = pgTable("recurring_invoice_runs", {
   index("recurring_run_executed_idx").on(t.businessId, t.executedAt),
 ]);
 
+// ── Chart of Accounts ──────────────────────────────────────────
+
+export const chartOfAccounts = pgTable("chart_of_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  accountType: accountTypeEnum("account_type").notNull(),
+  parentId: uuid("parent_id"),  // self-ref for hierarchy, null = root
+  isSystem: boolean("is_system").default(false).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("coa_business_idx").on(t.businessId),
+  uniqueIndex("coa_business_code_idx").on(t.businessId, t.code),
+  index("coa_parent_idx").on(t.parentId),
+  index("coa_type_idx").on(t.businessId, t.accountType),
+]);
+
+// ── Journal Entries (manual double-entry for CA adjustments) ──
+
+export const journalEntries = pgTable("journal_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  entryNumber: text("entry_number").notNull(),
+  entryDate: timestamp("entry_date", { withTimezone: true }).notNull(),
+  narration: text("narration"),
+  source: text("source").default("manual").notNull(), // "manual" | "system"
+  isVoided: boolean("is_voided").default(false).notNull(),
+  voidedByEntryId: uuid("voided_by_entry_id"),   // points to the reversing entry
+  reversesEntryId: uuid("reverses_entry_id"),     // on the reversal, points to original
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("je_business_idx").on(t.businessId),
+  index("je_date_idx").on(t.businessId, t.entryDate),
+  uniqueIndex("je_number_idx").on(t.businessId, t.entryNumber),
+]);
+
+export const journalEntryLines = pgTable("journal_entry_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  journalEntryId: uuid("journal_entry_id").notNull().references(() => journalEntries.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => chartOfAccounts.id, { onDelete: "restrict" }),
+  debit: numeric("debit", { precision: 15, scale: 2 }).default("0").notNull(),
+  credit: numeric("credit", { precision: 15, scale: 2 }).default("0").notNull(),
+  narration: text("narration"),
+}, (t) => [
+  index("jel_entry_idx").on(t.journalEntryId),
+  index("jel_account_idx").on(t.accountId),
+]);
+
+// ── Journal Entry Templates ──────────────────────────────────
+
+export const journalEntryTemplates = pgTable("journal_entry_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  narration: text("narration"),
+  lines: jsonb("lines").$type<Array<{
+    accountId: string;
+    accountCode: string;
+    accountName: string;
+    debit: string;
+    credit: string;
+    narration?: string;
+  }>>().notNull(),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("jet_business_idx").on(t.businessId),
+]);
+
+// ── ITC (Input Tax Credit) Tracking ─────────────────────────
+
+export const itcStatusEnum = pgEnum("itc_status", [
+  "available",    // ITC available for utilization
+  "utilized",     // ITC utilized against output liability
+  "reversed",     // ITC reversed (180-day rule, ineligibility, etc.)
+  "reclaimed",    // ITC re-availed after reversal
+  "blocked",      // Blocked under Section 17(5)
+]);
+
+export const itcLedgerEntries = pgTable("itc_ledger_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  returnPeriod: text("return_period").notNull(),  // "2026-04" format
+  status: itcStatusEnum("status").notNull(),
+  cgst: numeric("cgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  sgst: numeric("sgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  igst: numeric("igst", { precision: 15, scale: 2 }).default("0").notNull(),
+  cess: numeric("cess", { precision: 15, scale: 2 }).default("0").notNull(),
+  isReverseCharge: boolean("is_reverse_charge").default(false).notNull(),
+  blockReason: text("block_reason"),   // "motor_vehicle", "food_beverage", "personal", "membership", etc.
+  reversalReason: text("reversal_reason"),  // "section_16_4_180_days", "rule_42", "rule_43", "section_17_5"
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("itc_business_idx").on(t.businessId),
+  index("itc_invoice_idx").on(t.invoiceId),
+  index("itc_period_idx").on(t.businessId, t.returnPeriod),
+  index("itc_status_idx").on(t.businessId, t.status),
+]);
+
+export const itcUtilizations = pgTable("itc_utilizations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  returnPeriod: text("return_period").notNull(),  // "2026-04"
+  cgstUtilized: numeric("cgst_utilized", { precision: 15, scale: 2 }).default("0").notNull(),
+  sgstUtilized: numeric("sgst_utilized", { precision: 15, scale: 2 }).default("0").notNull(),
+  igstUtilizedAgainstCgst: numeric("igst_utilized_against_cgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  igstUtilizedAgainstSgst: numeric("igst_utilized_against_sgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  igstUtilizedAgainstIgst: numeric("igst_utilized_against_igst", { precision: 15, scale: 2 }).default("0").notNull(),
+  notes: text("notes"),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("itc_util_business_idx").on(t.businessId),
+  uniqueIndex("itc_util_period_idx").on(t.businessId, t.returnPeriod),
+]);
+
+// ── Bank Statement Templates ─────────────────────────────────
+
+export const bankStatementTemplates = pgTable("bank_statement_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  bankSlug: text("bank_slug").notNull(),
+  bankDisplayName: text("bank_display_name").notNull(),
+  version: integer("version").default(1).notNull(),
+  label: text("label"),
+  isSeeded: boolean("is_seeded").default(false).notNull(),
+  forkedFromId: uuid("forked_from_id"),
+  columnMapping: jsonb("column_mapping").$type<{
+    date: number;
+    narration: number;
+    debit?: number;
+    credit?: number;
+    amount?: number;
+    type?: number;
+    reference?: number;
+    balance?: number;
+    dateFormat: string;
+    skipRows: number;
+    amountSignConvention?: "debit_positive" | "credit_positive";
+  }>().notNull(),
+  preprocessRules: jsonb("preprocess_rules").$type<{
+    extraHeaderRows?: number;
+    skipRowPatterns?: string[];
+    amountParsingMode?: "standard" | "dr_cr_suffix" | "parentheses_negative" | "signed";
+    skipSubtotalRows?: boolean;
+    encoding?: string;
+  }>(),
+  detectionRules: jsonb("detection_rules").$type<{
+    headerPatterns?: string[];
+    columnCount?: { min: number; max: number };
+    firstRowPatterns?: string[];
+    ifscPrefix?: string;
+  }>(),
+  fileFormat: text("file_format").default("csv").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bst_business_idx").on(t.businessId),
+  index("bst_bank_slug_idx").on(t.businessId, t.bankSlug),
+  uniqueIndex("bst_business_bank_version_idx").on(t.businessId, t.bankSlug, t.version, t.fileFormat),
+]);
+
+// ── Bank Statement Reconciliation ────────────────────────────
+
+export const bankStatementImportStatusEnum = pgEnum("bank_statement_import_status", [
+  "pending", "mapped", "processing", "review", "completed",
+]);
+
+export const bankStatementMatchStatusEnum = pgEnum("bank_statement_match_status", [
+  "auto_matched", "manual_matched", "unmatched", "created", "ignored",
+]);
+
+export const bankStatementImports = pgTable("bank_statement_imports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  bankAccountId: uuid("bank_account_id").notNull().references(() => bankAccounts.id, { onDelete: "cascade" }),
+  fileName: text("file_name").notNull(),
+  status: bankStatementImportStatusEnum("status").default("pending").notNull(),
+  templateId: uuid("template_id").references(() => bankStatementTemplates.id, { onDelete: "set null" }),
+  templateVersion: integer("template_version"),
+  columnMapping: jsonb("column_mapping").$type<{
+    date: number;
+    narration: number;
+    debit?: number;
+    credit?: number;
+    amount?: number;
+    type?: number;
+    reference?: number;
+    balance?: number;
+    dateFormat: string;
+    skipRows: number;
+    amountSignConvention?: "debit_positive" | "credit_positive";
+  }>(),
+  totalLines: integer("total_lines").default(0).notNull(),
+  matchedLines: integer("matched_lines").default(0).notNull(),
+  unmatchedLines: integer("unmatched_lines").default(0).notNull(),
+  statementStartDate: timestamp("statement_start_date", { withTimezone: true }),
+  statementEndDate: timestamp("statement_end_date", { withTimezone: true }),
+  closingBalance: numeric("closing_balance", { precision: 15, scale: 2 }),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bsi_business_idx").on(t.businessId),
+  index("bsi_bank_account_idx").on(t.bankAccountId),
+]);
+
+export const bankStatementLines = pgTable("bank_statement_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  importId: uuid("import_id").notNull().references(() => bankStatementImports.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  lineNumber: integer("line_number").notNull(),
+  transactionDate: timestamp("transaction_date", { withTimezone: true }).notNull(),
+  narration: text("narration"),
+  debit: numeric("debit", { precision: 15, scale: 2 }).default("0").notNull(),
+  credit: numeric("credit", { precision: 15, scale: 2 }).default("0").notNull(),
+  balance: numeric("balance", { precision: 15, scale: 2 }),
+  referenceNumber: text("reference_number"),
+  rawData: jsonb("raw_data"),
+  matchStatus: bankStatementMatchStatusEnum("match_status").default("unmatched").notNull(),
+  matchConfidence: numeric("match_confidence", { precision: 3, scale: 2 }),
+  matchedPaymentId: uuid("matched_payment_id"),
+  matchedExpenseId: uuid("matched_expense_id"),
+  matchedBankTransactionId: uuid("matched_bank_transaction_id"),
+  autoCategory: text("auto_category"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bsl_import_idx").on(t.importId),
+  index("bsl_business_idx").on(t.businessId),
+  index("bsl_date_idx").on(t.businessId, t.transactionDate),
+  index("bsl_status_idx").on(t.importId, t.matchStatus),
+  index("bsl_dedup_idx").on(t.businessId, t.transactionDate, t.debit, t.credit, t.referenceNumber),
+]);
+
+export const bankCategorizationRules = pgTable("bank_categorization_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  bankAccountId: uuid("bank_account_id").references(() => bankAccounts.id, { onDelete: "cascade" }),
+  matchField: text("match_field").notNull(),       // "narration" | "reference"
+  matchType: text("match_type").notNull(),          // "contains" | "starts_with" | "exact" | "regex"
+  matchValue: text("match_value").notNull(),
+  action: text("action").notNull(),                 // "create_expense" | "ignore" | "tag_party"
+  expenseCategory: text("expense_category"),
+  partyId: uuid("party_id"),
+  priority: integer("priority").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  hitCount: integer("hit_count").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("bcr_business_idx").on(t.businessId),
+]);
+
+// ── E-Invoice Configuration ─────────────────────────────────
+
+export const eInvoiceConfigs = pgTable("e_invoice_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  gstin: text("gstin").notNull(),
+  clientId: text("client_id").notNull(),
+  clientSecret: text("client_secret").notNull(),
+  username: text("username").notNull(),
+  password: text("password").notNull(),
+  authToken: text("auth_token"),
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+  isSandbox: boolean("is_sandbox").default(true).notNull(),
+  isEnabled: boolean("is_enabled").default(false).notNull(),
+  thresholdCrore: numeric("threshold_crore", { precision: 5, scale: 2 }).default("5").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("einv_config_business_idx").on(t.businessId),
+]);
+
+// ── E-Way Bill ──────────────────────────────────────────────
+
+export const ewayBillStatusEnum = pgEnum("eway_bill_status", [
+  "generated", "active", "cancelled", "expired",
+]);
+
+export const ewayBills = pgTable("eway_bills", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  ewbNumber: text("ewb_number"),
+  ewbDate: timestamp("ewb_date", { withTimezone: true }),
+  validUpto: timestamp("valid_upto", { withTimezone: true }),
+  status: ewayBillStatusEnum("status").default("generated").notNull(),
+  transporterId: text("transporter_id"),
+  transporterName: text("transporter_name"),
+  vehicleNumber: text("vehicle_number"),
+  vehicleType: text("vehicle_type"),
+  transportMode: text("transport_mode"),
+  distance: integer("distance"),
+  fromAddress: text("from_address"),
+  fromPincode: text("from_pincode"),
+  fromState: text("from_state"),
+  toAddress: text("to_address"),
+  toPincode: text("to_pincode"),
+  toState: text("to_state"),
+  cancelReason: text("cancel_reason"),
+  apiResponse: jsonb("api_response"),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("ewb_business_idx").on(t.businessId),
+  index("ewb_invoice_idx").on(t.invoiceId),
+  index("ewb_number_idx").on(t.ewbNumber),
+  index("ewb_status_idx").on(t.businessId, t.status),
+  index("ewb_validity_idx").on(t.businessId, t.validUpto),
+]);
+
+export const ewayBillVehicleUpdates = pgTable("eway_bill_vehicle_updates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ewayBillId: uuid("eway_bill_id").notNull().references(() => ewayBills.id, { onDelete: "cascade" }),
+  vehicleNumber: text("vehicle_number").notNull(),
+  fromPlace: text("from_place"),
+  reason: text("reason"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("ewb_vehicle_ewb_idx").on(t.ewayBillId),
+]);
+
+// ── GSTR-2B Reconciliation ────────────────────────────────────
+
+export const gstr2bUploads = pgTable("gstr2b_uploads", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  returnPeriod: text("return_period").notNull(),  // "2026-04"
+  fileName: text("file_name").notNull(),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  totalRecords: integer("total_records").default(0).notNull(),
+  matchedRecords: integer("matched_records").default(0).notNull(),
+  unmatchedRecords: integer("unmatched_records").default(0).notNull(),
+  newRecords: integer("new_records").default(0).notNull(),  // In 2B but not in our books
+  createdByUserId: uuid("created_by_user_id"),
+}, (t) => [
+  index("g2b_business_idx").on(t.businessId),
+  index("g2b_period_idx").on(t.businessId, t.returnPeriod),
+]);
+
+export const gstr2bRecords = pgTable("gstr2b_records", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  uploadId: uuid("upload_id").notNull().references(() => gstr2bUploads.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  supplierGstin: text("supplier_gstin").notNull(),
+  supplierName: text("supplier_name"),
+  invoiceNumber: text("invoice_number").notNull(),
+  invoiceDate: timestamp("invoice_date", { withTimezone: true }),
+  invoiceValue: numeric("invoice_value", { precision: 15, scale: 2 }).default("0").notNull(),
+  taxableValue: numeric("taxable_value", { precision: 15, scale: 2 }).default("0").notNull(),
+  cgst: numeric("cgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  sgst: numeric("sgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  igst: numeric("igst", { precision: 15, scale: 2 }).default("0").notNull(),
+  cess: numeric("cess", { precision: 15, scale: 2 }).default("0").notNull(),
+  itcAvailable: text("itc_available"),  // "Y" | "N"
+  reason: text("reason"),               // Reason if ITC not available
+  sourceType: text("source_type"),      // "B2B" | "B2BA" | "CDNR" | "ISD" | etc.
+  // Reconciliation
+  matchStatus: text("match_status").default("pending").notNull(),  // "matched" | "mismatched" | "missing_in_books" | "pending" | "ignored"
+  matchedInvoiceId: uuid("matched_invoice_id"),  // Links to our purchase invoice
+  mismatchReasons: jsonb("mismatch_reasons").$type<string[]>(),  // ["amount_difference", "date_difference", etc.]
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("g2br_upload_idx").on(t.uploadId),
+  index("g2br_business_idx").on(t.businessId),
+  index("g2br_gstin_idx").on(t.businessId, t.supplierGstin),
+  index("g2br_match_idx").on(t.uploadId, t.matchStatus),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({
@@ -704,4 +1110,14 @@ export const recurringInvoiceRunsRelations = relations(recurringInvoiceRuns, ({ 
   template: one(recurringInvoiceTemplates, { fields: [recurringInvoiceRuns.templateId], references: [recurringInvoiceTemplates.id] }),
   business: one(businesses, { fields: [recurringInvoiceRuns.businessId], references: [businesses.id] }),
   invoice: one(invoices, { fields: [recurringInvoiceRuns.invoiceId], references: [invoices.id] }),
+}));
+
+export const journalEntriesRelations = relations(journalEntries, ({ one, many }) => ({
+  business: one(businesses, { fields: [journalEntries.businessId], references: [businesses.id] }),
+  lines: many(journalEntryLines),
+}));
+
+export const journalEntryLinesRelations = relations(journalEntryLines, ({ one }) => ({
+  journalEntry: one(journalEntries, { fields: [journalEntryLines.journalEntryId], references: [journalEntries.id] }),
+  account: one(chartOfAccounts, { fields: [journalEntryLines.accountId], references: [chartOfAccounts.id] }),
 }));

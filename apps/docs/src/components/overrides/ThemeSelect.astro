@@ -6,8 +6,10 @@
 import type { Props } from '@astrojs/starlight/props';
 import Default from '@astrojs/starlight/components/ThemeSelect.astro';
 import DeviceSwitcher from '../DeviceSwitcher.astro';
+import PersonaSwitcher from '../PersonaSwitcher.astro';
 ---
 <div class="sl-flex" style="gap: 0.25rem; align-items: center;">
+  <PersonaSwitcher />
   <DeviceSwitcher />
   <Default {...Astro.props}><slot /></Default>
 </div>

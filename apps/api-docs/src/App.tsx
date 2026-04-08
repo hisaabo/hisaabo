@@ -1,10 +1,13 @@
 import React, { useState, useCallback } from "react";
 import { HashRouter, Routes, Route } from "react-router-dom";
 import { UserProvider } from "./lib/user-context";
+import { PersonaProvider, usePersona } from "./lib/persona-context";
 import { Layout } from "./components/Layout";
 import { Sidebar } from "./components/Sidebar";
 import { AuthBanner } from "./components/AuthBanner";
-import { allEndpointGroups } from "./content";
+import { PersonaBanner } from "./components/PersonaSelector";
+import { FAQSection } from "./components/FAQ";
+import { allEndpointGroups, allSections } from "./content";
 import { Link } from "react-router-dom";
 
 const BASE_URL = "https://api.hisaabo.in";
@@ -125,8 +128,15 @@ function CodeBlock({ children }: { children: string }) {
   );
 }
 
+/** Endpoint count across all groups */
+const totalEndpoints = allEndpointGroups.reduce((acc, g) => acc + g.endpoints.length, 0);
+
 function OverviewPage() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const { persona, personaInfo } = usePersona();
+
+  // Determine which groups to highlight based on persona
+  const highlightedSet = new Set(personaInfo?.highlightedGroups ?? []);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-base)" }}>
@@ -193,16 +203,29 @@ function OverviewPage() {
               aria-hidden="true"
             />
 
-            <div
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-medium mb-5 relative"
-              style={{
-                background: "var(--brand-dim)",
-                border: "1px solid var(--brand-dim-strong)",
-                color: "var(--brand-light)",
-              }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--brand)" }} />
-              tRPC + SuperJSON
+            <div className="flex items-center gap-3 mb-5 flex-wrap relative">
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-medium"
+                style={{
+                  background: "var(--brand-dim)",
+                  border: "1px solid var(--brand-dim-strong)",
+                  color: "var(--brand-light)",
+                }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--brand)" }} />
+                tRPC + SuperJSON
+              </div>
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-medium"
+                style={{
+                  background: "var(--green-dim)",
+                  border: "1px solid rgba(16, 185, 129, 0.2)",
+                  color: "var(--green)",
+                }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--green)" }} />
+                {totalEndpoints}+ endpoints
+              </div>
             </div>
 
             <h1
@@ -212,13 +235,17 @@ function OverviewPage() {
               Hisaabo API Reference
             </h1>
             <p
-              className="text-[15px] lg:text-[16px] leading-[1.7] max-w-[520px] relative"
+              className="text-[15px] lg:text-[16px] leading-[1.7] max-w-[560px] relative"
               style={{ color: "var(--text-secondary)" }}
             >
-              Complete reference for the Hisaabo tRPC API. Build integrations for invoicing,
-              inventory, payments, and GST reporting.
+              Complete reference for the Hisaabo tRPC API. Every capability available to
+              the web dashboard, mobile app, and AI agents — documented with code examples in
+              JavaScript, cURL, and Python.
             </p>
           </div>
+
+          {/* Persona Banner */}
+          <PersonaBanner />
 
           {/* Base URL */}
           <section className="mb-10">
@@ -295,12 +322,13 @@ function OverviewPage() {
                     className="text-[13px] font-semibold"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    Bearer token — mobile / server clients
+                    Bearer token — mobile / server / agent clients
                   </span>
                 </div>
                 <p className="text-[13px] leading-relaxed mb-3" style={{ color: "var(--text-secondary)" }}>
                   Pass the <InlineCode>sessionToken</InlineCode> returned by{" "}
-                  <InlineCode>auth.login</InlineCode> or <InlineCode>auth.register</InlineCode> as a Bearer token.
+                  <InlineCode>auth.login</InlineCode> or an API key from{" "}
+                  <InlineCode>apiKey.create</InlineCode> as a Bearer token.
                 </p>
                 <CodeBlock>Authorization: Bearer sess_VbK2mQ9xP4nR7wA1...</CodeBlock>
               </div>
@@ -486,41 +514,67 @@ function OverviewPage() {
             </div>
           </section>
 
-          {/* Endpoint groups */}
-          <section>
+          {/* Endpoint groups by section */}
+          <section className="mb-10">
             <SectionHeading>Endpoint Groups</SectionHeading>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {allEndpointGroups.map((group) => (
-                <Link
-                  key={group.id}
-                  to={`/group/${group.id}`}
-                  className="group-card block p-4 rounded-lg"
-                  style={{
-                    background: "var(--bg-card)",
-                    border: "1px solid var(--border-mid)",
-                  }}
+            <p className="text-[13px] mb-6" style={{ color: "var(--text-tertiary)" }}>
+              {allEndpointGroups.length} groups, {totalEndpoints}+ endpoints.
+              {persona && " Highlighted groups are most relevant to your role."}
+            </p>
+
+            {allSections.map((section) => (
+              <div key={section.id} className="mb-6">
+                <h3
+                  className="section-label mb-3"
                 >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <h3
-                      className="text-[13px] font-semibold"
-                      style={{ color: "var(--text-primary)" }}
-                    >
-                      {group.title}
-                    </h3>
-                    <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                      {group.endpoints.length} endpoint{group.endpoints.length !== 1 ? "s" : ""}
-                    </span>
-                  </div>
-                  <p
-                    className="text-[12px] leading-relaxed line-clamp-2"
-                    style={{ color: "var(--text-tertiary)" }}
-                  >
-                    {group.description}
-                  </p>
-                </Link>
-              ))}
-            </div>
+                  {section.title}
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {section.groups.map((group) => {
+                    const isHighlighted = highlightedSet.has(group.id);
+                    return (
+                      <Link
+                        key={group.id}
+                        to={`/group/${group.id}`}
+                        className="group-card block p-4 rounded-lg relative"
+                        style={{
+                          background: isHighlighted ? "rgba(99, 102, 241, 0.06)" : "var(--bg-card)",
+                          border: `1px solid ${isHighlighted ? "rgba(99, 102, 241, 0.2)" : "var(--border-mid)"}`,
+                        }}
+                      >
+                        {isHighlighted && (
+                          <div
+                            className="absolute top-3 right-3 w-1.5 h-1.5 rounded-full"
+                            style={{ background: "var(--brand)" }}
+                          />
+                        )}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h4
+                            className="text-[13px] font-semibold"
+                            style={{ color: isHighlighted ? "var(--brand-light)" : "var(--text-primary)" }}
+                          >
+                            {group.title}
+                          </h4>
+                          <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                            {group.endpoints.length} endpoint{group.endpoints.length !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <p
+                          className="text-[12px] leading-relaxed line-clamp-2"
+                          style={{ color: "var(--text-tertiary)" }}
+                        >
+                          {group.description}
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </section>
+
+          {/* FAQ */}
+          <FAQSection />
         </div>
       </main>
 
@@ -586,13 +640,15 @@ function OverviewPage() {
 export default function App() {
   return (
     <UserProvider>
-      <HashRouter>
-        <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/group/:groupId" element={<Layout />} />
-          <Route path="/group/:groupId/endpoint/:endpointId" element={<Layout />} />
-        </Routes>
-      </HashRouter>
+      <PersonaProvider>
+        <HashRouter>
+          <Routes>
+            <Route path="/" element={<OverviewPage />} />
+            <Route path="/group/:groupId" element={<Layout />} />
+            <Route path="/group/:groupId/endpoint/:endpointId" element={<Layout />} />
+          </Routes>
+        </HashRouter>
+      </PersonaProvider>
     </UserProvider>
   );
 }

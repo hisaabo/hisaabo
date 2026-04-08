@@ -312,5 +312,207 @@ if session["user"]:
 )`,
       },
     },
+    {
+      id: "auth-update-name",
+      method: "mutation",
+      path: "auth.updateName",
+      title: "Update Name",
+      description: "Change the display name of the currently authenticated user. Invalidates the session cache so subsequent `auth.me` calls return the updated name.",
+      auth: "protected",
+      input: [
+        { name: "name", type: "string", required: true, description: "New display name (2\u2013100 chars)" },
+      ],
+      output: {
+        description: "Success confirmation.",
+        example: { success: true },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.updateName \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -d '{"json":{"name":"Rahul Kumar Sharma"}}'`,
+        javascript: `await trpc.auth.updateName.mutate({ name: "Rahul Kumar Sharma" });
+// Session cache is invalidated \u2014 next auth.me call returns updated name`,
+        python: `import httpx
+
+httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.updateName",
+    headers={"Authorization": f"Bearer {session_token}"},
+    json={"json": {"name": "Rahul Kumar Sharma"}},
+)`,
+      },
+      relatedEndpoints: ["auth-me", "auth-complete-profile"],
+    },
+    {
+      id: "auth-request-email-change",
+      method: "mutation",
+      path: "auth.requestEmailChange",
+      title: "Request Email Change",
+      description: "Initiate an email address change. Sends a verification link to the new email. The change is not applied until the link is clicked (see `auth.confirmEmailChange`). Returns CONFLICT if the new email is already registered.",
+      auth: "protected",
+      input: [
+        { name: "newEmail", type: "string", required: true, description: "New email address (max 255 chars)" },
+      ],
+      output: {
+        description: "Success confirmation. The verification link is sent to the new email.",
+        example: { success: true },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.requestEmailChange \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -d '{"json":{"newEmail":"rahul.new@myshop.in"}}'`,
+        javascript: `await trpc.auth.requestEmailChange.mutate({
+  newEmail: "rahul.new@myshop.in",
+});
+// Ask user to check new email inbox for verification link`,
+        python: `import httpx
+
+httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.requestEmailChange",
+    headers={"Authorization": f"Bearer {session_token}"},
+    json={"json": {"newEmail": "rahul.new@myshop.in"}},
+)`,
+      },
+      gotchas: [
+        "Returns CONFLICT (409) if the new email is already registered to another account.",
+        "The verification link expires in 15 minutes and can only be used once.",
+        "The requesting user's ID is bound server-side to the token \u2014 clients cannot substitute a different userId.",
+      ],
+      relatedEndpoints: ["auth-confirm-email-change"],
+    },
+    {
+      id: "auth-confirm-email-change",
+      method: "mutation",
+      path: "auth.confirmEmailChange",
+      title: "Confirm Email Change",
+      description: "Exchange the email-change verification token to apply the new email. The token contains the bound userId server-side \u2014 no userId is accepted from client input, preventing account takeover. This is a public endpoint because the user may verify from a different device.",
+      auth: "public",
+      input: [
+        { name: "token", type: "string", required: true, description: "Token from the email verification link" },
+      ],
+      output: {
+        description: "Success confirmation with the new email address.",
+        example: { success: true, newEmail: "rahul.new@myshop.in" },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.confirmEmailChange \\
+  -H "Content-Type: application/json" \\
+  -d '{"json":{"token":"<token-from-verification-link>"}}'`,
+        javascript: `const url = new URL(window.location.href);
+const token = url.searchParams.get("token");
+
+const result = await trpc.auth.confirmEmailChange.mutate({ token });
+console.log("Email changed to:", result.newEmail);`,
+        python: `import httpx
+
+resp = httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.confirmEmailChange",
+    json={"json": {"token": token_from_email}},
+)
+data = resp.json()["result"]["data"]["json"]
+print("New email:", data["newEmail"])`,
+      },
+      gotchas: [
+        "Returns BAD_REQUEST if the token is invalid, expired (>15 min), or already used.",
+        "The userId is read from the token record server-side \u2014 never from client input. This prevents token substitution attacks.",
+        "Token verification is atomic \u2014 concurrent requests with the same token will see one succeed and one fail.",
+      ],
+      relatedEndpoints: ["auth-request-email-change"],
+    },
+    {
+      id: "auth-list-sessions",
+      method: "query",
+      path: "auth.listSessions",
+      title: "List Sessions",
+      description: "List all active (or expired) sessions for the current user. Each session includes IP address, user agent, creation time, last-used time, and whether it is the current session. Useful for building a \"manage sessions\" security page.",
+      auth: "protected",
+      input: [
+        { name: "expired", type: "boolean", required: false, description: "If true, return expired sessions instead of active ones.", default: "false" },
+      ],
+      output: {
+        description: "Array of session objects with `isCurrent` flag.",
+        example: [
+          {
+            id: "sess_abc123...",
+            ipAddress: "103.21.244.15",
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...",
+            createdAt: "2026-03-15T08:30:00.000Z",
+            lastUsedAt: "2026-04-08T10:00:00.000Z",
+            expiresAt: "2026-04-14T08:30:00.000Z",
+            isCurrent: true,
+          },
+          {
+            id: "sess_def456...",
+            ipAddress: "49.36.128.42",
+            userAgent: "Hisaabo-Mobile/1.0",
+            createdAt: "2026-04-01T12:00:00.000Z",
+            lastUsedAt: "2026-04-07T18:00:00.000Z",
+            expiresAt: "2026-05-01T12:00:00.000Z",
+            isCurrent: false,
+          },
+        ],
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/auth.listSessions?input=%7B%22json%22%3A%7B%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN"`,
+        javascript: `const sessions = await trpc.auth.listSessions.query();
+const current = sessions.find(s => s.isCurrent);
+const others = sessions.filter(s => !s.isCurrent);
+console.log("Active sessions:", sessions.length);`,
+        python: `import httpx, json, urllib.parse
+
+params = urllib.parse.quote(json.dumps({"json": {}}))
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/auth.listSessions?input={params}",
+    headers={"Authorization": f"Bearer {session_token}"},
+)
+sessions = resp.json()["result"]["data"]["json"]`,
+      },
+      gotchas: [
+        "This is a `query` (GET) \u2014 use `.query()` not `.mutate()`.",
+        "The `isCurrent` flag is always `false` when querying expired sessions.",
+        "Sessions are ordered by creation date descending (newest first).",
+      ],
+      relatedEndpoints: ["auth-revoke-session", "auth-logout-all"],
+    },
+    {
+      id: "auth-revoke-session",
+      method: "mutation",
+      path: "auth.revokeSession",
+      title: "Revoke Session",
+      description: "Invalidate a specific session by ID. Cannot be used to revoke the current session \u2014 use `auth.logout` instead. Only sessions belonging to the current user can be revoked.",
+      auth: "protected",
+      input: [
+        { name: "sessionId", type: "string", required: true, description: "ID of the session to revoke (min 1 char)" },
+      ],
+      output: {
+        description: "Success confirmation.",
+        example: { success: true },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.revokeSession \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -d '{"json":{"sessionId":"sess_def456..."}}'`,
+        javascript: `await trpc.auth.revokeSession.mutate({
+  sessionId: "sess_def456...",
+});
+// The target session is now invalid \u2014 that device is logged out`,
+        python: `import httpx
+
+httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.revokeSession",
+    headers={"Authorization": f"Bearer {session_token}"},
+    json={"json": {"sessionId": "sess_def456..."}},
+)`,
+      },
+      gotchas: [
+        "Returns BAD_REQUEST if you try to revoke your own current session. Use `auth.logout` instead.",
+        "Returns NOT_FOUND if the session ID does not exist or belongs to a different user.",
+        "The session cache is invalidated immediately \u2014 the revoked session will fail on the next API call.",
+      ],
+      relatedEndpoints: ["auth-list-sessions", "auth-logout"],
+    },
   ],
 };

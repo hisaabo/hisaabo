@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { gstR1Command, gstR3bCommand, gstR1CsvCommand } from "../../commands/gst/index.js";
+import { gstR1Command, gstR3bCommand, gstR1CsvCommand, gstR9Command, gstr2bUploadsCommand } from "../../commands/gst/index.js";
 
 export function registerGstCommands(program: Command): void {
   // ── gst ───────────────────────────────────────────────────────────────────
@@ -37,5 +37,21 @@ export function registerGstCommands(program: Command): void {
     .option("--output <path>", "Output file path")
     .action(async (opts) => {
       await gstR1CsvCommand({ quarter: opts.quarter, month: opts.month, year: opts.year, output: opts.output });
+    });
+
+  gst
+    .command("gstr9 <fy>")
+    .description("GSTR-9 annual return (e.g. 2023-24)")
+    .option("--json", "JSON output")
+    .action(async (fy: string, opts) => {
+      await gstR9Command(fy, { json: opts.json });
+    });
+
+  gst
+    .command("gstr2b-uploads")
+    .description("List GSTR-2B uploaded periods")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      await gstr2bUploadsCommand({ json: opts.json });
     });
 }

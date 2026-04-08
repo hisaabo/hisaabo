@@ -522,6 +522,177 @@ export async function reportCashFlowCommand(opts: { json?: boolean }): Promise<v
   }
 }
 
+// ── Trial Balance ──────────────────────────────────────────────────────────
+
+export async function reportTrialBalanceCommand(opts: ReportOpts): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+  const { from: _from, to } = resolveRange(opts);
+
+  try {
+    const result = await client.reports.trialBalance({ asOfDate: to });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    console.log(`\n Trial Balance   as of ${to}\n`);
+    console.log(` ${"═".repeat(70)}\n`);
+
+    const rows = Array.isArray(result?.accounts) ? result.accounts
+      : Array.isArray(result?.rows) ? result.rows
+      : Array.isArray(result) ? result
+      : [];
+
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const name = String(row["accountName"] ?? row["name"] ?? "-").padEnd(30);
+      const debit = String(row["debit"] ?? "0");
+      const credit = String(row["credit"] ?? "0");
+      const dr = parseFloat(debit) !== 0 ? formatAmount(debit) : "-";
+      const cr = parseFloat(credit) !== 0 ? formatAmount(credit) : "-";
+      console.log(`  ${name}  ${dr.padStart(14)}  ${cr.padStart(14)}`);
+    }
+    console.log();
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}
+
+// ── Balance Sheet ──────────────────────────────────────────────────────────
+
+export async function reportBalanceSheetCommand(opts: ReportOpts): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+  const { to } = resolveRange(opts);
+
+  try {
+    const result = await client.reports.balanceSheet({ asOfDate: to });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    const r = result as Record<string, unknown>;
+    console.log(`\n Balance Sheet   as of ${to}\n`);
+    console.log(` ${"═".repeat(60)}\n`);
+
+    const assets = String(r["totalAssets"] ?? r["assets"] ?? "0");
+    const liabilities = String(r["totalLiabilities"] ?? r["liabilities"] ?? "0");
+    const equity = String(r["totalEquity"] ?? r["equity"] ?? "0");
+
+    console.log(`  Total Assets:       ${formatAmount(assets).padStart(14)}`);
+    console.log(`  Total Liabilities:  ${formatAmount(liabilities).padStart(14)}`);
+    console.log(`  Total Equity:       ${formatAmount(equity).padStart(14)}`);
+    console.log();
+    console.log("  Use --json for full balance sheet breakdown.\n");
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}
+
+// ── Cash Flow Statement ────────────────────────────────────────────────────
+
+export async function reportCashFlowStatementCommand(opts: ReportOpts): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+  const { from, to } = resolveRange(opts);
+
+  try {
+    const result = await client.reports.cashFlowStatement({ fromDate: from, toDate: to });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    const r = result as Record<string, unknown>;
+    console.log(`\n Cash Flow Statement   ${from} → ${to}\n`);
+    console.log(` ${"═".repeat(60)}\n`);
+
+    const operating = String(r["operatingActivities"] ?? r["operations"] ?? "0");
+    const investing = String(r["investingActivities"] ?? r["investing"] ?? "0");
+    const financing = String(r["financingActivities"] ?? r["financing"] ?? "0");
+    const net = String(r["netCashFlow"] ?? r["net"] ?? "0");
+
+    console.log(`  Operating Activities:  ${formatAmount(operating).padStart(14)}`);
+    console.log(`  Investing Activities:  ${formatAmount(investing).padStart(14)}`);
+    console.log(`  Financing Activities:  ${formatAmount(financing).padStart(14)}`);
+    console.log(`  Net Cash Flow:         ${formatAmount(net).padStart(14)}`);
+    console.log();
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}
+
+// ── General Ledger ─────────────────────────────────────────────────────────
+
+export async function reportGeneralLedgerCommand(accountId: string, opts: ReportOpts): Promise<void> {
+  const cfg = requireAuth();
+  const client = new HisaaboClient(cfg);
+  const { from, to } = resolveRange(opts);
+
+  try {
+    const result = await client.reports.generalLedger({ accountId, fromDate: from, toDate: to });
+
+    if (opts.json) {
+      outputJSON(result);
+      return;
+    }
+
+    const r = result as Record<string, unknown>;
+    const accountName = String(r["accountName"] ?? r["account"] ?? accountId);
+    console.log(`\n General Ledger — ${accountName}   ${from} → ${to}\n`);
+    console.log(` ${"═".repeat(75)}\n`);
+
+    const opening = String(r["openingBalance"] ?? "0");
+    console.log(`  Opening Balance:  ${formatAmount(opening).padStart(14)}\n`);
+
+    const entries = Array.isArray(r["entries"]) ? r["entries"]
+      : Array.isArray(r["rows"]) ? r["rows"]
+      : [];
+
+    for (const entry of entries as Array<Record<string, unknown>>) {
+      const date = formatDate(String(entry["date"] ?? "")).padEnd(13);
+      const narration = String(entry["narration"] ?? entry["description"] ?? "-").slice(0, 25).padEnd(25);
+      const debit = parseFloat(String(entry["debit"] ?? "0")) !== 0 ? formatAmount(String(entry["debit"])) : "-";
+      const credit = parseFloat(String(entry["credit"] ?? "0")) !== 0 ? formatAmount(String(entry["credit"])) : "-";
+      const balance = formatAmount(String(entry["balance"] ?? "0"));
+      console.log(`  ${date} ${narration}  ${debit.padStart(12)}  ${credit.padStart(12)}  ${balance.padStart(14)}`);
+    }
+
+    const closing = String(r["closingBalance"] ?? r["balance"] ?? "0");
+    console.log(`\n  Closing Balance:  ${formatAmount(closing).padStart(14)}\n`);
+
+  } catch (e) {
+    if (e instanceof HisaaboApiError) {
+      const err = e.hisaaboError;
+      if (err.code === "unauthorized") fatalError("Session expired. Run: hisaabo login", EXIT.AUTH);
+      if (err.code === "network_error") fatalError(err.message, EXIT.NETWORK);
+    }
+    fatalError(String(e instanceof Error ? e.message : e));
+  }
+}
+
 // ── Collection Efficiency ──────────────────────────────────────────────────
 
 export async function reportCollectionEfficiencyCommand(opts: ReportOpts): Promise<void> {

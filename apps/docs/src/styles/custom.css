@@ -127,6 +127,62 @@ html[data-platform="desktop"] .platform-mobile {
   display: none !important;
 }
 
+/* ── Persona-aware content ─────────────────────────────────── */
+
+/* When a specific persona is active, hide content for other personas.
+   "all" means no persona selected — show everything. */
+html[data-persona="ca"] .persona-business,
+html[data-persona="ca"] .persona-developer {
+  display: none !important;
+}
+
+html[data-persona="business"] .persona-ca,
+html[data-persona="business"] .persona-developer {
+  display: none !important;
+}
+
+html[data-persona="developer"] .persona-ca,
+html[data-persona="developer"] .persona-business {
+  display: none !important;
+}
+
+/* ── Persona switcher toggle ───────────────────────────────── */
+
+.persona-switcher {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 9999px;
+  overflow: hidden;
+  font-size: 0.75rem;
+}
+
+.persona-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border: none;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-family: var(--sl-font);
+  font-size: inherit;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.persona-btn:hover {
+  color: var(--sl-color-white);
+  background: var(--sl-color-gray-5);
+}
+
+.persona-btn.active {
+  background: var(--sl-color-accent);
+  color: var(--sl-color-black);
+}
+
 /* ── Device switcher toggle ─────────────────────────────────── */
 
 .device-switcher {

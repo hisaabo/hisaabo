@@ -759,3 +759,42 @@ describe("SECURITY — financial amounts must be string decimals, never JS float
     expect(result.success).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY — money amount validation (digit-count limit + zero-amount guard)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SECURITY — money amount validation", () => {
+  /**
+   * INVARIANT: Money fields use NUMERIC(15,2) in PostgreSQL — max 13 digits
+   * before the decimal point. The Zod regex must enforce this upper bound to
+   * prevent values that would overflow the DB column. Additionally, zero-amount
+   * payments must be rejected at the schema level to avoid accounting anomalies.
+   */
+
+  const validBase = {
+    partyId: "550e8400-e29b-41d4-a716-446655440000",
+    mode: "cash" as const,
+  };
+
+  it("rejects zero payment amount", () => {
+    const result = createPaymentSchema.safeParse({ ...validBase, amount: "0" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects amount with more than 13 digits before decimal (14 digits — overflows NUMERIC(15,2))", () => {
+    // 14 digits before decimal = 14 + 2 = 16 total, exceeds NUMERIC(15,2)
+    const result = createPaymentSchema.safeParse({ ...validBase, amount: "12345678901234.00" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts valid amount with exactly 13 digits before decimal", () => {
+    // 13 digits before decimal = 13 + 2 = 15 total, fits NUMERIC(15,2)
+    const result = createPaymentSchema.safeParse({ ...validBase, amount: "1234567890123.99" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts typical small payment amount", () => {
+    const result = createPaymentSchema.safeParse({ ...validBase, amount: "500.00" });
+    expect(result.success).toBe(true);
+  });
+});

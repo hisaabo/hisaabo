@@ -133,6 +133,113 @@ exceptions:
       - tenant.acceptById
       - tenant.peekInvitation
 
+      # --- Chart of Accounts ---
+      # Accounting management is a desktop/CA workflow.
+      - account.list
+      - account.create
+      - account.update
+      - account.delete
+
+      # --- Journal Entries ---
+      # Journal entries are CA adjustments — desktop accounting workflow.
+      - journal.list
+      - journal.getById
+      - journal.create
+      - journal.update
+      - journal.void
+      - journal.delete
+      - journal.templateList
+      - journal.templateCreate
+      - journal.templateDelete
+      - journal.createFromTemplate
+
+      # --- ITC Tracking ---
+      # ITC is GST compliance for CAs — desktop workflow.
+      - itc.dashboard
+      - itc.ledger
+      - itc.markBlocked
+      - itc.markEligible
+      - itc.agingAlerts
+      - itc.recordUtilization
+      - itc.gstr3bTable4
+
+      # --- Bank Reconciliation ---
+      # Bank recon requires CSV upload and review — desktop workflow.
+      - bankRecon.uploadCSV
+      - bankRecon.confirmMapping
+      - bankRecon.importList
+      - bankRecon.importDetail
+      - bankRecon.lines
+      - bankRecon.confirmMatch
+      - bankRecon.manualMatch
+      - bankRecon.unmatch
+      - bankRecon.createExpense
+      - bankRecon.ignoreLine
+      - bankRecon.summary
+      - bankRecon.ruleList
+      - bankRecon.ruleCreate
+      - bankRecon.ruleUpdate
+      - bankRecon.ruleDelete
+      - bankRecon.templateList
+      - bankRecon.templateCreate
+      - bankRecon.templateDelete
+      - bankRecon.templateFork
+
+      # --- E-Invoicing ---
+      # E-invoicing is GST compliance — desktop workflow.
+      - eInvoice.configure
+      - eInvoice.getConfig
+      - eInvoice.testConnection
+      - eInvoice.generate
+      - eInvoice.cancel
+      - eInvoice.retryFailed
+      - eInvoice.bulkRetry
+      - eInvoice.dashboard
+      - eInvoice.getStatus
+
+      # --- E-Way Bill ---
+      # E-way bill management is compliance — desktop workflow.
+      - ewayBill.generate
+      - ewayBill.cancel
+      - ewayBill.updateVehicle
+      - ewayBill.extend
+      - ewayBill.getByInvoice
+      - ewayBill.dashboard
+      - ewayBill.expiringList
+
+      # --- GSTR-2B Reconciliation ---
+      # GSTR-2B upload and reconciliation — desktop accounting workflow.
+      - gstr2b.upload
+      - gstr2b.uploads
+      - gstr2b.records
+      - gstr2b.summary
+      - gstr2b.missingInBooks
+      - gstr2b.missingIn2B
+      - gstr2b.linkInvoice
+      - gstr2b.ignoreRecord
+
+      # --- Additional GST Reports ---
+      - gst.gstr9
+      - gst.gstr9Json
+      - gst.gstr1Json
+      - gst.cmp08
+
+      # --- Additional Reports ---
+      - reports.trialBalance
+      - reports.balanceSheet
+      - reports.profitAndLoss
+      - reports.generalLedger
+      - reports.cashFlowStatement
+      - reports.comparativeTrialBalance
+      - reports.comparativeBalanceSheet
+      - reports.comparativeProfitAndLoss
+      - reports.tallyExport
+
+      # --- HSN ---
+      - hsn.search
+      - hsn.validate
+      - hsn.validateForTurnover
+
   cli:
     not-applicable:
       # --- Auth ---
@@ -174,6 +281,31 @@ exceptions:
       # --- Parties ---
       # Tally accounting integration — desktop-specific export format.
       - party.tallyExport
+
+      # --- Bank Reconciliation ---
+      # Interactive CSV upload + review workflow — not suited for CLI.
+      - bankRecon.uploadCSV
+      - bankRecon.confirmMapping
+      - bankRecon.importDetail
+      - bankRecon.lines
+      - bankRecon.confirmMatch
+      - bankRecon.manualMatch
+      - bankRecon.unmatch
+      - bankRecon.ignoreLine
+      - bankRecon.templateCreate
+      - bankRecon.templateDelete
+      - bankRecon.templateFork
+
+      # --- E-Invoicing ---
+      # Configuration requires interactive credential input.
+      - eInvoice.configure
+      - eInvoice.getConfig
+      - eInvoice.testConnection
+
+      # --- GSTR-2B ---
+      # CSV upload and per-record ignore are interactive UI workflows — not CLI.
+      - gstr2b.upload
+      - gstr2b.ignoreRecord
 
   mcp:
     not-applicable:
@@ -237,3 +369,31 @@ exceptions:
       # --- Parties ---
       # Tally accounting integration — desktop-specific export format.
       - party.tallyExport
+
+      # --- Bank Reconciliation ---
+      # Interactive CSV upload flow — MCP agents use structured data.
+      - bankRecon.uploadCSV
+      - bankRecon.confirmMapping
+      - bankRecon.templateCreate
+      - bankRecon.templateDelete
+      - bankRecon.templateFork
+      - bankRecon.templateUpdate
+
+      # --- E-Invoicing ---
+      # Credential management not for MCP agents.
+      - eInvoice.configure
+      - eInvoice.getConfig
+      - eInvoice.testConnection
+
+      # --- Chart of Accounts ---
+      # Accounting management is a desktop/CA workflow — read-only reporting sufficient for agents.
+      - account.list
+
+      # --- Bank Reconciliation ---
+      # Import detail view is part of the interactive CSV review flow.
+      - bankRecon.importDetail
+
+      # --- GSTR-2B ---
+      # CSV upload and per-record ignore are interactive UI workflows.
+      - gstr2b.upload
+      - gstr2b.ignoreRecord
