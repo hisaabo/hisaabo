@@ -655,6 +655,35 @@ export const hsnSearchSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 
+// ── GSTR-2B Reconciliation ────────────────────────────────────
+
+export const gstr2bUploadSchema = z.object({
+  returnPeriod: z.string().regex(/^\d{4}-\d{2}$/),
+  content: z.string().min(1).max(50_000_000),
+  fileName: z.string().min(1).max(255),
+  format: z.enum(["json", "csv"]),
+});
+
+export const gstr2bRecordsInputSchema = z.object({
+  uploadId: z.string().uuid(),
+  matchStatus: z.enum(["matched", "mismatched", "missing_in_books", "pending", "ignored"]).optional(),
+  page: z.number().int().min(1).default(1),
+  limit: z.number().int().min(1).max(100).default(25),
+});
+
+export const gstr2bSummaryInputSchema = z.object({
+  returnPeriod: z.string().regex(/^\d{4}-\d{2}$/),
+});
+
+export const gstr2bLinkInvoiceSchema = z.object({
+  recordId: z.string().uuid(),
+  invoiceId: z.string().uuid(),
+});
+
+export const gstr2bIgnoreRecordSchema = z.object({
+  recordId: z.string().uuid(),
+});
+
 // ── API Keys ───────────────────────────────────────────────────
 
 export const createApiKeySchema = z.object({

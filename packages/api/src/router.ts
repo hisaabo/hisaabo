@@ -34,6 +34,7 @@ import { itcRouter } from "./routers/itc.js";
 import { eInvoiceRouter } from "./routers/eInvoice.js";
 import { ewayBillRouter } from "./routers/ewayBill.js";
 import { bankReconRouter } from "./routers/bankRecon.js";
+import { gstr2bRouter } from "./routers/gstr2b.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -69,6 +70,7 @@ export const appRouter = router({
   eInvoice: eInvoiceRouter,
   ewayBill: ewayBillRouter,
   bankRecon: bankReconRouter,
+  gstr2b: gstr2bRouter,
 });
 
 export type AppRouter = typeof appRouter;

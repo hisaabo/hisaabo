@@ -961,6 +961,53 @@ export const ewayBillVehicleUpdates = pgTable("eway_bill_vehicle_updates", {
   index("ewb_vehicle_ewb_idx").on(t.ewayBillId),
 ]);
 
+// ── GSTR-2B Reconciliation ────────────────────────────────────
+
+export const gstr2bUploads = pgTable("gstr2b_uploads", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  returnPeriod: text("return_period").notNull(),  // "2026-04"
+  fileName: text("file_name").notNull(),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  totalRecords: integer("total_records").default(0).notNull(),
+  matchedRecords: integer("matched_records").default(0).notNull(),
+  unmatchedRecords: integer("unmatched_records").default(0).notNull(),
+  newRecords: integer("new_records").default(0).notNull(),  // In 2B but not in our books
+  createdByUserId: uuid("created_by_user_id"),
+}, (t) => [
+  index("g2b_business_idx").on(t.businessId),
+  index("g2b_period_idx").on(t.businessId, t.returnPeriod),
+]);
+
+export const gstr2bRecords = pgTable("gstr2b_records", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  uploadId: uuid("upload_id").notNull().references(() => gstr2bUploads.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  supplierGstin: text("supplier_gstin").notNull(),
+  supplierName: text("supplier_name"),
+  invoiceNumber: text("invoice_number").notNull(),
+  invoiceDate: timestamp("invoice_date", { withTimezone: true }),
+  invoiceValue: numeric("invoice_value", { precision: 15, scale: 2 }).default("0").notNull(),
+  taxableValue: numeric("taxable_value", { precision: 15, scale: 2 }).default("0").notNull(),
+  cgst: numeric("cgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  sgst: numeric("sgst", { precision: 15, scale: 2 }).default("0").notNull(),
+  igst: numeric("igst", { precision: 15, scale: 2 }).default("0").notNull(),
+  cess: numeric("cess", { precision: 15, scale: 2 }).default("0").notNull(),
+  itcAvailable: text("itc_available"),  // "Y" | "N"
+  reason: text("reason"),               // Reason if ITC not available
+  sourceType: text("source_type"),      // "B2B" | "B2BA" | "CDNR" | "ISD" | etc.
+  // Reconciliation
+  matchStatus: text("match_status").default("pending").notNull(),  // "matched" | "mismatched" | "missing_in_books" | "pending" | "ignored"
+  matchedInvoiceId: uuid("matched_invoice_id"),  // Links to our purchase invoice
+  mismatchReasons: jsonb("mismatch_reasons").$type<string[]>(),  // ["amount_difference", "date_difference", etc.]
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("g2br_upload_idx").on(t.uploadId),
+  index("g2br_business_idx").on(t.businessId),
+  index("g2br_gstin_idx").on(t.businessId, t.supplierGstin),
+  index("g2br_match_idx").on(t.uploadId, t.matchStatus),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({

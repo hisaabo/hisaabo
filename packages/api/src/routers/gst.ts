@@ -4,6 +4,7 @@ import { invoices, businesses } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson } from "../lib/gst-reports.js";
+import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
 
 export const gstRouter = router({
   // Reports are available for ALL businesses — GST-registered get GST terminology,
@@ -67,6 +68,35 @@ export const gstRouter = router({
       return {
         json: portalJson,
         filename: `GSTR1_${report.period.replace(" ", "_")}_portal.json`,
+      };
+    }),
+
+  // GSTR-9: Annual return consolidating 12 months of GSTR-1 + GSTR-3B data.
+  // Filed once per financial year (April–March). Tables 4-9 are generated from
+  // the monthly report data — no separate data entry required.
+  gstr9: viewerProcedure
+    .input(z.object({
+      financialYear: z.number().int().min(2020).max(2099), // Start year, e.g. 2025 for FY 2025-26
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "GstReport");
+      return generateGSTR9(ctx.businessId, input.financialYear, ctx.db);
+    }),
+
+  // GSTR-9 portal JSON — produces the JSON schema accepted by the GST portal's
+  // offline tool. Users can download this and upload directly to gstn.gov.in.
+  gstr9Json: viewerProcedure
+    .input(z.object({
+      financialYear: z.number().int().min(2020).max(2099),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "GstReport");
+      const report = await generateGSTR9(ctx.businessId, input.financialYear, ctx.db);
+      const portalJson = gstr9ToPortalJson(report);
+      const fyLabel = report.financialYear.replace("-", "_");
+      return {
+        json: portalJson,
+        filename: `GSTR9_FY${fyLabel}_portal.json`,
       };
     }),
 

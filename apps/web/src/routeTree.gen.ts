@@ -26,6 +26,7 @@ import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
 import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
 import { Route as ItcRouteImport } from './routes/itc'
 import { Route as InvoicesRouteImport } from './routes/invoices'
+import { Route as Gstr2bRouteImport } from './routes/gstr2b'
 import { Route as GstRouteImport } from './routes/gst'
 import { Route as ExpensesRouteImport } from './routes/expenses'
 import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
@@ -122,6 +123,11 @@ const InvoicesRoute = InvoicesRouteImport.update({
   path: '/invoices',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Gstr2bRoute = Gstr2bRouteImport.update({
+  id: '/gstr2b',
+  path: '/gstr2b',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GstRoute = GstRouteImport.update({
   id: '/gst',
   path: '/gst',
@@ -184,6 +190,7 @@ export interface FileRoutesByFullPath {
   '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
+  '/gstr2b': typeof Gstr2bRoute
   '/invoices': typeof InvoicesRoute
   '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
@@ -213,6 +220,7 @@ export interface FileRoutesByTo {
   '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
+  '/gstr2b': typeof Gstr2bRoute
   '/invoices': typeof InvoicesRoute
   '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
@@ -243,6 +251,7 @@ export interface FileRoutesById {
   '/eway-bills': typeof EwayBillsRoute
   '/expenses': typeof ExpensesRoute
   '/gst': typeof GstRoute
+  '/gstr2b': typeof Gstr2bRoute
   '/invoices': typeof InvoicesRoute
   '/itc': typeof ItcRoute
   '/items': typeof ItemsRoute
@@ -274,6 +283,7 @@ export interface FileRouteTypes {
     | '/eway-bills'
     | '/expenses'
     | '/gst'
+    | '/gstr2b'
     | '/invoices'
     | '/itc'
     | '/items'
@@ -303,6 +313,7 @@ export interface FileRouteTypes {
     | '/eway-bills'
     | '/expenses'
     | '/gst'
+    | '/gstr2b'
     | '/invoices'
     | '/itc'
     | '/items'
@@ -332,6 +343,7 @@ export interface FileRouteTypes {
     | '/eway-bills'
     | '/expenses'
     | '/gst'
+    | '/gstr2b'
     | '/invoices'
     | '/itc'
     | '/items'
@@ -362,6 +374,7 @@ export interface RootRouteChildren {
   EwayBillsRoute: typeof EwayBillsRoute
   ExpensesRoute: typeof ExpensesRoute
   GstRoute: typeof GstRoute
+  Gstr2bRoute: typeof Gstr2bRoute
   InvoicesRoute: typeof InvoicesRoute
   ItcRoute: typeof ItcRoute
   ItemsRoute: typeof ItemsRoute
@@ -509,6 +522,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GstRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/gstr2b': {
+      id: '/gstr2b'
+      path: '/gstr2b'
+      fullPath: '/gstr2b'
+      preLoaderRoute: typeof Gstr2bRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/expenses': {
       id: '/expenses'
       path: '/expenses'
@@ -586,6 +606,7 @@ const rootRouteChildren: RootRouteChildren = {
   EwayBillsRoute: EwayBillsRoute,
   ExpensesRoute: ExpensesRoute,
   GstRoute: GstRoute,
+  Gstr2bRoute: Gstr2bRoute,
   InvoicesRoute: InvoicesRoute,
   ItcRoute: ItcRoute,
   ItemsRoute: ItemsRoute,

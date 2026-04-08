@@ -65,6 +65,8 @@ import {
   eInvoiceConfigs,
   ewayBills,
   ewayBillVehicleUpdates,
+  gstr2bUploads,
+  gstr2bRecords,
 } from "@hisaabo/db";
 
 // Reconstruct schema objects for Drizzle so each instance has only its tables
@@ -110,6 +112,8 @@ const tenantSchema = {
   eInvoiceConfigs,
   ewayBills,
   ewayBillVehicleUpdates,
+  gstr2bUploads,
+  gstr2bRecords,
 };
 
 // Re-export the Drizzle type aliases so callers don't need to import drizzle directly.
@@ -193,6 +197,8 @@ export async function truncateAllTables(): Promise<void> {
   await client`
     TRUNCATE TABLE
       -- Tenant schema (leaf tables first)
+      gstr2b_records,
+      gstr2b_uploads,
       eway_bill_vehicle_updates,
       eway_bills,
       e_invoice_configs,

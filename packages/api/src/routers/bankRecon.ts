@@ -52,6 +52,7 @@ import {
   detectBankTemplate,
   preprocessRows,
   type DetectionResult,
+  type DetectionWarning,
 } from "../lib/bank-templates/index.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -135,8 +136,11 @@ export const bankReconRouter = router({
         bankName: acctHints?.bankName ?? undefined,
       };
 
-      // Auto-detect template
-      const detectedTemplate: DetectionResult | null = detectBankTemplate(rows, dbTemplates, hints);
+      // Auto-detect template: tries highest version first, degrades to lower
+      // versions if data validation fails. Warns if detected bank != account bank.
+      const detection = detectBankTemplate(rows, dbTemplates, hints);
+      const detectedTemplate: DetectionResult | null = detection?.result ?? null;
+      const detectionWarning: DetectionWarning | null = detection?.warning ?? null;
 
       const headers = rows[0] ?? [];
 
@@ -171,6 +175,7 @@ export const bankReconRouter = router({
         previewRows,
         detectedMapping,
         detectedTemplate,
+        detectionWarning,
         totalRows: rows.length - 1,
       };
     }),

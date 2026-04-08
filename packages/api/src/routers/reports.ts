@@ -32,6 +32,16 @@ import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { generateTallyXml } from "../lib/tally-xml-export.js";
 
+// ── Shared variance helper ────────────────────────────────────────
+function computeVariance(current: string, previous: string): { variance: string; variancePercent: string } {
+  const v = money.sub(current, previous);
+  const prevAbs = money.compare(previous, "0") < 0 ? money.sub("0", previous) : previous;
+  const variancePercent = money.compare(prevAbs, "0") === 0
+    ? "N/A"
+    : ((parseFloat(v) / parseFloat(prevAbs)) * 100).toFixed(1);
+  return { variance: v, variancePercent };
+}
+
 export const reportsRouter = router({
   // ── 1. Daybook ─────────────────────────────────────────────────
   daybook: viewerProcedure
@@ -1650,6 +1660,309 @@ export const reportsRouter = router({
       };
     }),
 
+  // ── 15. Comparative Trial Balance ─────────────────────────────
+  comparativeTrialBalance: viewerProcedure
+    .input(z.object({
+      currentFYStart: z.string().datetime(),
+      currentFYEnd: z.string().datetime(),
+      previousFYStart: z.string().datetime(),
+      previousFYEnd: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const [currentEntries, previousEntries] = await Promise.all([
+        deriveFullLedger(
+          ctx.db, ctx.businessId,
+          new Date(input.currentFYStart), new Date(input.currentFYEnd),
+        ),
+        deriveFullLedger(
+          ctx.db, ctx.businessId,
+          new Date(input.previousFYStart), new Date(input.previousFYEnd),
+        ),
+      ]);
+
+      // Aggregate per account code for each period
+      type AccAgg = { debit: string; credit: string; name: string };
+      const aggFor = (entries: Awaited<ReturnType<typeof deriveFullLedger>>) => {
+        const map = new Map<string, AccAgg>();
+        for (const entry of entries) {
+          for (const line of entry.lines) {
+            const existing = map.get(line.accountCode) ?? { debit: "0.00", credit: "0.00", name: line.accountName };
+            existing.debit = money.add(existing.debit, line.debit);
+            existing.credit = money.add(existing.credit, line.credit);
+            map.set(line.accountCode, existing);
+          }
+        }
+        return map;
+      };
+
+      const [currentMap, previousMap] = [aggFor(currentEntries), aggFor(previousEntries)];
+
+      // Fetch account types from CoA
+      const coaRows = await ctx.db
+        .select({ code: chartOfAccounts.code, accountType: chartOfAccounts.accountType })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+      const coaTypeMap = new Map(coaRows.map((r) => [r.code, r.accountType]));
+
+      // Merge all account codes from both periods
+      const allCodes = new Set([...currentMap.keys(), ...previousMap.keys()]);
+
+      const accounts = [...allCodes]
+        .map((code) => {
+          const cur = currentMap.get(code) ?? { debit: "0.00", credit: "0.00", name: "" };
+          const prev = previousMap.get(code) ?? { debit: "0.00", credit: "0.00", name: "" };
+          const name = cur.name || prev.name;
+          const currentBalance = money.sub(cur.debit, cur.credit);
+          const previousBalance = money.sub(prev.debit, prev.credit);
+          const { variance, variancePercent } = computeVariance(currentBalance, previousBalance);
+          return {
+            accountCode: code,
+            accountName: name,
+            accountType: coaTypeMap.get(code) ?? "expense",
+            currentDebit: cur.debit,
+            currentCredit: cur.credit,
+            currentBalance,
+            previousDebit: prev.debit,
+            previousCredit: prev.credit,
+            previousBalance,
+            variance,
+            variancePercent,
+          };
+        })
+        .filter((a) =>
+          money.compare(a.currentDebit, "0") !== 0 ||
+          money.compare(a.currentCredit, "0") !== 0 ||
+          money.compare(a.previousDebit, "0") !== 0 ||
+          money.compare(a.previousCredit, "0") !== 0,
+        )
+        .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      const currentTotalDebit = money.sum(accounts.map((a) => a.currentDebit));
+      const currentTotalCredit = money.sum(accounts.map((a) => a.currentCredit));
+      const previousTotalDebit = money.sum(accounts.map((a) => a.previousDebit));
+      const previousTotalCredit = money.sum(accounts.map((a) => a.previousCredit));
+
+      return { accounts, currentTotalDebit, currentTotalCredit, previousTotalDebit, previousTotalCredit };
+    }),
+
+  // ── 16. Comparative Balance Sheet ─────────────────────────────
+  comparativeBalanceSheet: viewerProcedure
+    .input(z.object({
+      currentAsOf: z.string().datetime(),
+      previousAsOf: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      // Balance sheet is cumulative — derive from the beginning of time up to each asOf date
+      const epoch = new Date("2000-01-01");
+      const [currentEntries, previousEntries] = await Promise.all([
+        deriveFullLedger(ctx.db, ctx.businessId, epoch, new Date(input.currentAsOf)),
+        deriveFullLedger(ctx.db, ctx.businessId, epoch, new Date(input.previousAsOf)),
+      ]);
+
+      const coaRows = await ctx.db
+        .select({ code: chartOfAccounts.code, name: chartOfAccounts.name, accountType: chartOfAccounts.accountType })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+      const coaTypeMap = new Map(coaRows.map((r) => [r.code, { name: r.name, type: r.accountType }]));
+
+      type AccBal = { debit: string; credit: string };
+      const buildMap = (entries: Awaited<ReturnType<typeof deriveFullLedger>>) => {
+        const m = new Map<string, AccBal>();
+        for (const entry of entries) {
+          for (const line of entry.lines) {
+            const ex = m.get(line.accountCode) ?? { debit: "0.00", credit: "0.00" };
+            ex.debit = money.add(ex.debit, line.debit);
+            ex.credit = money.add(ex.credit, line.credit);
+            m.set(line.accountCode, ex);
+          }
+        }
+        return m;
+      };
+      const [curMap, prevMap] = [buildMap(currentEntries), buildMap(previousEntries)];
+
+      // Net income helper (income - expenses over all time up to asOf)
+      const calcNetIncome = (m: Map<string, AccBal>) => {
+        let incCredits = "0.00", incDebits = "0.00", expDebits = "0.00", expCredits = "0.00";
+        for (const [code, acc] of m) {
+          const info = coaTypeMap.get(code);
+          if (!info) continue;
+          if (info.type === "income") {
+            incCredits = money.add(incCredits, acc.credit);
+            incDebits = money.add(incDebits, acc.debit);
+          } else if (info.type === "expense") {
+            expDebits = money.add(expDebits, acc.debit);
+            expCredits = money.add(expCredits, acc.credit);
+          }
+        }
+        return money.sub(money.sub(incCredits, incDebits), money.sub(expDebits, expCredits));
+      };
+
+      const currentNetIncome = calcNetIncome(curMap);
+      const previousNetIncome = calcNetIncome(prevMap);
+
+      // Build balance sheet sections for a given map + net income
+      const allCodes = new Set([...curMap.keys(), ...prevMap.keys()]);
+
+      type BsItem = { accountCode: string; accountName: string; currentBalance: string; previousBalance: string; variance: string; variancePercent: string };
+      const assets: BsItem[] = [];
+      const liabilities: BsItem[] = [];
+      const equity: BsItem[] = [];
+
+      for (const code of allCodes) {
+        const info = coaTypeMap.get(code);
+        if (!info) continue;
+        const { type, name } = info;
+
+        const cur = curMap.get(code) ?? { debit: "0.00", credit: "0.00" };
+        const prev = prevMap.get(code) ?? { debit: "0.00", credit: "0.00" };
+
+        let currentBalance: string;
+        let previousBalance: string;
+        if (type === "asset") {
+          currentBalance = money.sub(cur.debit, cur.credit);
+          previousBalance = money.sub(prev.debit, prev.credit);
+        } else if (type === "liability" || type === "equity") {
+          currentBalance = money.sub(cur.credit, cur.debit);
+          previousBalance = money.sub(prev.credit, prev.debit);
+        } else {
+          continue; // income/expense → net income only
+        }
+
+        if (money.compare(currentBalance, "0") === 0 && money.compare(previousBalance, "0") === 0) continue;
+
+        const { variance, variancePercent } = computeVariance(currentBalance, previousBalance);
+        const item: BsItem = { accountCode: code, accountName: name, currentBalance, previousBalance, variance, variancePercent };
+
+        if (type === "asset") assets.push(item);
+        else if (type === "liability") liabilities.push(item);
+        else equity.push(item);
+      }
+
+      // Add net income row to equity
+      const { variance: niVariance, variancePercent: niVariancePct } = computeVariance(currentNetIncome, previousNetIncome);
+      equity.push({
+        accountCode: "9999",
+        accountName: "Net Income (Current Period)",
+        currentBalance: currentNetIncome,
+        previousBalance: previousNetIncome,
+        variance: niVariance,
+        variancePercent: niVariancePct,
+      });
+
+      for (const section of [assets, liabilities, equity]) {
+        section.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      }
+
+      const currentTotalAssets = money.sum(assets.map((a) => a.currentBalance));
+      const previousTotalAssets = money.sum(assets.map((a) => a.previousBalance));
+      const currentTotalLiabilities = money.sum(liabilities.map((a) => a.currentBalance));
+      const previousTotalLiabilities = money.sum(liabilities.map((a) => a.previousBalance));
+      const currentTotalEquity = money.sum(equity.map((a) => a.currentBalance));
+      const previousTotalEquity = money.sum(equity.map((a) => a.previousBalance));
+
+      return {
+        assets, liabilities, equity,
+        currentTotalAssets, previousTotalAssets,
+        currentTotalLiabilities, previousTotalLiabilities,
+        currentTotalEquity, previousTotalEquity,
+      };
+    }),
+
+  // ── 17. Comparative Profit & Loss ─────────────────────────────
+  comparativeProfitAndLoss: viewerProcedure
+    .input(z.object({
+      currentFYStart: z.string().datetime(),
+      currentFYEnd: z.string().datetime(),
+      previousFYStart: z.string().datetime(),
+      previousFYEnd: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const [currentEntries, previousEntries] = await Promise.all([
+        deriveFullLedger(ctx.db, ctx.businessId, new Date(input.currentFYStart), new Date(input.currentFYEnd)),
+        deriveFullLedger(ctx.db, ctx.businessId, new Date(input.previousFYStart), new Date(input.previousFYEnd)),
+      ]);
+
+      const coaRows = await ctx.db
+        .select({ code: chartOfAccounts.code, name: chartOfAccounts.name, accountType: chartOfAccounts.accountType })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+      const coaTypeMap = new Map(coaRows.map((r) => [r.code, { name: r.name, type: r.accountType }]));
+
+      type AccBal2 = { debit: string; credit: string };
+      const aggFor2 = (entries: Awaited<ReturnType<typeof deriveFullLedger>>) => {
+        const m = new Map<string, AccBal2>();
+        for (const entry of entries) {
+          for (const line of entry.lines) {
+            const ex = m.get(line.accountCode) ?? { debit: "0.00", credit: "0.00" };
+            ex.debit = money.add(ex.debit, line.debit);
+            ex.credit = money.add(ex.credit, line.credit);
+            m.set(line.accountCode, ex);
+          }
+        }
+        return m;
+      };
+
+      const [curMap, prevMap] = [aggFor2(currentEntries), aggFor2(previousEntries)];
+      const allCodes = new Set([...curMap.keys(), ...prevMap.keys()]);
+
+      type PlItem = { accountCode: string; accountName: string; currentAmount: string; previousAmount: string; variance: string; variancePercent: string };
+      const income: PlItem[] = [];
+      const expenseItems: PlItem[] = [];
+
+      for (const code of allCodes) {
+        const info = coaTypeMap.get(code);
+        if (!info) continue;
+        const { type, name } = info;
+        if (type !== "income" && type !== "expense") continue;
+
+        const cur = curMap.get(code) ?? { debit: "0.00", credit: "0.00" };
+        const prev = prevMap.get(code) ?? { debit: "0.00", credit: "0.00" };
+
+        const currentAmount = type === "income"
+          ? money.sub(cur.credit, cur.debit)
+          : money.sub(cur.debit, cur.credit);
+        const previousAmount = type === "income"
+          ? money.sub(prev.credit, prev.debit)
+          : money.sub(prev.debit, prev.credit);
+
+        const { variance, variancePercent } = computeVariance(currentAmount, previousAmount);
+        const item: PlItem = { accountCode: code, accountName: name, currentAmount, previousAmount, variance, variancePercent };
+
+        if (type === "income") income.push(item);
+        else expenseItems.push(item);
+      }
+
+      income.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      expenseItems.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      const currentTotalIncome = money.sum(income.map((a) => a.currentAmount));
+      const previousTotalIncome = money.sum(income.map((a) => a.previousAmount));
+      const currentTotalExpenses = money.sum(expenseItems.map((a) => a.currentAmount));
+      const previousTotalExpenses = money.sum(expenseItems.map((a) => a.previousAmount));
+      const currentNetProfit = money.sub(currentTotalIncome, currentTotalExpenses);
+      const previousNetProfit = money.sub(previousTotalIncome, previousTotalExpenses);
+      const { variance: netProfitVariance, variancePercent: netProfitVariancePercent } = computeVariance(currentNetProfit, previousNetProfit);
+
+      return {
+        income,
+        expenses: expenseItems,
+        currentTotalIncome,
+        previousTotalIncome,
+        currentTotalExpenses,
+        previousTotalExpenses,
+        currentNetProfit,
+        previousNetProfit,
+        netProfitVariance,
+        netProfitVariancePercent,
+      };
+    }),
+
   // ── Tally Prime XML export ─────────────────────────────────────
   tallyExport: viewerProcedure
     .input(z.object({
@@ -1753,6 +2066,257 @@ export const reportsRouter = router({
       return {
         xml,
         filename: `tally-export-${fromSlice}-to-${toSlice}.xml`,
+      };
+    }),
+
+  // ── 15. Cash Flow Statement (indirect method) ─────────────────
+  cashFlowStatement: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime(),
+      toDate: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const from = new Date(input.fromDate);
+      const to = new Date(input.toDate);
+
+      // ── A. Period ledger entries ─────────────────────────────────
+      const entries = await deriveFullLedger(ctx.db, ctx.businessId, from, to);
+
+      // Fetch CoA for type information
+      const coaRows = await ctx.db
+        .select({
+          code: chartOfAccounts.code,
+          name: chartOfAccounts.name,
+          accountType: chartOfAccounts.accountType,
+        })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+      const coaTypeMap = new Map(
+        coaRows.map((r) => [r.code, { name: r.name, type: r.accountType }]),
+      );
+
+      // Aggregate net movements (debit - credit) per account code for the period
+      type AccMovement = { code: string; name: string; debit: string; credit: string };
+      const movMap = new Map<string, AccMovement>();
+
+      for (const entry of entries) {
+        for (const line of entry.lines) {
+          const existing = movMap.get(line.accountCode) ?? {
+            code: line.accountCode,
+            name: line.accountName,
+            debit: "0.00",
+            credit: "0.00",
+          };
+          existing.debit = money.add(existing.debit, line.debit);
+          existing.credit = money.add(existing.credit, line.credit);
+          movMap.set(line.accountCode, existing);
+        }
+      }
+
+      /** Net movement for an account during the period (positive = net debit) */
+      function netDebit(code: string): string {
+        const acc = movMap.get(code);
+        if (!acc) return "0.00";
+        return money.sub(acc.debit, acc.credit);
+      }
+
+      /** Net credit movement for an account during the period (positive = net credit) */
+      function netCredit(code: string): string {
+        return money.sub((movMap.get(code)?.credit ?? "0.00"), (movMap.get(code)?.debit ?? "0.00"));
+      }
+
+      // ── B. Net Income (income credits - expense debits) ──────────
+      let totalIncomeCredits = "0.00";
+      let totalIncomeDebits = "0.00";
+      let totalExpenseDebits = "0.00";
+      let totalExpenseCredits = "0.00";
+
+      for (const [code, acc] of movMap) {
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo) continue;
+        if (acctInfo.type === "income") {
+          totalIncomeCredits = money.add(totalIncomeCredits, acc.credit);
+          totalIncomeDebits = money.add(totalIncomeDebits, acc.debit);
+        } else if (acctInfo.type === "expense") {
+          totalExpenseDebits = money.add(totalExpenseDebits, acc.debit);
+          totalExpenseCredits = money.add(totalExpenseCredits, acc.credit);
+        }
+      }
+
+      const netIncome = money.sub(
+        money.sub(totalIncomeCredits, totalIncomeDebits),
+        money.sub(totalExpenseDebits, totalExpenseCredits),
+      );
+
+      // ── C. Operating Activities ──────────────────────────────────
+
+      // Depreciation (5900): add back non-cash expense — net debit to 5900
+      const depreciationAmt = netDebit("5900");
+
+      const adjustments: Array<{ description: string; amount: string }> = [];
+      if (!money.isZero(depreciationAmt)) {
+        adjustments.push({ description: "Add: Depreciation", amount: depreciationAmt });
+      }
+
+      // Working capital changes:
+      // Receivables (1100): asset — increase (net debit) = cash outflow (negative)
+      //   Change in receivables = net debit during period; positive debit = receivable went up = LESS cash
+      const receivableChange = netDebit("1100");
+      // Payables (2000): liability — increase (net credit) = cash inflow (positive)
+      //   Change in payables = net credit during period; positive credit = payable went up = MORE cash
+      const payableChange = netCredit("2000");
+      // Inventory (1300): asset — increase (net debit) = cash outflow (negative)
+      const inventoryChange = netDebit("1300");
+
+      const workingCapitalChanges: Array<{ description: string; amount: string }> = [];
+
+      if (!money.isZero(receivableChange)) {
+        // Positive receivableChange means receivables increased → cash decreased
+        workingCapitalChanges.push({
+          description: money.compare(receivableChange, "0") > 0
+            ? "Increase in Receivables"
+            : "Decrease in Receivables",
+          // Negate: increase in receivable = negative cash flow
+          amount: money.sub("0.00", receivableChange),
+        });
+      }
+
+      if (!money.isZero(payableChange)) {
+        workingCapitalChanges.push({
+          description: money.compare(payableChange, "0") > 0
+            ? "Increase in Payables"
+            : "Decrease in Payables",
+          // Positive payable change = positive cash flow (already correct)
+          amount: payableChange,
+        });
+      }
+
+      if (!money.isZero(inventoryChange)) {
+        workingCapitalChanges.push({
+          description: money.compare(inventoryChange, "0") > 0
+            ? "Increase in Inventory"
+            : "Decrease in Inventory",
+          // Negate: increase in inventory = negative cash flow
+          amount: money.sub("0.00", inventoryChange),
+        });
+      }
+
+      const totalWorkingCapital = money.sum(workingCapitalChanges.map((w) => w.amount));
+      const totalAdjustments = money.sum(adjustments.map((a) => a.amount));
+      const totalOperating = money.sum([netIncome, totalAdjustments, totalWorkingCapital]);
+
+      // ── D. Investing Activities ──────────────────────────────────
+      // Fixed asset accounts: 1xxx codes that are NOT cash/bank/receivable/inventory/tax
+      // Specifically 1400+ (fixed assets: land, building, plant, equipment, vehicles, etc.)
+      const EXCLUDED_ASSET_CODES = new Set(["1000", "1010", "1100", "1300", "1510", "1511", "1512"]);
+      const investingItems: Array<{ description: string; amount: string }> = [];
+
+      for (const [code, acc] of movMap) {
+        if (!code.startsWith("1") || EXCLUDED_ASSET_CODES.has(code)) continue;
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo || acctInfo.type !== "asset") continue;
+
+        // Net debit = asset increased = cash outflow (purchase)
+        const net = netDebit(code);
+        if (!money.isZero(net)) {
+          investingItems.push({
+            description: money.compare(net, "0") > 0
+              ? `Purchase of ${acc.name}`
+              : `Proceeds from ${acc.name}`,
+            // Net debit means outflow → negate to get cash flow sign
+            amount: money.sub("0.00", net),
+          });
+        }
+      }
+
+      const totalInvesting = money.sum(investingItems.map((i) => i.amount));
+
+      // ── E. Financing Activities ──────────────────────────────────
+      const financingItems: Array<{ description: string; amount: string }> = [];
+
+      // Capital contributions (3000): net credit = owner put money in = positive
+      const capitalChange = netCredit("3000");
+      if (!money.isZero(capitalChange)) {
+        financingItems.push({
+          description: money.compare(capitalChange, "0") > 0
+            ? "Capital Contributed"
+            : "Capital Withdrawn",
+          amount: capitalChange,
+        });
+      }
+
+      // Drawings (3100): net debit = owner took money out = negative cash flow
+      const drawingsChange = netDebit("3100");
+      if (!money.isZero(drawingsChange)) {
+        financingItems.push({
+          description: "Owner Drawings",
+          amount: money.sub("0.00", drawingsChange),
+        });
+      }
+
+      // Loan/financing liabilities (2xxx codes other than 2000 Payable, 2100/2101/2102 GST)
+      const EXCLUDED_LIABILITY_CODES = new Set(["2000", "2100", "2101", "2102"]);
+      for (const [code, acc] of movMap) {
+        if (!code.startsWith("2") || EXCLUDED_LIABILITY_CODES.has(code)) continue;
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo || acctInfo.type !== "liability") continue;
+
+        const net = netCredit(code);
+        if (!money.isZero(net)) {
+          financingItems.push({
+            description: money.compare(net, "0") > 0
+              ? `Proceeds from ${acc.name}`
+              : `Repayment of ${acc.name}`,
+            amount: net,
+          });
+        }
+      }
+
+      const totalFinancing = money.sum(financingItems.map((f) => f.amount));
+
+      // ── F. Net Cash Flow & Balances ──────────────────────────────
+      const netCashFlow = money.sum([totalOperating, totalInvesting, totalFinancing]);
+
+      // Opening cash balance: all entries from beginning of time up to (but not including) fromDate
+      const openingEntries = await deriveFullLedger(
+        ctx.db,
+        ctx.businessId,
+        new Date("2000-01-01"),
+        new Date(from.getTime() - 1), // 1ms before fromDate
+      );
+
+      let openingCash = "0.00";
+      for (const entry of openingEntries) {
+        for (const line of entry.lines) {
+          if (line.accountCode === "1000" || line.accountCode === "1010") {
+            openingCash = money.add(openingCash, money.sub(line.debit, line.credit));
+          }
+        }
+      }
+
+      const closingCashBalance = money.add(openingCash, netCashFlow);
+
+      return {
+        operating: {
+          netIncome,
+          adjustments,
+          workingCapitalChanges,
+          totalOperating,
+        },
+        investing: {
+          items: investingItems,
+          totalInvesting,
+        },
+        financing: {
+          items: financingItems,
+          totalFinancing,
+        },
+        netCashFlow,
+        openingCashBalance: openingCash,
+        closingCashBalance,
       };
     }),
 });

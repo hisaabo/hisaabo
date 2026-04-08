@@ -63,7 +63,7 @@ const REPORT_GROUPS: Array<{ label: string; reports: ReportDef[] }> = [
       { id: "payment-summary", label: "Payment Summary", description: "All payments received and made", tabular: true },
       { id: "tax-summary", label: "Tax Summary", description: "Tax collected and paid summary", tabular: true },
       { id: "collection-metrics", label: "Collection Efficiency", description: "Payment collection performance", tabular: false },
-      { id: "cash-flow", label: "Cash Flow Forecast", description: "Projected inflows and outflows", tabular: false },
+      { id: "cash-flow", label: "Cash Flow Statement", description: "Cash flows from operating, investing, and financing activities", tabular: false },
     ],
   },
 ];
@@ -2590,60 +2590,105 @@ function CollectionEfficiencyReport({
   );
 }
 
-// ── Cash Flow Forecast Report ────────────────────────────────────
+// ── Cash Flow Statement Report ───────────────────────────────────
 
-interface CashFlowForecastData {
-  forecast: Array<{
-    label: string;
-    days: number;
-    optimistic: string;
-    expected: string;
-    conservative: string;
-  }>;
-  currentBankBalance: string;
-  avgDailyExpenses: string;
-  openReceivables: Array<{
-    bucket: string;
-    totalDue: string;
-    invoiceCount: number;
-  }>;
-  collectionRates: {
-    rate7d: string;
-    rate14d: string;
-    rate30d: string;
-    paidInvoiceCount: number;
-    lowConfidence: boolean;
+interface CashFlowStatementData {
+  operating: {
+    netIncome: string;
+    adjustments: Array<{ description: string; amount: string }>;
+    workingCapitalChanges: Array<{ description: string; amount: string }>;
+    totalOperating: string;
   };
+  investing: {
+    items: Array<{ description: string; amount: string }>;
+    totalInvesting: string;
+  };
+  financing: {
+    items: Array<{ description: string; amount: string }>;
+    totalFinancing: string;
+  };
+  netCashFlow: string;
+  openingCashBalance: string;
+  closingCashBalance: string;
 }
 
-const BUCKET_LABELS: Record<string, string> = {
-  overdue: "Overdue",
-  "7d": "Due 0–7d",
-  "14d": "Due 8–14d",
-  "30d": "Due 15–30d",
-  beyond_30d: "Beyond 30d",
-  no_due_date: "No Due Date",
-};
-
-const FORECAST_PERIOD_LABELS: Record<string, string> = {
-  today: "Today",
-  "+7d": "+7 Days",
-  "+14d": "+14 Days",
-  "+30d": "+30 Days",
-};
-
-function forecastAmountColor(value: string): string {
+function cashFlowAmountColor(value: string): string {
   const n = parseFloat(value);
   if (n > 0) return "text-emerald-600 dark:text-emerald-400";
   if (n < 0) return "text-red-600 dark:text-red-400";
   return "text-text-secondary";
 }
 
-function CashFlowReport() {
-  const { data, isLoading, error } = (trpc as any).reports.cashFlowForecast.useQuery(
-    {},
-    { enabled: true }
-  ) as { data: CashFlowForecastData | undefined; isLoading: boolean; error: unknown };
+function CashFlowLineItem({ description, amount }: { description: string; amount: string }) {
+  return (
+    <div className="flex items-center justify-between px-5 py-2.5 border-b border-border/40 last:border-b-0 hover:bg-surface-2/30 transition-colors">
+      <span className="text-[13px] text-text-secondary">{description}</span>
+      <span className={cn("text-[13px] font-medium tabular-nums", cashFlowAmountColor(amount))}>
+        {formatCurrency(amount)}
+      </span>
+    </div>
+  );
+}
+
+function CashFlowSectionTotal({
+  label,
+  amount,
+  highlight,
+}: {
+  label: string;
+  amount: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between px-5 py-3",
+        highlight ? "bg-surface-2/60" : "bg-surface-2/40",
+      )}
+    >
+      <span className={cn("text-[13px] font-semibold", highlight ? "text-text-primary" : "text-text-secondary")}>
+        {label}
+      </span>
+      <span className={cn("text-[13px] font-bold tabular-nums", cashFlowAmountColor(amount))}>
+        {formatCurrency(amount)}
+      </span>
+    </div>
+  );
+}
+
+function CashFlowSection({
+  title,
+  children,
+  total,
+  totalLabel,
+}: {
+  title: string;
+  children: React.ReactNode;
+  total: string;
+  totalLabel: string;
+}) {
+  return (
+    <div className="bg-surface rounded-xl border border-border overflow-hidden">
+      <div className="px-5 py-3 border-b border-border bg-surface-2/20">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{title}</p>
+      </div>
+      {children}
+      <CashFlowSectionTotal label={totalLabel} amount={total} />
+    </div>
+  );
+}
+
+function CashFlowReport({
+  fromDate,
+  toDate,
+}: {
+  fromDate?: string;
+  toDate?: string;
+}) {
+  const { data, isLoading, error } = (trpc as any).reports.cashFlowStatement.useQuery(
+    { fromDate, toDate },
+    { enabled: !!(fromDate && toDate) }
+  ) as { data: CashFlowStatementData | undefined; isLoading: boolean; error: unknown };
 
   if (isLoading) {
     return (
@@ -2661,136 +2706,110 @@ function CashFlowReport() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
           </svg>
         }
-        title="Could not load cash flow forecast"
-        description="The reports router may not be available yet. It will appear here once the backend is ready."
+        title="Could not load cash flow statement"
+        description="No transactions found for the selected period, or the backend is not yet available."
       />
     );
   }
 
-  const { forecast, currentBankBalance, avgDailyExpenses, openReceivables, collectionRates } = data;
+  const { operating, investing, financing, netCashFlow, openingCashBalance, closingCashBalance } = data;
+  const netCashNum = parseFloat(netCashFlow);
 
   return (
     <div className="space-y-4">
-      {/* Top row: summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-surface rounded-xl border border-border px-5 py-5">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-3">
-            Current Bank Balance
-          </p>
-          <p className="text-4xl font-bold tabular-nums text-text-primary">
-            {formatCurrency(currentBankBalance)}
-          </p>
-          <p className="text-sm text-text-tertiary mt-2">Across all linked bank accounts</p>
+      {/* Opening / Closing balance summary cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-surface rounded-xl border border-border px-5 py-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Opening Balance</p>
+          <p className="text-2xl font-bold tabular-nums text-text-primary">{formatCurrency(openingCashBalance)}</p>
+          <p className="text-xs text-text-tertiary mt-1">Cash + Bank at period start</p>
         </div>
 
-        <div className="bg-surface rounded-xl border border-border px-5 py-5">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-3">
-            Avg Daily Expenses
+        <div className={cn(
+          "rounded-xl border px-5 py-4",
+          netCashNum > 0
+            ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+            : netCashNum < 0
+              ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+              : "bg-surface border-border"
+        )}>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Net Cash Flow</p>
+          <p className={cn("text-2xl font-bold tabular-nums", cashFlowAmountColor(netCashFlow))}>
+            {formatCurrency(netCashFlow)}
           </p>
-          <p className="text-4xl font-bold tabular-nums text-amber-600 dark:text-amber-400">
-            {formatCurrency(avgDailyExpenses)}
-          </p>
-          <p className="text-sm text-text-tertiary mt-2">30-day rolling average</p>
+          <p className="text-xs text-text-tertiary mt-1">For the selected period</p>
+        </div>
+
+        <div className="bg-surface rounded-xl border border-border px-5 py-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">Closing Balance</p>
+          <p className="text-2xl font-bold tabular-nums text-text-primary">{formatCurrency(closingCashBalance)}</p>
+          <p className="text-xs text-text-tertiary mt-1">Cash + Bank at period end</p>
         </div>
       </div>
 
-      {/* Forecast table */}
-      <div className="bg-surface rounded-xl border border-border overflow-hidden">
-        <div className="px-5 py-3 border-b border-border">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Cash Flow Forecast</p>
-        </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-surface-2/50">
-              <th className="text-left px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Period</th>
-              <th className="text-right px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Optimistic</th>
-              <th className="text-right px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Expected</th>
-              <th className="text-right px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">Conservative</th>
-            </tr>
-          </thead>
-          <tbody>
-            {forecast.map((row) => (
-              <tr key={row.label} className="border-b border-border/40 hover:bg-surface-2/40 transition-colors">
-                <td className="px-5 py-3">
-                  <span className="text-text-primary text-[13px] font-medium">
-                    {FORECAST_PERIOD_LABELS[row.label] ?? row.label}
-                  </span>
-                </td>
-                <td className={cn("px-5 py-3 text-right text-[13px] font-medium tabular-nums", forecastAmountColor(row.optimistic))}>
-                  {formatCurrency(row.optimistic)}
-                </td>
-                <td className={cn("px-5 py-3 text-right text-[13px] font-medium tabular-nums", forecastAmountColor(row.expected))}>
-                  {formatCurrency(row.expected)}
-                </td>
-                <td className={cn("px-5 py-3 text-right text-[13px] font-medium tabular-nums", forecastAmountColor(row.conservative))}>
-                  {formatCurrency(row.conservative)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Open Receivables */}
-      <div className="bg-surface rounded-xl border border-border overflow-hidden">
-        <div className="px-5 py-3 border-b border-border">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Open Receivables by Due Date</p>
-        </div>
-        {openReceivables.length === 0 ? (
-          <p className="px-5 py-4 text-sm text-text-tertiary">No open receivables.</p>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-0 divide-x divide-y divide-border">
-            {openReceivables.map((r) => (
-              <div key={r.bucket} className="px-5 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-                  {BUCKET_LABELS[r.bucket] ?? r.bucket}
-                </p>
-                <p className="text-lg font-semibold tabular-nums text-text-primary mt-1">
-                  {formatCurrency(r.totalDue)}
-                </p>
-                <p className="text-xs text-text-tertiary mt-0.5">
-                  {r.invoiceCount} invoice{r.invoiceCount !== 1 ? "s" : ""}
-                </p>
-              </div>
-            ))}
+      {/* A. Operating Activities */}
+      <CashFlowSection
+        title="A. Operating Activities"
+        total={operating.totalOperating}
+        totalLabel="Net Cash from Operating Activities"
+      >
+        <CashFlowLineItem description="Net Income" amount={operating.netIncome} />
+        {operating.adjustments.map((item) => (
+          <CashFlowLineItem key={item.description} description={item.description} amount={item.amount} />
+        ))}
+        {operating.workingCapitalChanges.length > 0 && (
+          <div className="px-5 pt-2 pb-0.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Working Capital Changes</p>
           </div>
         )}
-      </div>
+        {operating.workingCapitalChanges.map((item) => (
+          <CashFlowLineItem key={item.description} description={item.description} amount={item.amount} />
+        ))}
+        {operating.adjustments.length === 0 && operating.workingCapitalChanges.length === 0 && (
+          <p className="px-5 py-3 text-[13px] text-text-tertiary">No adjustments in this period.</p>
+        )}
+      </CashFlowSection>
 
-      {/* Collection Rates */}
-      <div className="bg-surface rounded-xl border border-border px-5 py-4">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Historical Collection Rates</p>
-          {collectionRates.lowConfidence && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950 px-2.5 py-1 rounded-full">
-              <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 5v4M8 11v.5" />
-                <circle cx="8" cy="8" r="6.5" />
-              </svg>
-              Low confidence — based on only {collectionRates.paidInvoiceCount} paid invoice{collectionRates.paidInvoiceCount !== 1 ? "s" : ""}
-            </span>
-          )}
+      {/* B. Investing Activities */}
+      <CashFlowSection
+        title="B. Investing Activities"
+        total={investing.totalInvesting}
+        totalLabel="Net Cash from Investing Activities"
+      >
+        {investing.items.length === 0 ? (
+          <p className="px-5 py-3 text-[13px] text-text-tertiary">No investing activities in this period.</p>
+        ) : (
+          investing.items.map((item) => (
+            <CashFlowLineItem key={item.description} description={item.description} amount={item.amount} />
+          ))
+        )}
+      </CashFlowSection>
+
+      {/* C. Financing Activities */}
+      <CashFlowSection
+        title="C. Financing Activities"
+        total={financing.totalFinancing}
+        totalLabel="Net Cash from Financing Activities"
+      >
+        {financing.items.length === 0 ? (
+          <p className="px-5 py-3 text-[13px] text-text-tertiary">No financing activities in this period.</p>
+        ) : (
+          financing.items.map((item) => (
+            <CashFlowLineItem key={item.description} description={item.description} amount={item.amount} />
+          ))
+        )}
+      </CashFlowSection>
+
+      {/* Net Cash Flow reconciliation */}
+      <div className="bg-surface rounded-xl border border-border overflow-hidden">
+        <div className="px-5 py-3 border-b border-border bg-surface-2/20">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Reconciliation</p>
         </div>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <p className="text-xs text-text-tertiary">Paid within 7 days</p>
-            <p className="text-lg font-semibold tabular-nums text-text-primary mt-0.5">
-              {(parseFloat(collectionRates.rate7d) * 100).toFixed(1)}%
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-text-tertiary">Paid within 14 days</p>
-            <p className="text-lg font-semibold tabular-nums text-text-primary mt-0.5">
-              {(parseFloat(collectionRates.rate14d) * 100).toFixed(1)}%
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-text-tertiary">Paid within 30 days</p>
-            <p className="text-lg font-semibold tabular-nums text-text-primary mt-0.5">
-              {(parseFloat(collectionRates.rate30d) * 100).toFixed(1)}%
-            </p>
-          </div>
-        </div>
+        <CashFlowLineItem description="Opening Cash Balance" amount={openingCashBalance} />
+        <CashFlowLineItem description="Net Cash from Operating Activities" amount={operating.totalOperating} />
+        <CashFlowLineItem description="Net Cash from Investing Activities" amount={investing.totalInvesting} />
+        <CashFlowLineItem description="Net Cash from Financing Activities" amount={financing.totalFinancing} />
+        <CashFlowSectionTotal label="Closing Cash Balance" amount={closingCashBalance} highlight />
       </div>
     </div>
   );
@@ -2877,7 +2896,7 @@ function ReportsPage() {
       case "collection-metrics":
         return <CollectionEfficiencyReport fromDate={fromDate} toDate={toDate} />;
       case "cash-flow":
-        return <CashFlowReport />;
+        return <CashFlowReport fromDate={fromDate} toDate={toDate} />;
       default:
         return <PlaceholderReport report={currentReport} />;
     }

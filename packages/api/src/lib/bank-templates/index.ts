@@ -24,7 +24,7 @@ import { INDUSIND_TEMPLATES } from "./banks/indusind.js";
 
 export { type BankTemplateDefinition } from "./types.js";
 export { preprocessRows } from "./preprocess.js";
-export { detectBankTemplate, type DetectionResult } from "./detect.js";
+export { detectBankTemplate, type DetectionResult, type DetectionWarning } from "./detect.js";
 
 /**
  * All built-in bank templates in registry order.
