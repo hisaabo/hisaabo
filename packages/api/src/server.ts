@@ -53,7 +53,8 @@ app.use("*", secureHeaders());
 
 // ── Request ID tracing ────────────────────────────────────────
 app.use("*", async (c: Context, next: Next) => {
-  const requestId = c.req.header("x-request-id") || randomUUID();
+  const raw = c.req.header("x-request-id");
+  const requestId = (raw && raw.length <= 128) ? raw.replace(/[^a-zA-Z0-9\-_]/g, "") : randomUUID();
   c.set("requestId", requestId);
   c.header("x-request-id", requestId);
   const start = Date.now();
@@ -246,7 +247,22 @@ app.get("/pay/upi", async (c) => {
 </body></html>`);
 });
 
-app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+app.get("/health", async (c) => {
+  const deep = c.req.query("deep") === "true";
+  const result: Record<string, unknown> = { status: "ok", timestamp: new Date().toISOString() };
+
+  if (deep) {
+    try {
+      await controlDb.execute(sql`SELECT 1`);
+      result.db = "ok";
+    } catch {
+      result.status = "degraded";
+      result.db = "error";
+    }
+  }
+
+  return c.json(result, result.status === "ok" ? 200 : 503);
+});
 // ONCE health check — lenient during PG handover (rolling deploy)
 app.get("/up", async (c) => {
   try {
@@ -265,17 +281,24 @@ app.get("/up", async (c) => {
 // ── PDF worker concurrency limiter ────────────────────────────
 // Cap concurrent PDF worker threads to prevent CPU saturation under load.
 class Semaphore {
-  private queue: (() => void)[] = [];
+  private queue: Array<{ resolve: () => void; timer: ReturnType<typeof setTimeout> }> = [];
   private active = 0;
-  constructor(private max: number) {}
+  constructor(private max: number, private timeoutMs = 30_000) {}
   async acquire(): Promise<void> {
     if (this.active < this.max) { this.active++; return; }
-    return new Promise(resolve => this.queue.push(resolve));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.queue.findIndex(e => e.timer === timer);
+        if (idx !== -1) this.queue.splice(idx, 1);
+        reject(new Error("Semaphore acquire timed out"));
+      }, this.timeoutMs);
+      this.queue.push({ resolve, timer });
+    });
   }
   release(): void {
     this.active--;
     const next = this.queue.shift();
-    if (next) { this.active++; next(); }
+    if (next) { clearTimeout(next.timer); this.active++; next.resolve(); }
   }
 }
 
@@ -1455,8 +1478,36 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
 
   // Resolve tenant from business ID and get DB connection
   const { shipments: shipmentsTable, shipmentEvents } = await import("@hisaabo/db");
-  // In single-tenant mode, use "single"; in multi-tenant, look up from business → tenant mapping
-  const db = await getTenantDb("single");
+  // In single-tenant mode, use "single"; in multi-tenant, scan active tenants to find the owner
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  let db: Awaited<ReturnType<typeof getTenantDb>>;
+
+  if (!isMultiTenant) {
+    db = await getTenantDb("single");
+  } else {
+    const activeTenants = await controlDb
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.status, "active"));
+
+    let resolvedDb: Awaited<ReturnType<typeof getTenantDb>> | undefined;
+    for (const t of activeTenants) {
+      const tdb = await getTenantDb(t.id);
+      const [biz] = await tdb
+        .select({ id: businesses.id })
+        .from(businesses)
+        .where(eq(businesses.id, businessId))
+        .limit(1);
+      if (biz) {
+        resolvedDb = tdb;
+        break;
+      }
+    }
+    if (!resolvedDb) {
+      return c.json({ error: "Business not found" }, 404);
+    }
+    db = resolvedDb;
+  }
 
   // Extract tracking number — carriers typically send it as `awb`, `tracking_id`, or `waybill`
   const trackingNumber = body.awb || body.tracking_id || body.waybill || body.trackingNumber || null;

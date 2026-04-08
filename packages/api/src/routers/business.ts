@@ -7,6 +7,7 @@ import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trp
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
+import { seedChartOfAccounts } from "../lib/coa-seed.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -73,6 +74,10 @@ export const businessRouter = router({
         currentBalance: "0",
         isDefault: false,
       });
+
+      // Seed the default Chart of Accounts for this business — must be inside
+      // the same transaction so a partial failure rolls back cleanly.
+      await seedChartOfAccounts(tx, biz.id);
 
       return biz;
     });

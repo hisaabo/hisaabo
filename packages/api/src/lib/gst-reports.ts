@@ -1,4 +1,4 @@
-import { eq, and, sql, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, sql, gte, lte, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
 
@@ -96,6 +96,8 @@ export interface GSTR3BReport {
     zeroRated: { taxableValue: number; igst: number; cgst: number; sgst: number };
     exempt: { taxableValue: number; igst: number; cgst: number; sgst: number };
   };
+  // 3.1(d) - Inward supplies liable to reverse charge
+  rcmSupplies: { taxableValue: string; cgst: string; sgst: string; igst: string };
   // 3.2 - Inter-state supplies to unregistered
   interStateUnregistered: Array<{
     state: string;
@@ -156,6 +158,7 @@ export async function generateGSTR1(
       eq(invoices.type, "sale"),
       eq(invoices.documentType, "invoice"),
       sql`${invoices.status} != 'cancelled'`,
+      isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),
       lte(invoices.invoiceDate, endDate),
     ))
@@ -301,6 +304,7 @@ export async function generateGSTR1(
       eq(invoices.businessId, businessId),
       eq(invoices.documentType, "credit_note"),
       sql`${invoices.status} != 'cancelled'`,
+      isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),
       lte(invoices.invoiceDate, endDate),
     ))
@@ -322,6 +326,7 @@ export async function generateGSTR1(
       eq(invoices.businessId, businessId),
       eq(invoices.documentType, "debit_note"),
       sql`${invoices.status} != 'cancelled'`,
+      isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),
       lte(invoices.invoiceDate, endDate),
     ))
@@ -403,17 +408,22 @@ export async function generateGSTR3B(
     subtotal: invoices.subtotal,
     partyState: parties.state,
     partyStateCode: parties.stateCode,
+    isReverseCharge: invoices.isReverseCharge,
   }).from(invoices)
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
       eq(invoices.type, "purchase"),
       sql`${invoices.status} != 'cancelled'`,
+      isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),
       lte(invoices.invoiceDate, endDate),
     ));
 
   let itcIgst = 0, itcCgst = 0, itcSgst = 0;
+
+  // RCM accumulators: Table 3.1(d) — inward supplies liable to reverse charge
+  let rcmTaxableValue = 0, rcmCgst = 0, rcmSgst = 0, rcmIgst = 0;
 
   for (const inv of purchaseInvoices) {
     const tax = parseFloat(inv.taxAmount);
@@ -423,11 +433,27 @@ export async function generateGSTR3B(
       : (biz?.state && inv.partyState &&
           biz.state.toLowerCase() === inv.partyState.toLowerCase());
 
-    if (sameState) {
-      itcCgst += splitTax(tax);
-      itcSgst += splitTax(tax);
+    if (inv.isReverseCharge) {
+      // RCM purchases: tracked in 3.1(d) AND generate ITC for the buyer
+      rcmTaxableValue += parseFloat(inv.subtotal);
+      if (sameState) {
+        const half = splitTax(tax);
+        rcmCgst += half;
+        rcmSgst += half;
+        itcCgst += half;
+        itcSgst += half;
+      } else {
+        rcmIgst += tax;
+        itcIgst += tax;
+      }
     } else {
-      itcIgst += tax;
+      // Normal purchase ITC
+      if (sameState) {
+        itcCgst += splitTax(tax);
+        itcSgst += splitTax(tax);
+      } else {
+        itcIgst += tax;
+      }
     }
   }
 
@@ -453,6 +479,12 @@ export async function generateGSTR3B(
       zeroRated: { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 },
       exempt: { taxableValue: 0, igst: 0, cgst: 0, sgst: 0 },
     },
+    rcmSupplies: {
+      taxableValue: rcmTaxableValue.toFixed(2),
+      cgst: rcmCgst.toFixed(2),
+      sgst: rcmSgst.toFixed(2),
+      igst: rcmIgst.toFixed(2),
+    },
     interStateUnregistered: gstr1.b2cLarge.map((e) => ({
       state: e.state, taxableValue: e.taxableValue, igst: e.igst,
     })),
@@ -473,6 +505,194 @@ export async function generateGSTR3B(
       sgst: netSgst,
       total: netIgst + netCgst + netSgst,
     },
+  };
+}
+
+// ── Portal JSON Export ─────────────────────────────────────────
+
+// GST state code lookup by state name (case-insensitive)
+const GST_STATE_CODE_MAP: Record<string, string> = {
+  "jammu and kashmir": "01", "himachal pradesh": "02", "punjab": "03",
+  "chandigarh": "04", "uttarakhand": "05", "haryana": "06", "delhi": "07",
+  "rajasthan": "08", "uttar pradesh": "09", "bihar": "10", "sikkim": "11",
+  "arunachal pradesh": "12", "nagaland": "13", "manipur": "14",
+  "mizoram": "15", "tripura": "16", "meghalaya": "17", "assam": "18",
+  "west bengal": "19", "jharkhand": "20", "odisha": "21",
+  "chhattisgarh": "22", "madhya pradesh": "23", "gujarat": "24",
+  "dadra and nagar haveli and daman and diu": "26", "maharashtra": "27",
+  "andhra pradesh": "28", "karnataka": "29", "goa": "30", "lakshadweep": "31",
+  "kerala": "32", "tamil nadu": "33", "puducherry": "34",
+  "andaman and nicobar islands": "35", "telangana": "36",
+  "andhra pradesh (new)": "37", "ladakh": "38",
+};
+
+function stateNameToCode(state: string): string {
+  return GST_STATE_CODE_MAP[state.toLowerCase()] ?? "99";
+}
+
+// UQC (Unit Quantity Code) mapping — GST portal codes
+const UQC_MAP: Record<string, string> = {
+  "pcs": "NOS", "nos": "NOS", "piece": "NOS", "pieces": "NOS",
+  "unit": "NOS", "units": "NOS", "number": "NOS",
+  "kg": "KGS", "kgs": "KGS", "kilogram": "KGS", "kilograms": "KGS",
+  "gm": "GMS", "gms": "GMS", "gram": "GMS", "grams": "GMS",
+  "ltr": "LTR", "lts": "LTR", "litre": "LTR", "litres": "LTR", "liter": "LTR",
+  "mtr": "MTR", "meter": "MTR", "meters": "MTR", "metre": "MTR",
+  "sqm": "SQM", "sqmtr": "SQM",
+  "sqf": "SQF", "sqft": "SQF",
+  "cbm": "CBM",
+  "doz": "DOZ", "dozen": "DOZ",
+  "box": "BOX", "boxes": "BOX",
+  "bag": "BAG", "bags": "BAG",
+  "set": "SET", "sets": "SET",
+  "pk": "PAC", "pac": "PAC", "pack": "PAC", "packs": "PAC",
+  "rol": "ROL", "roll": "ROL", "rolls": "ROL",
+  "tub": "TUB", "tube": "TUB",
+  "ton": "TON", "tonne": "TON", "tonnes": "TON",
+  "mlt": "MLT", "ml": "MLT", "millilitre": "MLT", "milliliter": "MLT",
+};
+
+function toUqc(unit?: string | null): string {
+  if (!unit) return "NOS";
+  return UQC_MAP[unit.toLowerCase()] ?? "NOS";
+}
+
+/** Convert ISO date string "YYYY-MM-DDTXX:XX:XX..." to portal "DD-MM-YYYY" */
+function isoToPortalDate(isoDate: string): string {
+  const datePart = isoDate.split("T")[0];
+  const [year, month, day] = datePart.split("-");
+  return `${day}-${month}-${year}`;
+}
+
+/**
+ * Transforms a GSTR1Report into the JSON schema required by the GST portal's
+ * offline tool. The returned object can be serialised to JSON and uploaded
+ * directly to the portal.
+ *
+ * @param report        - Internal GSTR1Report from generateGSTR1()
+ * @param gstin         - Business GSTIN
+ * @param _financialYear - e.g. "2025-26" (reserved for future portal schema versions)
+ * @param taxPeriod     - Filing period in MMYYYY format, e.g. "082025"
+ */
+export function gstr1ToPortalJson(
+  report: GSTR1Report,
+  gstin: string,
+  _financialYear: string,
+  taxPeriod: string,
+): Record<string, unknown> {
+  // B2B: group invoices by recipient GSTIN
+  const b2bMap = new Map<string, { ctin: string; inv: Array<Record<string, unknown>> }>();
+
+  for (const inv of report.b2b) {
+    const ctin = inv.partyGstin;
+    const existing = b2bMap.get(ctin) ?? { ctin, inv: [] };
+    existing.inv.push({
+      inum: inv.invoiceNumber,
+      idt: isoToPortalDate(inv.invoiceDate),
+      val: inv.totalInvoiceValue,
+      pos: ctin.substring(0, 2),
+      rchrg: "N",
+      inv_typ: "R",
+      itms: [
+        {
+          num: 1,
+          itm_det: {
+            txval: inv.taxableValue,
+            rt: 0,
+            iamt: inv.igst,
+            camt: inv.cgst,
+            samt: inv.sgst,
+            csamt: 0,
+          },
+        },
+      ],
+    });
+    b2bMap.set(ctin, existing);
+  }
+
+  // B2CL: group by state code
+  const b2clMap = new Map<string, { pos: string; inv: Array<Record<string, unknown>> }>();
+
+  for (const entry of report.b2cLarge) {
+    const pos = stateNameToCode(entry.state);
+    const existing = b2clMap.get(pos) ?? { pos, inv: [] };
+    existing.inv.push({
+      txval: entry.taxableValue,
+      iamt: entry.igst,
+      csamt: 0,
+    });
+    b2clMap.set(pos, existing);
+  }
+
+  // B2CS: determine INTRA vs INTER from presence of CGST
+  const b2cs = report.b2cSmall.map((entry) => ({
+    sply_ty: entry.cgst > 0 ? "INTRA" : "INTER",
+    pos: gstin.substring(0, 2),
+    typ: "OE",
+    txval: entry.taxableValue,
+    rt: entry.taxRate,
+    camt: entry.cgst,
+    samt: entry.sgst,
+    iamt: entry.igst,
+    csamt: 0,
+  }));
+
+  // CDNR: group credit and debit notes by recipient GSTIN
+  const cdnrMap = new Map<string, { ctin: string; nt: Array<Record<string, unknown>> }>();
+
+  const pushNote = (note: GSTR1Report["creditNotes"][0], ntty: "C" | "D") => {
+    const ctin = note.partyGstin;
+    const existing = cdnrMap.get(ctin) ?? { ctin, nt: [] };
+    existing.nt.push({
+      ntty,
+      nt_num: note.invoiceNumber,
+      nt_dt: isoToPortalDate(note.invoiceDate),
+      val: parseFloat(note.totalAmount),
+      pos: ctin.substring(0, 2),
+      rchrg: "N",
+      inv_typ: "R",
+      itms: [
+        {
+          num: 1,
+          itm_det: {
+            txval: parseFloat(note.taxableAmount),
+            rt: 0,
+            iamt: 0,
+            camt: 0,
+            samt: 0,
+            csamt: 0,
+          },
+        },
+      ],
+    });
+    cdnrMap.set(ctin, existing);
+  };
+
+  for (const cn of report.creditNotes) pushNote(cn, "C");
+  for (const dn of report.debitNotes) pushNote(dn, "D");
+
+  // HSN summary
+  const hsnData = report.hsn.map((entry, idx) => ({
+    num: idx + 1,
+    hsn_sc: entry.hsn,
+    desc: entry.description,
+    uqc: toUqc(null),
+    qty: entry.quantity,
+    txval: entry.taxableValue,
+    iamt: entry.igst,
+    camt: entry.cgst,
+    samt: entry.sgst,
+    csamt: 0,
+  }));
+
+  return {
+    gstin,
+    fp: taxPeriod,
+    b2b: Array.from(b2bMap.values()),
+    b2cl: Array.from(b2clMap.values()),
+    b2cs,
+    cdnr: Array.from(cdnrMap.values()),
+    hsn: { data: hsnData },
   };
 }
 

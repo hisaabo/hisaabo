@@ -39,7 +39,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { gstr1ToCSV, type GSTR1Report } from "../lib/gst-reports.js";
+import { gstr1ToCSV, gstr1ToPortalJson, type GSTR1Report } from "../lib/gst-reports.js";
 
 // =============================================================================
 // Pure functions — extracted verbatim from lib/gst-reports.ts
@@ -894,5 +894,652 @@ describe("gstr1ToCSV — period format validation", () => {
   it("Mar 2025 (financial year end month) is reproduced verbatim", () => {
     const csv = gstr1ToCSV(makeReport({ period: "Mar 2025" }));
     expect(csv).toContain("Period,Mar 2025");
+  });
+});
+
+// =============================================================================
+// Section 6: gstr1ToPortalJson — GST portal JSON export
+//
+// The portal JSON must match the schema expected by the GST offline tool exactly.
+// Wrong field names or formats will cause the portal upload to reject the file.
+// =============================================================================
+
+/**
+ * Builds a minimal GSTR1Report for portal JSON testing.
+ * Mirrors makeReport() but with concrete data matching the portal schema examples.
+ */
+function makePortalReport(overrides: Partial<GSTR1Report> = {}): GSTR1Report {
+  return {
+    period: "Aug 2025",
+    businessGstin: "27AABCA0000R1ZM",
+    businessName: "Test Business",
+    b2b: [],
+    b2cLarge: [],
+    b2cSmall: [],
+    hsn: [],
+    creditNotes: [],
+    debitNotes: [],
+    totalTaxableValue: 0,
+    totalCgst: 0,
+    totalSgst: 0,
+    totalIgst: 0,
+    totalTax: 0,
+    totalInvoiceValue: 0,
+    invoiceCount: 0,
+    ...overrides,
+  };
+}
+
+describe("gstr1ToPortalJson — top-level structure", () => {
+  /**
+   * The portal JSON must have gstin and fp at the root level.
+   * fp is the filing period in MMYYYY format (e.g. "082025" for August 2025).
+   */
+
+  it("includes gstin at root level", () => {
+    const json = gstr1ToPortalJson(makePortalReport(), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.gstin).toBe("27AABCA0000R1ZM");
+  });
+
+  it("includes fp (filing period) at root level", () => {
+    const json = gstr1ToPortalJson(makePortalReport(), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.fp).toBe("082025");
+  });
+
+  it("fp is passed through verbatim — not computed internally", () => {
+    const json = gstr1ToPortalJson(makePortalReport(), "27AABCA0000R1ZM", "2025-26", "032026");
+    expect(json.fp).toBe("032026");
+  });
+
+  it("empty report produces empty arrays for all sections", () => {
+    const json = gstr1ToPortalJson(makePortalReport(), "27AABCA0000R1ZM", "2025-26", "082025");
+    expect(json.b2b).toEqual([]);
+    expect(json.b2cl).toEqual([]);
+    expect(json.b2cs).toEqual([]);
+    expect(json.cdnr).toEqual([]);
+    expect((json.hsn as { data: unknown[] }).data).toEqual([]);
+  });
+});
+
+describe("gstr1ToPortalJson — B2B section", () => {
+  /**
+   * B2B invoices must be grouped by recipient GSTIN (ctin).
+   * Dates must be converted from ISO "YYYY-MM-DD" to portal "DD-MM-YYYY" format.
+   * Monetary values must be numbers (not strings).
+   */
+
+  it("produces a b2b entry with correct ctin", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-15").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    expect(json.b2b).toHaveLength(1);
+    expect((json.b2b as Array<{ ctin: string }>)[0].ctin).toBe("29XYZAB5678G1Z9");
+  });
+
+  it("formats invoice date as DD-MM-YYYY", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-15").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2BEntry = { ctin: string; inv: Array<{ idt: string }> };
+    expect((json.b2b as B2BEntry[])[0].inv[0].idt).toBe("15-08-2025");
+  });
+
+  it("invoice value (val) is a number, not a string", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-15").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2BEntry = { ctin: string; inv: Array<{ val: unknown }> };
+    expect(typeof (json.b2b as B2BEntry[])[0].inv[0].val).toBe("number");
+    expect((json.b2b as B2BEntry[])[0].inv[0].val).toBe(11800);
+  });
+
+  it("groups two invoices to the same party under one ctin entry", () => {
+    /**
+     * The portal schema nests all invoices under a single ctin object.
+     * Two B2B invoices to the same GSTIN must produce one ctin entry with
+     * two items in the inv array, not two separate ctin entries.
+     */
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [
+          {
+            partyGstin: "29XYZAB5678G1Z9",
+            partyName: "Same Party",
+            invoiceNumber: "INV-00001",
+            invoiceDate: new Date("2025-08-10").toISOString(),
+            invoiceType: "Regular",
+            taxableValue: 10000,
+            cgst: 0,
+            sgst: 0,
+            igst: 1800,
+            totalInvoiceValue: 11800,
+          },
+          {
+            partyGstin: "29XYZAB5678G1Z9",
+            partyName: "Same Party",
+            invoiceNumber: "INV-00002",
+            invoiceDate: new Date("2025-08-20").toISOString(),
+            invoiceType: "Regular",
+            taxableValue: 20000,
+            cgst: 0,
+            sgst: 0,
+            igst: 3600,
+            totalInvoiceValue: 23600,
+          },
+        ],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2BEntry = { ctin: string; inv: unknown[] };
+    const b2b = json.b2b as B2BEntry[];
+    expect(b2b).toHaveLength(1);
+    expect(b2b[0].ctin).toBe("29XYZAB5678G1Z9");
+    expect(b2b[0].inv).toHaveLength(2);
+  });
+
+  it("two invoices to different parties produce two separate ctin entries", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [
+          {
+            partyGstin: "29XYZAB5678G1Z9",
+            partyName: "Party A",
+            invoiceNumber: "INV-00001",
+            invoiceDate: new Date("2025-08-10").toISOString(),
+            invoiceType: "Regular",
+            taxableValue: 10000,
+            cgst: 0,
+            sgst: 0,
+            igst: 1800,
+            totalInvoiceValue: 11800,
+          },
+          {
+            partyGstin: "27ABCDE1234F1Z5",
+            partyName: "Party B",
+            invoiceNumber: "INV-00002",
+            invoiceDate: new Date("2025-08-20").toISOString(),
+            invoiceType: "Regular",
+            taxableValue: 5000,
+            cgst: 450,
+            sgst: 450,
+            igst: 0,
+            totalInvoiceValue: 5900,
+          },
+        ],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    expect((json.b2b as unknown[]).length).toBe(2);
+  });
+
+  it("invoice items block contains correct txval and tax amounts", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-15").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type ItmDet = { txval: number; iamt: number; camt: number; samt: number; csamt: number };
+    type InvEntry = { itms: Array<{ num: number; itm_det: ItmDet }> };
+    type B2BEntry = { ctin: string; inv: InvEntry[] };
+    const itm = (json.b2b as B2BEntry[])[0].inv[0].itms[0].itm_det;
+    expect(itm.txval).toBe(10000);
+    expect(itm.iamt).toBe(1800);
+    expect(itm.camt).toBe(0);
+    expect(itm.samt).toBe(0);
+    expect(itm.csamt).toBe(0);
+  });
+
+  it("sets rchrg to 'N' and inv_typ to 'R' for regular invoices", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-15").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type InvEntry = { rchrg: string; inv_typ: string };
+    type B2BEntry = { inv: InvEntry[] };
+    const inv = (json.b2b as B2BEntry[])[0].inv[0];
+    expect(inv.rchrg).toBe("N");
+    expect(inv.inv_typ).toBe("R");
+  });
+});
+
+describe("gstr1ToPortalJson — B2CL section", () => {
+  /**
+   * B2C Large invoices are grouped by state code (pos field).
+   * The state name from the report must be mapped to a 2-digit state code.
+   */
+
+  it("groups b2cLarge entries by state into b2cl array", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cLarge: [{
+          state: "Karnataka",
+          taxableValue: 254237.29,
+          cgst: 0,
+          sgst: 0,
+          igst: 45762.71,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    expect((json.b2cl as unknown[]).length).toBe(1);
+  });
+
+  it("b2cl entry has pos field (state code)", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cLarge: [{
+          state: "Karnataka",
+          taxableValue: 254237.29,
+          cgst: 0,
+          sgst: 0,
+          igst: 45762.71,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2CLEntry = { pos: string; inv: unknown[] };
+    const entry = (json.b2cl as B2CLEntry[])[0];
+    expect(entry.pos).toBeDefined();
+    expect(typeof entry.pos).toBe("string");
+  });
+});
+
+describe("gstr1ToPortalJson — B2CS section", () => {
+  /**
+   * B2C Small entries use sply_ty (INTRA/INTER), pos, rt (tax rate),
+   * and aggregated tax amounts.
+   */
+
+  it("produces b2cs entries from b2cSmall data", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cSmall: [{
+          taxRate: 18,
+          taxableValue: 50000,
+          cgst: 4500,
+          sgst: 4500,
+          igst: 0,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    expect((json.b2cs as unknown[]).length).toBe(1);
+  });
+
+  it("intra-state b2cs entry has sply_ty INTRA when cgst > 0", () => {
+    /**
+     * CGST and SGST are present only for intra-state supplies.
+     * When cgst > 0, the supply type must be "INTRA".
+     */
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cSmall: [{
+          taxRate: 18,
+          taxableValue: 50000,
+          cgst: 4500,
+          sgst: 4500,
+          igst: 0,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2CSEntry = { sply_ty: string };
+    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTRA");
+  });
+
+  it("inter-state b2cs entry has sply_ty INTER when igst > 0", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cSmall: [{
+          taxRate: 18,
+          taxableValue: 25000,
+          cgst: 0,
+          sgst: 0,
+          igst: 4500,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2CSEntry = { sply_ty: string };
+    expect((json.b2cs as B2CSEntry[])[0].sply_ty).toBe("INTER");
+  });
+
+  it("b2cs entry includes txval and rt fields", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2cSmall: [{
+          taxRate: 12,
+          taxableValue: 30000,
+          cgst: 1800,
+          sgst: 1800,
+          igst: 0,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type B2CSEntry = { txval: number; rt: number };
+    const entry = (json.b2cs as B2CSEntry[])[0];
+    expect(entry.txval).toBe(30000);
+    expect(entry.rt).toBe(12);
+  });
+});
+
+describe("gstr1ToPortalJson — CDNR section (credit/debit notes)", () => {
+  /**
+   * Credit notes go to cdnr with ntty: "C", debit notes with ntty: "D".
+   * Both are grouped by recipient GSTIN (ctin).
+   */
+
+  it("maps credit notes to cdnr with ntty C", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        creditNotes: [{
+          invoiceNumber: "CN-00001",
+          invoiceDate: new Date("2025-08-25").toISOString(),
+          partyName: "Test Party",
+          partyGstin: "29XYZAB5678G1Z9",
+          totalAmount: "5000.00",
+          taxableAmount: "4237.29",
+          taxAmount: "762.71",
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type NtEntry = { ntty: string; nt_num: string };
+    type CDNREntry = { ctin: string; nt: NtEntry[] };
+    const cdnr = json.cdnr as CDNREntry[];
+    expect(cdnr).toHaveLength(1);
+    expect(cdnr[0].ctin).toBe("29XYZAB5678G1Z9");
+    expect(cdnr[0].nt[0].ntty).toBe("C");
+    expect(cdnr[0].nt[0].nt_num).toBe("CN-00001");
+  });
+
+  it("maps debit notes to cdnr with ntty D", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        debitNotes: [{
+          invoiceNumber: "DN-00001",
+          invoiceDate: new Date("2025-08-20").toISOString(),
+          partyName: "Test Party",
+          partyGstin: "29XYZAB5678G1Z9",
+          totalAmount: "3000.00",
+          taxableAmount: "2542.37",
+          taxAmount: "457.63",
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type NtEntry = { ntty: string };
+    type CDNREntry = { nt: NtEntry[] };
+    const cdnr = json.cdnr as CDNREntry[];
+    expect(cdnr).toHaveLength(1);
+    expect(cdnr[0].nt[0].ntty).toBe("D");
+  });
+
+  it("formats credit note date as DD-MM-YYYY", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        creditNotes: [{
+          invoiceNumber: "CN-00001",
+          invoiceDate: new Date("2025-08-25").toISOString(),
+          partyName: "Test Party",
+          partyGstin: "29XYZAB5678G1Z9",
+          totalAmount: "5000.00",
+          taxableAmount: "4237.29",
+          taxAmount: "762.71",
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type NtEntry = { nt_dt: string };
+    type CDNREntry = { nt: NtEntry[] };
+    expect((json.cdnr as CDNREntry[])[0].nt[0].nt_dt).toBe("25-08-2025");
+  });
+
+  it("groups credit and debit notes for the same party under one ctin", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        creditNotes: [{
+          invoiceNumber: "CN-00001",
+          invoiceDate: new Date("2025-08-25").toISOString(),
+          partyName: "Test Party",
+          partyGstin: "29XYZAB5678G1Z9",
+          totalAmount: "5000.00",
+          taxableAmount: "4237.29",
+          taxAmount: "762.71",
+        }],
+        debitNotes: [{
+          invoiceNumber: "DN-00001",
+          invoiceDate: new Date("2025-08-20").toISOString(),
+          partyName: "Test Party",
+          partyGstin: "29XYZAB5678G1Z9",
+          totalAmount: "3000.00",
+          taxableAmount: "2542.37",
+          taxAmount: "457.63",
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type CDNREntry = { ctin: string; nt: unknown[] };
+    const cdnr = json.cdnr as CDNREntry[];
+    // Both notes are for the same party — should be grouped under one ctin
+    expect(cdnr).toHaveLength(1);
+    expect(cdnr[0].nt).toHaveLength(2);
+  });
+});
+
+describe("gstr1ToPortalJson — HSN section", () => {
+  /**
+   * HSN data must be under hsn.data as an array.
+   * Each entry has a sequential num, hsn_sc, desc, uqc, qty, and tax amounts.
+   */
+
+  it("wraps HSN entries under hsn.data array", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [{
+          hsn: "8471",
+          description: "Computers",
+          quantity: 10,
+          taxableValue: 100000,
+          cgst: 9000,
+          sgst: 9000,
+          igst: 0,
+          totalValue: 118000,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type HSNSection = { data: unknown[] };
+    expect((json.hsn as HSNSection).data).toHaveLength(1);
+  });
+
+  it("HSN entry has correct field names: hsn_sc, desc, qty, txval", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [{
+          hsn: "8471",
+          description: "Computers",
+          quantity: 10,
+          taxableValue: 100000,
+          cgst: 9000,
+          sgst: 9000,
+          igst: 0,
+          totalValue: 118000,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type HSNEntry = { num: number; hsn_sc: string; desc: string; qty: number; txval: number; uqc: string };
+    type HSNSection = { data: HSNEntry[] };
+    const entry = (json.hsn as HSNSection).data[0];
+    expect(entry.hsn_sc).toBe("8471");
+    expect(entry.desc).toBe("Computers");
+    expect(entry.qty).toBe(10);
+    expect(entry.txval).toBe(100000);
+    expect(entry.num).toBe(1);
+    expect(entry.uqc).toBe("NOS"); // default UQC when unit not known
+  });
+
+  it("assigns sequential num starting from 1", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [
+          { hsn: "8471", description: "Computers", quantity: 5, taxableValue: 50000, cgst: 4500, sgst: 4500, igst: 0, totalValue: 59000 },
+          { hsn: "7306", description: "Steel Pipes", quantity: 20, taxableValue: 20000, cgst: 1800, sgst: 1800, igst: 0, totalValue: 23600 },
+        ],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type HSNEntry = { num: number };
+    type HSNSection = { data: HSNEntry[] };
+    const data = (json.hsn as HSNSection).data;
+    expect(data[0].num).toBe(1);
+    expect(data[1].num).toBe(2);
+  });
+
+  it("HSN tax amounts include camt, samt, iamt, csamt", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        hsn: [{
+          hsn: "8471",
+          description: "Computers",
+          quantity: 10,
+          taxableValue: 100000,
+          cgst: 9000,
+          sgst: 9000,
+          igst: 0,
+          totalValue: 118000,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type HSNEntry = { camt: number; samt: number; iamt: number; csamt: number };
+    type HSNSection = { data: HSNEntry[] };
+    const entry = (json.hsn as HSNSection).data[0];
+    expect(entry.camt).toBe(9000);
+    expect(entry.samt).toBe(9000);
+    expect(entry.iamt).toBe(0);
+    expect(entry.csamt).toBe(0);
+  });
+});
+
+describe("gstr1ToPortalJson — date formatting", () => {
+  /**
+   * Dates in the internal report are ISO strings (YYYY-MM-DDThh:mm:ss.sssZ).
+   * The portal requires DD-MM-YYYY format.
+   */
+
+  it("converts first day of month correctly: 2025-08-01 → 01-08-2025", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-01").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type InvEntry = { idt: string };
+    type B2BEntry = { inv: InvEntry[] };
+    expect((json.b2b as B2BEntry[])[0].inv[0].idt).toBe("01-08-2025");
+  });
+
+  it("converts last day of month correctly: 2025-08-31 → 31-08-2025", () => {
+    const json = gstr1ToPortalJson(
+      makePortalReport({
+        b2b: [{
+          partyGstin: "29XYZAB5678G1Z9",
+          partyName: "Test Party",
+          invoiceNumber: "INV-00001",
+          invoiceDate: new Date("2025-08-31").toISOString(),
+          invoiceType: "Regular",
+          taxableValue: 10000,
+          cgst: 0,
+          sgst: 0,
+          igst: 1800,
+          totalInvoiceValue: 11800,
+        }],
+      }),
+      "27AABCA0000R1ZM", "2025-26", "082025"
+    );
+    type InvEntry = { idt: string };
+    type B2BEntry = { inv: InvEntry[] };
+    expect((json.b2b as B2BEntry[])[0].inv[0].idt).toBe("31-08-2025");
   });
 });

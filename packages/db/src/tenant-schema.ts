@@ -17,6 +17,7 @@ export const gstRegistrationTypeEnum = pgEnum("gst_registration_type", ["regular
 export const recurringFrequencyEnum = pgEnum("recurring_frequency", ["weekly", "biweekly", "monthly", "quarterly", "half_yearly", "yearly", "custom"]);
 export const recurringTemplateStatusEnum = pgEnum("recurring_template_status", ["active", "paused", "completed", "expired"]);
 export const recurringRunStatusEnum = pgEnum("recurring_run_status", ["success", "failed", "skipped_limit"]);
+export const accountTypeEnum = pgEnum("account_type", ["asset", "liability", "equity", "income", "expense"]);
 
 // ── Business ───────────────────────────────────────────────────
 
@@ -57,6 +58,7 @@ export const businesses = pgTable("businesses", {
   nextProformaNumber: integer("next_proforma_number").default(1).notNull(),
   financialYearStart: integer("financial_year_start_month").default(4).notNull(), // April
   currency: text("currency").default("INR").notNull(),
+  annualTurnover: numeric("annual_turnover", { precision: 15, scale: 2 }), // For HSN digit enforcement & e-invoicing threshold
   // ── Online Store settings ──
   storeEnabled: boolean("store_enabled").default(false).notNull(),
   storeSlug: text("store_slug"),
@@ -203,6 +205,7 @@ export const invoices = pgTable("invoices", {
   createdByUserId: uuid("created_by_user_id"),
   createdByName: text("created_by_name"), // denormalized for display + imports
   deliveryMethod: text("delivery_method").default("self_pickup"), // self_pickup, hand_delivery, courier, bus, transport, post
+  isReverseCharge: boolean("is_reverse_charge").default(false).notNull(),
   source: text("source"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -613,6 +616,57 @@ export const recurringInvoiceRuns = pgTable("recurring_invoice_runs", {
   index("recurring_run_executed_idx").on(t.businessId, t.executedAt),
 ]);
 
+// ── Chart of Accounts ──────────────────────────────────────────
+
+export const chartOfAccounts = pgTable("chart_of_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  accountType: accountTypeEnum("account_type").notNull(),
+  parentId: uuid("parent_id"),  // self-ref for hierarchy, null = root
+  isSystem: boolean("is_system").default(false).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("coa_business_idx").on(t.businessId),
+  uniqueIndex("coa_business_code_idx").on(t.businessId, t.code),
+  index("coa_parent_idx").on(t.parentId),
+  index("coa_type_idx").on(t.businessId, t.accountType),
+]);
+
+// ── Journal Entries (manual double-entry for CA adjustments) ──
+
+export const journalEntries = pgTable("journal_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  entryNumber: text("entry_number").notNull(),
+  entryDate: timestamp("entry_date", { withTimezone: true }).notNull(),
+  narration: text("narration"),
+  source: text("source").default("manual").notNull(), // "manual" | "system"
+  createdByUserId: uuid("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("je_business_idx").on(t.businessId),
+  index("je_date_idx").on(t.businessId, t.entryDate),
+  uniqueIndex("je_number_idx").on(t.businessId, t.entryNumber),
+]);
+
+export const journalEntryLines = pgTable("journal_entry_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  journalEntryId: uuid("journal_entry_id").notNull().references(() => journalEntries.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => chartOfAccounts.id, { onDelete: "restrict" }),
+  debit: numeric("debit", { precision: 15, scale: 2 }).default("0").notNull(),
+  credit: numeric("credit", { precision: 15, scale: 2 }).default("0").notNull(),
+  narration: text("narration"),
+}, (t) => [
+  index("jel_entry_idx").on(t.journalEntryId),
+  index("jel_account_idx").on(t.accountId),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({
@@ -715,4 +769,14 @@ export const recurringInvoiceRunsRelations = relations(recurringInvoiceRuns, ({ 
   template: one(recurringInvoiceTemplates, { fields: [recurringInvoiceRuns.templateId], references: [recurringInvoiceTemplates.id] }),
   business: one(businesses, { fields: [recurringInvoiceRuns.businessId], references: [businesses.id] }),
   invoice: one(invoices, { fields: [recurringInvoiceRuns.invoiceId], references: [invoices.id] }),
+}));
+
+export const journalEntriesRelations = relations(journalEntries, ({ one, many }) => ({
+  business: one(businesses, { fields: [journalEntries.businessId], references: [businesses.id] }),
+  lines: many(journalEntryLines),
+}));
+
+export const journalEntryLinesRelations = relations(journalEntryLines, ({ one }) => ({
+  journalEntry: one(journalEntries, { fields: [journalEntryLines.journalEntryId], references: [journalEntries.id] }),
+  account: one(chartOfAccounts, { fields: [journalEntryLines.accountId], references: [chartOfAccounts.id] }),
 }));

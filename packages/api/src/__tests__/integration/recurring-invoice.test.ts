@@ -24,6 +24,7 @@ import {
   items as itemsTable,
   recurringInvoiceTemplates,
   recurringInvoiceRuns,
+  getTenantDb,
 } from "@hisaabo/db";
 import {
   createTestWorld,
@@ -32,6 +33,7 @@ import {
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import { getTenantTestDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
+import { processDueTemplates } from "../../lib/recurring-invoice-scheduler.js";
 
 // ── Shared fixture ─────────────────────────────────────────────────────────────
 
@@ -382,6 +384,154 @@ describe("REC-11: runNow — manual trigger", () => {
     ).rejects.toMatchObject({
       message: expect.stringContaining("active or paused"),
     });
+  });
+});
+
+// =============================================================================
+// REC-CATCHUP: Scheduler catch-up for missed runs
+// =============================================================================
+
+describe("recurring scheduler catch-up for missed runs", () => {
+  // Use dedicated businesses isolated from world.business1 to avoid plan limit
+  // contamination from other tests that also generate recurring invoices this month.
+  let catchupBusiness1: import("../helpers/fixtures.js").TestBusiness;
+  let catchupParty1: import("../helpers/fixtures.js").TestParty;
+  let catchupBusiness2: import("../helpers/fixtures.js").TestBusiness;
+  let catchupParty2: import("../helpers/fixtures.js").TestParty;
+
+  beforeAll(async () => {
+    const db = getTenantTestDb();
+    const { createBusiness, createParty } = await import("../helpers/fixtures.js");
+
+    catchupBusiness1 = await createBusiness(db, world.ramesh.id, {
+      name: "Catchup Test Business 1",
+      gstin: "27CATCHUP001R1ZM",
+      invoicePrefix: "CU1",
+      nextInvoiceNumber: 1,
+    });
+    catchupParty1 = await createParty(db, catchupBusiness1.id, {
+      name: "Catchup Party 1",
+      type: "customer",
+    });
+
+    catchupBusiness2 = await createBusiness(db, world.ramesh.id, {
+      name: "Catchup Test Business 2",
+      gstin: "27CATCHUP002R1ZM",
+      invoicePrefix: "CU2",
+      nextInvoiceNumber: 1,
+    });
+    catchupParty2 = await createParty(db, catchupBusiness2.id, {
+      name: "Catchup Party 2",
+      type: "customer",
+    });
+  });
+
+  it("generates multiple invoices when scheduler was down and nextRunDate is in the past", async () => {
+    const db = getTenantTestDb();
+    const schedulerDb = await getTenantDb("single");
+
+    // Insert a weekly template with nextRunDate = 3 weeks ago
+    // so the scheduler should generate 3 missed invoices in one tick
+    const threeWeeksAgo = new Date();
+    threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
+
+    const [template] = await db.insert(recurringInvoiceTemplates).values({
+      businessId: catchupBusiness1.id,
+      partyId: catchupParty1.id,
+      name: "Catchup Weekly Template",
+      type: "sale",
+      frequency: "weekly",
+      startDate: threeWeeksAgo,
+      nextRunDate: threeWeeksAgo,
+      lineItems: [
+        {
+          description: "Weekly service fee",
+          quantity: "1",
+          unitPrice: "1000.00",
+          taxPercent: "18",
+          discountPercent: "0",
+        },
+      ],
+      additionalCharges: "0",
+    }).returning();
+
+    await processDueTemplates(schedulerDb);
+
+    // Verify 3 invoices were generated (one per missed week)
+    const runs = await db.select()
+      .from(recurringInvoiceRuns)
+      .where(eq(recurringInvoiceRuns.templateId, template!.id));
+    expect(runs.length).toBeGreaterThanOrEqual(3);
+    expect(runs.every((r) => r.status === "success")).toBe(true);
+
+    // Verify nextRunDate is now in the future
+    const [updatedTpl] = await db.select({
+      nextRunDate: recurringInvoiceTemplates.nextRunDate,
+      totalRuns: recurringInvoiceTemplates.totalRuns,
+    }).from(recurringInvoiceTemplates)
+      .where(eq(recurringInvoiceTemplates.id, template!.id));
+
+    expect(updatedTpl!.nextRunDate.getTime()).toBeGreaterThan(Date.now());
+    expect(updatedTpl!.totalRuns).toBeGreaterThanOrEqual(3);
+
+    // Verify each run record links to a real invoice
+    const invoiceIds = runs.map((r) => r.invoiceId).filter(Boolean);
+    expect(invoiceIds.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not generate an unbounded number of invoices for a long-overdue template", async () => {
+    const db = getTenantTestDb();
+    const schedulerDb = await getTenantDb("single");
+
+    // Insert a daily template with nextRunDate = 30 days ago.
+    // Without a cap the scheduler would generate 30 invoices; with either
+    // MAX_CATCHUP=12 or the plan limit of RECURRING_RUNS_PER_MONTH_FREE runs,
+    // it must stop well short of 30.
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const [template] = await db.insert(recurringInvoiceTemplates).values({
+      businessId: catchupBusiness2.id,
+      partyId: catchupParty2.id,
+      name: "Catchup Daily Template (cap test)",
+      type: "sale",
+      frequency: "custom",
+      customIntervalDays: 1,
+      startDate: thirtyDaysAgo,
+      nextRunDate: thirtyDaysAgo,
+      lineItems: [
+        {
+          description: "Daily service fee",
+          quantity: "1",
+          unitPrice: "500.00",
+          taxPercent: "18",
+          discountPercent: "0",
+        },
+      ],
+      additionalCharges: "0",
+    }).returning();
+
+    await processDueTemplates(schedulerDb);
+
+    // Count only successful runs — whatever the effective cap (MAX_CATCHUP or plan limit),
+    // we must have generated more than 1 (proving the catch-up loop actually ran)
+    // but strictly fewer than 30 (proving the cap works).
+    const runs = await db.select()
+      .from(recurringInvoiceRuns)
+      .where(eq(recurringInvoiceRuns.templateId, template!.id));
+
+    const successRuns = runs.filter((r) => r.status === "success");
+    expect(successRuns.length).toBeGreaterThan(1);  // catch-up ran multiple times
+    expect(successRuns.length).toBeLessThan(30);    // cap prevented unbounded generation
+
+    // nextRunDate should still be in the past — catch-up is incomplete and
+    // will continue on the next tick.
+    const [updatedTpl] = await db.select({
+      nextRunDate: recurringInvoiceTemplates.nextRunDate,
+    }).from(recurringInvoiceTemplates)
+      .where(eq(recurringInvoiceTemplates.id, template!.id));
+
+    expect(updatedTpl!.nextRunDate.getTime()).toBeLessThan(Date.now());
   });
 });
 

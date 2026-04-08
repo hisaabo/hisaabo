@@ -52,6 +52,9 @@ import {
   shipments,
   shipmentEvents,
   storeOrders,
+  chartOfAccounts,
+  journalEntries,
+  journalEntryLines,
 } from "@hisaabo/db";
 
 // Reconstruct schema objects for Drizzle so each instance has only its tables
@@ -84,6 +87,9 @@ const tenantSchema = {
   shipments,
   shipmentEvents,
   storeOrders,
+  chartOfAccounts,
+  journalEntries,
+  journalEntryLines,
 };
 
 // Re-export the Drizzle type aliases so callers don't need to import drizzle directly.
@@ -167,6 +173,9 @@ export async function truncateAllTables(): Promise<void> {
   await client`
     TRUNCATE TABLE
       -- Tenant schema (leaf tables first)
+      journal_entry_lines,
+      journal_entries,
+      chart_of_accounts,
       shipment_events,
       shipments,
       store_orders,

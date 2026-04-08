@@ -150,12 +150,30 @@ export const invoiceRouter = router({
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
       // invoice with a party from a different business within the same tenant.
-      const [partyCheck] = await tx.select({ id: parties.id })
+      const [partyCheck] = await tx.select({ id: parties.id, stateCode: parties.stateCode })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
       if (!partyCheck) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
+      // Composition scheme: block inter-state sale invoices.
+      // Composition dealers may only make intra-state outward supplies (GST rule).
+      if (input.type === "sale") {
+        const [biz] = await tx.select({
+          gstRegistrationType: businesses.gstRegistrationType,
+          stateCode: businesses.stateCode,
+        }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
+
+        if (biz?.gstRegistrationType === "composition") {
+          if (partyCheck.stateCode && biz.stateCode && partyCheck.stateCode !== biz.stateCode) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Composition scheme businesses cannot make inter-state outward supplies",
+            });
+          }
+        }
       }
 
       // Security: validate that every itemId in line items belongs to the current business.
@@ -248,6 +266,7 @@ export const invoiceRouter = router({
         termsAndConditions: input.termsAndConditions,
         referenceDocumentId: input.referenceDocumentId || null,
         deliveryMethod: input.deliveryMethod || "self_pickup",
+        isReverseCharge: input.isReverseCharge ?? false,
         createdByUserId: ctx.user!.id,
         createdByName: ctx.user!.name,
       }).returning();
@@ -272,7 +291,10 @@ export const invoiceRouter = router({
               ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
               : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
             updatedAt: new Date(),
-          }).where(eq(itemVariants.id, li.variantId));
+          }).where(and(
+            eq(itemVariants.id, li.variantId),
+            sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+          ));
         } else if (li.itemId) {
           const cf = li.conversionFactor || "1";
           await tx.update(items).set({
@@ -352,17 +374,19 @@ export const invoiceRouter = router({
         .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
         .returning();
 
-      if (invoice) {
-        logAudit(ctx.db, {
-          businessId: ctx.businessId,
-          userId: ctx.user!.id,
-          action: "invoice.updateStatus",
-          entityType: "invoice",
-          entityId: input.id,
-          metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
-        });
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
       }
+
+      logAudit(ctx.db, {
+        businessId: ctx.businessId,
+        userId: ctx.user!.id,
+        action: "invoice.updateStatus",
+        entityType: "invoice",
+        entityId: input.id,
+        metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
+        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      });
 
       return invoice;
     }),
@@ -460,35 +484,27 @@ export const invoiceRouter = router({
             variantId: invoiceItems.variantId,
           }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Step 2: Reverse old stock adjustments (separate item vs variant)
-          const oldItemStockMap = new Map<string, number>();
-          const oldVariantStockMap = new Map<string, number>();
+          // Step 2: Reverse old stock adjustments using PostgreSQL NUMERIC arithmetic
           for (const li of oldLineItems) {
             if (li.variantId) {
-              const qty = parseFloat(li.quantity);
-              oldVariantStockMap.set(li.variantId, (oldVariantStockMap.get(li.variantId) || 0) + qty);
+              await tx.update(itemVariants).set({
+                stockQuantity: existing.type === "sale"
+                  ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
+                  : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
+                updatedAt: new Date(),
+              }).where(and(
+                eq(itemVariants.id, li.variantId),
+                sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+              ));
             } else if (li.itemId) {
-              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              oldItemStockMap.set(li.itemId, (oldItemStockMap.get(li.itemId) || 0) + qty);
+              const cf = li.conversionFactor || "1";
+              await tx.update(items).set({
+                stockQuantity: existing.type === "sale"
+                  ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
+                  : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
+                updatedAt: new Date(),
+              }).where(eq(items.id, li.itemId));
             }
-          }
-          for (const [itemId, totalQty] of oldItemStockMap) {
-            const qtyStr = totalQty.toFixed(3);
-            await tx.update(items).set({
-              stockQuantity: existing.type === "sale"
-                ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`
-                : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`,
-              updatedAt: new Date(),
-            }).where(eq(items.id, itemId));
-          }
-          for (const [variantId, totalQty] of oldVariantStockMap) {
-            const qtyStr = totalQty.toFixed(3);
-            await tx.update(itemVariants).set({
-              stockQuantity: existing.type === "sale"
-                ? sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`
-                : sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`,
-              updatedAt: new Date(),
-            }).where(eq(itemVariants.id, variantId));
           }
 
           // Step 3: Delete existing line items
@@ -523,35 +539,27 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
-          // Step 5: Apply new stock adjustments (separate item vs variant)
-          const newItemStockMap = new Map<string, number>();
-          const newVariantStockMap = new Map<string, number>();
+          // Step 5: Apply new stock adjustments using PostgreSQL NUMERIC arithmetic
           for (const li of input.lineItems) {
             if (li.variantId) {
-              const qty = parseFloat(li.quantity);
-              newVariantStockMap.set(li.variantId, (newVariantStockMap.get(li.variantId) || 0) + qty);
+              await tx.update(itemVariants).set({
+                stockQuantity: existing.type === "sale"
+                  ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
+                  : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                updatedAt: new Date(),
+              }).where(and(
+                eq(itemVariants.id, li.variantId),
+                sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+              ));
             } else if (li.itemId) {
-              const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor || "1");
-              newItemStockMap.set(li.itemId, (newItemStockMap.get(li.itemId) || 0) + qty);
+              const cf = li.conversionFactor || "1";
+              await tx.update(items).set({
+                stockQuantity: existing.type === "sale"
+                  ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
+                  : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
+                updatedAt: new Date(),
+              }).where(eq(items.id, li.itemId));
             }
-          }
-          for (const [itemId, totalQty] of newItemStockMap) {
-            const qtyStr = totalQty.toFixed(3);
-            await tx.update(items).set({
-              stockQuantity: existing.type === "sale"
-                ? sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`
-                : sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`,
-              updatedAt: new Date(),
-            }).where(eq(items.id, itemId));
-          }
-          for (const [variantId, totalQty] of newVariantStockMap) {
-            const qtyStr = totalQty.toFixed(3);
-            await tx.update(itemVariants).set({
-              stockQuantity: existing.type === "sale"
-                ? sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`
-                : sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`,
-              updatedAt: new Date(),
-            }).where(eq(itemVariants.id, variantId));
           }
 
           // Recalculate totals using fixed-point arithmetic
@@ -627,34 +635,27 @@ export const invoiceRouter = router({
           .from(invoiceItems)
           .where(eq(invoiceItems.invoiceId, input.id));
 
-        const itemStockMap = new Map<string, number>();
-        const variantStockMap = new Map<string, number>();
+        // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
         for (const li of lineItemRows) {
           if (li.variantId) {
-            const qty = parseFloat(li.quantity);
-            variantStockMap.set(li.variantId, (variantStockMap.get(li.variantId) || 0) + qty);
+            await tx.update(itemVariants).set({
+              stockQuantity: inv.type === "sale"
+                ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
+                : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
+              updatedAt: new Date(),
+            }).where(and(
+              eq(itemVariants.id, li.variantId),
+              sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
+            ));
           } else if (li.itemId) {
-            const qty = parseFloat(li.quantity) * parseFloat(li.conversionFactor ?? "1");
-            itemStockMap.set(li.itemId, (itemStockMap.get(li.itemId) || 0) + qty);
+            const cf = li.conversionFactor ?? "1";
+            await tx.update(items).set({
+              stockQuantity: inv.type === "sale"
+                ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
+                : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
+              updatedAt: new Date(),
+            }).where(eq(items.id, li.itemId));
           }
-        }
-        for (const [itemId, totalQty] of itemStockMap) {
-          const qtyStr = totalQty.toFixed(3);
-          await tx.update(items).set({
-            stockQuantity: inv.type === "sale"
-              ? sql`${items.stockQuantity}::numeric + ${qtyStr}::numeric`
-              : sql`${items.stockQuantity}::numeric - ${qtyStr}::numeric`,
-            updatedAt: new Date(),
-          }).where(eq(items.id, itemId));
-        }
-        for (const [variantId, totalQty] of variantStockMap) {
-          const qtyStr = totalQty.toFixed(3);
-          await tx.update(itemVariants).set({
-            stockQuantity: inv.type === "sale"
-              ? sql`${itemVariants.stockQuantity}::numeric + ${qtyStr}::numeric`
-              : sql`${itemVariants.stockQuantity}::numeric - ${qtyStr}::numeric`,
-            updatedAt: new Date(),
-          }).where(eq(itemVariants.id, variantId));
         }
 
         // Soft delete

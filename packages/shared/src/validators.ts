@@ -112,10 +112,10 @@ export const createPartySchema = z.object({
   state: z.string().max(100).optional(),
   stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
-  openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  openingBalance: z.string().regex(/^-?\d{1,13}(\.\d{1,2})?$/).default("0"),
   category: z.string().max(100).optional(),
   creditPeriodDays: z.number().int().min(0).max(365).optional(),
-  creditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  creditLimit: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
   contactPersonName: z.string().max(200).optional(),
   contactPersonDob: z.string().datetime().optional(),
   bankAccountNumber: z.string().max(34).optional(),
@@ -136,13 +136,13 @@ export type ItemMode = (typeof itemModes)[number];
 export const unitVariantSchema = z.object({
   unit: z.string().min(1).max(50),
   conversionFactor: z.number().positive(),
-  salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  salePrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  purchasePrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
 });
 
 export type UnitVariant = z.infer<typeof unitVariantSchema>;
 
-export const decimalStr = z.string().regex(/^\d+(\.\d{1,2})?$/);
+export const decimalStr = z.string().regex(/^\d{1,13}(\.\d{1,2})?$/);
 export const decimalStr3 = z.string().regex(/^-?\d+(\.\d{1,3})?$/);
 
 export const itemVariantSchema = z.object({
@@ -162,9 +162,9 @@ const createItemBaseSchema = z.object({
   sku: z.string().max(50).optional(),
   unit: z.enum(units).default("pcs"),
   itemMode: z.enum(itemModes).default("simple"),
-  salePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  purchasePrice: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  salePrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
+  purchasePrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
+  taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   stockQuantity: z.string().regex(/^-?\d+(\.\d{1,3})?$/).default("0"),
   lowStockAlert: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
   description: z.string().max(1000).optional(),
@@ -194,16 +194,16 @@ export type DeliveryMethod = (typeof deliveryMethods)[number];
 
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
 });
 
 export const invoiceLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
   description: z.string().min(1).max(500),
   quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
-  unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 56, { message: "Tax percent cannot exceed 56%" }),
-  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
+  unitPrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 56, { message: "Tax percent cannot exceed 56%" }),
+  discountPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 100, { message: "Discount cannot exceed 100%" }),
   selectedUnit: z.string().nullish(),
   conversionFactor: z.string().nullish(), // stored as string like all numerics
   variantId: z.string().uuid().nullish(),
@@ -217,11 +217,11 @@ export const createInvoiceSchema = z.object({
   dueDate: z.string().datetime().optional(),
   notes: z.string().max(2000).optional(),
   termsAndConditions: z.string().max(2000).optional(),
-  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  additionalCharges: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   charges: z.array(invoiceChargeSchema).optional(),
-  invoiceDiscount: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  invoiceDiscount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   invoiceDiscountType: z.enum(["amount", "percent"]).default("amount"),
-  roundOff: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  roundOff: z.string().regex(/^-?\d{1,13}(\.\d{1,2})?$/).default("0"),
   referenceDocumentId: z.string().uuid().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1),
   /**
@@ -230,6 +230,7 @@ export const createInvoiceSchema = z.object({
    * challan already decremented it).
    */
   skipStockAdjustment: z.boolean().optional(),
+  isReverseCharge: z.boolean().default(false),
   deliveryMethod: z.enum(deliveryMethods).default("self_pickup"),
 });
 
@@ -243,14 +244,14 @@ export const paymentModes = ["cash", "bank", "upi", "cheque", "other", "credit_c
 
 export const paymentAllocationSchema = z.object({
   invoiceId: z.string().uuid(),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
 });
 
 export const createPaymentSchema = z.object({
   invoiceId: z.string().uuid().optional(),
   partyId: z.string().uuid(),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  discount: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
+  discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   mode: z.enum(paymentModes),
   referenceNumber: z.string().max(100).optional(),
   paymentDate: z.string().datetime().optional(),
@@ -262,8 +263,8 @@ export const createPaymentSchema = z.object({
 
 export const updatePaymentSchema = z.object({
   id: z.string().uuid(),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
-  discount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
+  discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
   mode: z.enum(paymentModes).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),
   paymentDate: z.string().datetime().optional(),
@@ -278,7 +279,7 @@ export const updatePaymentSchema = z.object({
 export const createExpenseSchema = z.object({
   category: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
   mode: z.enum(paymentModes),
   expenseDate: z.string().datetime().optional(),
   referenceNumber: z.string().max(100).optional(),
@@ -321,7 +322,7 @@ export const createBankAccountSchema = z.object({
   ifsc: z.string().max(11).optional(),
   bankName: z.string().max(200).optional(),
   accountType: z.enum(bankAccountTypes).default("savings"),
-  openingBalance: z.string().regex(/^-?\d+(\.\d{1,2})?$/).default("0"),
+  openingBalance: z.string().regex(/^-?\d{1,13}(\.\d{1,2})?$/).default("0"),
   isDefault: z.boolean().default(false),
 });
 
@@ -330,7 +331,7 @@ export const updateBankAccountSchema = createBankAccountSchema.partial();
 export const createBankTransactionSchema = z.object({
   bankAccountId: z.string().uuid(),
   type: z.enum(bankTransactionTypes),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
   description: z.string().max(500).optional(),
   referenceType: z.string().max(50).optional(),
   referenceId: z.string().uuid().optional(),
@@ -340,7 +341,7 @@ export const createBankTransactionSchema = z.object({
 export const bankTransferSchema = z.object({
   fromAccountId: z.string().uuid(),
   toAccountId: z.string().uuid(),
-  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
   description: z.string().max(500).optional(),
   transactionDate: z.string().datetime().optional(),
 });
@@ -423,9 +424,9 @@ export const recurringLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
   description: z.string().min(1).max(500),
   quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
-  unitPrice: z.string().regex(/^\d+(\.\d{1,2})?$/),
-  taxPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
-  discountPercent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  unitPrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  discountPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   selectedUnit: z.string().nullish(),
   conversionFactor: z.string().nullish(),
   variantId: z.string().uuid().nullish(),
@@ -440,7 +441,7 @@ export const createRecurringInvoiceSchema = z.object({
   lineItems: z.array(recurringLineItemSchema).min(1),
   notes: z.string().max(2000).optional(),
   termsAndConditions: z.string().max(2000).optional(),
-  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  additionalCharges: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   charges: z.array(invoiceChargeSchema).optional(),
   startDate: z.string().datetime(),
   endDate: z.string().datetime().optional(),
@@ -459,10 +460,54 @@ export const updateRecurringInvoiceSchema = z.object({
   lineItems: z.array(recurringLineItemSchema).min(1).optional(),
   notes: z.string().max(2000).optional(),
   termsAndConditions: z.string().max(2000).optional(),
-  additionalCharges: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  additionalCharges: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
   charges: z.array(invoiceChargeSchema).optional(),
   endDate: z.string().datetime().optional(),
   maxRuns: z.number().int().min(1).optional().nullable(),
+});
+
+// ── Chart of Accounts ──────────────────────────────────────────
+
+export const accountTypes = ["asset", "liability", "equity", "income", "expense"] as const;
+export type AccountType = (typeof accountTypes)[number];
+
+export const createAccountSchema = z.object({
+  code: z.string().min(1).max(10),
+  name: z.string().min(1).max(200),
+  accountType: z.enum(accountTypes),
+  parentId: z.string().uuid().optional(),
+});
+
+export const updateAccountSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  isActive: z.boolean().optional(),
+});
+
+// ── Journal Entries ──────────────────────────────────────────
+
+export const journalEntryLineSchema = z.object({
+  accountId: z.string().uuid(),
+  debit: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  credit: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
+  narration: z.string().max(500).optional(),
+});
+
+export const createJournalEntrySchema = z.object({
+  entryDate: z.string().datetime(),
+  narration: z.string().max(2000).optional(),
+  lines: z.array(journalEntryLineSchema).min(2),
+}).refine(data => {
+  const totalDebit = data.lines.reduce((s, l) => s + parseFloat(l.debit), 0);
+  const totalCredit = data.lines.reduce((s, l) => s + parseFloat(l.credit), 0);
+  return Math.abs(totalDebit - totalCredit) < 0.01;
+}, { message: "Journal entry must be balanced (total debits = total credits)" });
+
+// ── HSN Search ────────────────────────────────────────────────
+
+export const hsnSearchSchema = z.object({
+  query: z.string().min(1).max(50),
+  type: z.enum(["goods", "services"]).optional(),
+  limit: z.number().int().min(1).max(50).default(20),
 });
 
 // ── API Keys ───────────────────────────────────────────────────

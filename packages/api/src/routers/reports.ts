@@ -1,5 +1,6 @@
 import { eq, and, sql, desc, gte, lte, isNull } from "drizzle-orm";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   invoices,
   invoiceItems,
@@ -9,7 +10,12 @@ import {
   items,
   itemVariants,
   bankAccounts,
+  chartOfAccounts,
+  businesses,
+  journalEntries,
+  journalEntryLines,
 } from "@hisaabo/db";
+import { deriveLedger } from "../lib/derive-ledger.js";
 import {
   daybookInputSchema,
   outstandingInputSchema,
@@ -24,6 +30,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { generateTallyXml } from "../lib/tally-xml-export.js";
 
 export const reportsRouter = router({
   // ── 1. Daybook ─────────────────────────────────────────────────
@@ -1223,6 +1230,529 @@ export const reportsRouter = router({
           totalExpenses,
           netCashMovement: money.sub(totalReceived, money.add(totalMade, totalExpenses)),
         },
+      };
+    }),
+
+  // ── 11. Trial Balance ──────────────────────────────────────────
+  trialBalance: viewerProcedure
+    .input(z.object({
+      asOfDate: z.string().datetime(),
+      fromDate: z.string().datetime().optional(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const asOf = new Date(input.asOfDate);
+
+      // Determine FY start: default to April 1 of the asOf year (or prev year if before April)
+      const [biz] = await ctx.db
+        .select({ financialYearStart: businesses.financialYearStart })
+        .from(businesses)
+        .where(eq(businesses.id, ctx.businessId))
+        .limit(1);
+
+      const fyStartMonth = (biz?.financialYearStart ?? 4) - 1; // 0-indexed
+      const fyYear =
+        asOf.getMonth() < fyStartMonth
+          ? asOf.getFullYear() - 1
+          : asOf.getFullYear();
+      const from = input.fromDate
+        ? new Date(input.fromDate)
+        : new Date(fyYear, fyStartMonth, 1);
+
+      const entries = await deriveLedger(ctx.db, ctx.businessId, from, asOf);
+
+      // Aggregate debits and credits per account code
+      const accountMap = new Map<
+        string,
+        { debit: string; credit: string; code: string; name: string }
+      >();
+
+      for (const entry of entries) {
+        for (const line of entry.lines) {
+          const existing = accountMap.get(line.accountCode) ?? {
+            debit: "0.00",
+            credit: "0.00",
+            code: line.accountCode,
+            name: line.accountName,
+          };
+          existing.debit = money.add(existing.debit, line.debit);
+          existing.credit = money.add(existing.credit, line.credit);
+          accountMap.set(line.accountCode, existing);
+        }
+      }
+
+      // Fetch account types from CoA
+      const coaRows = await ctx.db
+        .select({
+          code: chartOfAccounts.code,
+          accountType: chartOfAccounts.accountType,
+        })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+      const coaTypeMap = new Map(coaRows.map((r) => [r.code, r.accountType]));
+
+      const accounts = [...accountMap.values()]
+        .map((a) => ({
+          accountCode: a.code,
+          accountName: a.name,
+          accountType: coaTypeMap.get(a.code) ?? "expense",
+          debit: a.debit,
+          credit: a.credit,
+          balance: money.sub(a.debit, a.credit),
+        }))
+        .filter(
+          (a) =>
+            money.compare(a.debit, "0") !== 0 ||
+            money.compare(a.credit, "0") !== 0,
+        )
+        .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      const totalDebit = money.sum(accounts.map((a) => a.debit));
+      const totalCredit = money.sum(accounts.map((a) => a.credit));
+
+      return { accounts, totalDebit, totalCredit };
+    }),
+
+  // ── 12. Balance Sheet ──────────────────────────────────────────
+  balanceSheet: viewerProcedure
+    .input(z.object({ asOfDate: z.string().datetime() }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const asOf = new Date(input.asOfDate);
+
+      // Derive all entries from the beginning of time up to asOf.
+      // Balance sheet is cumulative — income/expense flows accumulate as net income
+      // in equity (this system has no year-end closing entries).
+      const allEntries = await deriveLedger(
+        ctx.db,
+        ctx.businessId,
+        new Date("2000-01-01"),
+        asOf,
+      );
+
+      // Fetch CoA for type information
+      const coaRows = await ctx.db
+        .select({
+          code: chartOfAccounts.code,
+          name: chartOfAccounts.name,
+          accountType: chartOfAccounts.accountType,
+        })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+      const coaTypeMap = new Map(
+        coaRows.map((r) => [r.code, { name: r.name, type: r.accountType }]),
+      );
+
+      // Aggregate cumulative balances for all account types
+      type AccBalance = { code: string; name: string; debit: string; credit: string };
+      const allMap = new Map<string, AccBalance>();
+
+      for (const entry of allEntries) {
+        for (const line of entry.lines) {
+          const existing = allMap.get(line.accountCode) ?? {
+            code: line.accountCode,
+            name: line.accountName,
+            debit: "0.00",
+            credit: "0.00",
+          };
+          existing.debit = money.add(existing.debit, line.debit);
+          existing.credit = money.add(existing.credit, line.credit);
+          allMap.set(line.accountCode, existing);
+        }
+      }
+
+      // Compute net income from all-time income/expense movements.
+      // Since there are no closing journal entries, all accumulated income/expense
+      // contributes to net income (retained earnings equivalent).
+      let totalIncomeCredits = "0.00";
+      let totalIncomeDebits = "0.00";
+      let totalExpenseDebits = "0.00";
+      let totalExpenseCredits = "0.00";
+
+      for (const [code, acc] of allMap) {
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo) continue;
+        if (acctInfo.type === "income") {
+          totalIncomeCredits = money.add(totalIncomeCredits, acc.credit);
+          totalIncomeDebits = money.add(totalIncomeDebits, acc.debit);
+        } else if (acctInfo.type === "expense") {
+          totalExpenseDebits = money.add(totalExpenseDebits, acc.debit);
+          totalExpenseCredits = money.add(totalExpenseCredits, acc.credit);
+        }
+      }
+
+      const netIncome = money.sub(
+        money.sub(totalIncomeCredits, totalIncomeDebits),
+        money.sub(totalExpenseDebits, totalExpenseCredits),
+      );
+
+      // Build section arrays from cumulative balances (balance sheet accounts only)
+      type BsItem = { accountCode: string; accountName: string; balance: string };
+      const assets: BsItem[] = [];
+      const liabilities: BsItem[] = [];
+      const equity: BsItem[] = [];
+
+      for (const [code, acc] of allMap) {
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo) continue;
+        const { type } = acctInfo;
+
+        if (type === "asset") {
+          // Asset balance = debit - credit (debit-normal)
+          const balance = money.sub(acc.debit, acc.credit);
+          if (money.compare(balance, "0") !== 0) {
+            assets.push({ accountCode: code, accountName: acc.name, balance });
+          }
+        } else if (type === "liability") {
+          // Liability balance = credit - debit (credit-normal)
+          const balance = money.sub(acc.credit, acc.debit);
+          if (money.compare(balance, "0") !== 0) {
+            liabilities.push({ accountCode: code, accountName: acc.name, balance });
+          }
+        } else if (type === "equity") {
+          // Equity balance = credit - debit (credit-normal)
+          const balance = money.sub(acc.credit, acc.debit);
+          if (money.compare(balance, "0") !== 0) {
+            equity.push({ accountCode: code, accountName: acc.name, balance });
+          }
+        }
+        // income/expense accounts go into net income, not balance sheet directly
+      }
+
+      // Sort each section by account code
+      assets.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      liabilities.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      equity.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      // Append net income to equity section
+      equity.push({
+        accountCode: "9999",
+        accountName: "Net Income (Current Period)",
+        balance: netIncome,
+      });
+
+      const totalAssets = money.sum(assets.map((a) => a.balance));
+      const totalLiabilities = money.sum(liabilities.map((a) => a.balance));
+      const totalEquity = money.sum(equity.map((a) => a.balance));
+
+      return { assets, liabilities, equity, totalAssets, totalLiabilities, totalEquity };
+    }),
+
+  // ── 13. Profit & Loss (CoA-based) ─────────────────────────────
+  profitAndLoss: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime(),
+      toDate: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const from = new Date(input.fromDate);
+      const to = new Date(input.toDate);
+
+      const entries = await deriveLedger(ctx.db, ctx.businessId, from, to);
+
+      // Fetch CoA for type information
+      const coaRows = await ctx.db
+        .select({
+          code: chartOfAccounts.code,
+          name: chartOfAccounts.name,
+          accountType: chartOfAccounts.accountType,
+        })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+      const coaTypeMap = new Map(
+        coaRows.map((r) => [r.code, { name: r.name, type: r.accountType }]),
+      );
+
+      // Aggregate debits and credits per account
+      type AccBalance = { code: string; name: string; debit: string; credit: string };
+      const accountMap = new Map<string, AccBalance>();
+
+      for (const entry of entries) {
+        for (const line of entry.lines) {
+          const existing = accountMap.get(line.accountCode) ?? {
+            code: line.accountCode,
+            name: line.accountName,
+            debit: "0.00",
+            credit: "0.00",
+          };
+          existing.debit = money.add(existing.debit, line.debit);
+          existing.credit = money.add(existing.credit, line.credit);
+          accountMap.set(line.accountCode, existing);
+        }
+      }
+
+      // Split into income and expense line items
+      // Income: amount = credit - debit (credit-normal accounts)
+      // Expenses: amount = debit - credit (debit-normal accounts)
+      type PlItem = { accountCode: string; accountName: string; amount: string };
+      const income: PlItem[] = [];
+      const expenseItems: PlItem[] = [];
+
+      for (const [code, acc] of accountMap) {
+        const acctInfo = coaTypeMap.get(code);
+        if (!acctInfo) continue;
+        const { type } = acctInfo;
+
+        if (type === "income") {
+          const amount = money.sub(acc.credit, acc.debit);
+          income.push({ accountCode: code, accountName: acc.name, amount });
+        } else if (type === "expense") {
+          const amount = money.sub(acc.debit, acc.credit);
+          expenseItems.push({ accountCode: code, accountName: acc.name, amount });
+        }
+      }
+
+      income.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      expenseItems.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+      const totalIncome = money.sum(income.map((a) => a.amount));
+      const totalExpenses = money.sum(expenseItems.map((a) => a.amount));
+
+      // Gross profit = Sales (4000) - Direct costs (5000 Purchases + 5100 Direct Expenses)
+      const salesAmt = income.find((a) => a.accountCode === "4000")?.amount ?? "0.00";
+      const salesReturnsAmt = expenseItems.find((a) => a.accountCode === "4010")?.amount ?? "0.00";
+      const purchasesAmt = expenseItems.find((a) => a.accountCode === "5000")?.amount ?? "0.00";
+      const directExpAmt = expenseItems.find((a) => a.accountCode === "5100")?.amount ?? "0.00";
+
+      const grossProfit = money.sub(
+        money.sub(salesAmt, salesReturnsAmt),
+        money.add(purchasesAmt, directExpAmt),
+      );
+
+      const netProfit = money.sub(totalIncome, totalExpenses);
+
+      return {
+        income,
+        expenses: expenseItems,
+        totalIncome,
+        totalExpenses,
+        grossProfit,
+        netProfit,
+      };
+    }),
+
+  // ── 14. General Ledger ────────────────────────────────────────
+  generalLedger: viewerProcedure
+    .input(z.object({
+      accountId: z.string().uuid(),
+      fromDate: z.string().datetime(),
+      toDate: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      // 1. Get account details
+      const [account] = await ctx.db.select()
+        .from(chartOfAccounts)
+        .where(and(
+          eq(chartOfAccounts.id, input.accountId),
+          eq(chartOfAccounts.businessId, ctx.businessId),
+        ))
+        .limit(1);
+
+      if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+
+      const from = new Date(input.fromDate);
+      const to = new Date(input.toDate);
+
+      // 2. Get derived entries for this account (from operational transactions)
+      const allDerived = await deriveLedger(ctx.db, ctx.businessId, from, to);
+
+      type LedgerLine = {
+        date: Date;
+        narration: string;
+        sourceType: string;
+        sourceId: string;
+        sourceNumber: string;
+        debit: string;
+        credit: string;
+      };
+
+      const derivedLines: LedgerLine[] = [];
+      for (const entry of allDerived) {
+        for (const line of entry.lines) {
+          if (line.accountId === input.accountId) {
+            derivedLines.push({
+              date: entry.date,
+              narration: entry.narration,
+              sourceType: entry.sourceType,
+              sourceId: entry.sourceId,
+              sourceNumber: entry.sourceNumber,
+              debit: line.debit,
+              credit: line.credit,
+            });
+          }
+        }
+      }
+
+      // 3. Get manual journal entry lines for this account
+      const jeRows = await ctx.db.select({
+        date: journalEntries.entryDate,
+        narration: journalEntries.narration,
+        sourceNumber: journalEntries.entryNumber,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        journalEntryId: journalEntries.id,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntries.id, journalEntryLines.journalEntryId))
+      .where(and(
+        eq(journalEntryLines.accountId, input.accountId),
+        eq(journalEntries.businessId, ctx.businessId),
+        gte(journalEntries.entryDate, from),
+        lte(journalEntries.entryDate, to),
+      ));
+
+      const journalLines: LedgerLine[] = jeRows.map(je => ({
+        date: je.date,
+        narration: je.narration ?? "",
+        sourceType: "journal",
+        sourceId: je.journalEntryId,
+        sourceNumber: je.sourceNumber,
+        debit: je.debit,
+        credit: je.credit,
+      }));
+
+      // 4. Merge, sort by date, compute running balance
+      const allLines = [...derivedLines, ...journalLines]
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      let runningBalance = "0.00";
+      const entries = allLines.map(line => {
+        // Standard ledger convention: balance = previous balance + debit - credit
+        runningBalance = money.sub(money.add(runningBalance, line.debit), line.credit);
+        return {
+          date: line.date.toISOString(),
+          narration: line.narration,
+          sourceType: line.sourceType,
+          sourceId: line.sourceId,
+          sourceNumber: line.sourceNumber,
+          debit: line.debit,
+          credit: line.credit,
+          balance: runningBalance,
+        };
+      });
+
+      return {
+        accountId: account.id,
+        accountCode: account.code,
+        accountName: account.name,
+        accountType: account.accountType,
+        entries,
+        closingBalance: runningBalance,
+      };
+    }),
+
+  // ── Tally Prime XML export ─────────────────────────────────────
+  tallyExport: viewerProcedure
+    .input(z.object({
+      fromDate: z.string().datetime(),
+      toDate: z.string().datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Report");
+
+      const from = new Date(input.fromDate);
+      const to = new Date(input.toDate);
+
+      // ── 1. Derived entries (invoices, payments, expenses) ─────────
+      const derived = await deriveLedger(ctx.db, ctx.businessId, from, to);
+
+      // ── 2. Manual journal entries → DerivedEntry format ───────────
+      const manualEntries = await ctx.db
+        .select({
+          id: journalEntries.id,
+          entryNumber: journalEntries.entryNumber,
+          entryDate: journalEntries.entryDate,
+          narration: journalEntries.narration,
+        })
+        .from(journalEntries)
+        .where(
+          and(
+            eq(journalEntries.businessId, ctx.businessId),
+            gte(journalEntries.entryDate, from),
+            lte(journalEntries.entryDate, to),
+          ),
+        )
+        .orderBy(journalEntries.entryDate);
+
+      const journalDerived = await Promise.all(
+        manualEntries.map(async (je) => {
+          const lines = await ctx.db
+            .select({
+              id: journalEntryLines.id,
+              accountId: journalEntryLines.accountId,
+              accountCode: chartOfAccounts.code,
+              accountName: chartOfAccounts.name,
+              debit: journalEntryLines.debit,
+              credit: journalEntryLines.credit,
+            })
+            .from(journalEntryLines)
+            .innerJoin(chartOfAccounts, eq(journalEntryLines.accountId, chartOfAccounts.id))
+            .where(eq(journalEntryLines.journalEntryId, je.id));
+
+          return {
+            date: je.entryDate,
+            narration: je.narration ?? `Journal Entry ${je.entryNumber}`,
+            sourceType: "journal" as const,
+            sourceId: je.id,
+            sourceNumber: je.entryNumber,
+            lines: lines.map((l) => ({
+              accountId: l.accountId,
+              accountCode: l.accountCode,
+              accountName: l.accountName,
+              debit: l.debit,
+              credit: l.credit,
+            })),
+          };
+        }),
+      );
+
+      // ── 3. Chart of Accounts ──────────────────────────────────────
+      const coaRows = await ctx.db
+        .select({
+          code: chartOfAccounts.code,
+          name: chartOfAccounts.name,
+          accountType: chartOfAccounts.accountType,
+        })
+        .from(chartOfAccounts)
+        .where(eq(chartOfAccounts.businessId, ctx.businessId));
+
+      // ── 4. Business name ──────────────────────────────────────────
+      const [biz] = await ctx.db
+        .select({ name: businesses.name })
+        .from(businesses)
+        .where(eq(businesses.id, ctx.businessId))
+        .limit(1);
+
+      // ── 5. Generate XML ───────────────────────────────────────────
+      const allEntries = [...derived, ...journalDerived].sort(
+        (a, b) => a.date.getTime() - b.date.getTime(),
+      );
+
+      const xml = generateTallyXml(
+        allEntries,
+        coaRows.map((a) => ({
+          code: a.code,
+          name: a.name,
+          accountType: a.accountType as "asset" | "liability" | "equity" | "income" | "expense",
+        })),
+        { name: biz?.name ?? "Business" },
+      );
+
+      const fromSlice = input.fromDate.slice(0, 10);
+      const toSlice = input.toDate.slice(0, 10);
+
+      return {
+        xml,
+        filename: `tally-export-${fromSlice}-to-${toSlice}.xml`,
       };
     }),
 });

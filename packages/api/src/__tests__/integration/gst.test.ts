@@ -23,11 +23,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   createTestWorld,
   createParty,
+  createBusiness,
   createInvoiceWithItems,
   type TestWorld,
+  type TestBusiness,
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
-import { truncateAllTables, closeTestDb } from "../helpers/test-db.js";
+import { truncateAllTables, closeTestDb, getTenantTestDb } from "../helpers/test-db.js";
 
 // ── Fixture ────────────────────────────────────────────────────────────────────
 
@@ -410,5 +412,245 @@ describe("gst.gstr1CSV", () => {
     expect(result.csv.length).toBeGreaterThan(0);
     expect(typeof result.filename).toBe("string");
     expect(result.filename).toMatch(/\.csv$/);
+  });
+});
+
+// ── GSTR-3B — Reverse Charge Mechanism ────────────────────────────────────────
+
+describe("GSTR-3B — Reverse Charge Mechanism", () => {
+  // Use a different month to avoid polluting the shared fixture month
+  const RCM_YEAR = 2025;
+  const RCM_MONTH = 9; // September 2025
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a purchase invoice for business1 with RCM flag
+    // 1 × 50,000 @ 18% tax = 9,000 tax, same-state (Maharashtra "27") supplier
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Legal Services",
+          quantity: "1",
+          unitPrice: "50000.00",
+          taxPercent: "18.00",
+        },
+      ],
+      {
+        type: "purchase",
+        documentType: "invoice",
+        status: "sent",
+        invoiceDate: new Date(RCM_YEAR, RCM_MONTH - 1, 15, 12, 0, 0),
+        isReverseCharge: true,
+      },
+    );
+  });
+
+  it("RCM purchase invoice appears in rcmSupplies section of GSTR-3B", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    const report = await caller.gst.gstr3b({ year: RCM_YEAR, month: RCM_MONTH });
+
+    expect(report.rcmSupplies).toBeDefined();
+    expect(parseFloat(report.rcmSupplies.taxableValue)).toBeCloseTo(50000, 2);
+  });
+
+  it("RCM purchase generates ITC equal to the tax paid under RCM", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    const report = await caller.gst.gstr3b({ year: RCM_YEAR, month: RCM_MONTH });
+
+    // Same-state RCM → CGST + SGST. Tax = 50000 * 18% = 9000. CGST = SGST = 4500.
+    expect(report.itc.cgst).toBeCloseTo(4500, 2);
+    expect(report.itc.sgst).toBeCloseTo(4500, 2);
+    expect(report.itc.total).toBeCloseTo(9000, 2);
+  });
+
+  it("non-RCM purchase period returns zero rcmSupplies taxableValue", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    // October 2025 has no invoices at all
+    const report = await caller.gst.gstr3b({ year: 2025, month: 10 });
+
+    expect(parseFloat(report.rcmSupplies.taxableValue)).toBe(0);
+  });
+});
+
+// ── Composition Scheme Enforcement ────────────────────────────────────────────
+
+describe("Composition scheme enforcement", () => {
+  let compositionBusiness: TestBusiness;
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a composition-registered business in Maharashtra ("27") — same state as party1
+    compositionBusiness = await createBusiness(tenantDb, world.ramesh.id, {
+      name: "Sharma Kirana Store",
+      gstRegistrationType: "composition",
+      gstin: "27AABCS9999R1ZM",
+      city: "Nashik",
+      state: "Maharashtra",
+      stateCode: "27",
+    });
+  });
+
+  it("blocks inter-state sale invoice for composition business", async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a party in Karnataka (different state from composition business)
+    const karnatakaParty = await createParty(tenantDb, compositionBusiness.id, {
+      name: "Bengaluru Buyer",
+      type: "customer",
+      gstin: null,
+      city: "Bengaluru",
+      state: "Karnataka",
+      stateCode: "29",
+      openingBalance: "0.00",
+    });
+
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: compositionBusiness.id,
+    });
+
+    await expect(
+      caller.invoice.create({
+        type: "sale",
+        partyId: karnatakaParty.id,
+        lineItems: [
+          {
+            description: "Rice",
+            quantity: "10",
+            unitPrice: "50.00",
+            taxPercent: "0",
+            discountPercent: "0",
+            conversionFactor: "1",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Composition scheme businesses cannot make inter-state outward supplies");
+  });
+
+  it("allows intra-state sale invoice for composition business", async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a party in Maharashtra (same state as composition business)
+    const maharashtraParty = await createParty(tenantDb, compositionBusiness.id, {
+      name: "Pune Customer",
+      type: "customer",
+      gstin: null,
+      city: "Pune",
+      state: "Maharashtra",
+      stateCode: "27",
+      openingBalance: "0.00",
+    });
+
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: compositionBusiness.id,
+    });
+
+    const result = await caller.invoice.create({
+      type: "sale",
+      partyId: maharashtraParty.id,
+      lineItems: [
+        {
+          description: "Rice",
+          quantity: "10",
+          unitPrice: "50.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: "1",
+        },
+      ],
+    });
+
+    expect(result.id).toBeDefined();
+    expect(result.type).toBe("sale");
+  });
+
+  it("CMP-08 returns taxable value for the quarter of outward supplies", async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create an intra-state party for the composition business
+    const localParty = await createParty(tenantDb, compositionBusiness.id, {
+      name: "Local Buyer",
+      type: "customer",
+      gstin: null,
+      city: "Aurangabad",
+      state: "Maharashtra",
+      stateCode: "27",
+      openingBalance: "0.00",
+    });
+
+    // Create a sale invoice dated in Q3 2025 (Jul–Sep)
+    await createInvoiceWithItems(
+      tenantDb,
+      compositionBusiness.id,
+      localParty.id,
+      [
+        {
+          description: "Groceries",
+          quantity: "100",
+          unitPrice: "200.00",
+          taxPercent: "0",
+        },
+      ],
+      {
+        type: "sale",
+        documentType: "invoice",
+        status: "sent",
+        invoiceDate: new Date(2025, 7, 10, 12, 0, 0), // August 10, 2025 → Q2 FY (Jul–Sep) = Q3 calendar
+      },
+    );
+
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: compositionBusiness.id,
+    });
+
+    // Q3 of 2025 (July–September, calendar year): quarter=3
+    const cmp08 = await caller.gst.cmp08({ year: 2025, quarter: 3 });
+
+    expect(parseFloat(cmp08.taxableValue)).toBeGreaterThan(0);
+    expect(parseFloat(cmp08.taxPayable)).toBeGreaterThan(0);
+    // Tax payable = 1% of taxable value
+    expect(parseFloat(cmp08.taxPayable)).toBeCloseTo(
+      parseFloat(cmp08.taxableValue) * 0.01,
+      2,
+    );
+    expect(typeof cmp08.quarterStart).toBe("string");
+    expect(typeof cmp08.quarterEnd).toBe("string");
   });
 });

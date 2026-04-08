@@ -501,6 +501,14 @@ describe("party.delete", () => {
     const fetched = await callerRamesh.party.getById({ id: party.id });
     expect(fetched).not.toBeNull();
   });
+
+  it("delete on non-existent party throws NOT_FOUND", async () => {
+    await expect(
+      callerRamesh.party.delete({
+        id: "00000000-0000-0000-0000-000000000000",
+      })
+    ).rejects.toThrow(/not found/i);
+  });
 });
 
 // ── party.ledger ──────────────────────────────────────────────────────────────

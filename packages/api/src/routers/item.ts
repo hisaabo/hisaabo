@@ -272,7 +272,7 @@ export const itemRouter = router({
         const [item] = await tx.select()
           .from(items)
           .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
-        if (!item) throw new Error("Item not found");
+        if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
 
         const isBase = item.unit === input.oldUnit;
         const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -323,8 +323,13 @@ export const itemRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Item");
-      await ctx.db.delete(items)
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+      const deleted = await ctx.db.delete(items)
+        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+        .returning();
+
+      if (deleted.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+      }
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,

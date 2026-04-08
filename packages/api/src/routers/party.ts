@@ -196,8 +196,13 @@ export const partyRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Party");
-      await ctx.db.delete(parties)
-        .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)));
+      const deleted = await ctx.db.delete(parties)
+        .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
+        .returning();
+
+      if (deleted.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Party not found" });
+      }
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
