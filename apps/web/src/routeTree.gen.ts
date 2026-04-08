@@ -21,17 +21,17 @@ import { Route as PartiesRouteImport } from './routes/parties'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as JournalEntriesRouteImport } from './routes/journal-entries'
 import { Route as ItemsRouteImport } from './routes/items'
-import { Route as EwayBillsRouteImport } from './routes/eway-bills'
-import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
-import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
 import { Route as ItcRouteImport } from './routes/itc'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as Gstr2bRouteImport } from './routes/gstr2b'
 import { Route as GstRouteImport } from './routes/gst'
 import { Route as ExpensesRouteImport } from './routes/expenses'
+import { Route as EwayBillsRouteImport } from './routes/eway-bills'
+import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
 import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
 import { Route as CreditNotesRouteImport } from './routes/credit-notes'
 import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
+import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
 import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoices'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
@@ -98,21 +98,6 @@ const ItemsRoute = ItemsRouteImport.update({
   path: '/items',
   getParentRoute: () => rootRouteImport,
 } as any)
-const EwayBillsRoute = EwayBillsRouteImport.update({
-  id: '/eway-bills',
-  path: '/eway-bills',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EInvoicingRoute = EInvoicingRouteImport.update({
-  id: '/e-invoicing',
-  path: '/e-invoicing',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BankReconciliationRoute = BankReconciliationRouteImport.update({
-  id: '/bank-reconciliation',
-  path: '/bank-reconciliation',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ItcRoute = ItcRouteImport.update({
   id: '/itc',
   path: '/itc',
@@ -138,6 +123,16 @@ const ExpensesRoute = ExpensesRouteImport.update({
   path: '/expenses',
   getParentRoute: () => rootRouteImport,
 } as any)
+const EwayBillsRoute = EwayBillsRouteImport.update({
+  id: '/eway-bills',
+  path: '/eway-bills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EInvoicingRoute = EInvoicingRouteImport.update({
+  id: '/e-invoicing',
+  path: '/e-invoicing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryChallansRoute = DeliveryChallansRouteImport.update({
   id: '/delivery-challans',
   path: '/delivery-challans',
@@ -151,6 +146,11 @@ const CreditNotesRoute = CreditNotesRouteImport.update({
 const CashAndBankRoute = CashAndBankRouteImport.update({
   id: '/cash-and-bank',
   path: '/cash-and-bank',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BankReconciliationRoute = BankReconciliationRouteImport.update({
+  id: '/bank-reconciliation',
+  path: '/bank-reconciliation',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AutomatedInvoicesRoute = AutomatedInvoicesRouteImport.update({
@@ -396,27 +396,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/bank-reconciliation': {
-      id: '/bank-reconciliation'
-      path: '/bank-reconciliation'
-      fullPath: '/bank-reconciliation'
-      preLoaderRoute: typeof BankReconciliationRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/e-invoicing': {
-      id: '/e-invoicing'
-      path: '/e-invoicing'
-      fullPath: '/e-invoicing'
-      preLoaderRoute: typeof EInvoicingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/eway-bills': {
-      id: '/eway-bills'
-      path: '/eway-bills'
-      fullPath: '/eway-bills'
-      preLoaderRoute: typeof EwayBillsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/store-orders': {
       id: '/store-orders'
       path: '/store-orders'
@@ -515,13 +494,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InvoicesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/gst': {
-      id: '/gst'
-      path: '/gst'
-      fullPath: '/gst'
-      preLoaderRoute: typeof GstRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/gstr2b': {
       id: '/gstr2b'
       path: '/gstr2b'
@@ -529,11 +501,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Gstr2bRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/gst': {
+      id: '/gst'
+      path: '/gst'
+      fullPath: '/gst'
+      preLoaderRoute: typeof GstRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/expenses': {
       id: '/expenses'
       path: '/expenses'
       fullPath: '/expenses'
       preLoaderRoute: typeof ExpensesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/eway-bills': {
+      id: '/eway-bills'
+      path: '/eway-bills'
+      fullPath: '/eway-bills'
+      preLoaderRoute: typeof EwayBillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/e-invoicing': {
+      id: '/e-invoicing'
+      path: '/e-invoicing'
+      fullPath: '/e-invoicing'
+      preLoaderRoute: typeof EInvoicingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/delivery-challans': {
@@ -555,6 +548,13 @@ declare module '@tanstack/react-router' {
       path: '/cash-and-bank'
       fullPath: '/cash-and-bank'
       preLoaderRoute: typeof CashAndBankRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bank-reconciliation': {
+      id: '/bank-reconciliation'
+      path: '/bank-reconciliation'
+      fullPath: '/bank-reconciliation'
+      preLoaderRoute: typeof BankReconciliationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/automated-invoices': {
