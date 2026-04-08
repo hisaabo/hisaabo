@@ -36,6 +36,7 @@ import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
@@ -48,18 +49,20 @@ async function generateIRNForInvoice(
   businessId: string,
   db: TenantDatabase,
 ) {
-  const [config] = await db
+  const [rawConfig] = await db
     .select()
     .from(eInvoiceConfigs)
     .where(and(eq(eInvoiceConfigs.businessId, businessId), eq(eInvoiceConfigs.isEnabled, true)))
     .limit(1);
 
-  if (!config) {
+  if (!rawConfig) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: "E-invoicing is not enabled for this business. Configure it in Settings.",
     });
   }
+
+  const config = decryptEInvoiceConfig(rawConfig);
 
   const [invoice] = await db
     .select()
@@ -214,15 +217,23 @@ export const eInvoiceRouter = router({
         .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
         .limit(1);
 
+      // Encrypt sensitive fields before persisting
+      const encrypted = encryptEInvoiceConfig({
+        clientId: input.clientId,
+        clientSecret: input.clientSecret,
+        username: input.username,
+        password: input.password,
+      });
+
       if (existing.length > 0) {
         const [updated] = await ctx.db
           .update(eInvoiceConfigs)
           .set({
             gstin: input.gstin,
-            clientId: input.clientId,
-            clientSecret: input.clientSecret,
-            username: input.username,
-            password: input.password,
+            clientId: encrypted.clientId,
+            clientSecret: encrypted.clientSecret,
+            username: encrypted.username,
+            password: encrypted.password,
             isSandbox: input.isSandbox,
             isEnabled: input.isEnabled,
             thresholdCrore: input.thresholdCrore,
@@ -241,10 +252,10 @@ export const eInvoiceRouter = router({
         .values({
           businessId: ctx.businessId,
           gstin: input.gstin,
-          clientId: input.clientId,
-          clientSecret: input.clientSecret,
-          username: input.username,
-          password: input.password,
+          clientId: encrypted.clientId,
+          clientSecret: encrypted.clientSecret,
+          username: encrypted.username,
+          password: encrypted.password,
           isSandbox: input.isSandbox,
           isEnabled: input.isEnabled,
           thresholdCrore: input.thresholdCrore,
@@ -259,14 +270,15 @@ export const eInvoiceRouter = router({
   getConfig: adminProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "manage", "EInvoice");
 
-    const [config] = await ctx.db
+    const [rawConfig] = await ctx.db
       .select()
       .from(eInvoiceConfigs)
       .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
       .limit(1);
 
-    if (!config) return null;
+    if (!rawConfig) return null;
 
+    const config = decryptEInvoiceConfig(rawConfig);
     return {
       ...config,
       password: "••••••••", // Mask password in response
@@ -280,13 +292,13 @@ export const eInvoiceRouter = router({
   testConnection: adminProcedure.mutation(async ({ ctx }) => {
     requireCan(ctx.ability, "manage", "EInvoice");
 
-    const [config] = await ctx.db
+    const [rawConfig] = await ctx.db
       .select()
       .from(eInvoiceConfigs)
       .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
       .limit(1);
 
-    if (!config) {
+    if (!rawConfig) {
       throw new TRPCError({
         code: "NOT_FOUND",
         message: "E-invoice configuration not found. Please configure first.",
@@ -294,6 +306,7 @@ export const eInvoiceRouter = router({
     }
 
     try {
+      const config = decryptEInvoiceConfig(rawConfig);
       const client = new IRPClient(config, ctx.db);
       await client.authenticate();
       return { success: true, message: "Successfully connected to IRP" };
@@ -339,19 +352,21 @@ export const eInvoiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "manage", "EInvoice");
 
-      // Fetch config
-      const [config] = await ctx.db
+      // Fetch config and decrypt credentials
+      const [rawConfig] = await ctx.db
         .select()
         .from(eInvoiceConfigs)
         .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
         .limit(1);
 
-      if (!config) {
+      if (!rawConfig) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "E-invoice configuration not found",
         });
       }
+
+      const config = decryptEInvoiceConfig(rawConfig);
 
       // Fetch invoice
       const [invoice] = await ctx.db

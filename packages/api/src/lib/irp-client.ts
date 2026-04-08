@@ -14,7 +14,7 @@
 
 import { createHash, createCipheriv, createDecipheriv, publicEncrypt, constants, randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
-import { eInvoiceConfigs } from "@hisaabo/db";
+import { eInvoiceConfigs, encryptField } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 
 // ── NIC IRP endpoints ─────────────────────────────────────────────────────────
@@ -327,10 +327,10 @@ export class IRPClient {
     this.authToken = result.Data.AuthToken;
     this.tokenExpiresAt = expiry;
 
-    // Persist token to DB for reuse
+    // Persist token to DB for reuse (encrypted at rest)
     await this.db.update(eInvoiceConfigs)
       .set({
-        authToken: this.authToken,
+        authToken: this.authToken ? encryptField(this.authToken) : null,
         tokenExpiresAt: this.tokenExpiresAt,
         updatedAt: new Date(),
       })

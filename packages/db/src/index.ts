@@ -11,3 +11,14 @@ export { provisionTenantDatabase, type TenantDbConfig } from "./provision-tenant
 
 // Backward-compatible default db export
 export { db, type Database } from "./client.js";
+
+// Field-level encryption
+export {
+  encryptField,
+  decryptField,
+  reEncryptField,
+  isEncrypted,
+  getKeyVersion,
+  encryptDbPassword,
+  decryptDbPassword,
+} from "./crypto.js";

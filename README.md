@@ -1,6 +1,6 @@
 # Hisaabo
 
-> The open-source accounting and compliance platform that CAs trust and Indian businesses love.
+> The first agent-native financial operating system for India.
 
 [![CI](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
@@ -21,177 +21,68 @@
 
 **Hisaab, pakka.** (Honest accounting.)
 
-Your clients' bank passwords are on WhatsApp. Their books close two weeks late. GST filing is a monthly panic. Hisaabo fixes all three.
+Hisaabo is not accounting software with an AI add-on. It is a financial operating system where humans and AI agents operate on the same structured primitives -- creating invoices, reconciling bank statements, filing GST returns, closing books. The web dashboard, mobile app, CLI, and MCP server are all equal clients of the same API. There is no "AI layer." The entire system is the AI interface.
+
+Open source. Self-hostable. Free forever. Built India-first.
 
 ---
 
-## Why Hisaabo?
+## What is Hisaabo?
 
-### If you run a CA firm
+Every accounting tool built in the last 30 years follows the same pattern: a database, a forms-based UI, and maybe an API bolted on later. AI gets added as a chat widget that reads from the same database humans already see.
 
-You manage 30-100 clients. Each one sends you bank statements in a different format. You chase GST data over WhatsApp the week before filing. Some clients share their net banking credentials in plain text messages. Your articled clerks spend 80% of their time on data entry that should not exist.
+Hisaabo inverts this. The system is built as a set of structured financial operations -- 200+ typed tRPC endpoints -- that any client can execute. The React dashboard is one client. The Expo mobile app is another. The CLI is another. An MCP-connected AI agent is another. They all have identical capabilities, identical permissions, identical audit trails.
 
-Hisaabo gives you a single platform where every client is a separate business with role-based access. You log in once and see all your clients. Bank statements come in through CSV import with auto-detection for 10 Indian banks. GSTR-1 and GSTR-3B auto-generate from invoice data. Trial Balance, P&L, and Balance Sheet derive automatically from transactions. When you need depreciation entries or year-end adjustments, journal entries are there. When you need to hand off to Tally for audit, there is a clean XML export.
+This means an AI agent does not "read your screen" or "fill in forms." It calls the same `invoice.create` procedure your accountant does, with the same validation, the same GST logic, the same atomic invoice numbering. The result is deterministic, auditable, and indistinguishable from human input.
 
-No more credential sharing. No more data re-entry. No more month-end panic.
-
-### If you run a business
-
-**If you use a paper bahi khata** -- you are one lost register away from losing years of business records. You cannot generate GST-compliant invoices, track outstanding payments across dozens of parties, or file GSTR-1 without manually copying numbers into a spreadsheet. Hisaabo digitises your entire operation in an afternoon, runs on your phone, and costs nothing.
-
-**If you use Tally** -- you paid Rs. 18,000-54,000 for a license that only works on Windows, only runs on one machine, and has no mobile app. Hisaabo runs on any device with a browser, works on Android and iOS, and your CA can access it from their own office. The entire source code is open -- no vendor lock-in, no renewal anxiety.
-
-**If you use myBillBook or Vyapar** -- you started with a "free" plan that paywalls essential features behind Rs. 3,000-10,000/year subscriptions. Your data lives on their servers, and if you stop paying, you lose access to your own business records. Hisaabo has no feature gates. Every capability is available from day one, and your data stays on your infrastructure.
-
-**If you use Zoho Books** -- you are paying a monthly SaaS subscription designed for companies ten times your size, dealing with a complex interface, and hoping the pricing does not change next quarter. Hisaabo is built India-first: GST logic is foundational, not bolted on.
-
-### What makes Hisaabo different
-
-- **You own your data.** Self-host on a Rs. 500/month VPS, or use Hisaabo Cloud. Export everything, any time. No lock-in.
-- **Rs. 0 forever.** No feature gates, no invoice limits, no "upgrade to unlock GST reports."
-- **Full accounting stack.** Chart of Accounts, derived double-entry ledger, Trial Balance, Balance Sheet, P&L, Cash Flow Statement, General Ledger, journal entries for CA adjustments -- all derived automatically from the invoices and payments your business already records.
-- **Complete GST compliance.** GSTR-1/3B/9 generation, GSTR-2B reconciliation, e-invoicing (NIC IRP), e-way bill, ITC tracking with 180-day aging, HSN validation against 19K official codes, composition scheme with CMP-08, reverse charge mechanism.
-- **Bank reconciliation built for India.** CSV import with pre-built templates for SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB, Union, IDBI, and IndusInd. Auto-detection of bank format. 4-tier matching algorithm. Auto-categorization rules.
-- **AI-native.** The only Indian accounting platform with an MCP server and CLI. Connect Claude Desktop and run your bookkeeping in natural language.
-- **Every platform, one codebase.** Web, Android, iOS, macOS, Windows, Linux, CLI, and a full API.
-- **Production-hardened.** 1,809 tests. Structured logging. CSRF protection. Race-condition-safe payments. No floating-point errors on your balance sheet.
+That is what makes this a financial operating system, not an accounting app.
 
 ---
 
-## Features
+## Financial Actions
 
-### 1. Secure Client Operations
+Hisaabo does not expose spreadsheets and forms. It exposes structured financial operations.
 
-| Feature | Detail |
+| Action | What happens |
 |---|---|
-| **Multi-business management** | Each client is a separate business. Switch from the sidebar. One login, all your clients. |
-| **Role-based access** | Superadmin, Admin, Seller Manager, Seller, Accountant -- each with scoped permissions |
-| **Audit logging** | Every write operation logged with user, timestamp, and before/after state |
-| **No credential sharing** | Clients upload their own statements. CAs access via role-based login. No bank passwords on WhatsApp. |
-| **Team invitations** | Add articled clerks, managers, or clients with plan-based limits |
-| **Business isolation** | All API queries scoped by business ID. No cross-business data leakage. |
+| **Record a GST-compliant sale** | Tax determination (CGST+SGST or IGST) from state codes, HSN validation against 19K codes, atomic invoice numbering, PDF with QR, optional e-invoice IRN via NIC IRP |
+| **Reconcile a bank statement** | Auto-detect format across 10 Indian banks, 4-tier matching (exact, strong, narration parse, partial), auto-categorization rules, BRS generation |
+| **Generate filing-ready GST returns** | GSTR-1 (B2B, B2C Large, B2C Small, HSN summary, CDN), GSTR-3B (outward, ITC, RCM, net payable), GSTR-9 annual, GSTR-2B reconciliation |
+| **Close a financial period** | Journal entries for depreciation, provisions, bad debt write-offs, opening balances. Trial Balance, P&L, Balance Sheet, Cash Flow derived automatically. |
+| **Track ITC compliance** | Auto-creation from purchase invoices, 180-day aging alerts (Section 16(4)), blocked ITC under 17(5), utilization in prescribed order (IGST > CGST > SGST) |
+| **Manage parties and receivables** | GSTIN validation (regex + checksum), per-party ledger, aging buckets (Current, 31-60, 61-90, 90+), credit period and limit tracking |
+| **Run bank operations** | 9 payment modes, multi-invoice allocation, inter-account transfers with atomic dual-entry, payment gateway integration with charge/settlement/reversal traceability |
 
-### 2. Bank Statement Ingestion and Reconciliation
+Every action is: deterministic (same input, same output), auditable (traced to a user or agent), and executable identically by a human clicking a button or an AI agent calling an endpoint.
 
-| Feature | Detail |
-|---|---|
-| **10 Indian bank templates** | SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB, Union, IDBI, IndusInd -- pre-built column mappings |
-| **Auto-detection** | Upload a CSV and Hisaabo identifies the bank from headers. Falls back gracefully if the format changed. |
-| **4-tier matching** | Exact match (amount + date + reference), strong match (amount + 2-day window), narration parsing (UPI ID, cheque number), partial match (amount only, date within 7 days) |
-| **Bank mismatch warnings** | Detects when the CSV bank does not match the selected account bank |
-| **Auto-categorization rules** | "If narration contains NEFT-SALARY then expense category Salary." User-created and system-suggested. |
-| **Template versioning** | Banks change CSV formats. Hisaabo tracks revisions and degrades gracefully. |
-| **Manual resolution** | Match manually, create expense from unmatched transactions, mark as timing differences |
-| **BRS summary** | Bank Reconciliation Statement with matched, unmatched, and timing difference totals |
+This is the design constraint that makes everything else possible.
 
-### 3. Accounting and Financial Reports
+---
 
-| Feature | Detail |
-|---|---|
-| **Chart of Accounts** | Indian CoA seeded on business creation (40 accounts across assets, liabilities, equity, income, expenses). Customizable. |
-| **Derived ledger engine** | Invoices, payments, expenses, and bank transfers auto-map to double-entry without users seeing debits and credits |
-| **Trial Balance** | Period-filtered, with opening + closing balances. Balances to zero. |
-| **Balance Sheet** | Assets, liabilities, equity -- derived from live transaction data |
-| **Profit and Loss** | Revenue, COGS, gross margin, expenses by category, net margin |
-| **General Ledger** | Per-account transaction detail with running balance |
-| **Cash Flow Statement** | Indirect method -- operating, investing, financing activities |
-| **Comparative reports** | FY vs FY comparison for P&L, Balance Sheet, and Trial Balance with absolute and percentage variance |
-| **Journal entries** | Create, update, void, templates. For CA adjustments: depreciation, bad debt write-offs, opening balances, provisions |
-| **Tally XML export** | Ledger masters + vouchers (sales, purchase, receipt, payment, journal, contra). Clean import into Tally Prime. |
+## Agent-Native Architecture
 
-### 4. GST Compliance
+This is not "AI-powered accounting." This is accounting infrastructure that AI agents operate natively.
 
-| Feature | Detail |
-|---|---|
-| **HSN master validation** | 19,000+ official codes. Autocomplete on item creation. Turnover-based 4/6/8 digit enforcement. |
-| **GSTR-1 export** | B2B invoices, B2C Large (inter-state > Rs. 2.5L), B2C Small, HSN summary, Credit/Debit notes. JSON + CSV for portal upload. |
-| **GSTR-3B generation** | Outward supplies (taxable, zero-rated, exempt), ITC summary, reverse charge, net tax payable. Auto-populated from transaction data. |
-| **GSTR-9 annual return** | 12-month aggregation across all return periods. Portal-compatible JSON export. |
-| **GSTR-2B reconciliation** | Upload JSON/CSV from GST portal. Auto-match against purchase invoices. Mismatch detection with drill-down. |
-| **E-Invoicing** | NIC IRP integration. IRN generation, QR code embedded in PDF invoices, cancel within 24 hours, sandbox mode for testing. |
-| **E-Way Bill** | NIC API integration. Auto-generate for goods > Rs. 50,000. Vehicle number updates, transporter details, validity tracking. |
-| **ITC tracking** | Auto-creation from purchase invoices. 180-day aging alerts (Section 16(4)). Blocked ITC under Section 17(5). Utilization in prescribed order (IGST > CGST > SGST). GSTR-3B Table 4 auto-population. |
-| **Composition scheme** | CMP-08 quarterly return generation. Inter-state sales blocked. Tax rates locked to composition slab. |
-| **Reverse Charge Mechanism** | Auto-suggest when supplier has no GSTIN. Populates GSTR-3B Table 3.1(d) and Table 4 separately. |
-| **Tax determination** | Automatic CGST+SGST (intra-state) or IGST (inter-state) based on business and party state codes |
-| **Invoice titling** | Auto-switches: "TAX INVOICE" (regular), "BILL OF SUPPLY" (composition), "INVOICE" (unregistered) |
+**How it works:**
 
-### 5. Invoicing and Documents
+The entire Hisaabo API is a set of typed, validated procedures. Every capability -- from creating an invoice to generating GSTR-3B -- is a structured tool with defined inputs, outputs, and side effects. There is no screen-scraping, no form-filling, no prompt-engineering around a UI.
 
-| Document | What You Get |
-|---|---|
-| **Sale and Purchase Invoices** | GST-compliant with CGST/SGST/IGST auto-split, PDF generation (A4/A5/thermal), UPI QR code, e-invoice IRN + QR when enabled |
-| **Quotations and Proformas** | Convert to invoice with one click, preserving all line items and terms |
-| **Delivery Challans** | Shipment tracking, convert to invoice without double stock deduction, e-way bill linkage |
-| **Credit and Debit Notes** | Separate numbering sequences (CN-00001, DN-00001), linked to original invoices |
-| **Sales and Purchase Returns** | Stock auto-adjustment on creation, separate SR/PR number sequences |
+```
+                 +------------------+
+                 |   tRPC API       |
+                 |   200+ typed     |
+                 |   procedures     |
+                 +--------+---------+
+                          |
+          +------+--------+--------+--------+
+          |      |        |        |        |
+        Web    Mobile   Desktop   CLI     MCP
+       React   Expo     Tauri    npm     Claude
+```
 
-Every document type gets its own prefix and number sequence (customizable).
+All five clients call the same procedures, with the same `x-business-id` header, the same role-based permissions, the same audit logging. An invoice created by Claude Desktop through MCP is byte-for-byte identical to one created through the web dashboard.
 
-### 6. Parties, Items, and Payments
-
-**Parties and Ledger**
-
-- Customer and supplier management with GSTIN validation (regex + checksum)
-- Per-party chronological ledger with debit/credit entries and running balance
-- Outstanding and overdue tracking with aging buckets (Current, 31-60, 61-90, 90+ days)
-- Opening balance support, credit period and credit limit tracking
-
-**Items and Inventory**
-
-- Real-time stock tracking with low-stock alerts
-- Unit conversion: sell in kg, track in g (configurable conversion factors)
-- Item variants: Size, Color, etc. with per-variant stock and pricing
-- Tax-inclusive and tax-exclusive pricing modes
-- HSN/SAC codes with autocomplete from 19K master, categories, SKU codes
-- Online store pricing separate from wholesale pricing
-
-**Payments and Banking**
-
-- 9 payment modes: Cash, UPI, Bank Transfer, Cheque, Credit Card, Debit Card, Net Banking, Wallet, Other
-- Multi-invoice allocation: one payment split across multiple invoices
-- Bank account management: Savings, Current, Cash, UPI, Credit Card, Payment Gateway
-- Inter-account transfers with atomic dual-entry balance tracking
-- Payment gateway integration with full money-flow traceability: transaction ID recording, auto-expense for gateway charges (CC/DC/UPI/NB rates configurable per gateway), auto-settlement into linked bank account, automatic reversal of charges and settlements
-- Running balance per account with full transaction history
-
-### 7. Reports
-
-| Report | Description |
-|---|---|
-| **Trial Balance** | Period-filtered, opening + closing balances, derived from all transactions |
-| **Balance Sheet** | Assets, liabilities, equity -- live from transaction data |
-| **Profit and Loss** | Multi-level: revenue, COGS, gross margin, expenses by category, net margin |
-| **Cash Flow Statement** | Indirect method with operating, investing, and financing activities |
-| **General Ledger** | Per-account transaction detail with running balance |
-| **Comparative FY vs FY** | P&L, Balance Sheet, and Trial Balance with absolute and percentage variance |
-| **Daybook** | Chronological register of all transactions with debit/credit columns |
-| **Sales and Purchase Register** | Tax breakdown by rate (5%, 12%, 18%, 28%) with CSV export |
-| **Receivables and Payables Aging** | Current, 31-60, 61-90, 90+ day buckets |
-| **Party Statement** | Full ledger per party, printable with CSV export |
-| **Stock Summary** | Current stock levels with value calculation |
-| **Cash Flow Forecast** | Projected inflows/outflows based on due dates |
-| **Collection Efficiency** | Payment collection metrics and trends |
-| **Bank Reconciliation Statement** | Matched, unmatched, timing differences -- against imported bank statements |
-| **GSTR-1 / GSTR-3B / GSTR-9** | GST returns auto-generated from transaction data |
-
-### 8. Online Store
-
-- Public storefront at `store.hisaabo.in/your-slug`
-- Phone verification for customer orders
-- WhatsApp order update notifications
-- Custom shipping methods (in addition to built-in: self pickup, courier, transport)
-- Configurable minimum order amount and delivery notes
-
-### 9. AI and Automation
-
-**The only Indian accounting platform with native AI agent support.**
-
-Hisaabo is API-first. The web dashboard, mobile app, desktop app, CLI, and MCP server all use the same tRPC endpoints. Everything a human can do in the UI, an AI agent can do via API.
-
-**MCP Server -- Works with Claude Desktop today**
-
-The `@hisaabo/mcp` package exposes your entire business as tools, resources, and prompt templates to any MCP-compatible AI agent.
+**What this enables today:**
 
 ```
 You: "How much does Montu Arora owe me?"
@@ -206,7 +97,21 @@ Claude: "GSTR-1 data ready. 47 B2B invoices, 12 B2C. Total taxable: Rs. 8,43,200
          2 invoices have missing HSN codes. Shall I list them?"
 ```
 
-**Built-in prompt templates:**
+**What this enables tomorrow:**
+
+- A WhatsApp bot that creates invoices from voice notes via Claude + MCP
+- A Slack integration that posts daily business summaries to your team channel
+- A customer service agent that answers "where is my order?" from live data
+- A tax filing assistant that prepares GSTR-1 and flags anomalies before your CA reviews
+- An audit preparation bot that generates schedules and reconciliations
+
+None of these require new API development. The surface area already exists. Every agent is a new client of the same financial primitives.
+
+**MCP Server**
+
+The `@hisaabo/mcp` package exposes your entire business as tools, resources, and prompt templates to any MCP-compatible AI agent.
+
+Built-in prompt templates:
 
 | Prompt | What it does |
 |---|---|
@@ -236,39 +141,92 @@ Add to Claude Desktop's `claude_desktop_config.json`:
 }
 ```
 
-**CLI Tool -- Script everything**
+**CLI**
 
 ```bash
 npm install -g @hisaabo/cli
 hisaabo login --api-url https://your-hisaabo-instance.com
 
-# Morning business brief
 hisaabo dashboard --json | jq '{revenue, outstanding, overdueCount}'
-
-# This month's invoices as a CSV
 hisaabo invoice list --this-month --format csv > invoices.csv
-
-# GSTR-3B numbers for Q4 filing
 hisaabo gst r3b --quarter Q4 --json | jq '.taxPayable'
-
-# Bank reconciliation summary
 hisaabo bank recon --account "HDFC Current" --format csv > brs.csv
-
-# Party outstanding report
-hisaabo party list --outstanding --format csv > outstanding.csv
 ```
 
-14 command groups: `invoice`, `party`, `item`, `payment`, `expense`, `bank`, `gst`, `report`, `shipment`, `target`, `store`, `import`, `dashboard`, `business`.
+14 command groups. Every command supports `--json`, `--format csv`, and `--format ids` for piping.
 
-Every command supports `--json`, `--format csv`, and `--format ids` for piping.
+---
 
-**Build on Top**
+## Controlled Financial Access
 
-- **WhatsApp Bot** -- Create invoices from voice notes via Claude + MCP
-- **Slack/Teams** -- Daily business summary in your team channel
-- **Google Sheets** -- Nightly sync of invoices, payments, and stock levels
-- **Tally** -- Export full voucher XML for clean Tally Prime import
-- **Custom Agents** -- Deploy customer service agents, tax filing assistants, audit preparation bots
+The adoption wedge for Hisaabo is not features. It is trust.
+
+Right now, Indian businesses share bank passwords over WhatsApp so their CA can download statements. Articled clerks have unscoped access to every client's data. There is no audit trail for who changed what. This is the status quo for millions of businesses.
+
+Hisaabo replaces this with structured access control:
+
+| Layer | What it enforces |
+|---|---|
+| **5 roles** | Superadmin, Admin, Seller Manager, Seller, Accountant -- each with scoped permissions per resource and action |
+| **Business isolation** | Every API query scoped by `x-business-id`. Impossible to access another client's data by accident or intent. |
+| **No credential sharing** | Clients upload their own statements or create their own invoices. CAs access via their own role-based login. |
+| **Full audit trail** | Every write operation logged with user, timestamp, and before/after state. Every invoice, payment, and journal entry traceable to a specific person. |
+| **Session security** | HttpOnly + Secure + SameSite=Lax cookies. Argon2id password hashing. 30-day expiry. No JWTs. |
+| **Team invitations** | Add articled clerks, managers, or clients with plan-based limits. Revoke access instantly. |
+
+This is what gets CAs to adopt. Not a better spreadsheet -- a system where access is controlled, actions are auditable, and no one needs to share a bank password ever again.
+
+---
+
+## Why Hisaabo?
+
+### If you run a CA firm
+
+You manage 30-100 clients. Each one sends you bank statements in a different format. You chase GST data over WhatsApp the week before filing. Some clients share their net banking credentials in plain text messages. Your articled clerks spend 80% of their time on data entry that should not exist.
+
+Hisaabo gives you a single platform where every client is a separate business with role-based access. You log in once and see all your clients. Bank statements import with auto-detection for 10 Indian banks. GSTR-1 and GSTR-3B auto-generate from invoice data. Trial Balance, P&L, and Balance Sheet derive automatically. When you need depreciation entries or year-end adjustments, journal entries are there. When you need to hand off to Tally for audit, there is a clean XML export.
+
+### If you run a business
+
+**If you use a paper bahi khata** -- you are one lost register away from losing years of records. Hisaabo digitises your entire operation in an afternoon, runs on your phone, and costs nothing.
+
+**If you use Tally** -- you paid Rs. 18,000-54,000 for a license that only works on Windows, on one machine, with no mobile app. Hisaabo runs on any device with a browser, and your CA can access it from their own office.
+
+**If you use myBillBook or Vyapar** -- you started with a "free" plan that paywalls essential features behind Rs. 3,000-10,000/year. Your data lives on their servers. If you stop paying, you lose access to your own records. Hisaabo has no feature gates.
+
+**If you use Zoho Books** -- you are paying a monthly SaaS subscription designed for companies ten times your size. Hisaabo is built India-first: GST logic is foundational, not bolted on.
+
+---
+
+## Features
+
+### Invoicing and Documents
+
+GST-compliant sale and purchase invoices with automatic CGST/SGST/IGST split, PDF generation (A4/A5/thermal), and UPI QR code. Quotations and proformas convert to invoices with one click. Delivery challans with e-way bill linkage and stock-safe invoice conversion. Credit notes, debit notes, sales returns, and purchase returns with separate numbering sequences and automatic stock adjustment.
+
+### Accounting
+
+Full double-entry accounting derived automatically from business transactions. Chart of Accounts seeded with 40 standard Indian accounts on business creation. Trial Balance, Balance Sheet, Profit and Loss, Cash Flow Statement (indirect method), General Ledger, Daybook, and comparative FY-vs-FY reports with variance analysis. Journal entries for CA adjustments: depreciation, provisions, bad debt write-offs, opening balances. Tally XML export for clean import into Tally Prime.
+
+### GST Compliance
+
+GSTR-1/3B/9 generation, GSTR-2B reconciliation, e-invoicing (NIC IRP with IRN and QR), e-way bill (auto-generate for goods over Rs. 50,000), ITC tracking with 180-day aging and blocked ITC, HSN validation against 19K official codes, composition scheme with CMP-08, reverse charge mechanism, automatic tax determination from state codes. Complete.
+
+### Bank Reconciliation
+
+CSV import with pre-built templates for SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB, Union, IDBI, and IndusInd. Auto-detection of bank format from headers. 4-tier matching: exact (amount + date + reference), strong (amount + 2-day window), narration parsing (UPI ID, cheque number), partial (amount only, 7-day window). Auto-categorization rules. Template versioning for format changes. BRS with matched, unmatched, and timing difference totals.
+
+### Parties, Items, and Payments
+
+Customer and supplier management with GSTIN validation, per-party ledger, aging buckets, credit period and limit tracking. Real-time stock with low-stock alerts, unit conversion, item variants, HSN/SAC autocomplete, online store pricing. 9 payment modes, multi-invoice allocation, inter-account transfers, payment gateway integration with full charge/settlement/reversal traceability.
+
+### Reports
+
+Trial Balance, Balance Sheet, P&L, Cash Flow, General Ledger, Daybook, Sales and Purchase Register (by tax rate), Receivables and Payables Aging, Party Statement, Stock Summary, Cash Flow Forecast, Collection Efficiency, Bank Reconciliation Statement, GSTR-1/3B/9. All exportable as CSV.
+
+### Online Store
+
+Public storefront at `store.hisaabo.in/your-slug`. Phone verification for orders. WhatsApp notifications. Custom shipping methods. Configurable minimum order amount.
 
 ---
 
@@ -312,16 +270,19 @@ Every command supports `--json`, `--format csv`, and `--format ids` for piping.
 | Each client on a different system (Tally, Excel, paper) | All clients on one platform with a single login |
 | No audit trail for changes | Every write operation logged with user, timestamp, and state |
 
-**Security model**
+---
 
-- No shared credentials. Each user has their own login with role-based permissions.
-- Session cookies with HttpOnly, Secure, and SameSite=Lax. Argon2id password hashing.
-- All API queries scoped by business ID. Impossible to access another client's data by accident or intent.
-- Full audit log. Every invoice created, payment recorded, and journal entry posted is traceable to a user.
+## Gets Smarter With Every Firm
 
-**Better with every firm**
+Hisaabo is not a static tool. It is a system that compounds.
 
-As more businesses run through Hisaabo, the platform gets smarter. Transaction narration patterns improve auto-categorization accuracy. HSN classifications from one business help validate another. GST matching algorithms learn from confirmed reconciliations. The network effect compounds.
+**Transaction patterns improve auto-categorization.** When a CA categorizes "NEFT-SALARY" as a salary expense for one business, that rule applies across similar transactions. Every manual categorization trains the matching engine.
+
+**GST classifications validate across businesses.** HSN codes confirmed for one business help validate classifications for others in the same industry. A textile trader's HSN mappings benefit the next textile trader onboarded.
+
+**Bank reconciliation accuracy compounds.** As more bank statements flow through the system, narration parsing patterns improve. New UPI formats, changed NEFT descriptions, updated bank CSV layouts -- each resolved case makes the next one faster.
+
+**This is a data moat, not a feature.** Every firm on the platform makes the platform better for every other firm. A new entrant building accounting software from scratch starts at zero. Hisaabo starts with the accumulated intelligence of every transaction ever reconciled.
 
 ---
 
@@ -349,22 +310,20 @@ Hisaabo is not a side project. It is production-hardened financial software.
 | **Price** | Free | Rs. 18K-54K | Rs. 749-2,499/mo | Rs. 2,999-9,999/yr | Rs. 2,499-7,999/yr |
 | **Open source** | Yes | No | No | No | No |
 | **Self-hostable** | Yes | Desktop only | No | No | No |
-| **Chart of Accounts** | Yes (Indian CoA, 40 accounts) | Yes | Yes | No | No |
-| **Trial Balance / Balance Sheet** | Yes (derived) | Yes | Yes | No | No |
-| **P&L** | Yes | Yes | Yes | No | No |
-| **Cash Flow Statement** | Yes (indirect method) | Yes | Yes | No | No |
+| **Full accounting (CoA, TB, BS, P&L, CF)** | Yes | Yes | Yes | No | No |
 | **Journal entries** | Yes | Yes | Yes | No | No |
-| **GST returns** | GSTR-1, 3B, 9, 2B recon | GSTR-1, 3B, 9 | GSTR-1, 3B, 9 | Basic | Basic |
+| **GST returns (1, 3B, 9, 2B recon)** | Yes | Yes | Yes | Basic | Basic |
 | **E-Invoicing (IRP)** | Yes | Yes | Yes | No | No |
 | **E-Way Bill** | Yes | Yes | Yes | No | No |
-| **ITC tracking** | Yes (aging + blocked + utilization) | Yes | Yes | No | No |
-| **Bank reconciliation** | Yes (10 banks, auto-match) | Yes | Yes | No | No |
+| **ITC tracking (aging + blocked + utilization)** | Yes | Yes | Yes | No | No |
+| **Bank reconciliation (10 banks, auto-match)** | Yes | Yes | Yes | No | No |
 | **Tally export** | Yes (XML, clean import) | N/A | Partial | Yes | No |
 | **Mobile app** | Yes | No | Yes | Yes (primary) | Yes (primary) |
-| **AI / API access** | MCP + CLI + API | XML API | REST API | No | No |
-| **Payment gateway** | Full (charges + settlement + reversal) | No | Basic | No | No |
+| **AI agent access (MCP + CLI)** | Yes | No | No | No | No |
+| **Payment gateway (charges + settlement)** | Yes | No | Basic | No | No |
 | **Online store** | Built-in | No | No | Basic | Basic |
 | **Multi-tenant SaaS** | Yes | No | Yes | Cloud only | Cloud only |
+| **Agent-native architecture** | Yes | No | No | No | No |
 
 ---
 
@@ -372,49 +331,48 @@ Hisaabo is not a side project. It is production-hardened financial software.
 
 ```
 +--------------------------------------------------------------+
-|                        Client Layer                          |
+|                      Client Layer                            |
 |                                                              |
 |  apps/web            apps/mobile        apps/store           |
 |  React 19 + Vite     Expo SDK 55        React 19 + Vite     |
 |  TanStack Router     Expo Router        (public storefront)  |
 |                                                              |
-|  apps/desktop                                                |
-|  Tauri v2 (wraps web)                                        |
+|  apps/desktop        packages/cli       packages/mcp         |
+|  Tauri v2            Terminal CLI        MCP Server           |
+|  (wraps web)         (@hisaabo/cli)     (Claude, AI agents)  |
 +----------------------------+---------------------------------+
                              | tRPC (typed) + REST (store)
+                             | x-business-id header
+                             | Role-based permissions
 +----------------------------v---------------------------------+
-|                       API Layer                              |
+|                     API Layer                                |
 |                                                              |
 |  packages/api                                                |
-|  Hono + tRPC v11 · 20+ routers · 200+ procedures            |
-|  pino logging · CSRF · Rate limiting · Audit log             |
+|  Hono + tRPC v11 -- 20+ routers -- 200+ procedures          |
+|  Three procedure levels:                                     |
+|    publicProcedure / protectedProcedure / businessProcedure  |
+|  pino logging -- CSRF -- Rate limiting -- Audit log          |
 +----------------------------+---------------------------------+
                              | Drizzle ORM
 +----------------------------v---------------------------------+
-|                     Database Layer                            |
+|                   Database Layer                             |
 |                                                              |
 |  packages/db                                                 |
-|  PostgreSQL 16 · NUMERIC(15,2) for money                     |
+|  PostgreSQL 16 -- NUMERIC(15,2) for money                    |
 |  Control DB (auth, tenants) + Tenant DB (business data)      |
-|  Partial indexes · FOR UPDATE locking                        |
+|  Partial indexes -- FOR UPDATE locking                       |
 +--------------------------------------------------------------+
 
 +--------------------------------------------------------------+
-|                    Shared Layer                               |
+|                  Shared Layer                                 |
 |  packages/shared                                             |
-|  Zod validators · TypeScript types · Fixed-point money       |
-|  Invoice calculation · HSN master (19K codes)                |
-|  Used by API + web + mobile                                  |
-+--------------------------------------------------------------+
-
-+--------------------------------------------------------------+
-|                  CLI & AI Agents                             |
-|                                                              |
-|  packages/cli    Terminal CLI (@hisaabo/cli on npm)          |
-|  packages/mcp    MCP server for Claude, AI agents            |
-|  Both call the API with x-business-id header                |
+|  Zod validators -- TypeScript types -- Fixed-point money     |
+|  Invoice calculation -- HSN master (19K codes)               |
+|  Used by API + web + mobile + CLI + MCP                      |
 +--------------------------------------------------------------+
 ```
+
+All six clients (web, mobile, desktop, store, CLI, MCP) call the same API with the same typed contracts. There is no separate "AI API" or "bot API." The architecture enforces that every capability available to a human is available to an agent.
 
 **Tech stack:**
 
@@ -465,7 +423,6 @@ Create an account on first visit. The setup wizard creates your first business w
 ### 2. Try the API immediately
 
 ```bash
-# Register an account on Hisaabo Cloud
 curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
   -H "Content-Type: application/json" \
   -d '{"json":{"email":"you@yourshop.in","name":"Your Name","password":"strongpass123","confirmPassword":"strongpass123"}}'
@@ -625,7 +582,7 @@ Copy `.env.example` to `.env`. Key variables:
 
 ### Delivered (April 2026)
 
-Everything listed in Features above is shipped and tested. The full accounting layer, GST compliance suite, and bank reconciliation engine were built in Q4 FY26.
+Everything listed in Features above is shipped and tested. The full accounting layer, GST compliance suite, bank reconciliation engine, and agent-native architecture were built in Q4 FY26.
 
 ### Coming Next
 

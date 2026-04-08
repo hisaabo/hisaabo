@@ -12,10 +12,10 @@ const checks: EnvCheck[] = [
   { key: "CORS_ORIGINS", required: true, hint: "Comma-separated allowed origins (e.g. https://app.hisaabo.in)" },
   { key: "APP_URL", required: false, hint: "Frontend URL for magic link emails" },
   {
-    key: "DB_ENCRYPTION_KEY",
+    key: "ENCRYPTION_KEY",
     required: false,
-    condition: () => process.env.MULTI_TENANT === "true",
-    hint: "Required in multi-tenant mode for tenant DB encryption",
+    condition: () => process.env.NODE_ENV === "production",
+    hint: "Required in production for field-level encryption of sensitive credentials (e-invoice, carrier API keys). Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
   },
   {
     key: "RESEND_API_KEY",

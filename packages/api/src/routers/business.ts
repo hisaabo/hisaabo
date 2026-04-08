@@ -8,6 +8,7 @@ import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
+import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
   const [membership] = await controlDb
@@ -29,7 +30,11 @@ export const businessRouter = router({
     // returns only businesses within the caller's tenant — no cross-tenant
     // access is possible. All businesses within a tenant are visible to every
     // tenant member so that they can switch between businesses.
-    return ctx.db.select().from(businesses);
+    const rows = await ctx.db.select().from(businesses);
+    return rows.map((biz) => ({
+      ...biz,
+      carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
+    }));
   }),
 
   // Check if more businesses can be created in this tenant (plan limit).
@@ -51,7 +56,12 @@ export const businessRouter = router({
         .from(businesses)
         .where(eq(businesses.id, input.id))
         .limit(1);
-      return biz ?? null;
+      if (!biz) return null;
+      // Decrypt carrier credentials if present
+      return {
+        ...biz,
+        carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
+      };
     }),
 
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
@@ -99,9 +109,18 @@ export const businessRouter = router({
     .input(z.object({ id: z.string().uuid(), data: updateBusinessSchema }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      // Encrypt carrier credentials if present in the update payload
+      const data = { ...input.data } as Record<string, unknown>;
+      if ("carrierCredentials" in data && data.carrierCredentials) {
+        data.carrierCredentials = encryptCarrierCredentials(
+          data.carrierCredentials as Parameters<typeof encryptCarrierCredentials>[0],
+        );
+      }
+
       const [biz] = await ctx.db
         .update(businesses)
-        .set({ ...input.data, updatedAt: new Date() })
+        .set({ ...data, updatedAt: new Date() })
         .where(eq(businesses.id, input.id))
         .returning();
 
