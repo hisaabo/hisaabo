@@ -358,6 +358,9 @@ importers:
       argon2:
         specifier: ^0.41.0
         version: 0.41.1
+      dotenv:
+        specifier: ^17.3.1
+        version: 17.3.1
       drizzle-orm:
         specifier: ^0.38.0
         version: 0.38.4(@types/react@19.2.14)(postgres@3.4.8)(react@19.2.0)
@@ -373,6 +376,9 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.8
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
