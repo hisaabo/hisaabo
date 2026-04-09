@@ -21,11 +21,8 @@ COPY packages/shared/ packages/shared/
 COPY packages/db/ packages/db/
 COPY packages/api/ packages/api/
 
-# Build the API (tsup bundles server.ts -> dist/server.js)
-# tsup only bundles the main entry; the pdf-worker needs separate compilation
-RUN pnpm --filter @hisaabo/api build && \
-    cd packages/api && \
-    npx tsup src/lib/pdf-worker.ts --format esm --out-dir dist/lib
+# Build the API (tsup bundles server.ts + pdf-worker via tsup.config.ts)
+RUN pnpm --filter @hisaabo/api build
 
 # ── Stage 2: Production runtime ────────────────────────────────
 FROM node:22-alpine AS runtime
@@ -41,22 +38,29 @@ COPY --from=builder /app/packages/api/package.json packages/api/
 COPY --from=builder /app/packages/api/dist/ packages/api/dist/
 COPY packages/api/fonts/ packages/api/fonts/
 
-# -- DB package: source (imported at runtime via workspace:*), migrations, config
+# -- DB package: schema source (for drizzle-kit config), migrations, config
+# Note: DB code is inlined into the API bundle by tsup; these files are only
+# needed so that drizzle-kit can resolve its config's `schema` paths.
 COPY packages/db/package.json packages/db/
 COPY packages/db/src/ packages/db/src/
 COPY packages/db/drizzle/ packages/db/drizzle/
 COPY packages/db/drizzle.config.ts packages/db/drizzle-tenant.config.ts packages/db/drizzle-control.config.ts packages/db/
 COPY packages/db/tsconfig.json packages/db/
 
-# -- Shared package: source (imported at runtime via workspace:*)
+# -- Shared package: package.json only (code is inlined by tsup)
 COPY packages/shared/package.json packages/shared/
-COPY packages/shared/src/ packages/shared/src/
-COPY packages/shared/tsconfig.json packages/shared/
 
-# Install all dependencies (drizzle-kit + tsx needed at runtime for schema push)
-# argon2 needs a rebuild on alpine (native addon)
+# Install production deps only — keeps the image lean (no tsup, vitest, etc.)
+# argon2 needs a rebuild on alpine (native addon).
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --prod
+
+# ── Smoke test: catch module resolution errors at build time ──
+# This would have caught the control-schema.js error before deployment.
+RUN node --check packages/api/dist/server.js && \
+    node -e "import('file:///app/packages/api/dist/server.js').catch(e => { \
+      if (e.code === 'ERR_MODULE_NOT_FOUND') { console.error('FATAL:', e.message); process.exit(1); } \
+    })"
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

@@ -459,19 +459,19 @@ importers:
       dotenv:
         specifier: ^17.3.1
         version: 17.3.1
+      drizzle-kit:
+        specifier: ^0.30.0
+        version: 0.30.6
       drizzle-orm:
         specifier: ^0.38.0
         version: 0.38.4(@types/react@19.2.14)(postgres@3.4.8)(react@19.2.0)
       postgres:
         specifier: ^3.4.5
         version: 3.4.8
-    devDependencies:
-      drizzle-kit:
-        specifier: ^0.30.0
-        version: 0.30.6
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
+    devDependencies:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -11498,7 +11498,9 @@ snapshots:
       metro-runtime: 0.83.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
     optional: true
 
   '@react-native/normalize-colors@0.83.4': {}
