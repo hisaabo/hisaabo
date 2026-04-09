@@ -1,11 +1,15 @@
 import { config } from "dotenv";
-config({ path: "../../.env" });
+// Only load .env in development — in production (Docker), env vars are injected
+// by the container runtime. The relative path resolves from cwd, not this file.
+if (process.env.NODE_ENV !== "production") {
+  config({ path: "../../.env" });
+}
 
 import postgres from "postgres";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
 const execFileAsync = promisify(execFile);
@@ -121,47 +125,73 @@ export async function provisionTenantDatabase(
     await adminClient.end();
   }
 
-  // ── Step 3: Connect to the new DB as superuser and grant schema privileges ──
-  const newDbAdminClient = postgres(`${baseUrl}/${dbName}`, {
-    max: 1,
-    idle_timeout: 0,
-    connect_timeout: 15,
-    onnotice: () => {},
-  });
-
+  // Steps 3 & 4 are wrapped in a try/catch so we can clean up the DB and user
+  // created in steps 1 & 2 if anything goes wrong (prevents orphaned resources).
   try {
-    await newDbAdminClient.unsafe(`GRANT ALL ON SCHEMA public TO "${dbUser}"`);
-    await newDbAdminClient.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${dbUser}"`);
-    await newDbAdminClient.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${dbUser}"`);
-  } finally {
-    await newDbAdminClient.end();
-  }
+    // ── Step 3: Connect to the new DB as superuser and grant schema privileges ──
+    const newDbAdminClient = postgres(`${baseUrl}/${dbName}`, {
+      max: 1,
+      idle_timeout: 0,
+      connect_timeout: 15,
+      onnotice: () => {},
+    });
 
-  // ── Step 4: Push the tenant schema using drizzle-kit push ─────
-  // drizzle-tenant.config.ts uses DATABASE_URL as its connection target.
-  // We override it for this subprocess so it targets the new tenant DB.
-  // The superuser connection is used so drizzle-kit can create extensions/types.
-  const tenantUrl = `${baseUrl}/${dbName}`;
+    try {
+      await newDbAdminClient.unsafe(`GRANT ALL ON SCHEMA public TO "${dbUser}"`);
+      await newDbAdminClient.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${dbUser}"`);
+      await newDbAdminClient.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${dbUser}"`);
+    } finally {
+      await newDbAdminClient.end();
+    }
 
-  // Resolve the db package root (one level up from src/)
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const dbPackageRoot = resolve(__dirname, "..");
+    // ── Step 4: Push the tenant schema using drizzle-kit push ─────
+    // drizzle-tenant.config.ts uses DATABASE_URL as its connection target.
+    // We override it for this subprocess so it targets the new tenant DB.
+    // The superuser connection is used so drizzle-kit can create extensions/types.
+    const tenantUrl = `${baseUrl}/${dbName}`;
 
-  const configPath = resolve(dbPackageRoot, "drizzle-tenant.config.ts");
+    // Resolve the db package root via package resolution.
+    // When tsup bundles this into the API dist, import.meta.url points to the
+    // wrong directory. createRequire + resolve works regardless of bundling.
+    const _require = createRequire(import.meta.url);
+    const dbPackageRoot = dirname(_require.resolve("@hisaabo/db/package.json"));
 
-  await execFileAsync(
-    "npx",
-    ["drizzle-kit", "push", "--config", configPath, "--force"],
-    {
-      env: {
-        ...process.env,
-        DATABASE_URL: tenantUrl,
+    const configPath = resolve(dbPackageRoot, "drizzle-tenant.config.ts");
+
+    await execFileAsync(
+      "npx",
+      ["drizzle-kit", "push", "--config", configPath, "--force"],
+      {
+        env: {
+          ...process.env,
+          DATABASE_URL: tenantUrl,
+        },
+        cwd: dbPackageRoot,
+        timeout: 60_000,
       },
-      cwd: dbPackageRoot,
-      timeout: 60_000,
-    },
-  );
+    );
+  } catch (err) {
+    // ── Rollback: drop the orphaned DB and user ──────────────────
+    const cleanupClient = postgres(`${baseUrl}/postgres`, {
+      max: 1,
+      idle_timeout: 0,
+      connect_timeout: 15,
+      onnotice: () => {},
+    });
+    try {
+      // Terminate any lingering connections to the tenant DB before dropping
+      await cleanupClient.unsafe(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
+      );
+      await cleanupClient.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
+      await cleanupClient.unsafe(`DROP USER IF EXISTS "${dbUser}"`);
+    } catch {
+      // Best-effort cleanup — log but don't mask the original error
+    } finally {
+      await cleanupClient.end();
+    }
+    throw err;
+  }
 
   // Encrypt the password before returning — stored encrypted in the tenants table
   const { encryptDbPassword } = await import("./crypto.js");

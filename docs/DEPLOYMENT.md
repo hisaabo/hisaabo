@@ -71,7 +71,9 @@
 | `NODE_ENV` | Yes | Environment | `production` |
 | `CORS_ORIGINS` | Yes | Comma-separated allowed origins | `https://app.hisaabo.in,https://store.hisaabo.in` |
 | `APP_URL` | Yes | Frontend URL (for magic links) | `https://app.hisaabo.in` |
-| `RESEND_API_KEY` | No | Email service API key | `re_xxx` |
+| `ENCRYPTION_KEY` | Yes | AES-256-GCM key for field-level encryption (64-char hex). Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | `a1b2c3...` |
+| `ENCRYPTION_KEY_PREVIOUS` | No | Previous encryption key — set only during key rotation | |
+| `RESEND_API_KEY` | Yes | Email service API key (magic links, invites) | `re_xxx` |
 | `EMAIL_FROM` | No | From address for emails | `Hisaabo <noreply@hisaabo.in>` |
 | `MULTI_TENANT` | No | Enable multi-tenancy | `true` |
 | `CONTROL_DATABASE_URL` | No | Separate control DB (multi-tenant only) | `postgresql://...` |
@@ -90,24 +92,28 @@ Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes
 
 ### Quick start
 
-1. Clone the repo and copy the env file:
+1. Clone the repo and create your prod env file:
 
 ```bash
-cp .env.example .env
-# Edit .env with your production values
+cp .env.prod.example .env.prod
 ```
 
-2. Update `docker-compose.prod.yml`:
-   - Replace `ghcr.io/OWNER/hisaabo-api:latest` with your actual GHCR image path
+2. Edit `.env.prod` with your production values:
    - Set a strong `POSTGRES_PASSWORD`
+   - Generate an `ENCRYPTION_KEY`: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+   - Set `CORS_ORIGINS` and `APP_URL` to your domain
+   - Set `RESEND_API_KEY` for email delivery
 
-3. Start the stack:
+3. Update `docker-compose.prod.yml`:
+   - Replace `ghcr.io/OWNER/hisaabo-api:latest` with your actual GHCR image path
+
+4. Start the stack:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
-4. Verify health:
+5. Verify health:
 
 ```bash
 curl http://localhost:3000/health

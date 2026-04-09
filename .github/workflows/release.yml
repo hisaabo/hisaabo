@@ -264,7 +264,7 @@ jobs:
         run: node -e "const fs=require('fs'),f='packages/cli/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
 
       - run: pnpm --filter @hisaabo/cli build
-      - run: pnpm --filter @hisaabo/cli pack --pack-destination /tmp/cli
+      - run: pnpm -C packages/cli pack --pack-destination /tmp/cli
       - run: npm publish /tmp/cli/*.tgz --access public --provenance
 
   # ── MCP (npm publish) ──────────────────────────────────────────
@@ -294,7 +294,7 @@ jobs:
         run: node -e "const fs=require('fs'),f='packages/mcp/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
 
       - run: pnpm --filter @hisaabo/mcp build
-      - run: pnpm --filter @hisaabo/mcp pack --pack-destination /tmp/mcp
+      - run: pnpm -C packages/mcp pack --pack-destination /tmp/mcp
       - run: npm publish /tmp/mcp/*.tgz --access public --provenance
 
   # ── Release Notes ──────────────────────────────────────────────

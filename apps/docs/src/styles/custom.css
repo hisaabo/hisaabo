@@ -222,10 +222,36 @@ html[data-persona="developer"] .persona-business {
 
 /* Hide label text on very small screens, keep icons */
 @media (max-width: 30rem) {
-  .device-switcher-btn span {
+  .device-switcher-btn span,
+  .persona-btn span {
     display: none;
   }
-  .device-switcher-btn {
+  .device-switcher-btn,
+  .persona-btn {
     padding: 0.3rem;
+  }
+}
+
+/* ── Mobile switcher bar ───────────────────────────────────────
+   Move the persona/device pills to the top of the mobile sidebar
+   so users see them immediately without scrolling.             */
+@media (max-width: 49.99rem) {
+  /* Move the mobile-preferences block (containing the switchers)
+     above the sidebar navigation links. */
+  .sidebar-content > .md\:sl-hidden {
+    order: -1;
+  }
+
+  /* Sticky so it stays visible while scrolling the sidebar */
+  .mobile-preferences {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: var(--sl-color-bg-sidebar, var(--sl-color-black));
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-top: none;
+    border-bottom: 1px solid var(--sl-color-hairline-light);
+    margin-bottom: 0.5rem;
   }
 }

@@ -27,34 +27,31 @@
   </button>
 </div>
 
-<script>
-  function getDefaultPersona(): string {
-    return localStorage.getItem('hisaabo-docs-persona') || 'all';
-  }
+<script is:inline>
+  (function () {
+    function setPersona(persona) {
+      document.documentElement.setAttribute('data-persona', persona);
+      localStorage.setItem('hisaabo-docs-persona', persona);
+      document.querySelectorAll('.persona-btn').forEach(function (btn) {
+        var isActive = btn.getAttribute('data-persona-target') === persona;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
+      });
+    }
 
-  function setPersona(persona: string) {
-    document.documentElement.setAttribute('data-persona', persona);
-    localStorage.setItem('hisaabo-docs-persona', persona);
-    document.querySelectorAll<HTMLButtonElement>('.persona-btn').forEach((btn) => {
-      const target = btn.getAttribute('data-persona-target');
-      const isActive = target === persona;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
-    });
-  }
+    // Apply stored/default state
+    setPersona(localStorage.getItem('hisaabo-docs-persona') || 'all');
 
-  function initPersonaSwitcher() {
-    setPersona(getDefaultPersona());
-    document.querySelectorAll<HTMLButtonElement>('.persona-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = btn.getAttribute('data-persona-target') as string;
-        const current = document.documentElement.getAttribute('data-persona');
-        // Toggle: clicking active persona resets to 'all'
+    // Event delegation — works regardless of how many copies of the buttons exist
+    if (!document.__personaDelegated) {
+      document.__personaDelegated = true;
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.persona-btn');
+        if (!btn) return;
+        var target = btn.getAttribute('data-persona-target');
+        var current = document.documentElement.getAttribute('data-persona');
         setPersona(current === target ? 'all' : target);
       });
-    });
-  }
-
-  initPersonaSwitcher();
-  document.addEventListener('astro:after-swap', initPersonaSwitcher);
+    }
+  })();
 </script>
