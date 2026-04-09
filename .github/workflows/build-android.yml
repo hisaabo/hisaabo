@@ -6,7 +6,7 @@ on:
       build_type:
         description: "Build method: eas (cloud) or local (self-hosted Gradle)"
         required: true
-        default: eas
+        default: local
         type: choice
         options:
           - eas
@@ -20,11 +20,13 @@ on:
           - development
           - preview
           - production
-  push:
-    branches: [main]
-    paths:
-      - "apps/mobile/**"
-      - "packages/shared/**"
+  # EAS cloud builds disabled — no EXPO_TOKEN configured yet.
+  # Re-enable this trigger once an Expo account is set up:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "apps/mobile/**"
+  #     - "packages/shared/**"
 
 concurrency:
   group: build-android-${{ github.ref }}
@@ -40,8 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'eas')
+      github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'eas'
     defaults:
       run:
         working-directory: apps/mobile

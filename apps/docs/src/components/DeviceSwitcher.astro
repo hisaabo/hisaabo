@@ -34,38 +34,39 @@
   </button>
 </div>
 
-<script>
-  function getDefaultPlatform(): 'desktop' | 'mobile' {
-    const stored = localStorage.getItem('hisaabo-docs-platform');
-    if (stored === 'desktop' || stored === 'mobile') return stored;
-    const isMobile =
-      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-      window.innerWidth < 768;
-    return isMobile ? 'mobile' : 'desktop';
-  }
+<script is:inline>
+  (function () {
+    function getDefaultPlatform() {
+      var stored = localStorage.getItem('hisaabo-docs-platform');
+      if (stored === 'desktop' || stored === 'mobile') return stored;
+      var isMobile =
+        /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        window.innerWidth < 768;
+      return isMobile ? 'mobile' : 'desktop';
+    }
 
-  function setPlatform(platform: 'desktop' | 'mobile') {
-    document.documentElement.setAttribute('data-platform', platform);
-    localStorage.setItem('hisaabo-docs-platform', platform);
-    document.querySelectorAll<HTMLButtonElement>('.device-switcher-btn').forEach((btn) => {
-      const target = btn.getAttribute('data-platform-target');
-      const isActive = target === platform;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
-    });
-  }
+    function setPlatform(platform) {
+      document.documentElement.setAttribute('data-platform', platform);
+      localStorage.setItem('hisaabo-docs-platform', platform);
+      document.querySelectorAll('.device-switcher-btn').forEach(function (btn) {
+        var isActive = btn.getAttribute('data-platform-target') === platform;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
+      });
+    }
 
-  function initSwitcher() {
+    // Apply stored state or auto-detect
     setPlatform(getDefaultPlatform());
-    document.querySelectorAll<HTMLButtonElement>('.device-switcher-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = btn.getAttribute('data-platform-target') as 'desktop' | 'mobile';
+
+    // Event delegation — works regardless of how many copies of the buttons exist
+    if (!document.__platformDelegated) {
+      document.__platformDelegated = true;
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.device-switcher-btn');
+        if (!btn) return;
+        var target = btn.getAttribute('data-platform-target');
         if (target) setPlatform(target);
       });
-    });
-  }
-
-  // Runs on initial load + Astro page transitions (Starlight uses View Transitions)
-  initSwitcher();
-  document.addEventListener('astro:after-swap', initSwitcher);
+    }
+  })();
 </script>

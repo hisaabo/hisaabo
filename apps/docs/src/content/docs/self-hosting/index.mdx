@@ -38,6 +38,8 @@ The native mobile app (Android/iOS) and desktop app (macOS/Windows/Linux) are **
 | `CORS_ORIGINS` | Yes | — | Comma-separated allowed origins |
 | `NODE_ENV` | Yes | — | `production` or `development` |
 | `APP_URL` | Yes | — | Public URL of the app (used in magic link emails) |
+| `ENCRYPTION_KEY` | Yes | — | AES-256-GCM key (64-char hex) for field-level encryption. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ENCRYPTION_KEY_PREVIOUS` | No | — | Previous key for rotation — set temporarily, remove after all fields are re-encrypted |
 | `RESEND_API_KEY` | No | — | Resend API key for transactional email |
 | `EMAIL_FROM` | No | — | Sender name and address for emails |
 | `MULTI_TENANT` | No | `false` | Set `true` for cloud SaaS mode |
@@ -103,7 +105,7 @@ Check the container logs after update to confirm migrations succeeded.
 
 ## Multi-tenancy (cloud SaaS mode)
 
-When `MULTI_TENANT=true`, Hisaabo creates a separate PostgreSQL schema per tenant (organisation). A separate **control database** stores users, tenants, sessions, and tenant members.
+When `MULTI_TENANT=true`, Hisaabo provisions a separate PostgreSQL database per tenant (organisation) with a dedicated database user. A separate **control database** stores users, tenants, sessions, and tenant members. Tenant database credentials are encrypted at rest using `ENCRYPTION_KEY`.
 
 Required when `MULTI_TENANT=true`:
 - `CONTROL_DATABASE_URL` — connection string to the control database

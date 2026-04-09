@@ -116,9 +116,9 @@ const navSections = [
     label: "COMPLIANCE",
     items: [
       { to: "/gst", label: "__REPORTS__", icon: GSTIcon, resource: "GstReport", action: "read" }, // label set dynamically based on GST status
-      { to: "/gstr2b", label: "GSTR-2B Recon", icon: ReportsIcon, resource: "GstReport", action: "read" },
-      { to: "/itc", label: "Input Tax Credit", icon: ReportsIcon, resource: "ITC", action: "read" },
-      { to: "/eway-bills", label: "E-Way Bills", icon: ReportsIcon, resource: "EWayBill", action: "read" },
+      { to: "/gstr2b", label: "GSTR-2B Recon", icon: ReportsIcon, resource: "GstReport", action: "read", gstOnly: true },
+      { to: "/itc", label: "Input Tax Credit", icon: ReportsIcon, resource: "ITC", action: "read", gstOnly: true },
+      { to: "/eway-bills", label: "E-Way Bills", icon: ReportsIcon, resource: "EWayBill", action: "read", gstOnly: true },
       { to: "/reports", label: "Reports", icon: ReportsIcon, resource: "Report", action: "read" },
     ],
   },
@@ -612,7 +612,10 @@ function RootLayout() {
         <nav className="flex-1 overflow-y-auto pb-2" onClick={() => setSidebarOpen(false)}>
           {navSections.map((section) => {
             const visibleItems = section.items
-              .filter((item) => canAccess(session?.role, item.resource, item.action))
+              .filter((item) =>
+                canAccess(session?.role, item.resource, item.action) &&
+                (!("gstOnly" in item && item.gstOnly) || isGstRegistered)
+              )
               .map((item) => {
                 // Rename reports label based on GST status (always visible)
                 if (item.to === "/gst") {
@@ -624,10 +627,11 @@ function RootLayout() {
                 return item;
               });
             if (visibleItems.length === 0) return null;
+            const sectionLabel = section.label === "COMPLIANCE" && !isGstRegistered ? "REPORTS" : section.label;
             return (
               <div key={section.label}>
                 <p className="px-3 pt-5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-tertiary">
-                  {section.label}
+                  {sectionLabel}
                 </p>
                 {visibleItems.map((item) => (
                   <Link

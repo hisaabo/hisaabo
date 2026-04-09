@@ -303,27 +303,102 @@ describe("P1: Partial indexes on soft-delete columns", () => {
 // 9. DOCKER ENTRYPOINT
 // =============================================================================
 describe("P2: Docker entrypoint hardening", () => {
+  let entrypointContent: string;
+
+  // Read once, share across tests
+  const getEntrypoint = async () => {
+    if (!entrypointContent) {
+      const fs = await import("node:fs");
+      const nodePath = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+      const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
+      const entrypointPath = nodePath.resolve(thisDir, "../../../../docker-entrypoint.sh");
+      entrypointContent = fs.readFileSync(entrypointPath, "utf-8");
+    }
+    return entrypointContent;
+  };
+
   it("docker-entrypoint.sh uses node instead of tsx for production", async () => {
-    const fs = await import("node:fs");
-    const nodePath = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
-    const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
-    const entrypointPath = nodePath.resolve(thisDir, "../../../../docker-entrypoint.sh");
-    const content = fs.readFileSync(entrypointPath, "utf-8");
+    const content = await getEntrypoint();
     // Should use 'node' for production, not 'npx tsx'
     expect(content).toContain("exec node packages/api/dist/server.js");
     expect(content).not.toContain("npx tsx");
   });
 
   it("docker-entrypoint.sh exits on migration failure", async () => {
+    const content = await getEntrypoint();
+    // Should exit 1 on migration failure, not start the server anyway
+    expect(content).toContain("exit 1");
+    expect(content).not.toContain("WARNING: Migration failed! Starting server anyway");
+  });
+
+  it("docker-entrypoint.sh validates DATABASE_URL before running migrations", async () => {
+    const content = await getEntrypoint();
+    // Must fail fast with a clear message if DATABASE_URL is not set
+    expect(content).toContain('DATABASE_URL');
+    expect(content).toMatch(/\bFATAL\b.*DATABASE_URL/);
+  });
+});
+
+// =============================================================================
+// 10. TENANT PROVISIONING ROBUSTNESS
+// =============================================================================
+describe("P1: Tenant provisioning path resolution and rollback", () => {
+  /**
+   * AUDIT FINDING: provision-tenant.ts used import.meta.url to resolve the
+   * @hisaabo/db package root. When tsup bundles the code into packages/api/dist/,
+   * import.meta.url points to the bundle location, so dbPackageRoot resolved to
+   * /app/packages/api/ instead of /app/packages/db/. This caused:
+   *   - configPath pointed to a non-existent file
+   *   - cwd was wrong so npx couldn't find drizzle-kit
+   *   - Result: 500 error on first user signup in Docker
+   *
+   * FIX: Use createRequire(import.meta.url).resolve('@hisaabo/db/package.json')
+   * which works regardless of bundling because Node's module resolution follows
+   * workspace links.
+   */
+
+  it("provision-tenant.ts uses createRequire instead of import.meta.url for path resolution", async () => {
     const fs = await import("node:fs");
     const nodePath = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
-    const entrypointPath = nodePath.resolve(thisDir, "../../../../docker-entrypoint.sh");
-    const content = fs.readFileSync(entrypointPath, "utf-8");
-    // Should exit 1 on migration failure, not start the server anyway
-    expect(content).toContain("exit 1");
-    expect(content).not.toContain("WARNING: Migration failed! Starting server anyway");
+    const provisionPath = nodePath.resolve(thisDir, "../../../../packages/db/src/provision-tenant.ts");
+    const content = fs.readFileSync(provisionPath, "utf-8");
+
+    // Must use createRequire for bundle-safe package resolution
+    expect(content).toContain("createRequire");
+    expect(content).toContain('@hisaabo/db/package.json');
+
+    // Must NOT use the old fragile pattern: dirname(fileURLToPath(import.meta.url))
+    expect(content).not.toContain("fileURLToPath(import.meta.url)");
+  });
+
+  it("provision-tenant.ts guards dotenv in production", async () => {
+    const fs = await import("node:fs");
+    const nodePath = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
+    const provisionPath = nodePath.resolve(thisDir, "../../../../packages/db/src/provision-tenant.ts");
+    const content = fs.readFileSync(provisionPath, "utf-8");
+
+    // dotenv must be guarded by NODE_ENV check — in Docker, env vars come from
+    // the container runtime and the relative ../../.env path resolves wrong
+    expect(content).toMatch(/NODE_ENV.*!==.*production/);
+  });
+
+  it("provision-tenant.ts cleans up on failure (DROP DATABASE / DROP USER)", async () => {
+    const fs = await import("node:fs");
+    const nodePath = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
+    const provisionPath = nodePath.resolve(thisDir, "../../../../packages/db/src/provision-tenant.ts");
+    const content = fs.readFileSync(provisionPath, "utf-8");
+
+    // Must have rollback logic that drops the orphaned DB and user
+    expect(content).toContain("DROP DATABASE IF EXISTS");
+    expect(content).toContain("DROP USER IF EXISTS");
+    // Must terminate lingering connections before dropping
+    expect(content).toContain("pg_terminate_backend");
   });
 });

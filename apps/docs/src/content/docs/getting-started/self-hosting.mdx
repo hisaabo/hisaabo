@@ -40,6 +40,10 @@ NODE_ENV=production
 # ── App URL (used in magic link emails) ───────────────────────
 APP_URL=https://YOUR_DOMAIN
 
+# ── Field-Level Encryption (required) ────────────────────────
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ENCRYPTION_KEY=
+
 # ── Email (optional — magic links print to console if not set)
 RESEND_API_KEY=
 EMAIL_FROM=Hisaabo <noreply@yourdomain.com>
@@ -71,6 +75,8 @@ Replace `YOUR_STRONG_PASSWORD` with a randomly generated password. You can gener
 | `CORS_ORIGINS` | Yes | Comma-separated list of allowed origins. Set to your frontend domain. |
 | `NODE_ENV` | Yes | Set to `production` for a live server. |
 | `APP_URL` | Yes | Full URL of your Hisaabo web frontend, including `https://`. Used in magic link emails. |
+| `ENCRYPTION_KEY` | Yes | AES-256-GCM key for encrypting sensitive data at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `ENCRYPTION_KEY_PREVIOUS` | No | Set only during key rotation. Allows decryption with the old key while re-encrypting with the new one. Remove after rotation completes. |
 | `RESEND_API_KEY` | No | If set, magic link emails are sent via [Resend](https://resend.com). If not set, magic links are printed to the API container log. |
 | `EMAIL_FROM` | No | Sender name and address for email, for example `Hisaabo <noreply@yourdomain.com>`. |
 | `MULTI_TENANT` | No | Set to `true` only for a cloud SaaS deployment serving multiple unrelated organisations. Leave `false` for personal or single-business use. |
@@ -93,6 +99,7 @@ services:
       PORT: 3000
       CORS_ORIGINS: ${CORS_ORIGINS}
       APP_URL: ${APP_URL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       MULTI_TENANT: ${MULTI_TENANT:-false}

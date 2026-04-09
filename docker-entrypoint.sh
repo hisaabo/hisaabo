@@ -4,6 +4,12 @@ set -e
 echo "[entrypoint] Hisaabo API — starting up"
 echo "[entrypoint] Node $(node --version) | ENV=${NODE_ENV}"
 
+# ── Validate required env vars ────────────────────────────────
+if [ -z "$DATABASE_URL" ]; then
+  echo "[entrypoint] FATAL: DATABASE_URL is not set. Cannot start without a database connection."
+  exit 1
+fi
+
 # ── Run database migrations ────────────────────────────────────
 echo "[entrypoint] Running database migrations..."
 cd /app/packages/db
