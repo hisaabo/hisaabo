@@ -8,6 +8,7 @@ import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
 import { Modal } from "@/components/ui/Modal";
 import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
+import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
@@ -156,9 +157,7 @@ function NoOrgScreen() {
     <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
       <div className="w-full max-w-[400px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light">
         <div className="flex items-center justify-center gap-2.5 mb-6">
-          <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
-            <span className="text-white font-bold text-base">H</span>
-          </div>
+          <Logo className="w-9 h-9" />
           <span className="font-semibold text-lg tracking-tight text-text-primary">Hisaabo</span>
         </div>
 
@@ -487,9 +486,7 @@ function RootLayout() {
   const loadingSpinner = (
     <div className="min-h-screen flex items-center justify-center bg-surface-0">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
-          <span className="text-white font-semibold text-lg">H</span>
-        </div>
+        <Logo className="w-10 h-10" />
         <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
       </div>
     </div>
@@ -528,9 +525,7 @@ function RootLayout() {
       return (
         <div className="min-h-screen flex items-center justify-center bg-surface-0">
           <div className="flex flex-col items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
-              <span className="text-white font-semibold text-lg">H</span>
-            </div>
+            <Logo className="w-10 h-10" />
             <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
           </div>
         </div>
@@ -599,9 +594,7 @@ function RootLayout() {
         {/* Logo + Org switcher */}
         <div className="px-4 py-4 shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
-              <span className="text-white font-semibold text-sm">H</span>
-            </div>
+            <Logo className="w-8 h-8" />
             <span className="font-semibold text-[15px] tracking-tight text-text-primary">
               Hisaabo
             </span>

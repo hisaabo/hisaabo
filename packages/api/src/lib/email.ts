@@ -141,11 +141,23 @@ class ResendEmailService implements EmailService {
 <tr><td style="height: 4px; background: linear-gradient(90deg, #4f46e5 0%, #6366f1 50%, #4f46e5 100%); font-size: 0; line-height: 0;">&nbsp;</td></tr>
 
 <!-- Logo + brand mark -->
+<!-- Grid lockup is built from nested tables (not an image) so it renders identically in Gmail, Outlook, Apple Mail — no image-blocking, no external fetch, no broken alt. Matches favicon.svg: indigo rounded square with 4 inner squares, bottom-right in gold. Inner square colors are pre-blended (96%/58% white on #5b5bd6, plus amber) because some clients flatten layered opacity inconsistently. -->
 <tr><td style="padding: 32px 40px 0 40px; text-align: center;">
-<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin: 0 auto;">
 <tr>
-<td style="width: 36px; height: 36px; background-color: #4f46e5; border-radius: 8px; text-align: center; vertical-align: middle; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 20px; font-weight: 700; color: #ffffff; line-height: 36px;">H</td>
-<td style="padding-left: 10px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 20px; font-weight: 700; color: #111827; letter-spacing: -0.3px;">Hisaabo</td>
+<td style="vertical-align: middle; line-height: 1; font-size: 0;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="4" bgcolor="#5b5bd6" style="background-color: #5b5bd6; border-radius: 8px; border-collapse: separate;">
+<tr>
+<td width="12" height="12" bgcolor="#F8F8FF" style="background-color: #F8F8FF; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+<td width="12" height="12" bgcolor="#BDBDEE" style="background-color: #BDBDEE; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+</tr>
+<tr>
+<td width="12" height="12" bgcolor="#BDBDEE" style="background-color: #BDBDEE; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+<td width="12" height="12" bgcolor="#fbbf24" style="background-color: #fbbf24; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+</tr>
+</table>
+</td>
+<td height="36" style="padding-left: 12px; vertical-align: middle; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700; color: #111827; letter-spacing: -0.3px; line-height: 36px;">Hisaabo</td>
 </tr>
 </table>
 </td></tr>
@@ -257,11 +269,23 @@ ${deepLinkHtml}
 <tr><td style="height: 4px; background: linear-gradient(90deg, #4f46e5 0%, #6366f1 50%, #4f46e5 100%); font-size: 0; line-height: 0;">&nbsp;</td></tr>
 
 <!-- Logo + brand mark -->
+<!-- Grid lockup is built from nested tables (not an image) so it renders identically in Gmail, Outlook, Apple Mail — no image-blocking, no external fetch, no broken alt. Matches favicon.svg: indigo rounded square with 4 inner squares, bottom-right in gold. Inner square colors are pre-blended (96%/58% white on #5b5bd6, plus amber) because some clients flatten layered opacity inconsistently. -->
 <tr><td style="padding: 32px 40px 0 40px; text-align: center;">
-<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin: 0 auto;">
 <tr>
-<td style="width: 36px; height: 36px; background-color: #4f46e5; border-radius: 8px; text-align: center; vertical-align: middle; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 20px; font-weight: 700; color: #ffffff; line-height: 36px;">H</td>
-<td style="padding-left: 10px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 20px; font-weight: 700; color: #111827; letter-spacing: -0.3px;">Hisaabo</td>
+<td style="vertical-align: middle; line-height: 1; font-size: 0;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="4" bgcolor="#5b5bd6" style="background-color: #5b5bd6; border-radius: 8px; border-collapse: separate;">
+<tr>
+<td width="12" height="12" bgcolor="#F8F8FF" style="background-color: #F8F8FF; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+<td width="12" height="12" bgcolor="#BDBDEE" style="background-color: #BDBDEE; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+</tr>
+<tr>
+<td width="12" height="12" bgcolor="#BDBDEE" style="background-color: #BDBDEE; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+<td width="12" height="12" bgcolor="#fbbf24" style="background-color: #fbbf24; border-radius: 2px; font-size: 1px; line-height: 1px; mso-line-height-rule: exactly;">&nbsp;</td>
+</tr>
+</table>
+</td>
+<td height="36" style="padding-left: 12px; vertical-align: middle; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700; color: #111827; letter-spacing: -0.3px; line-height: 36px;">Hisaabo</td>
 </tr>
 </table>
 </td></tr>

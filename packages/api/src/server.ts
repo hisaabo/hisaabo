@@ -22,6 +22,7 @@ import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
 import { logger } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
+import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 
 // ── Process crash handlers ────────────────────────────────────
 process.on("unhandledRejection", (reason) => {
@@ -160,31 +161,34 @@ setInterval(() => {
   }
 }, 5 * 60_000).unref();
 
-// ── CSRF protection ───────────────────────────────────────────
-// State-changing requests authenticated via cookies must include
-// the X-Requested-With: hisaabo header. This blocks cross-origin
-// form submissions and navigation-based CSRF attacks while allowing
-// mobile/CLI clients (which use Authorization header, not cookies).
-// GET/HEAD/OPTIONS are exempt — they must be side-effect-free by convention.
-app.use("*", async (c: Context, next: Next) => {
-  if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") {
-    return next();
-  }
-
-  // Only enforce for cookie-based auth — if no session cookie, skip
-  const hasCookie = c.req.header("cookie")?.includes("session_id=");
-  if (!hasCookie) {
-    return next();
-  }
-
-  // Cookie-authenticated state-changing request → require CSRF header
-  const xrw = c.req.header("x-requested-with");
-  if (xrw !== "hisaabo") {
-    return c.json({ error: "CSRF validation failed" }, 403);
-  }
-
-  return next();
-});
+// ── CSRF protection (non-tRPC routes) ─────────────────────────
+// State-changing requests authenticated via cookies must include the
+// `X-Requested-With: hisaabo` header. This blocks cross-origin form
+// submissions and navigation-based CSRF attacks.
+//
+// Scope:
+//   - tRPC routes (/api/trpc/*) are intentionally skipped here and
+//     gated by a matching tRPC-level middleware in `trpc.ts`. Doing
+//     the rejection at the tRPC layer means the client receives a
+//     real `TRPCError` envelope (shaped by superjson) instead of a
+//     Hono `{error: "…"}` blob that the tRPC HTTP link cannot parse
+//     — the latter was the root cause of the Android "Unable to
+//     transform response from server" regression.
+//   - Non-tRPC routes (store REST endpoints, webhooks, etc.) still
+//     get the plain Hono 403 shape, which their clients expect.
+//
+// Bearer-authenticated requests are exempt because:
+//   1. Bearer tokens are not vulnerable to CSRF — they live in
+//      client-controlled storage, not browser cookies, so a hostile
+//      origin cannot forge a request that carries them.
+//   2. React Native's native HTTP stack maintains a per-app cookie
+//      jar that replays stale `session_id` cookies on every request
+//      even when the JS tRPC client never set them. Without this
+//      bypass the mobile app would be locked out after its first
+//      successful magic-link verification.
+//
+// GET/HEAD/OPTIONS are exempt by HTTP convention (side-effect-free).
+app.use("*", createCsrfMiddleware());
 
 // ── Health check ───────────────────────────────────────────────
 // ── UPI payment redirect ──────────────────────────────────────

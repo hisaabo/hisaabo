@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -244,9 +248,6 @@ jobs:
     if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -265,7 +266,7 @@ jobs:
 
       - run: pnpm --filter @hisaabo/cli build
       - run: pnpm -C packages/cli pack --pack-destination /tmp/cli
-      - run: npm publish /tmp/cli/*.tgz --access public --provenance
+      - run: npm publish /tmp/cli/*.tgz
 
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
@@ -274,9 +275,6 @@ jobs:
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -295,7 +293,7 @@ jobs:
 
       - run: pnpm --filter @hisaabo/mcp build
       - run: pnpm -C packages/mcp pack --pack-destination /tmp/mcp
-      - run: npm publish /tmp/mcp/*.tgz --access public --provenance
+      - run: npm publish /tmp/mcp/*.tgz
 
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:

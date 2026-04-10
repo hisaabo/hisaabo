@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <!-- Background: deep indigo → brand -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0a1f"/>
+      <stop offset="35%" stop-color="#1e1b4b"/>
+      <stop offset="75%" stop-color="#312e81"/>
+      <stop offset="100%" stop-color="#3730a3"/>
+    </linearGradient>
+
+    <!-- Logo mark background gradient -->
+    <linearGradient id="logoMark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+
+    <!-- Radial glow behind logo -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.38"/>
+      <stop offset="55%" stop-color="#6366f1" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Subtle dot grid texture -->
+    <pattern id="dots" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#ffffff" fill-opacity="0.06"/>
+    </pattern>
+
+    <!-- Gold gradient accent underline -->
+    <linearGradient id="goldLine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background layers -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#dots)"/>
+
+  <!-- Radial glow centered behind logo -->
+  <ellipse cx="270" cy="315" rx="440" ry="400" fill="url(#glow)"/>
+
+  <!-- Decorative rupee watermark (top-right) -->
+  <text x="1185" y="210" font-family="Lato, 'Helvetica Neue', Arial, sans-serif"
+        font-size="440" font-weight="900" fill="#818cf8" fill-opacity="0.07"
+        text-anchor="end">₹</text>
+
+  <!-- Logo mark: 4-square grid (echoes favicon.svg exactly) -->
+  <g transform="translate(120, 165)">
+    <!-- Drop shadow -->
+    <rect x="0" y="10" width="300" height="300" rx="60" fill="#000000" fill-opacity="0.32"/>
+    <!-- Brand rounded square -->
+    <rect x="0" y="0" width="300" height="300" rx="60" fill="url(#logoMark)"/>
+    <!-- Top-left (bright) -->
+    <rect x="30" y="30" width="105" height="105" rx="20" fill="#ffffff" fill-opacity="0.96"/>
+    <!-- Top-right (mid) -->
+    <rect x="165" y="30" width="105" height="105" rx="20" fill="#ffffff" fill-opacity="0.58"/>
+    <!-- Bottom-left (mid) -->
+    <rect x="30" y="165" width="105" height="105" rx="20" fill="#ffffff" fill-opacity="0.58"/>
+    <!-- Bottom-right (gold accent) -->
+    <rect x="165" y="165" width="105" height="105" rx="20" fill="#fbbf24"/>
+  </g>
+
+  <!-- Wordmark: Hisaabo -->
+  <text x="478" y="288" font-family="Lato, 'Helvetica Neue', Arial, sans-serif"
+        font-size="134" font-weight="900" fill="#ffffff" letter-spacing="-4">Hisaabo</text>
+
+  <!-- Gold accent bar under wordmark -->
+  <rect x="482" y="308" width="132" height="6" rx="3" fill="url(#goldLine)"/>
+
+  <!-- Tagline: Hisaab, pakka. -->
+  <text x="478" y="380" font-family="Lato, 'Helvetica Neue', Arial, sans-serif"
+        font-size="54" font-weight="700" font-style="italic" fill="#fbbf24">Hisaab, pakka.</text>
+
+  <!-- Description line -->
+  <text x="480" y="432" font-family="Lato, 'Helvetica Neue', Arial, sans-serif"
+        font-size="27" font-weight="400" fill="#ffffff" fill-opacity="0.8">Fast, precise, GST-compliant invoicing for Indian businesses.</text>
+
+  <!-- Feature pills -->
+  <!-- Pill 1: AI autopilot (agent-native, auto-runs your books) -->
+  <g transform="translate(120, 538)">
+    <rect x="0" y="0" width="218" height="52" rx="26" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5"/>
+    <circle cx="30" cy="26" r="6" fill="#10b981"/>
+    <text x="50" y="34" font-family="Lato, 'Helvetica Neue', Arial, sans-serif" font-size="21" font-weight="700" fill="#ffffff">AI autopilot</text>
+  </g>
+
+  <!-- Pill 2: Open source -->
+  <g transform="translate(354, 538)">
+    <rect x="0" y="0" width="228" height="52" rx="26" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5"/>
+    <circle cx="30" cy="26" r="6" fill="#fbbf24"/>
+    <text x="50" y="34" font-family="Lato, 'Helvetica Neue', Arial, sans-serif" font-size="21" font-weight="700" fill="#ffffff">Open source</text>
+  </g>
+
+  <!-- Pill 3: GST-ready -->
+  <g transform="translate(602, 538)">
+    <rect x="0" y="0" width="198" height="52" rx="26" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5"/>
+    <circle cx="30" cy="26" r="6" fill="#818cf8"/>
+    <text x="50" y="34" font-family="Lato, 'Helvetica Neue', Arial, sans-serif" font-size="21" font-weight="700" fill="#ffffff">GST-ready</text>
+  </g>
+
+  <!-- Pill 4: Tally export (CA-friendly hand-off) -->
+  <g transform="translate(820, 538)">
+    <rect x="0" y="0" width="228" height="52" rx="26" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5"/>
+    <circle cx="30" cy="26" r="6" fill="#ec4899"/>
+    <text x="50" y="34" font-family="Lato, 'Helvetica Neue', Arial, sans-serif" font-size="21" font-weight="700" fill="#ffffff">Tally export</text>
+  </g>
+
+  <!-- Bottom gold accent strip -->
+  <rect x="0" y="624" width="1200" height="6" fill="url(#goldLine)"/>
+</svg>

@@ -33,8 +33,68 @@ const t = initTRPC.context<Context>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
 export const createCallerFactory = t.createCallerFactory;
+
+// ── CSRF check (tRPC layer) ───────────────────────────────────────────────────
+// Mirrors the Hono-level CSRF middleware in `lib/csrf-middleware.ts`, but
+// runs inside the tRPC request pipeline so rejections become proper
+// `TRPCError`s — the tRPC HTTP link on the client can then deserialize
+// the error envelope (superjson-shaped `{error: {json: {...}}}`) and
+// surface a readable message instead of "Unable to transform response
+// from server".
+//
+// WHY THIS IS NEEDED IN ADDITION TO THE HONO-LEVEL CHECK:
+// The Hono middleware returns `c.json({error: "..."}, 403)`, whose shape
+// the tRPC client cannot parse. Keeping that shape for non-tRPC routes
+// (store REST, webhooks) is correct, but every tRPC call needs to go
+// through a tRPC-aware path so the error formatter produces a
+// client-parseable envelope for batched queries, mutations, and
+// subscriptions alike.
+//
+// SAFETY MODEL (must match csrf-middleware.ts):
+//   - GET/HEAD/OPTIONS: exempt (side-effect-free per HTTP convention).
+//   - Bearer-authenticated (Authorization header): exempt — Bearer
+//     tokens are not vulnerable to CSRF and React Native's native
+//     cookie jar replays stale `session_id` cookies that must not
+//     trip this check.
+//   - No session cookie: exempt — nothing to protect.
+//   - Otherwise: require `X-Requested-With: hisaabo` or throw
+//     TRPCError({code: "FORBIDDEN"}).
+const csrfCheck = t.middleware(({ ctx, next }) => {
+  const req = ctx.req;
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    return next();
+  }
+
+  const authHeader = req.headers.get("authorization");
+  if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+    return next();
+  }
+
+  const cookieHeader = req.headers.get("cookie");
+  const hasSessionCookie = cookieHeader?.includes("session_id=") ?? false;
+  if (!hasSessionCookie) {
+    return next();
+  }
+
+  const xrw = req.headers.get("x-requested-with");
+  if (xrw !== "hisaabo") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "CSRF validation failed",
+    });
+  }
+
+  return next();
+});
+
+// Base procedure with CSRF enforcement — every procedure below inherits
+// from this so the check runs on every tRPC call, including public
+// endpoints like `auth.sendMagicLink` that are otherwise unauthenticated.
+const baseProcedure = t.procedure.use(csrfCheck);
+
+export const publicProcedure = baseProcedure;
 
 // Middleware: requires authenticated user
 const isAuthenticated = t.middleware(({ ctx, next }) => {
@@ -108,9 +168,9 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(isAuthenticated);
-export const tenantProcedure = t.procedure.use(isAuthenticated).use(hasTenantAccess);
-export const businessProcedure = t.procedure.use(isAuthenticated).use(hasTenantAccess).use(hasBusinessAccess);
+export const protectedProcedure = baseProcedure.use(isAuthenticated);
+export const tenantProcedure = baseProcedure.use(isAuthenticated).use(hasTenantAccess);
+export const businessProcedure = baseProcedure.use(isAuthenticated).use(hasTenantAccess).use(hasBusinessAccess);
 
 // ── CASL-based permission middleware ──────────────────────────────────────────
 // Looks up the caller's membership role, maps it to the new permission role,
@@ -152,7 +212,7 @@ function withPermissions() {
 
 // All procedures that need CASL: get ability + role in context.
 // Permission checks happen per-endpoint via requireCan().
-export const authorizedProcedure = t.procedure
+export const authorizedProcedure = baseProcedure
   .use(isAuthenticated)
   .use(hasTenantAccess)
   .use(hasBusinessAccess)
