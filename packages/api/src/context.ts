@@ -13,13 +13,35 @@ const SESSION_CACHE_MAX = 1000;
 export async function createContext(opts: FetchCreateContextFnOptions) {
   // NOTE: we intentionally do NOT use getSessionIdFromRequest() here because
   // createContext needs the raw token to detect the API key prefix on line 27.
-  let sessionId = getCookie(opts.req, "session_id");
+  //
+  // ── Bearer-wins-over-cookie precedence ──────────────────────────────────
+  // An explicit `Authorization: Bearer <token>` header is an intentional,
+  // active authentication choice made by the calling code. A cookie, by
+  // contrast, can be replayed silently by a native HTTP stack (e.g. the
+  // iOS/Android native cookie jar, OkHttp, URLSession) without the JS
+  // application code ever touching it. The active choice must always win.
+  //
+  // Concrete scenario this prevents: on a mobile re-login, the client
+  // stores a fresh session token and sends it as a Bearer header on the
+  // very next request. However, the native HTTP stack may *still* be
+  // carrying the stale `session_id` cookie from a previous session that
+  // has not yet been garbage-collected server-side. If we read the cookie
+  // first, `createContext` would authenticate the request against the
+  // STALE cookie session — not the fresh Bearer session — until the stale
+  // row expires. By consulting the Bearer header first, a freshly
+  // re-authenticated mobile client is always resolved against its new
+  // token, regardless of whatever crud is still sitting in the cookie jar.
+  //
+  // Web and desktop clients are unaffected: they never send an
+  // Authorization header, so the code falls through to the cookie path.
+  let sessionId: string | null = null;
+  const authHeader = opts.req.headers.get("authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    sessionId = authHeader.slice(7);
+  }
 
   if (!sessionId) {
-    const authHeader = opts.req.headers.get("authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      sessionId = authHeader.slice(7);
-    }
+    sessionId = getCookie(opts.req, "session_id");
   }
 
   let user: { id: string; email: string; name: string | null } | null = null;

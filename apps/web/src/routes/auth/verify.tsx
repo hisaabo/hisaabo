@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { Logo } from "@/components/ui/Logo";
 
 export const Route = createFileRoute("/auth/verify")({
   component: VerifyPage,
@@ -51,9 +52,7 @@ function VerifyPage() {
     <div className="min-h-screen flex items-center justify-center px-4 bg-surface-1">
       <div className="w-full max-w-[380px] rounded-2xl p-8 shadow-elevated bg-surface-0 border border-border-light text-center">
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center">
-            <span className="text-white font-bold text-base">H</span>
-          </div>
+          <Logo className="w-9 h-9" />
           <span className="font-semibold text-lg tracking-tight text-text-primary">
             Hisaabo
           </span>

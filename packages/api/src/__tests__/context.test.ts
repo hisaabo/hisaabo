@@ -69,30 +69,49 @@ describe("getCookie — extracts a named cookie from a Cookie header string", ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Session extraction — Bearer header vs Cookie priority
+// Session extraction — Bearer header vs Cookie priority (createContext logic)
 // ─────────────────────────────────────────────────────────────────────────────
-describe("session ID extraction — cookie takes priority over Bearer header", () => {
+describe("session ID extraction inside createContext — Bearer header wins over session_id cookie", () => {
   /**
-   * The createContext function checks the cookie first, then falls back to
-   * the Authorization: Bearer header. This allows both web clients (cookie)
-   * and API consumers (Bearer) to authenticate.
+   * The createContext function checks the Authorization: Bearer header
+   * FIRST, then falls back to the session_id cookie. This prevents a stale
+   * native-cookie-jar replay from clobbering a freshly-authenticated mobile
+   * session. See the docblock in context.ts for the full re-login scenario.
    */
 
   function extractSessionId(req: Request): string | null {
-    // Mirror createContext logic from context.ts
-    const cookies = req.headers.get("cookie") || "";
-    const cookieMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
-    if (cookieMatch) return decodeURIComponent(cookieMatch[1]);
+    // Mirror createContext logic from context.ts (Bearer first, cookie fallback).
+    let sessionId: string | null = null;
     const authHeader = req.headers.get("authorization");
-    if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
-    return null;
+    if (authHeader?.startsWith("Bearer ")) sessionId = authHeader.slice(7);
+    if (!sessionId) {
+      const cookies = req.headers.get("cookie") || "";
+      const cookieMatch = cookies.match(/(?:^|;\s*)session_id=([^;]*)/);
+      if (cookieMatch) sessionId = decodeURIComponent(cookieMatch[1]);
+    }
+    return sessionId;
   }
 
-  it("extracts session from cookie header", () => {
+  it("createContext resolves the user from the Authorization Bearer token when BOTH a Bearer header and a session_id cookie are present — a mobile client that just re-authenticated after a stale cookie replay must be authenticated against the fresh token, never the stale cookie", () => {
     const req = new Request("http://localhost/", {
-      headers: { cookie: "session_id=cookietoken123" },
+      headers: {
+        cookie: "session_id=stale-cookie-from-previous-session",
+        authorization: "Bearer fresh-mobile-token-from-relogin",
+      },
     });
-    expect(extractSessionId(req)).toBe("cookietoken123");
+    expect(extractSessionId(req)).toBe("fresh-mobile-token-from-relogin");
+  });
+
+  it("createContext falls back to the session_id cookie when no Authorization header is present — web and desktop clients must keep working unchanged", () => {
+    const req = new Request("http://localhost/", {
+      headers: { cookie: "session_id=web-cookie-session-abc" },
+    });
+    expect(extractSessionId(req)).toBe("web-cookie-session-abc");
+  });
+
+  it("createContext resolves to no user when neither Bearer nor cookie is present — public endpoints must not receive a phantom user context", () => {
+    const req = new Request("http://localhost/");
+    expect(extractSessionId(req)).toBeNull();
   });
 
   it("extracts session from Authorization: Bearer header when no cookie is present", () => {
@@ -102,22 +121,25 @@ describe("session ID extraction — cookie takes priority over Bearer header", (
     expect(extractSessionId(req)).toBe("bearer-token-abc");
   });
 
-  it("prefers the cookie over the Bearer token when both are present", () => {
+  it("extracts session from cookie header when no Authorization header is present", () => {
+    const req = new Request("http://localhost/", {
+      headers: { cookie: "session_id=cookietoken123" },
+    });
+    expect(extractSessionId(req)).toBe("cookietoken123");
+  });
+
+  it("returns null for a malformed Authorization header (no 'Bearer ' prefix) and falls through to the cookie", () => {
     const req = new Request("http://localhost/", {
       headers: {
-        cookie: "session_id=cookie-wins",
-        authorization: "Bearer bearer-loses",
+        authorization: "Token some-api-key",
+        cookie: "session_id=fallback-cookie",
       },
     });
-    expect(extractSessionId(req)).toBe("cookie-wins");
+    // Malformed Authorization is ignored; the cookie fallback kicks in.
+    expect(extractSessionId(req)).toBe("fallback-cookie");
   });
 
-  it("returns null when neither cookie nor Bearer header is present", () => {
-    const req = new Request("http://localhost/");
-    expect(extractSessionId(req)).toBe(null);
-  });
-
-  it("returns null for a malformed Authorization header (no 'Bearer ' prefix)", () => {
+  it("returns null for a malformed Authorization header when no cookie is present either", () => {
     const req = new Request("http://localhost/", {
       headers: { authorization: "Token some-api-key" },
     });
