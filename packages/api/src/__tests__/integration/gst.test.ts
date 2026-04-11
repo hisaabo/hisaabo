@@ -544,7 +544,7 @@ describe("Composition scheme enforcement", () => {
         partyId: karnatakaParty.id,
         lineItems: [
           {
-            description: "Rice",
+            itemName: "Rice",
             quantity: "10",
             unitPrice: "50.00",
             taxPercent: "0",
@@ -583,7 +583,7 @@ describe("Composition scheme enforcement", () => {
       partyId: maharashtraParty.id,
       lineItems: [
         {
-          description: "Rice",
+          itemName: "Rice",
           quantity: "10",
           unitPrice: "50.00",
           taxPercent: "0",

@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   invoices,
   items as itemsTable,
@@ -76,7 +76,12 @@ async function getStockQty(itemId: string): Promise<string> {
   return row?.stockQuantity ?? "0.000";
 }
 
-// Base input for creating a recurring template
+// Base input for creating a recurring template.
+//
+// Post Bug B schema split: itemName is the required snapshot column on
+// invoice/recurring line items, and description is an optional notes
+// field. Templates created here only set itemName so notes stay null —
+// matching the dominant in-tree usage pattern.
 function baseTemplateInput(partyId: string, itemId?: string) {
   return {
     partyId,
@@ -86,7 +91,7 @@ function baseTemplateInput(partyId: string, itemId?: string) {
     startDate: pastDate(1), // start in the past so nextRunDate is computed from now
     lineItems: [
       {
-        description: "Monthly service fee",
+        itemName: "Monthly service fee",
         quantity: "1",
         unitPrice: "5000.00",
         taxPercent: "18",
@@ -445,7 +450,7 @@ describe("recurring scheduler catch-up for missed runs", () => {
       nextRunDate: threeWeeksAgo,
       lineItems: [
         {
-          description: "Weekly service fee",
+          itemName: "Weekly service fee",
           quantity: "1",
           unitPrice: "1000.00",
           taxPercent: "18",
@@ -501,7 +506,7 @@ describe("recurring scheduler catch-up for missed runs", () => {
       nextRunDate: thirtyDaysAgo,
       lineItems: [
         {
-          description: "Daily service fee",
+          itemName: "Daily service fee",
           quantity: "1",
           unitPrice: "500.00",
           taxPercent: "18",
@@ -604,5 +609,134 @@ describe("Recurring invoice full lifecycle", () => {
       .where(eq(recurringInvoiceRuns.templateId, template.id));
     expect(runs).toHaveLength(2);
     expect(runs.every(r => r.status === "success")).toBe(true);
+  });
+});
+
+// =============================================================================
+// Bug B: recurring template generator carries itemName + description forward
+// =============================================================================
+
+describe("Recurring template — itemName + description schema split (Bug B)", () => {
+  it("carries itemName and description forward to every generated invoice line", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create a template whose JSONB lineItems explicitly set both the new
+    // required itemName and the optional description notes. The generator
+    // must persist both on every invoice_items row it produces.
+    const template = await caller.recurringInvoice.create({
+      partyId: world.party1.id,
+      name: "Weekly Rice — split fields",
+      type: "sale" as const,
+      frequency: "weekly" as const,
+      startDate: pastDate(1),
+      lineItems: [
+        {
+          itemName: "Rice Basmati",
+          description: "Weekly order — keep separate",
+          quantity: "2",
+          unitPrice: "1000.00",
+          taxPercent: "0",
+          discountPercent: "0",
+        },
+      ],
+    });
+
+    // Trigger a manual run and inspect the generated invoice's line items.
+    await caller.recurringInvoice.runNow({ id: template.id });
+
+    const [run] = await db.select()
+      .from(recurringInvoiceRuns)
+      .where(eq(recurringInvoiceRuns.templateId, template.id));
+    expect(run).toBeDefined();
+    expect(run!.status).toBe("success");
+    expect(run!.invoiceId).toBeTruthy();
+
+    const generated = await caller.invoice.getById({ id: run!.invoiceId! });
+    expect(generated).not.toBeNull();
+    expect(generated!.lineItems).toHaveLength(1);
+    expect(generated!.lineItems[0]!.itemName).toBe("Rice Basmati");
+    expect(generated!.lineItems[0]!.description).toBe("Weekly order — keep separate");
+  });
+
+  it("migration-style JSONB backfill renames description → itemName on existing rows", async () => {
+    // Simulates the one-shot UPDATE embedded in migration 0007 by inserting
+    // a row whose JSONB array carries the pre-split shape (description but
+    // no itemName) and then executing the exact same WHERE/SET expression
+    // on that single row. The assertion is that after the backfill, every
+    // element has an itemName field carrying the old description value and
+    // a new description field set to null.
+    const db = getTenantTestDb();
+
+    // Raw insert to bypass the TypeScript schema (which now requires
+    // itemName). We cast through the untyped execute path.
+    const legacyLineItems = JSON.stringify([
+      {
+        description: "Legacy Service",
+        quantity: "1",
+        unitPrice: "500.00",
+        taxPercent: "18",
+        discountPercent: "0",
+      },
+      {
+        description: "Another Legacy Line",
+        quantity: "2",
+        unitPrice: "250.00",
+        taxPercent: "5",
+        discountPercent: "0",
+      },
+    ]);
+
+    const [inserted] = await db.execute(sql`
+      INSERT INTO recurring_invoice_templates
+        (business_id, party_id, name, type, frequency, line_items,
+         additional_charges, start_date, next_run_date)
+      VALUES
+        (${world.business1.id}::uuid, ${world.party1.id}::uuid,
+         'Legacy shape template', 'sale', 'monthly',
+         ${legacyLineItems}::jsonb, '0', NOW(), NOW())
+      RETURNING id
+    `) as unknown as Array<{ id: string }>;
+    const templateId = inserted!.id;
+
+    // Execute the same backfill SQL that migration 0007 runs globally.
+    await db.execute(sql`
+      UPDATE recurring_invoice_templates
+      SET line_items = COALESCE(
+        (
+          SELECT jsonb_agg(
+            CASE
+              WHEN elem ? 'description' AND NOT (elem ? 'itemName') THEN
+                (elem - 'description')
+                || jsonb_build_object('itemName', elem->'description')
+                || jsonb_build_object('description', NULL::jsonb)
+              ELSE elem
+            END
+            ORDER BY ord
+          )
+          FROM jsonb_array_elements(line_items) WITH ORDINALITY AS t(elem, ord)
+        ),
+        line_items
+      )
+      WHERE id = ${templateId}::uuid
+        AND line_items IS NOT NULL
+        AND jsonb_typeof(line_items) = 'array'
+    `);
+
+    const [after] = await db.select({ lineItems: recurringInvoiceTemplates.lineItems })
+      .from(recurringInvoiceTemplates)
+      .where(eq(recurringInvoiceTemplates.id, templateId));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items = after!.lineItems as any as Array<Record<string, unknown>>;
+
+    expect(items).toHaveLength(2);
+    expect(items[0]!.itemName).toBe("Legacy Service");
+    expect(items[0]!.description).toBeNull();
+    expect(items[1]!.itemName).toBe("Another Legacy Line");
+    expect(items[1]!.description).toBeNull();
+
+    // And the other fields must be preserved verbatim.
+    expect(items[0]!.quantity).toBe("1");
+    expect(items[1]!.quantity).toBe("2");
   });
 });

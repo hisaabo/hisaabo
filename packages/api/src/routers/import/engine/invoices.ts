@@ -116,7 +116,14 @@ export async function runInvoicesImport(
         lineItemRows.push({
           invoiceId,
           itemId,
-          description: li.description || li.itemName || "Imported item",
+          // Post Bug B: itemName is the required snapshot. The adapter
+          // already enforces a non-empty itemName via the canonical schema,
+          // but we keep the fallback as defence in depth in case a row
+          // somehow slipped through. description is the optional notes
+          // column — imported invoices have no user-authored notes, so
+          // it stays null.
+          itemName: li.itemName || "Imported item",
+          description: li.description ?? null,
           quantity: li.quantity,
           selectedUnit: li.unit || null,
           conversionFactor: cf,
@@ -138,7 +145,11 @@ export async function runInvoicesImport(
       lineItemRows.push({
         invoiceId,
         itemId: null,
-        description: `Imported: ${inv.invoiceNumber}`,
+        // Synthetic single-line fallback when the source CSV had no line
+        // items. Use itemName as the placeholder display text; description
+        // (notes) stays null.
+        itemName: `Imported: ${inv.invoiceNumber}`,
+        description: null,
         quantity: "1",
         unitPrice: inv.totalAmount,
         taxPercent: "0",

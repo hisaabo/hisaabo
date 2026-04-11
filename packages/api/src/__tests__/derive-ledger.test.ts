@@ -44,7 +44,7 @@ describe("derive-ledger engine", () => {
       partyId: world.party1.id,
       lineItems: [{
         itemId: world.item1.id,
-        description: "Test Item",
+        itemName: "Test Item",
         quantity: "10",
         unitPrice: "100.00",
         taxPercent: "18",
@@ -167,7 +167,7 @@ describe("derive-ledger engine", () => {
       partyId: world.party1.id,
       invoiceDate: new Date().toISOString(),
       lineItems: [{
-        description: "Return of Goods",
+        itemName: "Return of Goods",
         quantity: "1",
         unitPrice: "500.00",
         taxPercent: "0",
@@ -213,7 +213,7 @@ describe("derive-ledger engine", () => {
       type: "purchase",
       partyId: supplier.id,
       lineItems: [{
-        description: "Raw Cotton",
+        itemName: "Raw Cotton",
         quantity: "100",
         unitPrice: "50.00",
         taxPercent: "5",

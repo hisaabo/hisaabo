@@ -270,7 +270,10 @@ export async function generateGSTR1(
         ? (itemHsnLookup.get(li.itemId) || "0000")
         : "0000";
       const existing = hsnSummaryMap.get(itemHsn) || {
-        hsn: itemHsn, description: li.description, quantity: 0,
+        // HSN summary description is a human-readable label for the HSN
+        // group — use itemName (required snapshot), not the optional notes
+        // column.
+        hsn: itemHsn, description: li.itemName, quantity: 0,
         taxableValue: 0, cgst: 0, sgst: 0, igst: 0, totalValue: 0,
       };
       const itemTaxable = parseFloat(li.totalAmount) - parseFloat(li.taxAmount);

@@ -1516,9 +1516,14 @@ export default function InvoiceCreateScreen() {
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
       roundOff: "0",
+      // Post Bug B: backend expects itemName (required snapshot) +
+      // description (optional notes). Stage 3 will split the client state
+      // into two fields; until then the local `description` field still
+      // holds the item-name display, so we map it straight onto itemName
+      // and leave the notes column unset.
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        description: li.description.trim(),
+        itemName: li.description.trim(),
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

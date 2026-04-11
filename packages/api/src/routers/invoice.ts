@@ -217,7 +217,8 @@ export const invoiceRouter = router({
         });
         return {
           itemId: li.itemId || null,
-          description: li.description,
+          itemName: li.itemName,
+          description: li.description || null,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent || "0",
@@ -424,6 +425,7 @@ export const invoiceRouter = router({
 
           const lineItemRows = await db
             .select({
+              itemName: invoiceItems.itemName,
               description: invoiceItems.description,
               quantity: invoiceItems.quantity,
               unitPrice: invoiceItems.unitPrice,
@@ -461,6 +463,7 @@ export const invoiceRouter = router({
               isReverseCharge: inv.isReverseCharge ?? false,
             },
             lineItemRows.map((li) => ({
+              itemName: li.itemName,
               description: li.description,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
@@ -727,7 +730,8 @@ export const invoiceRouter = router({
             return {
               invoiceId: input.id,
               itemId: li.itemId || null,
-              description: li.description,
+              itemName: li.itemName,
+              description: li.description || null,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",

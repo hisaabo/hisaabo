@@ -18,7 +18,8 @@ interface TemplateRow {
   type: "sale" | "purchase";
   lineItems: Array<{
     itemId?: string;
-    description: string;
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent: string;
@@ -120,7 +121,8 @@ export async function generateInvoiceFromTemplate(
       });
       return {
         itemId: li.itemId || null,
-        description: li.description,
+        itemName: li.itemName,
+        description: li.description ?? null,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent || "0",

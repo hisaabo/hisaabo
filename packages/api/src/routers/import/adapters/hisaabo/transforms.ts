@@ -104,11 +104,17 @@ export function transformInvoice(raw: Record<string, unknown>): CanonicalInvoice
     ? (rawType as typeof validTypes[number])
     : "sale";
 
+  // Line items
+  //
+  // Post-schema-split (Bug B): prefer the explicit "Item Name" column from
+  // the CSV. For legacy Hisaabo exports that only had a "Description" column
+  // (pre-split), fall back so we don't break old exports. Imported rows never
+  // carry a user-authored description.
   let lineItems: CanonicalInvoice["lineItems"] = undefined;
   if (Array.isArray(raw.lineItems) && raw.lineItems.length > 0) {
     lineItems = (raw.lineItems as Record<string, unknown>[]).map((li) => ({
-      itemName: str(li.itemName) || undefined,
-      description: str(li.description) || "Imported item",
+      itemName: str(li.itemName) || str(li.description) || "Imported item",
+      description: null,
       quantity: str(li.quantity, "1") || "1",
       unit: str(li.unit) || undefined,
       conversionFactor: str(li.conversionFactor) || undefined,

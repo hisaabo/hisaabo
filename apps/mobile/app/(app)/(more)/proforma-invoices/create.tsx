@@ -194,7 +194,9 @@ export default function ProformaCreateScreen() {
       invoiceDate: invoiceDate.toISOString(), dueDate: dueDate.toISOString(),
       notes: notes.trim() || undefined,
       additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
-      lineItems: validItems.map((li) => ({ itemId: li.itemId, description: li.description.trim(), quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })),
+      // Post Bug B: backend expects itemName (required); map local
+      // description display onto it until Stage 3 splits client state.
+      lineItems: validItems.map((li) => ({ itemId: li.itemId, itemName: li.description.trim(), quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })),
     });
   }, [selectedParty, lineItems, invoiceDate, dueDate, notes, createMutation]);
 

@@ -305,10 +305,14 @@ function AutomatedInvoicesPage() {
   function handleSubmit() {
     if (!validateForm()) return;
 
+    // Post Bug B: backend expects itemName (required) + description
+    // (optional notes). Stage 3 will split the client state; until then
+    // the local `description` field holds the item-name display, so we
+    // map it straight onto itemName and leave notes unset.
     const lineItems = form.lineItems
       .filter((li) => li.description.trim() || li.unitPrice)
       .map((li) => ({
-        description: li.description.trim(),
+        itemName: li.description.trim(),
         quantity: li.quantity ? parseFloat(li.quantity).toString() : "1",
         unitPrice: parseFloat(li.unitPrice).toFixed(2),
         taxPercent: li.taxPercent ? parseFloat(li.taxPercent).toString() : "0",

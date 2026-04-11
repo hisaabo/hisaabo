@@ -85,6 +85,7 @@ async function generateIRNForInvoice(
 
   const lineItemRows = await db
     .select({
+      itemName: invoiceItems.itemName,
       description: invoiceItems.description,
       quantity: invoiceItems.quantity,
       unitPrice: invoiceItems.unitPrice,
@@ -116,6 +117,7 @@ async function generateIRNForInvoice(
       isReverseCharge: invoice.isReverseCharge ?? false,
     },
     lineItemRows.map((li) => ({
+      itemName: li.itemName,
       description: li.description,
       quantity: li.quantity,
       unitPrice: li.unitPrice,

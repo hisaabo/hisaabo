@@ -259,8 +259,10 @@ export default function CreateRecurringInvoiceScreen() {
       type,
       frequency,
       customIntervalDays: frequency === "custom" ? parseInt(customIntervalDays) : undefined,
+      // Post Bug B: map local description (display) onto backend itemName.
+      // Stage 3 will split the client state into two fields.
       lineItems: validItems.map((li) => ({
-        description: li.description.trim(),
+        itemName: li.description.trim(),
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

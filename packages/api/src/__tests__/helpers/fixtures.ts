@@ -292,7 +292,13 @@ export async function createInvoiceWithItems(
   partyId: string,
   lineItems: Array<{
     itemId?: string;
-    description: string;
+    /**
+     * Required snapshot of the item name (post Bug B schema split). Tests
+     * may pass `description` as a legacy alias — the helper maps it to
+     * itemName so existing test rows keep compiling without rewrites.
+     */
+    itemName?: string;
+    description?: string;
     quantity: string;
     unitPrice: string;
     taxPercent?: string;
@@ -342,12 +348,18 @@ export async function createInvoiceWithItems(
     const taxPct = parseFloat(li.taxPercent ?? "0");
     const lineTotal = qty * price * (1 + taxPct / 100);
 
+    // Tests may pass either { itemName } or the legacy { description } field;
+    // map both to the new required itemName column. description stays NULL
+    // unless the caller explicitly opts into providing both.
+    const itemName = li.itemName ?? li.description ?? "Test Line";
+
     const [lineItem] = await db
       .insert(invoiceItems)
       .values({
         invoiceId: invoice!.id,
         itemId: li.itemId ?? null,
-        description: li.description,
+        itemName,
+        description: null,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent ?? "0.00",

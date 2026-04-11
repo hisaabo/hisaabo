@@ -85,7 +85,15 @@ function callerForKiran() {
 
 function baseSaleInput(partyId: string, lineItems: Array<{
   itemId?: string;
-  description: string;
+  /**
+   * Either pass `itemName` (post Bug B) or the legacy `description` field —
+   * the helper maps `description` → `itemName` so existing test bodies keep
+   * compiling without sweeping rewrites. Tests that need to exercise the
+   * new optional notes column should use `notes`.
+   */
+  itemName?: string;
+  description?: string;
+  notes?: string | null;
   quantity: string;
   unitPrice: string;
   taxPercent?: string;
@@ -98,7 +106,8 @@ function baseSaleInput(partyId: string, lineItems: Array<{
     type: "sale" as const,
     invoiceDate: new Date().toISOString(),
     lineItems: lineItems.map((li) => ({
-      description: li.description,
+      itemName: li.itemName ?? li.description ?? "Test Line",
+      description: li.notes ?? null,
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       taxPercent: li.taxPercent ?? "0",
@@ -225,7 +234,7 @@ describe("invoice.create", () => {
       lineItems: [
         {
           itemId: world.item1.id,
-          description: "Cotton Fabric (purchase)",
+          itemName: "Cotton Fabric (purchase)",
           quantity: purchaseQty,
           unitPrice: "200.00",
           taxPercent: "5.00",
@@ -301,7 +310,7 @@ describe("invoice.create", () => {
       lineItems: [
         {
           itemId: world.item1.id,
-          description: "Challan conversion — stock already decremented",
+          itemName: "Challan conversion — stock already decremented",
           quantity: "5",
           unitPrice: "250.00",
           taxPercent: "0",
@@ -454,7 +463,7 @@ describe("invoice.create", () => {
   it("invoice with round-off adjusts totalAmount by the specified amount", async () => {
     const caller = callerForRamesh();
 
-    const lineItemInput = { description: "Widget", quantity: "3", unitPrice: "100.00", taxPercent: "18.00" };
+    const lineItemInput = { itemName: "Widget", quantity: "3", unitPrice: "100.00", taxPercent: "18.00" };
 
     // First calculate expected total without round-off
     const _baseTotals = calcInvoiceTotals({
@@ -469,7 +478,7 @@ describe("invoice.create", () => {
       roundOff,
       lineItems: [
         {
-          description: lineItemInput.description,
+          itemName: lineItemInput.itemName,
           quantity: lineItemInput.quantity,
           unitPrice: lineItemInput.unitPrice,
           taxPercent: lineItemInput.taxPercent,
@@ -501,7 +510,7 @@ describe("invoice.create", () => {
       invoiceDiscountType: "percent",
       lineItems: [
         {
-          description: "Discounted fabric",
+          itemName: "Discounted fabric",
           quantity: "10",
           unitPrice: "100.00",
           taxPercent: "0",
@@ -521,6 +530,124 @@ describe("invoice.create", () => {
 
     expect(result.discountAmount).toBe(expected.invoiceDiscountAmount);
     expect(result.totalAmount).toBe(expected.total);
+  });
+});
+
+// =============================================================================
+// invoice line items — itemName / description schema split (Bug B)
+//
+// These tests cover the post Bug B shape:
+//   invoice_items.item_name — required snapshot of the item name at billing
+//   invoice_items.description — optional free-text line notes
+//
+// Decoupled from baseSaleInput/createInvoiceWithItems so they exercise the
+// router's validator directly.
+// =============================================================================
+
+describe("invoice.create — itemName + description schema split (Bug B)", () => {
+  it("persists both itemName and description when both are provided", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "Rice Basmati",
+          description: "Keep separate from order #42",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    const fetched = await caller.invoice.getById({ id: result.id });
+    expect(fetched).not.toBeNull();
+    expect(fetched!.lineItems).toHaveLength(1);
+    expect(fetched!.lineItems[0]!.itemName).toBe("Rice Basmati");
+    expect(fetched!.lineItems[0]!.description).toBe("Keep separate from order #42");
+  });
+
+  it("leaves description NULL when only itemName is provided", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "Wheat Flour 5kg",
+          quantity: "2",
+          unitPrice: "250.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    const fetched = await caller.invoice.getById({ id: result.id });
+    expect(fetched).not.toBeNull();
+    expect(fetched!.lineItems[0]!.itemName).toBe("Wheat Flour 5kg");
+    expect(fetched!.lineItems[0]!.description).toBeNull();
+  });
+
+  it("rejects the create when itemName is missing", async () => {
+    const caller = callerForRamesh();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const badInput: any = {
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          // itemName intentionally omitted
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    };
+
+    await expect(caller.invoice.create(badInput)).rejects.toThrow();
+  });
+
+  it("rejects the create even when description is present but itemName is missing — no back-compat fallback", async () => {
+    const caller = callerForRamesh();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const legacyShape: any = {
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          // itemName omitted on purpose to simulate a stale client that
+          // still sends the pre-split shape. This MUST fail — we do not
+          // accept the legacy single-field shape.
+          description: "Old-client item",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    };
+
+    await expect(caller.invoice.create(legacyShape)).rejects.toThrow();
   });
 });
 
@@ -567,7 +694,7 @@ describe("invoice.list", () => {
       type: "purchase",
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Purchase Item", quantity: "1", unitPrice: "80.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Purchase Item", quantity: "1", unitPrice: "80.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
 
@@ -627,7 +754,7 @@ describe("invoice.list", () => {
       type: "sale" as const,
       invoiceDate: "2026-01-15T00:00:00.000Z",
       lineItems: [
-        { description: "Jan item", quantity: "1", unitPrice: "100.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Jan item", quantity: "1", unitPrice: "100.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
 
@@ -671,7 +798,7 @@ describe("invoice.list", () => {
       invoiceDate: "2025-01-01T00:00:00.000Z",
       dueDate: "2025-02-01T00:00:00.000Z",
       lineItems: [
-        { description: "Overdue item", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Overdue item", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
 
@@ -734,9 +861,13 @@ describe("invoice.getById", () => {
     expect(result!.party).not.toBeNull();
     expect(result!.party!.id).toBe(world.party1.id);
 
-    // Line items are returned in sortOrder
-    expect(result!.lineItems[0]!.description).toBe("Item A");
-    expect(result!.lineItems[1]!.description).toBe("Item B");
+    // Line items are returned in sortOrder. Post Bug B: itemName is the
+    // primary display field; description is the optional notes column
+    // (null on these rows since the test didn't set `notes`).
+    expect(result!.lineItems[0]!.itemName).toBe("Item A");
+    expect(result!.lineItems[1]!.itemName).toBe("Item B");
+    expect(result!.lineItems[0]!.description).toBeNull();
+    expect(result!.lineItems[1]!.description).toBeNull();
   });
 
   it("returns null for an invoice that belongs to a different business — cross-business isolation", async () => {

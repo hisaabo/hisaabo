@@ -378,9 +378,14 @@ export function DocumentCreator({
       return;
     }
 
+    // Post Bug B: the backend expects `itemName` (required snapshot) and
+    // `description` (optional free-text notes). Stage 3 will split the
+    // client state into two fields; for now the local `description` field
+    // holds the item name display, so we map it straight onto itemName and
+    // leave the new notes column unset.
     const lineItemsPayload = validItems.map((li) => ({
       itemId: li.itemId,
-      description: li.description,
+      itemName: li.description,
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       taxPercent: li.taxPercent,

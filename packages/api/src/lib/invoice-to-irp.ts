@@ -55,7 +55,10 @@ export interface IRPInvoice {
 }
 
 export interface IRPLineItem {
-  description: string;
+  /** Required snapshot of the item name at billing time. */
+  itemName: string;
+  /** Optional free-text line notes (from invoice_items.description). */
+  description: string | null;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -197,7 +200,11 @@ export function mapInvoiceToIRP(
 
     return {
       SlNo: String(idx + 1),
-      PrdDesc: li.description.slice(0, 300),
+      // IRP PrdDesc is the product-line display — use itemName (required
+      // snapshot). The free-text notes field is intentionally NOT included
+      // here, as IRP's PrdDesc is meant to identify the product, not capture
+      // per-line comments.
+      PrdDesc: li.itemName.slice(0, 300),
       IsServc: isService,
       HsnCd: li.itemHsn ?? "9999",
       Qty: qty,

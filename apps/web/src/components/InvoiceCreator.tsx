@@ -178,9 +178,13 @@ export function InvoiceCreator({ type, onClose }: Props) {
       dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
       notes: notes || undefined,
       termsAndConditions: terms || undefined,
+      // Post Bug B: backend expects itemName (required) + description
+      // (optional notes). Stage 3 will split the client state; until then
+      // the local `description` field holds the item-name display, so we
+      // map it straight onto itemName and omit the notes column.
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        description: li.description,
+        itemName: li.description,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent,

@@ -116,7 +116,7 @@ describe("ITC auto-creation", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 15).toISOString(),
       lineItems: [
         {
-          description: "Steel Rods",
+          itemName: "Steel Rods",
           quantity: "10",
           unitPrice: "1000.00",
           taxPercent: "18",
@@ -155,7 +155,7 @@ describe("ITC auto-creation", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 16).toISOString(),
       lineItems: [
         {
-          description: "Electronic Components",
+          itemName: "Electronic Components",
           quantity: "5",
           unitPrice: "2000.00",
           taxPercent: "18",
@@ -190,7 +190,7 @@ describe("ITC auto-creation", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 17).toISOString(),
       lineItems: [
         {
-          description: "Cotton Fabric",
+          itemName: "Cotton Fabric",
           quantity: "10",
           unitPrice: "500.00",
           taxPercent: "12",
@@ -224,7 +224,7 @@ describe("ITC auto-creation", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 18).toISOString(),
       lineItems: [
         {
-          description: "Exempt Supply",
+          itemName: "Exempt Supply",
           quantity: "50",
           unitPrice: "100.00",
           taxPercent: "0",
@@ -266,7 +266,7 @@ describe("ITC auto-creation", () => {
         invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 19).toISOString(),
         lineItems: [
           {
-            description: "Raw Materials",
+            itemName: "Raw Materials",
             quantity: "20",
             unitPrice: "300.00",
             taxPercent: "12",
@@ -306,7 +306,7 @@ describe("ITC auto-creation", () => {
       isReverseCharge: true,
       lineItems: [
         {
-          description: "Legal Services (RCM)",
+          itemName: "Legal Services (RCM)",
           quantity: "1",
           unitPrice: "50000.00",
           taxPercent: "18",
@@ -345,7 +345,7 @@ describe("ITC auto-creation", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 21).toISOString(),
       lineItems: [
         {
-          description: "Cancelled Goods",
+          itemName: "Cancelled Goods",
           quantity: "5",
           unitPrice: "400.00",
           taxPercent: "12",
@@ -399,7 +399,7 @@ describe("ITC blocking", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 10).toISOString(),
       lineItems: [
         {
-          description: "Motor Vehicle Parts",
+          itemName: "Motor Vehicle Parts",
           quantity: "2",
           unitPrice: "5000.00",
           taxPercent: "18",
@@ -429,7 +429,7 @@ describe("ITC blocking", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 11).toISOString(),
       lineItems: [
         {
-          description: "Food and Beverages",
+          itemName: "Food and Beverages",
           quantity: "10",
           unitPrice: "200.00",
           taxPercent: "5",
@@ -463,7 +463,7 @@ describe("ITC blocking", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 12).toISOString(),
       lineItems: [
         {
-          description: "Personal Items",
+          itemName: "Personal Items",
           quantity: "3",
           unitPrice: "1000.00",
           taxPercent: "18",
@@ -497,7 +497,7 @@ describe("ITC blocking", () => {
       invoiceDate: new Date(TEST_YEAR, TEST_MONTH - 1, 13).toISOString(),
       lineItems: [
         {
-          description: "Office Supplies",
+          itemName: "Office Supplies",
           quantity: "20",
           unitPrice: "50.00",
           taxPercent: "18",
@@ -533,7 +533,7 @@ describe("ITC aging alerts", () => {
       supplierParty.id,
       [
         {
-          description: "Old Purchase - Warning",
+          itemName: "Old Purchase - Warning",
           quantity: "10",
           unitPrice: "1000.00",
           taxPercent: "18.00",
@@ -586,7 +586,7 @@ describe("ITC aging alerts", () => {
       supplierParty.id,
       [
         {
-          description: "Old Purchase - Critical",
+          itemName: "Old Purchase - Critical",
           quantity: "5",
           unitPrice: "2000.00",
           taxPercent: "18.00",
@@ -634,7 +634,7 @@ describe("ITC aging alerts", () => {
       supplierParty.id,
       [
         {
-          description: "Paid Old Purchase",
+          itemName: "Paid Old Purchase",
           quantity: "10",
           unitPrice: "500.00",
           taxPercent: "18.00",
@@ -690,7 +690,7 @@ describe("ITC dashboard", () => {
       invoiceDate: new Date(DASH_YEAR, DASH_MONTH - 1, 5).toISOString(),
       lineItems: [
         {
-          description: "Dashboard Test Item 1",
+          itemName: "Dashboard Test Item 1",
           quantity: "10",
           unitPrice: "100.00",
           taxPercent: "18",
@@ -706,7 +706,7 @@ describe("ITC dashboard", () => {
       invoiceDate: new Date(DASH_YEAR, DASH_MONTH - 1, 6).toISOString(),
       lineItems: [
         {
-          description: "Dashboard Test Item 2",
+          itemName: "Dashboard Test Item 2",
           quantity: "20",
           unitPrice: "200.00",
           taxPercent: "18",
@@ -751,7 +751,7 @@ describe("ITC dashboard", () => {
       partyId: supplierParty.id,
       lineItems: [
         {
-          description: "Today Purchase",
+          itemName: "Today Purchase",
           quantity: "5",
           unitPrice: "100.00",
           taxPercent: "18",
@@ -788,7 +788,7 @@ describe("GSTR-3B Table 4", () => {
       invoiceDate: new Date(T4_YEAR, T4_MONTH - 1, 5).toISOString(),
       lineItems: [
         {
-          description: "Normal Purchase for Table 4",
+          itemName: "Normal Purchase for Table 4",
           quantity: "10",
           unitPrice: "500.00",
           taxPercent: "18",
@@ -807,7 +807,7 @@ describe("GSTR-3B Table 4", () => {
       isReverseCharge: true,
       lineItems: [
         {
-          description: "Legal Services (RCM) for Table 4",
+          itemName: "Legal Services (RCM) for Table 4",
           quantity: "1",
           unitPrice: "20000.00",
           taxPercent: "18",
@@ -867,7 +867,7 @@ describe("ITC utilization", () => {
       invoiceDate: new Date(UTIL_YEAR, UTIL_MONTH - 1, 5).toISOString(),
       lineItems: [
         {
-          description: "Utilization Test Purchase",
+          itemName: "Utilization Test Purchase",
           quantity: "100",
           unitPrice: "100.00",
           taxPercent: "18",

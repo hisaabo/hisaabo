@@ -118,7 +118,9 @@ export const documentRouter = router({
         skipStockAdjustment,
         lineItems: sourceLineItems.map((li) => ({
           itemId: li.itemId ?? undefined,
-          description: li.description,
+          itemName: li.itemName,
+          // Carry forward optional notes verbatim. Null stays null.
+          description: li.description ?? null,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent,

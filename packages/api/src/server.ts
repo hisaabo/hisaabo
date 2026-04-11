@@ -496,6 +496,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     dueDate: invoice.dueDate?.toISOString(),
     type: invoice.type,
     lineItems: lineItems.map((li) => ({
+      itemName: li.itemName,
       description: li.description,
       quantity: li.quantity,
       unit: li.selectedUnit || (li.itemId ? itemUnitMap.get(li.itemId) : undefined) || undefined,
@@ -1305,7 +1306,11 @@ app.post("/store/:slug/order", async (c) => {
         return {
           invoiceId: invoice.id,
           itemId: li.itemId,
-          description: li.name,
+          // Online store orders: snapshot the item name into the required
+          // itemName column. Notes column stays null — store customers
+          // don't submit per-line comments through the ordering UI.
+          itemName: li.name,
+          description: null,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent,

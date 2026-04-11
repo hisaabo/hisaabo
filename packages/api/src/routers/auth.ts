@@ -344,14 +344,31 @@ export const authRouter = router({
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
     const tokenParam = `token=${encodeURIComponent(rawToken)}`;
-    const webUrl = `${baseUrl}/auth/verify?${tokenParam}`;
+
+    // Primary email CTA is ALWAYS the HTTPS link — email clients (Gmail,
+    // Outlook, Apple Mail, corporate gateways) strip or refuse to render
+    // anchors with custom URL schemes like `hisaabo://`, treating them as
+    // phishing / protocol-hijack vectors. Shipping the deep link as the
+    // primary `<a href="...">` produces a plain-text, non-clickable line
+    // in most inboxes.
+    //
+    // When the sign-in was initiated from the desktop or mobile app we
+    // thread the `source` through the HTTPS URL as a query param so the
+    // /auth/verify page can hand off to the native app via the `hisaabo://`
+    // scheme from a real browser (where custom schemes ARE honored by the
+    // OS), instead of consuming the token inside the browser session.
+    const sourceSuffix =
+      input.source === "desktop" || input.source === "mobile"
+        ? `&source=${input.source}`
+        : "";
+    const webUrl = `${baseUrl}/auth/verify?${tokenParam}${sourceSuffix}`;
     const deepLinkUrl = `hisaabo://verify?${tokenParam}`;
 
-    // Primary link matches the initiator: desktop/mobile get the deep link,
-    // web gets the regular HTTPS link. The other is shown as secondary.
-    const isAppSource = input.source === "desktop" || input.source === "mobile";
-    const primaryUrl = isAppSource ? deepLinkUrl : webUrl;
-    const secondaryUrl = isAppSource ? webUrl : deepLinkUrl;
+    // Secondary is the raw deep link — some email clients do render it
+    // (and it serves as a copy-paste fallback) but we no longer depend
+    // on its clickability.
+    const primaryUrl = webUrl;
+    const secondaryUrl = deepLinkUrl;
 
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)

@@ -136,6 +136,7 @@ export const ewayBillRouter = router({
       const lineItemRows = await ctx.db
         .select({
           id: invoiceItems.id,
+          itemName: invoiceItems.itemName,
           description: invoiceItems.description,
           quantity: invoiceItems.quantity,
           unitPrice: invoiceItems.unitPrice,
@@ -240,6 +241,7 @@ export const ewayBillRouter = router({
       };
 
       const lineItemsForEWB: LineItemForEWB[] = lineItemRows.map((li) => ({
+        itemName: li.itemName,
         description: li.description,
         quantity: li.quantity,
         unitPrice: li.unitPrice,

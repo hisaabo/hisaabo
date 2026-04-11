@@ -259,7 +259,7 @@ export const businessRouter = router({
       parties: toCsv(partiesData, ["name", "type", "phone", "email", "gstin", "billingAddress", "city", "state", "pincode", "openingBalance", "category"]),
       items: toCsv(itemsData, ["name", "itemType", "unit", "salePrice", "purchasePrice", "taxPercent", "hsn", "sku", "stockQuantity", "category"]),
       invoices: toCsv(invoicesData, ["invoiceNumber", "type", "documentType", "invoiceDate", "dueDate", "status", "subtotal", "taxAmount", "discountAmount", "totalAmount", "amountPaid", "notes"]),
-      lineItems: toCsv(lineItemsData.map(r => r.invoice_items), ["invoiceId", "description", "quantity", "unitPrice", "taxPercent", "taxAmount", "discountPercent", "totalAmount"]),
+      lineItems: toCsv(lineItemsData.map(r => r.invoice_items), ["invoiceId", "itemName", "description", "quantity", "unitPrice", "taxPercent", "taxAmount", "discountPercent", "totalAmount"]),
       payments: toCsv(paymentsData, ["paymentNumber", "paymentDate", "amount", "mode", "referenceNumber", "notes"]),
       expenses: toCsv(expensesData, ["category", "description", "amount", "mode", "expenseDate", "referenceNumber"]),
     };

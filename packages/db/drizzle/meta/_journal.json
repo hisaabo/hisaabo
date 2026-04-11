@@ -50,6 +50,13 @@
       "when": 1775751260771,
       "tag": "0006_medical_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775917396432,
+      "tag": "0007_strong_mantis",
+      "breakpoints": true
     }
   ]
 }

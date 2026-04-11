@@ -241,7 +241,12 @@ export const invoiceItems = pgTable("invoice_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
   itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
-  description: text("description").notNull(),
+  // Snapshot of the item name at billing time. Required — frozen at create.
+  // Preserves the name the customer was billed for even if the item is later renamed.
+  itemName: text("item_name").notNull(),
+  // Optional free-text line notes (e.g. "Keep separate from order #42").
+  // Not populated by imports — only set when the user types something.
+  description: text("description"),
   quantity: numeric("quantity", { precision: 15, scale: 3 }).notNull(),
   unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).notNull(),
   taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
@@ -581,7 +586,8 @@ export const recurringInvoiceTemplates = pgTable("recurring_invoice_templates", 
   customIntervalDays: integer("custom_interval_days"), // only when frequency = 'custom'
   lineItems: jsonb("line_items").$type<Array<{
     itemId?: string;
-    description: string;
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent: string;

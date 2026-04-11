@@ -255,7 +255,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             });
             return {
               itemId: li.itemId || null,
-              description: li.description,
+              itemName: li.itemName,
+              description: li.description || null,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",

@@ -837,7 +837,7 @@ export const reportsRouter = router({
         return ctx.db
           .select({
             itemId: invoiceItems.itemId,
-            itemName: sql<string>`COALESCE(${items.name}, ${invoiceItems.description})`,
+            itemName: sql<string>`COALESCE(${items.name}, ${invoiceItems.itemName})`,
             category: items.category,
             unit: items.unit,
             soldQty: sql<string>`SUM(${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1))::text`,
@@ -857,7 +857,7 @@ export const reportsRouter = router({
           .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
           .leftJoin(items, eq(items.id, invoiceItems.itemId))
           .where(and(...periodConditions))
-          .groupBy(invoiceItems.itemId, items.name, items.category, items.unit, invoiceItems.description, items.purchasePrice)
+          .groupBy(invoiceItems.itemId, items.name, items.category, items.unit, invoiceItems.itemName, items.purchasePrice)
           .orderBy(sortExpr);
       }
 

@@ -199,7 +199,14 @@ export const invoiceChargeSchema = z.object({
 
 export const invoiceLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
-  description: z.string().min(1).max(500),
+  // Snapshot of the item name at billing time. Required on every line — this
+  // is the primary display text on invoices and must be frozen at create
+  // time so future renames of the underlying item don't rewrite history.
+  itemName: z.string().min(1).max(200),
+  // Optional free-text line notes (e.g. "Keep separate from order #42").
+  // Nullable because the DB column is nullable and the client may pass null
+  // explicitly to clear notes. Empty string is coerced to null downstream.
+  description: z.string().max(500).optional().nullable(),
   quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
   unitPrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
   taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0").refine((v) => parseFloat(v) <= 56, { message: "Tax percent cannot exceed 56%" }),
@@ -422,7 +429,10 @@ export type RecurringTemplateStatus = (typeof recurringTemplateStatuses)[number]
 
 export const recurringLineItemSchema = z.object({
   itemId: z.string().uuid().optional(),
-  description: z.string().min(1).max(500),
+  // Mirrors invoiceLineItemSchema — itemName is the required snapshot and
+  // description is the optional free-text notes field.
+  itemName: z.string().min(1).max(200),
+  description: z.string().max(500).optional().nullable(),
   quantity: z.string().regex(/^\d+(\.\d{1,3})?$/).refine((v) => parseFloat(v) > 0, { message: "Quantity must be greater than 0" }),
   unitPrice: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
   taxPercent: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),

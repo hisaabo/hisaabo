@@ -357,9 +357,11 @@ export default function QuotationCreateScreen() {
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
       roundOff: "0",
+      // Post Bug B: backend expects itemName (required); map local
+      // description display onto it until Stage 3 splits client state.
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        description: li.description.trim(),
+        itemName: li.description.trim(),
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

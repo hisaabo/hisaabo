@@ -70,7 +70,7 @@ async function createSaleInvoice(totalAmount: string) {
     invoiceDate: new Date().toISOString(),
     lineItems: [
       {
-        description: `Gateway test invoice for ${totalAmount}`,
+        itemName: `Gateway test invoice for ${totalAmount}`,
         quantity: "1",
         unitPrice: totalAmount,
         taxPercent: "0",

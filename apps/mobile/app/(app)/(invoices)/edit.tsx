@@ -483,9 +483,11 @@ export default function InvoiceEditScreen() {
       invoiceDate: invoiceDate.toISOString(),
       dueDate: dueDate ? dueDate.toISOString() : null,
       notes: notes.trim() || null,
+      // Post Bug B: map local description (display) onto backend itemName.
+      // Stage 3 will split the client state into two fields.
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        description: li.description.trim(),
+        itemName: li.description.trim(),
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

@@ -366,8 +366,11 @@ describe("createItemSchema — validates item creation with mode constraints", (
 // invoiceLineItemSchema — individual line item on an invoice
 // ─────────────────────────────────────────────────────────────────────────────
 describe("invoiceLineItemSchema — validates a single invoice line item", () => {
+  // Post Bug B: itemName is the required snapshot of the item name; the
+  // description column on invoice_items is now an optional free-text
+  // notes field.
   const validLine = {
-    description: "Organic wheat flour 10kg",
+    itemName: "Organic wheat flour 10kg",
     quantity: "10",
     unitPrice: "85.00",
     taxPercent: "5",
@@ -378,11 +381,42 @@ describe("invoiceLineItemSchema — validates a single invoice line item", () =>
     expect(invoiceLineItemSchema.safeParse(validLine).success).toBe(true);
   });
 
-  it("rejects an empty description", () => {
-    // Blank descriptions produce unreadable invoices — blocked at schema level.
-    const result = invoiceLineItemSchema.safeParse({ ...validLine, description: "" });
+  it("rejects an empty itemName", () => {
+    // Blank item names produce unreadable invoices — blocked at the
+    // schema level. itemName is required min(1) post Bug B.
+    const result = invoiceLineItemSchema.safeParse({ ...validLine, itemName: "" });
     expect(result.success).toBe(false);
-    expect(result.error?.issues[0].path).toContain("description");
+    expect(result.error?.issues[0].path).toContain("itemName");
+  });
+
+  it("rejects a missing itemName", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { itemName: _dropped, ...noName } = validLine as any;
+    void _dropped;
+    const result = invoiceLineItemSchema.safeParse(noName);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.path.includes("itemName"))).toBe(true);
+  });
+
+  it("accepts an optional description (free-text notes)", () => {
+    const result = invoiceLineItemSchema.safeParse({
+      ...validLine,
+      description: "Keep separate from order #42",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts description set to null (clears existing notes)", () => {
+    const result = invoiceLineItemSchema.safeParse({ ...validLine, description: null });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a description longer than 500 characters", () => {
+    const result = invoiceLineItemSchema.safeParse({
+      ...validLine,
+      description: "A".repeat(501),
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects a quantity of 0 (quantity must be strictly greater than 0)", () => {
@@ -447,8 +481,10 @@ describe("invoiceLineItemSchema — validates a single invoice line item", () =>
 // createInvoiceSchema — full invoice creation
 // ─────────────────────────────────────────────────────────────────────────────
 describe("createInvoiceSchema — validates invoice creation input", () => {
+  // Post Bug B: itemName is the required snapshot; description is the
+  // optional free-text notes column.
   const validLineItem = {
-    description: "Laptop Dell Inspiron 15",
+    itemName: "Laptop Dell Inspiron 15",
     quantity: "2",
     unitPrice: "55000.00",
     taxPercent: "18",
