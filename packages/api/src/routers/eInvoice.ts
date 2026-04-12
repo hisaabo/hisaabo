@@ -249,7 +249,7 @@ export const eInvoiceRouter = router({
           })
           .where(eq(eInvoiceConfigs.businessId, ctx.businessId))
           .returning();
-        return updated;
+        return decryptEInvoiceConfig(updated!);
       }
 
       const [created] = await ctx.db
@@ -266,7 +266,7 @@ export const eInvoiceRouter = router({
           thresholdCrore: input.thresholdCrore,
         })
         .returning();
-      return created;
+      return decryptEInvoiceConfig(created!);
     }),
 
   /**
