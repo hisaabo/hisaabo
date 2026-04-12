@@ -552,10 +552,12 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                                 "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
                                 row.type === "payment"
                                   ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                                  : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                                  : row.type === "credit_note" || row.type === "sales_return"
+                                    ? "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
+                                    : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
                               )}
                             >
-                              {row.type === "payment" ? "Payment" : row.type === "purchase" ? "Purchase" : "Invoice"}
+                              {{ payment: "Payment", purchase: "Purchase", invoice: "Invoice", credit_note: "Credit Note", sales_return: "Sales Return", purchase_return: "Purchase Return", debit_note: "Debit Note" }[row.type] ?? row.type}
                             </span>
                           </td>
                           <td className="font-mono text-[13px] text-text-secondary">{row.documentNumber}</td>
@@ -606,18 +608,29 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                                 "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
                                 row.type === "payment"
                                   ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                                  : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                                  : row.type === "credit_note" || row.type === "sales_return"
+                                    ? "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
+                                    : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
                               )}
                             >
-                              {row.type === "payment" ? "Payment" : row.type === "purchase" ? "Purchase" : "Invoice"}
+                              {{ payment: "Payment", purchase: "Purchase", invoice: "Invoice", credit_note: "Credit Note", sales_return: "Sales Return", purchase_return: "Purchase Return", debit_note: "Debit Note" }[row.type] ?? row.type}
                             </span>
                           </td>
                           <td>
                             <LinkButton
                               className="font-mono text-[13px]"
                               onClick={() => {
+                                const routes: Record<string, string> = {
+                                  payment: "/payments",
+                                  invoice: "/invoices",
+                                  purchase: "/invoices",
+                                  credit_note: "/credit-notes",
+                                  sales_return: "/sales-returns",
+                                  purchase_return: "/invoices",
+                                  debit_note: "/invoices",
+                                };
                                 onClose();
-                                navigate({ to: row.type === "payment" ? "/payments" : "/invoices" });
+                                navigate({ to: routes[row.type] ?? "/invoices", search: { id: row.documentId } });
                               }}
                             >
                               {row.documentNumber}

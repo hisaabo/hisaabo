@@ -789,10 +789,11 @@ export const partyRouter = router({
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
       const toDate = input.toDate ? new Date(input.toDate) : null;
 
-      // UNION ALL: invoices (debit for sales, credit for purchases) + payments
-      // Uses raw SQL with parameterised values — column names are safe literals.
+      // UNION ALL: invoices + CN/SR/PR/DN + payments
+      // CN/SR/PR reverse the normal debit/credit direction.
       const ledgerRows = await ctx.db.execute(sql`
         WITH ledger AS (
+          -- Sale invoices: debit (customer owes us)
           SELECT
             invoice_date AS entry_date,
             'invoice'::text AS entry_type,
@@ -806,9 +807,12 @@ export const partyRouter = router({
             AND business_id = ${ctx.businessId}
             AND type = 'sale'
             AND document_type = 'invoice'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
 
           UNION ALL
 
+          -- Purchase invoices: credit (we owe supplier)
           SELECT
             invoice_date AS entry_date,
             'purchase'::text AS entry_type,
@@ -822,9 +826,88 @@ export const partyRouter = router({
             AND business_id = ${ctx.businessId}
             AND type = 'purchase'
             AND document_type = 'invoice'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
 
           UNION ALL
 
+          -- Sale credit notes / sales returns: credit (reduces what customer owes)
+          SELECT
+            invoice_date AS entry_date,
+            document_type::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            total_amount::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type IN ('credit_note', 'sales_return')
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Purchase credit notes / purchase returns: debit (reduces what we owe)
+          SELECT
+            invoice_date AS entry_date,
+            document_type::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            total_amount::numeric AS debit,
+            0::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'purchase'
+            AND document_type IN ('credit_note', 'purchase_return')
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Sale debit notes: debit (customer owes more)
+          SELECT
+            invoice_date AS entry_date,
+            'debit_note'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            total_amount::numeric AS debit,
+            0::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type = 'debit_note'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Purchase debit notes: credit (we owe more)
+          SELECT
+            invoice_date AS entry_date,
+            'debit_note'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            total_amount::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'purchase'
+            AND document_type = 'debit_note'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Payments received from customer: credit
           SELECT
             payment_date AS entry_date,
             'payment'::text AS entry_type,

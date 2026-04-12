@@ -1,13 +1,17 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { z } from "zod";
 import { DocumentListPage } from "@/components/DocumentListPage";
 
 export const Route = createFileRoute("/delivery-challans")({
+  validateSearch: (search) => z.object({ id: z.string().uuid().optional() }).parse(search),
   component: DeliveryChallansPage,
 });
 
 function DeliveryChallansPage() {
+  const { id } = useSearch({ from: "/delivery-challans" });
   return (
     <DocumentListPage
+      initialSelectedId={id}
       config={{
         trpcRouter: "deliveryChallan",
         documentType: "delivery_challan",

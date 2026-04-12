@@ -185,8 +185,12 @@ export function DocumentCreator({
   useEffect(() => {
     if (!editData) return;
     setPartyId(editData.partyId);
-    setInvoiceDate(new Date(editData.invoiceDate).toISOString().split("T")[0]);
-    if (editData.dueDate) setDueDate(new Date(editData.dueDate).toISOString().split("T")[0]);
+    if (isEditing) {
+      // Editing: use the document's own date
+      setInvoiceDate(new Date(editData.invoiceDate).toISOString().split("T")[0]);
+      if (editData.dueDate) setDueDate(new Date(editData.dueDate).toISOString().split("T")[0]);
+    }
+    // Prefill from source: keep today's date (already the default)
     setNotes(editData.notes || "");
     setTerms(editData.termsAndConditions || "");
     setRoundOff(editData.roundOff || "0");
@@ -553,15 +557,17 @@ export function DocumentCreator({
               className="input"
             />
           </div>
-          <div>
-            <label className="label">Due date</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => { setDueDate(e.target.value); setDueDateManuallySet(true); }}
-              className="input"
-            />
-          </div>
+          {!["credit_note", "sales_return", "purchase_return"].includes(documentType) && (
+            <div>
+              <label className="label">Due date</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => { setDueDate(e.target.value); setDueDateManuallySet(true); }}
+                className="input"
+              />
+            </div>
+          )}
         </div>
 
         {/* Line items */}

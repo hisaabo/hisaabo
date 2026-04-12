@@ -525,15 +525,41 @@ export default function PartyDetailScreen() {
                   </Text>
                 </View>
                 {ledgerData.data.map((entry, idx) => {
-                  const docTypes = ["invoice", "credit_note", "sales_return", "purchase_return", "debit_note"];
+                  const docTypes = ["invoice", "purchase", "credit_note", "sales_return", "purchase_return", "debit_note"];
                   const isTappable = docTypes.includes(entry.type) || entry.type === "payment";
                   const docRoutes: Record<string, string> = {
                     invoice: "/(invoices)/",
+                    purchase: "/(invoices)/",
                     credit_note: "/(more)/credit-notes/",
                     sales_return: "/(more)/sales-returns/",
                     debit_note: "/(invoices)/",
                     purchase_return: "/(invoices)/",
                   };
+                  const TYPE_LABELS: Record<string, string> = {
+                    invoice: "Invoice",
+                    purchase: "Purchase",
+                    payment: "Payment",
+                    credit_note: "Credit Note",
+                    sales_return: "Sales Return",
+                    purchase_return: "Purchase Return",
+                    debit_note: "Debit Note",
+                  };
+                  const isCreditType = ["credit_note", "sales_return", "purchase_return", "debit_note"].includes(entry.type);
+                  const typeIconName: React.ComponentProps<typeof Ionicons>["name"] = entry.type === "payment"
+                    ? "cash-outline"
+                    : isCreditType
+                      ? "arrow-undo-outline"
+                      : "receipt-outline";
+                  const typeIconColor = entry.type === "payment"
+                    ? colors.success
+                    : isCreditType
+                      ? "#a78bfa"
+                      : colors.brand;
+                  const typeIconBgStyle = entry.type === "payment"
+                    ? styles.ledgerTypeIconPayment
+                    : isCreditType
+                      ? styles.ledgerTypeIconCredit
+                      : styles.ledgerTypeIconInvoice;
                   const handleLedgerRowPress = () => {
                     haptic.light();
                     if (entry.type === "payment") {
@@ -550,25 +576,8 @@ export default function PartyDetailScreen() {
                       activeOpacity={0.6}
                     >
                       <View style={styles.ledgerIconCol}>
-                        <View
-                          style={[
-                            styles.ledgerTypeIcon,
-                            entry.type === "payment"
-                              ? styles.ledgerTypeIconPayment
-                              : styles.ledgerTypeIconInvoice,
-                          ]}
-                        >
-                          <Ionicons
-                            name={
-                              entry.type === "payment"
-                                ? "cash-outline"
-                                : "receipt-outline"
-                            }
-                            size={14}
-                            color={
-                              entry.type === "payment" ? colors.success : colors.brand
-                            }
-                          />
+                        <View style={[styles.ledgerTypeIcon, typeIconBgStyle]}>
+                          <Ionicons name={typeIconName} size={14} color={typeIconColor} />
                         </View>
                       </View>
                       <View style={styles.ledgerMiddle}>
@@ -576,7 +585,7 @@ export default function PartyDetailScreen() {
                           {entry.documentNumber}
                         </Text>
                         <Text style={styles.ledgerDate}>
-                          {formatDate(entry.date)}
+                          {TYPE_LABELS[entry.type] ?? entry.type} · {formatDate(entry.date)}
                         </Text>
                         {entry.status && (
                           <Text style={styles.ledgerStatus}>{entry.status}</Text>
@@ -602,17 +611,8 @@ export default function PartyDetailScreen() {
                   ) : (
                     <View key={`${entry.documentId}-${idx}`} style={styles.ledgerRow}>
                       <View style={styles.ledgerIconCol}>
-                        <View
-                          style={[
-                            styles.ledgerTypeIcon,
-                            styles.ledgerTypeIconInvoice,
-                          ]}
-                        >
-                          <Ionicons
-                            name="receipt-outline"
-                            size={14}
-                            color={colors.brand}
-                          />
+                        <View style={[styles.ledgerTypeIcon, styles.ledgerTypeIconInvoice]}>
+                          <Ionicons name="receipt-outline" size={14} color={colors.brand} />
                         </View>
                       </View>
                       <View style={styles.ledgerMiddle}>
@@ -730,22 +730,27 @@ export default function PartyDetailScreen() {
                 {reportData.entries.map((entry, idx) => {
                   const bal = parseFloat(entry.runningBalance);
                   const balPositive = bal >= 0;
+                  const isCreditTypeReport = ["credit_note", "sales_return", "purchase_return", "debit_note"].includes(entry.type);
+                  const reportIconName: React.ComponentProps<typeof Ionicons>["name"] = entry.type === "payment"
+                    ? "cash-outline"
+                    : isCreditTypeReport
+                      ? "arrow-undo-outline"
+                      : "receipt-outline";
+                  const reportIconColor = entry.type === "payment"
+                    ? colors.success
+                    : isCreditTypeReport
+                      ? "#a78bfa"
+                      : colors.brand;
+                  const reportIconBgStyle = entry.type === "payment"
+                    ? styles.ledgerTypeIconPayment
+                    : isCreditTypeReport
+                      ? styles.ledgerTypeIconCredit
+                      : styles.ledgerTypeIconInvoice;
                   return (
                     <View key={`${entry.documentId}-${idx}`} style={styles.reportEntryRow}>
                       <View style={styles.reportEntryLeft}>
-                        <View
-                          style={[
-                            styles.ledgerTypeIcon,
-                            entry.type === "payment"
-                              ? styles.ledgerTypeIconPayment
-                              : styles.ledgerTypeIconInvoice,
-                          ]}
-                        >
-                          <Ionicons
-                            name={entry.type === "payment" ? "cash-outline" : "receipt-outline"}
-                            size={13}
-                            color={entry.type === "payment" ? colors.success : colors.brand}
-                          />
+                        <View style={[styles.ledgerTypeIcon, reportIconBgStyle]}>
+                          <Ionicons name={reportIconName} size={13} color={reportIconColor} />
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.reportEntryRef} numberOfLines={1}>
@@ -1304,6 +1309,9 @@ const styles = StyleSheet.create({
   },
   ledgerTypeIconPayment: {
     backgroundColor: "rgba(16,185,129,0.15)",
+  },
+  ledgerTypeIconCredit: {
+    backgroundColor: "rgba(147,51,234,0.15)",
   },
   ledgerMiddle: {
     flex: 1,

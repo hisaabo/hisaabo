@@ -19,6 +19,7 @@ const STATUS_TABS = [
 
 function ProformaInvoicesPage() {
   const navigate = useNavigate();
+  const { id: idFromSearch } = useSearch({ from: "/proforma-invoices" });
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const utils = trpc.useUtils();
 
@@ -42,6 +43,7 @@ function ProformaInvoicesPage() {
 
   return (
     <DocumentListPage
+      initialSelectedId={idFromSearch}
       config={{
         trpcRouter: "proforma",
         documentType: "proforma",
