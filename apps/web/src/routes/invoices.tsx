@@ -602,9 +602,6 @@ function InvoiceDetailPanel({
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.quantity}</td>
                       <td className="px-3 py-2 text-text-secondary text-xs align-top">
                         {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
-                        {li.conversionFactor && parseFloat(li.conversionFactor) > 1 && (
-                          <span className="text-text-tertiary"> (×{li.conversionFactor})</span>
-                        )}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{formatCurrency(li.unitPrice)}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.taxPercent}%</td>

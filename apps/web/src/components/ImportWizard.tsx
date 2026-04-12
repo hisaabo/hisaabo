@@ -1625,6 +1625,12 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
             await updateItemMut.mutateAsync({
               id: item.id,
               data: {
+                // Sync the item's base unit to the conflict's baseUnit.
+                // Without this, the item may have been imported with a
+                // different default (e.g. "pcs" from Rate List) while
+                // conflict detection picked "kg" as base — resulting in
+                // both base and alt being "pcs".
+                unit: conflict.baseUnit as any,
                 itemMode: "alt_units" as const,
                 unitVariants: resolvedAlts,
               },
