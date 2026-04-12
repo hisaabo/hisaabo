@@ -183,7 +183,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: shipment.id,
         metadata: { trackingNumber: input.trackingNumber || null },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return shipment;
@@ -268,7 +268,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: input.id,
         metadata: { shipmentId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return shipment;
@@ -304,7 +304,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: input.id,
         metadata: { shipmentId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

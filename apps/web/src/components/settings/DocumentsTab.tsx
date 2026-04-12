@@ -115,7 +115,6 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
                   isPending={updateSeqMutation.isPending}
                   onConfirm={(newValue) =>
                     updateSeqMutation.mutate({
-                      businessId: biz.id,
                       documentType: doc.key,
                       newNumber: newValue,
                     })

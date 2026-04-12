@@ -277,7 +277,6 @@ resp = httpx.post(
       description: "Set the next auto-generated document number for a specific document type (invoice, payment, quotation, credit note, delivery challan, proforma). The new number must be greater than or equal to the current value \u2014 you cannot go backwards.",
       auth: "protected",
       input: [
-        { name: "businessId", type: "string (UUID)", required: true, description: "Business ID" },
         { name: "documentType", type: "enum", required: true, description: "Document type to update", enumValues: ["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"] },
         { name: "newNumber", type: "number", required: true, description: "New starting number (must be >= current value)" },
       ],
@@ -289,9 +288,9 @@ resp = httpx.post(
         curl: `curl -X POST https://api.hisaabo.in/api/trpc/business.updateSequenceNumber \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
-  -d '{"json":{"businessId":"biz-uuid","documentType":"invoice","newNumber":100}}'`,
+  -H "x-business-id: YOUR_BUSINESS_ID" \\
+  -d '{"json":{"documentType":"invoice","newNumber":100}}'`,
         javascript: `const result = await trpc.business.updateSequenceNumber.mutate({
-  businessId: "biz-uuid",
   documentType: "invoice",
   newNumber: 100,
 });
@@ -300,9 +299,8 @@ console.log("Previous:", result.previousNumber, "New:", result.newNumber);`,
 
 resp = httpx.post(
     "https://api.hisaabo.in/api/trpc/business.updateSequenceNumber",
-    headers={"Authorization": f"Bearer {session_token}"},
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
     json={"json": {
-        "businessId": "biz-uuid",
         "documentType": "invoice",
         "newNumber": 100,
     }},

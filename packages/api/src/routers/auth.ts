@@ -8,7 +8,7 @@ import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, in
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
-import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
+import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 
@@ -35,6 +35,8 @@ function generateSlug(name: string): string {
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
+
+const IS_SECURE = (process.env.APP_URL || "").startsWith("https");
 
 // Safe IP extraction from a raw Request — mirrors the logic in server.ts getClientIp().
 // Prefers cf-connecting-ip (Cloudflare, strips spoofed values at CDN edge).
@@ -104,6 +106,12 @@ async function createSessionForUser(
 
   // Evict oldest sessions if at plan limit (FIFO, never blocks login)
   await enforceSessionLimit(userId);
+
+  const previousSessionId = getSessionIdFromRequest(ctx.req);
+  if (previousSessionId && !previousSessionId.startsWith("hisaabo_key_")) {
+    controlDb.delete(sessions).where(eq(sessions.id, previousSessionId)).catch(() => {});
+    invalidateSessionCache(previousSessionId);
+  }
 
   const sessionId = nanoid(64);
   await controlDb.insert(sessions).values({
@@ -594,6 +602,7 @@ export const authRouter = router({
 
     await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
 
+    revokeAllUserSessions(ctx.user!.id);
     for (const s of userSessions) {
       invalidateSessionCache(s.id);
     }
@@ -685,7 +694,7 @@ export const authRouter = router({
 });
 
 function setSessionCookie(headers: Headers, sessionId: string) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = IS_SECURE ? "; Secure" : "";
   headers.set(
     "Set-Cookie",
     `session_id=${sessionId}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${30 * 24 * 60 * 60}`
@@ -693,5 +702,6 @@ function setSessionCookie(headers: Headers, sessionId: string) {
 }
 
 function clearSessionCookie(headers: Headers) {
-  headers.set("Set-Cookie", "session_id=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0");
+  const secure = IS_SECURE ? "; Secure" : "";
+  headers.set("Set-Cookie", `session_id=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`);
 }

@@ -188,7 +188,6 @@ export const paymentRouter = router({
 
   create: memberProcedure.input(createPaymentSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Payment");
-    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const payment = await ctx.db.transaction(async (tx) => {
       // Security: validate that partyId belongs to the current business.
       const [partyCheck] = await tx.select({ id: parties.id })
@@ -362,7 +361,7 @@ export const paymentRouter = router({
       entityType: "payment",
       entityId: payment.id,
       metadata: { paymentNumber: payment.paymentNumber, amount: payment.amount, mode: payment.mode },
-      ipAddress,
+      ipAddress: ctx.ipAddress,
     });
 
     return payment;
@@ -669,7 +668,7 @@ export const paymentRouter = router({
       entityType: "payment",
       entityId: updated.id,
       metadata: { paymentNumber: updated.paymentNumber },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return updated;
@@ -679,7 +678,6 @@ export const paymentRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Payment");
-      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       const result = await ctx.db.transaction(async (tx) => {
         const [payment] = await tx.select()
           .from(payments)
@@ -791,7 +789,7 @@ export const paymentRouter = router({
           entityType: "payment",
           entityId: input.id,
           metadata: { paymentNumber: result.payment.paymentNumber, amount: result.payment.amount },
-          ipAddress,
+          ipAddress: ctx.ipAddress,
         });
       }
 
@@ -975,7 +973,7 @@ export const paymentRouter = router({
           entityType: "payment",
           entityId: result.paymentIds[0],
           metadata: { paymentId: result.paymentIds[0], bankAccountId: input.bankAccountId, totalAssigned: result.assigned },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
       }
 

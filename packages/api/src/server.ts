@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -126,6 +127,7 @@ function isSameOrigin(c: Context): boolean {
 // Same-origin unauthenticated: 60 (login attempts, public pages)
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
+app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   const ip = getClientIp(c);
   const hasSession = c.req.header("cookie")?.includes("session_id=")

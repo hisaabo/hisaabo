@@ -184,7 +184,7 @@ export const targetRouter = router({
       entityType: "salesTarget",
       entityId: target.id,
       metadata: { period: input.periodType },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return target;
@@ -309,7 +309,7 @@ export const targetRouter = router({
       entityType: "salesTarget",
       entityId: id,
       metadata: { targetId: id },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return updated;
@@ -345,7 +345,7 @@ export const targetRouter = router({
         entityType: "salesTarget",
         entityId: input.id,
         metadata: { targetId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

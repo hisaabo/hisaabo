@@ -81,7 +81,6 @@ export function App() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [isNewCustomer, setIsNewCustomer] = useState(false);
-  const [turnstileToken, setTurnstileToken] = useState("");
 
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
@@ -275,11 +274,10 @@ export function App() {
           slug={slug}
           accentColor={catalog.business.accentColor || "var(--store-accent)"}
           onBack={() => setView("cart")}
-          onVerified={(phone, name, isNew, token) => {
+          onVerified={(phone, name, isNew) => {
             setCustomerPhone(phone);
             setCustomerName(name);
             setIsNewCustomer(isNew);
-            setTurnstileToken(token);
             setView("checkout");
           }}
         />
@@ -299,7 +297,6 @@ export function App() {
           customerPhone={customerPhone}
           customerName={customerName}
           isNewCustomer={isNewCustomer}
-          turnstileToken={turnstileToken}
           onBack={() => setView("phone-verify")}
           onSuccess={handleOrderSuccess}
         />

@@ -20,7 +20,7 @@ export const importItems = adminProcedure
       stockQuantity: z.string().default("0"),
       sku: z.string().optional(),
       category: z.string().optional(),
-    })),
+    })).max(5000),
   }))
   .mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "manage", "Import");

@@ -366,7 +366,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityType: config.documentType,
           entityId: doc.id,
           metadata: { invoiceNumber: doc.invoiceNumber, type: config.documentType },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return doc;
@@ -406,7 +406,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityType: config.documentType,
           entityId: input.id,
           metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: input.status },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return doc;
@@ -488,7 +488,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             entityType: config.documentType,
             entityId: input.id,
             metadata: { invoiceNumber: deleteResult.invoiceNumber },
-            ipAddress: ctx.req.headers.get("x-forwarded-for"),
+            ipAddress: ctx.ipAddress,
           });
         }
 

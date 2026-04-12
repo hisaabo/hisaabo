@@ -37,7 +37,7 @@ export const importInvoices = adminProcedure
         taxPercent: z.string().default("0"),
         discountPercent: z.string().default("0"),
       })).optional(),
-    })),
+    })).max(5000),
   }))
   .mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "manage", "Import");

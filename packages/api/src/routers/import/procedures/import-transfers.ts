@@ -15,7 +15,7 @@ export const importTransfers = adminProcedure
       toMode: z.string(),
       notes: z.string().optional(),
       txnNo: z.string().optional(),
-    })),
+    })).max(5000),
   }))
   .mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "manage", "Import");

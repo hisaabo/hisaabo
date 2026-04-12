@@ -93,7 +93,7 @@ export const bankAccountRouter = router({
         entityType: "bankAccount",
         entityId: account.id,
         metadata: { accountName: account.accountName },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return account;
@@ -154,7 +154,7 @@ export const bankAccountRouter = router({
         entityType: "bankAccount",
         entityId: account.id,
         metadata: { accountName: account.accountName },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return account;
@@ -212,7 +212,7 @@ export const bankAccountRouter = router({
         entityType: "bankAccount",
         entityId: input.id,
         metadata: { accountId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return result;
@@ -367,7 +367,7 @@ export const bankAccountRouter = router({
         entityType: "bankTransaction",
         entityId: txn.id,
         metadata: { amount: txn.amount, type: txn.type },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return txn;
@@ -484,7 +484,7 @@ export const bankAccountRouter = router({
         entityType: "bankTransaction",
         entityId: transferResult.withdrawal.id,
         metadata: { amount: input.amount, fromAccountId: input.fromAccountId, toAccountId: input.toAccountId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return transferResult;
@@ -604,7 +604,7 @@ export const bankAccountRouter = router({
         entityType: "paymentGatewayConfig",
         entityId: config.id,
         metadata: { bankAccountId: input.bankAccountId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return config;
@@ -646,7 +646,7 @@ export const bankAccountRouter = router({
         entityType: "paymentGatewayConfig",
         entityId: existing.id,
         metadata: { bankAccountId: input.bankAccountId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

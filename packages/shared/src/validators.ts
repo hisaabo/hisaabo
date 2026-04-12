@@ -252,7 +252,7 @@ export const paymentModes = ["cash", "bank", "upi", "cheque", "other", "credit_c
 
 export const paymentAllocationSchema = z.object({
   invoiceId: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
 });
 
 export const createPaymentSchema = z.object({
@@ -271,7 +271,7 @@ export const createPaymentSchema = z.object({
 
 export const updatePaymentSchema = z.object({
   id: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }).optional(),
   discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
   mode: z.enum(paymentModes).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),
@@ -287,7 +287,7 @@ export const updatePaymentSchema = z.object({
 export const createExpenseSchema = z.object({
   category: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
   mode: z.enum(paymentModes),
   expenseDate: z.string().datetime().optional(),
   referenceNumber: z.string().max(100).optional(),
@@ -339,7 +339,7 @@ export const updateBankAccountSchema = createBankAccountSchema.partial();
 export const createBankTransactionSchema = z.object({
   bankAccountId: z.string().uuid(),
   type: z.enum(bankTransactionTypes),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
   description: z.string().max(500).optional(),
   referenceType: z.string().max(50).optional(),
   referenceId: z.string().uuid().optional(),
@@ -349,7 +349,7 @@ export const createBankTransactionSchema = z.object({
 export const bankTransferSchema = z.object({
   fromAccountId: z.string().uuid(),
   toAccountId: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
   description: z.string().max(500).optional(),
   transactionDate: z.string().datetime().optional(),
 });

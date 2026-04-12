@@ -33,7 +33,7 @@ function InviteAcceptPage() {
     if (sessionLoading) return;
 
     if (!session?.user) {
-      localStorage.setItem("pendingInviteToken", token);
+      sessionStorage.setItem("pendingInviteToken", token);
       navigate({ to: "/login", search: { invite: "1" } });
       return;
     }
@@ -44,7 +44,7 @@ function InviteAcceptPage() {
     (async () => {
       try {
         const data = await acceptMutation.mutateAsync({ token });
-        localStorage.removeItem("pendingInviteToken");
+        sessionStorage.removeItem("pendingInviteToken");
         await utils.auth.me.refetch();
         await utils.tenant.list.refetch();
         // Show org choice instead of navigating directly
@@ -52,10 +52,10 @@ function InviteAcceptPage() {
       } catch (err: any) {
         const message = err?.message ?? String(err);
         if (message.includes("different email")) {
-          localStorage.setItem("pendingInviteToken", token);
+          sessionStorage.setItem("pendingInviteToken", token);
           navigate({ to: "/login", search: { invite: "1", error: "email_mismatch" } });
         } else if (message.includes("already accepted")) {
-          localStorage.removeItem("pendingInviteToken");
+          sessionStorage.removeItem("pendingInviteToken");
           await utils.auth.me.refetch();
           navigate({ to: "/" });
         } else {

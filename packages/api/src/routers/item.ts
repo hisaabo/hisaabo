@@ -148,7 +148,7 @@ export const itemRouter = router({
           entityType: "item",
           entityId: item.id,
           metadata: { name: item.name },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return { ...item, variants };
@@ -161,7 +161,7 @@ export const itemRouter = router({
         entityType: "item",
         entityId: item.id,
         metadata: { name: item.name },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
@@ -256,7 +256,7 @@ export const itemRouter = router({
         entityType: "item",
         entityId: input.id,
         metadata: { itemId: input.id, name: result.name, newUnit: input.newUnit, conversionFactor: input.conversionFactor },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return result;
@@ -289,7 +289,7 @@ export const itemRouter = router({
         entityType: "item",
         entityId: item.id,
         metadata: { name: item.name },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return item;
@@ -359,7 +359,7 @@ export const itemRouter = router({
         entityType: "item",
         entityId: input.id,
         metadata: { itemId: input.id, oldUnit: input.oldUnit, newUnit: input.newUnit },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return result;
@@ -430,7 +430,7 @@ export const itemRouter = router({
           entityType: "item",
           entityId: input.id,
           metadata: { itemId: input.id },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
       }
 
@@ -689,7 +689,7 @@ export const itemRouter = router({
         entityType: "itemVariant",
         entityId: variant.id,
         metadata: { itemId: input.itemId, variantName: JSON.stringify(input.variant.attributeValues) },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return variant;
@@ -739,7 +739,7 @@ export const itemRouter = router({
         entityType: "itemVariant",
         entityId: input.variantId,
         metadata: { variantId: input.variantId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return variant;
@@ -793,7 +793,7 @@ export const itemRouter = router({
           entityType: "itemVariant",
           entityId: input.variantId,
           metadata: { variantId: input.variantId },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
       }
 

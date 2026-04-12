@@ -65,6 +65,7 @@ function callerWithSession(sessionId: string, userId: string, email: string, ten
     businessId: null,
     req,
     resHeaders,
+    ipAddress: null,
   };
   return _callerFactory(ctx);
 }

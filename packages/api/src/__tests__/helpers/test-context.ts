@@ -75,6 +75,7 @@ export function createTestContext(opts: TestContextOptions = {}): Context {
     businessId: opts.businessId && opts.user ? opts.businessId : null,
     req,
     resHeaders,
+    ipAddress: null,
   };
 
   // Attach optional test-only extensions. These are not part of the Context

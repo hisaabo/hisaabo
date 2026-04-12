@@ -109,10 +109,12 @@ export async function provisionTenantDatabase(
     await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
 
     // Create the dedicated user with a securely-generated password.
-    // The password is passed as a literal string via parameterized query to
-    // avoid injection even though it is randomly generated.
+    // base64url output is [A-Za-z0-9_-] only — assert this before interpolating.
+    if (!/^[A-Za-z0-9_-]+$/.test(dbPassword)) {
+      throw new Error("Generated password contains unexpected characters — refusing to interpolate into SQL");
+    }
     await adminClient.unsafe(
-      `CREATE USER "${dbUser}" WITH PASSWORD '${dbPassword.replace(/'/g, "''")}'`,
+      `CREATE USER "${dbUser}" WITH PASSWORD '${dbPassword}'`,
     );
 
     // Grant all privileges on the database to the dedicated user

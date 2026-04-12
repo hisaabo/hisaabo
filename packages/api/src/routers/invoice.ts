@@ -151,7 +151,6 @@ export const invoiceRouter = router({
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
-    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const invoice = await ctx.db.transaction(async (tx) => {
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
@@ -404,7 +403,7 @@ export const invoiceRouter = router({
       entityType: "invoice",
       entityId: invoice.id,
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
-      ipAddress,
+      ipAddress: ctx.ipAddress,
     });
 
     // ── Async e-invoice submission (fire-and-forget) ───────────────────────
@@ -620,7 +619,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: input.id,
         metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return invoice;
@@ -852,7 +851,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: updated.id,
         metadata: { invoiceNumber: updated.invoiceNumber },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;
@@ -928,7 +927,6 @@ export const invoiceRouter = router({
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
       });
 
-      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       await logAudit(ctx.db, {
         businessId: ctx.businessId,
         userId: ctx.user!.id,
@@ -936,7 +934,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: input.id,
         metadata: { invoiceNumber: inv.invoiceNumber, previousStatus: inv.status },
-        ipAddress,
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

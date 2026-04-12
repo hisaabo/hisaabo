@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { CartItem, StoreConfig, OrderResult } from "../types";
 import { cartItemKey } from "../types";
 import { placeOrder } from "../api";
@@ -13,8 +13,6 @@ interface CheckoutProps {
   customerName: string;
   /** Whether this is a new customer (name field editable) or returning (read-only) */
   isNewCustomer: boolean;
-  /** Turnstile token from PhoneVerify step — reused for order submission */
-  turnstileToken: string;
   onBack: () => void;
   onSuccess: (result: OrderResult) => void;
 }
@@ -36,7 +34,6 @@ export function Checkout({
   customerPhone,
   customerName: initialName,
   isNewCustomer,
-  turnstileToken: initialToken,
   onBack,
   onSuccess,
 }: CheckoutProps) {
@@ -59,8 +56,71 @@ export function Checkout({
   const [apiError, setApiError] = useState("");
   const [summaryOpen, setSummaryOpen] = useState(false);
 
-  // Reuse the turnstile token from the PhoneVerify step — no need for a second challenge
-  const orderTokenRef = useRef<string>(initialToken);
+  // Fresh Turnstile token for order submission — Cloudflare tokens are single-use
+  const orderTokenRef = useRef<string>("");
+  const turnstileRef = useRef<HTMLDivElement>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  // Render Turnstile widget on mount
+  useEffect(() => {
+    if (!turnstileRef.current) return;
+
+    const siteKey =
+      (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
+      "1x00000000000000000000AA"; // Cloudflare test key for dev
+
+    const win = window as unknown as {
+      turnstile?: {
+        render: (
+          el: HTMLElement,
+          opts: {
+            sitekey: string;
+            callback: (token: string) => void;
+            "error-callback": () => void;
+            "expired-callback": () => void;
+            theme: string;
+            size: string;
+          },
+        ) => string;
+        reset: (id: string) => void;
+      };
+    };
+
+    function mount() {
+      if (!turnstileRef.current || !win.turnstile) return;
+      // Guard against double-render (React StrictMode in dev)
+      if (widgetIdRef.current !== null) return;
+      widgetIdRef.current = win.turnstile.render(turnstileRef.current, {
+        sitekey: siteKey,
+        callback: (token: string) => {
+          orderTokenRef.current = token;
+          setApiError((prev) => (prev === "Please complete the security check" ? "" : prev));
+        },
+        "error-callback": () => {
+          setApiError("Verification widget error. Please refresh the page.");
+        },
+        "expired-callback": () => {
+          orderTokenRef.current = "";
+        },
+        theme: "light",
+        size: "flexible",
+      });
+    }
+
+    // Turnstile may not be loaded yet (async script)
+    if (win.turnstile) {
+      mount();
+    } else {
+      // Poll briefly until the script loads
+      const interval = setInterval(() => {
+        if (win.turnstile) {
+          clearInterval(interval);
+          mount();
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, []);
 
   const subtotal = cart.reduce(
     (s, c) => s + parseFloat(c.effectivePrice) * c.quantity,
@@ -86,6 +146,11 @@ export function Checkout({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
+
+    if (!orderTokenRef.current) {
+      setApiError("Please complete the security check");
+      return;
+    }
 
     setSubmitting(true);
     setApiError("");
@@ -365,6 +430,9 @@ export function Checkout({
                 <span>{business.deliveryNote}</span>
               </div>
             )}
+
+            {/* Turnstile widget — renders a fresh token for order submission */}
+            <div ref={turnstileRef} />
 
             {apiError && (
               <div

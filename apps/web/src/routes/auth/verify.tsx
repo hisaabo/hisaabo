@@ -33,7 +33,7 @@ function VerifyPage() {
   const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
     onSuccess: (data) => {
       utils.auth.me.invalidate();
-      const pendingToken = localStorage.getItem("pendingInviteToken");
+      const pendingToken = sessionStorage.getItem("pendingInviteToken");
       if (data.needsProfile) {
         navigate({
           to: "/auth/complete-profile",
