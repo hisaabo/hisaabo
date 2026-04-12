@@ -487,7 +487,7 @@ export default function QuotationCreateScreen() {
             style={[styles.createBtn, createMutation.isPending && styles.createBtnDisabled]}
             onPress={handleCreate}
             activeOpacity={0.85}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.textPrimary} size="small" />

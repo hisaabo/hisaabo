@@ -305,7 +305,7 @@ export default function CreditNoteCreateScreen() {
         </ScrollView>
 
         <View style={s.footer}>
-          <TouchableOpacity style={[s.createBtn, createMutation.isPending && s.createBtnDisabled]} onPress={handleCreate} activeOpacity={0.85} disabled={createMutation.isPending}>
+          <TouchableOpacity style={[s.createBtn, (createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && s.createBtnDisabled]} onPress={handleCreate} activeOpacity={0.85} disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}>
             {createMutation.isPending ? <ActivityIndicator color={colors.textPrimary} size="small" /> : (
               <>
                 <Ionicons name="checkmark-circle-outline" size={20} color={colors.textPrimary} />

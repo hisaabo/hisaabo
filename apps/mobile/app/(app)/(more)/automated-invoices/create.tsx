@@ -465,7 +465,7 @@ export default function CreateRecurringInvoiceScreen() {
           <TouchableOpacity
             style={[styles.submitBtn, createMutation.isPending && styles.submitBtnDisabled]}
             onPress={handleSubmit}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
             activeOpacity={0.85}
           >
             {createMutation.isPending ? (

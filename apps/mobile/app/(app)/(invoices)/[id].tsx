@@ -225,10 +225,9 @@ interface ShipmentSectionProps {
   invoiceStatus: string;
 }
 
-function ShipmentSection({ invoiceId, invoiceStatus: _invoiceStatus }: ShipmentSectionProps) {
-  // TODO: Mobile engineer to use _invoiceStatus to hide shipment action
-  // buttons when invoice is paid (backend already blocks the mutations).
+function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
+  const utils = trpc.useUtils();
 
   const { data, isLoading, refetch } = trpc.shipment.list.useQuery(
     { invoiceId, limit: 1 },
@@ -236,9 +235,17 @@ function ShipmentSection({ invoiceId, invoiceStatus: _invoiceStatus }: ShipmentS
   );
 
   const updateShipment = trpc.shipment.update.useMutation({
-    onSuccess: () => { haptic.success(); refetch(); },
+    onSuccess: () => {
+      haptic.success();
+      refetch();
+      // Refresh invoice data so totals reflect synced shipping charges
+      utils.invoice.getById.invalidate({ id: invoiceId });
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
+
+  // Paid invoices: backend blocks mutations, UI hides action buttons
+  const isPaid = invoiceStatus === "paid";
 
   const shipment = data?.data?.[0] ?? null;
 
@@ -373,8 +380,8 @@ function ShipmentSection({ invoiceId, invoiceStatus: _invoiceStatus }: ShipmentS
           </View>
         ) : null}
 
-        {/* Action buttons */}
-        {(shipment.status === "pending" ||
+        {/* Action buttons — hidden when invoice is paid */}
+        {!isPaid && (shipment.status === "pending" ||
           shipment.status === "shipped" ||
           shipment.status === "in_transit") ? (
           <View style={shipmentStyles.actionRow}>
