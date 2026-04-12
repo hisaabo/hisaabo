@@ -853,6 +853,10 @@ export const reportsRouter = router({
                 1
               )::text`,
           })
+          // Historical join — the item sales report shows what sold over
+          // the period. Soft-deleted items must still appear (with their
+          // snapshot name from `invoice_items.item_name`) so the report
+          // doesn't silently drop rows when the user prunes their catalog.
           .from(invoiceItems)
           .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
           .leftJoin(items, eq(items.id, invoiceItems.itemId))
@@ -909,10 +913,14 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
+      // Active stock summary — soft-deleted items are not part of the
+      // current inventory and should not appear on the stock report. A
+      // deleted item's stockQuantity is historical-only.
       const simpleConditions = [
         eq(items.businessId, ctx.businessId),
         eq(items.itemType, "product"),
         sql`${items.itemMode} != 'variants'`,
+        isNull(items.deletedAt),
       ];
       if (!input.showZeroStock) simpleConditions.push(sql`${items.stockQuantity}::numeric != 0`);
       if (input.category) simpleConditions.push(eq(items.category, input.category));
@@ -921,6 +929,8 @@ export const reportsRouter = router({
         eq(items.businessId, ctx.businessId),
         eq(items.itemType, "product"),
         eq(items.itemMode, "variants"),
+        isNull(items.deletedAt),
+        isNull(itemVariants.deletedAt),
       ];
       if (input.category) variantConditions.push(eq(items.category, input.category));
 

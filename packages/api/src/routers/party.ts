@@ -221,6 +221,11 @@ export const partyRouter = router({
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Party");
+      // Historical join — top items a party has ever bought. Soft-deleted
+      // items must still count toward the totals (otherwise the report
+      // silently drops rows when the user prunes their catalog). The
+      // `innerJoin` means we still fetch the live `items.name`, but the
+      // row's deletedAt state is irrelevant to the aggregation.
       const rows = await ctx.db.select({
         itemId: invoiceItems.itemId,
         itemName: items.name,

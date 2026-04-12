@@ -560,7 +560,7 @@ function InvoiceDetailPanel({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-surface-1 border-b border-border-light">
-                    <th className="px-3 py-2 text-left font-medium text-text-tertiary">Description</th>
+                    <th className="px-3 py-2 text-left font-medium text-text-tertiary">Item</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Qty</th>
                     <th className="px-3 py-2 text-left font-medium text-text-tertiary">Unit</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Price</th>
@@ -572,18 +572,28 @@ function InvoiceDetailPanel({
                 <tbody className="divide-y divide-border-light">
                   {invoice.lineItems.map((li) => (
                     <tr key={li.id}>
-                      <td className="px-3 py-2 text-text-primary">{li.description}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
-                      <td className="px-3 py-2 text-text-secondary text-xs">
+                      <td className="px-3 py-2">
+                        {/* Primary: frozen item name snapshot. Secondary:
+                            optional italic notes — collapses with no
+                            placeholder gap when description is null/empty. */}
+                        <p className="font-medium text-text-primary">{li.itemName}</p>
+                        {li.description && (
+                          <p className="text-[11px] italic text-text-secondary mt-0.5 whitespace-pre-wrap">
+                            {li.description}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.quantity}</td>
+                      <td className="px-3 py-2 text-text-secondary text-xs align-top">
                         {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
                         {li.conversionFactor && parseFloat(li.conversionFactor) > 1 && (
                           <span className="text-text-tertiary"> (×{li.conversionFactor})</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.discountPercent}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(li.totalAmount)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{formatCurrency(li.unitPrice)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.taxPercent}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.discountPercent}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary align-top">{formatCurrency(li.totalAmount)}</td>
                     </tr>
                   ))}
                 </tbody>

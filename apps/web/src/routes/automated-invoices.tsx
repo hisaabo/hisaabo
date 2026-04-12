@@ -81,7 +81,10 @@ function statusColor(status: string): string {
 // ── Form state types ───────────────────────────────────────────
 
 type LineItemForm = {
-  description: string;
+  /** Primary bold line on the generated invoice. */
+  itemName: string;
+  /** Free-text line notes (optional). Mapped to `description` on the wire. */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -104,7 +107,8 @@ type TemplateFormState = {
 };
 
 const EMPTY_LINE_ITEM: LineItemForm = {
-  description: "",
+  itemName: "",
+  notes: "",
   quantity: "1",
   unitPrice: "",
   taxPercent: "0",
@@ -251,10 +255,13 @@ function AutomatedInvoicesPage() {
         type: full.type || "sale",
         frequency: full.frequency || "monthly",
         customIntervalDays: full.customIntervalDays ? String(full.customIntervalDays) : "",
+        // Bug B: backend line items now expose `itemName` (required snapshot)
+        // and `description` (optional free-text notes) as separate fields.
         lineItems:
           full.lineItems && full.lineItems.length > 0
             ? full.lineItems.map((li: any) => ({
-                description: li.description || "",
+                itemName: li.itemName ?? "",
+                notes: li.description ?? "",
                 quantity: String(li.quantity ?? "1"),
                 unitPrice: String(li.unitPrice ?? ""),
                 taxPercent: String(li.taxPercent ?? "0"),
@@ -294,9 +301,9 @@ function AutomatedInvoicesPage() {
 
     // Validate line items
     const hasValidLineItem = form.lineItems.some(
-      (li) => li.description.trim() && li.unitPrice && parseFloat(li.unitPrice) > 0
+      (li) => li.itemName.trim() && li.unitPrice && parseFloat(li.unitPrice) > 0
     );
-    if (!hasValidLineItem) errs.lineItems = "At least one line item with description and price is required";
+    if (!hasValidLineItem) errs.lineItems = "At least one line item with an item name and price is required";
 
     setFormErrors(errs);
     return Object.keys(errs).length === 0;
@@ -305,20 +312,23 @@ function AutomatedInvoicesPage() {
   function handleSubmit() {
     if (!validateForm()) return;
 
-    // Post Bug B: backend expects itemName (required) + description
-    // (optional notes). Stage 3 will split the client state; until then
-    // the local `description` field holds the item-name display, so we
-    // map it straight onto itemName and leave notes unset.
+    // Bug B: itemName is required; description is the optional free-text
+    // notes field. Empty/whitespace notes become `undefined` so the validator
+    // keeps the stored column NULL instead of persisting "".
     const lineItems = form.lineItems
-      .filter((li) => li.description.trim() || li.unitPrice)
-      .map((li) => ({
-        itemName: li.description.trim(),
-        quantity: li.quantity ? parseFloat(li.quantity).toString() : "1",
-        unitPrice: parseFloat(li.unitPrice).toFixed(2),
-        taxPercent: li.taxPercent ? parseFloat(li.taxPercent).toString() : "0",
-        discountPercent: li.discountPercent ? parseFloat(li.discountPercent).toString() : "0",
-        itemId: li.itemId || undefined,
-      }));
+      .filter((li) => li.itemName.trim() || li.unitPrice)
+      .map((li) => {
+        const trimmedNotes = li.notes.trim();
+        return {
+          itemName: li.itemName.trim(),
+          description: trimmedNotes.length > 0 ? trimmedNotes : undefined,
+          quantity: li.quantity ? parseFloat(li.quantity).toString() : "1",
+          unitPrice: parseFloat(li.unitPrice).toFixed(2),
+          taxPercent: li.taxPercent ? parseFloat(li.taxPercent).toString() : "0",
+          discountPercent: li.discountPercent ? parseFloat(li.discountPercent).toString() : "0",
+          itemId: li.itemId || undefined,
+        };
+      });
 
     if (editTemplateId) {
       updateMutation.mutate({
@@ -845,10 +855,11 @@ function AutomatedInvoicesPage() {
                             value={li.itemId || ""}
                             onChange={(val) => {
                               updateLineItem(idx, "itemId", val);
-                              // Auto-fill description from item name
+                              // Auto-fill itemName from the linked item; the
+                              // notes field stays blank for the user to fill.
                               const item = itemOptions.find((o: any) => o.value === val);
                               if (item) {
-                                updateLineItem(idx, "description", item.label);
+                                updateLineItem(idx, "itemName", item.label);
                               }
                             }}
                             options={[{ value: "", label: "None" }, ...itemOptions]}
@@ -858,13 +869,14 @@ function AutomatedInvoicesPage() {
                       )}
                       <div>
                         <label className="block text-[10px] font-medium text-text-tertiary mb-1">
-                          Description
+                          Item Name <span className="text-red-500">*</span>
                         </label>
                         <input
                           className="input text-sm"
-                          placeholder="Item description"
-                          value={li.description}
-                          onChange={(e) => updateLineItem(idx, "description", e.target.value)}
+                          placeholder="Item name"
+                          maxLength={200}
+                          value={li.itemName}
+                          onChange={(e) => updateLineItem(idx, "itemName", e.target.value)}
                         />
                       </div>
                       <div className="grid grid-cols-4 gap-2">
@@ -923,6 +935,34 @@ function AutomatedInvoicesPage() {
                             value={li.discountPercent}
                             onChange={(e) => updateLineItem(idx, "discountPercent", e.target.value)}
                           />
+                        </div>
+                      </div>
+                      {/* Free-text line notes — rendered as italic secondary
+                          text beneath the item name on the generated PDFs. */}
+                      <div>
+                        <label className="block text-[10px] font-medium text-text-tertiary mb-1">
+                          Notes (optional)
+                        </label>
+                        <div className="relative">
+                          <textarea
+                            className="input text-xs resize-y min-h-[2.25rem]"
+                            rows={2}
+                            maxLength={500}
+                            placeholder="Notes for this line (optional)"
+                            aria-label="Line notes"
+                            value={li.notes}
+                            onChange={(e) => updateLineItem(idx, "notes", e.target.value)}
+                          />
+                          {li.notes.length > 400 && (
+                            <p
+                              className={`absolute right-2 bottom-1 text-[10px] tabular-nums pointer-events-none ${
+                                li.notes.length > 500 ? "text-red-500" : "text-text-tertiary"
+                              }`}
+                              aria-live="polite"
+                            >
+                              {li.notes.length} / 500
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1126,7 +1166,7 @@ function TemplateDetailSlideOver({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-surface-1">
-                      <th className="text-left px-3 py-2 text-[11px] font-medium text-text-tertiary uppercase">Description</th>
+                      <th className="text-left px-3 py-2 text-[11px] font-medium text-text-tertiary uppercase">Item</th>
                       <th className="text-right px-3 py-2 text-[11px] font-medium text-text-tertiary uppercase">Qty</th>
                       <th className="text-right px-3 py-2 text-[11px] font-medium text-text-tertiary uppercase">Price</th>
                       <th className="text-right px-3 py-2 text-[11px] font-medium text-text-tertiary uppercase">Tax%</th>
@@ -1143,7 +1183,14 @@ function TemplateDetailSlideOver({
                       const total = subtotal * (1 + tax / 100);
                       return (
                         <tr key={idx}>
-                          <td className="px-3 py-2 text-text-primary">{li.description}</td>
+                          <td className="px-3 py-2">
+                            <p className="text-text-primary font-medium">{li.itemName}</p>
+                            {li.description && (
+                              <p className="text-xs italic text-text-secondary mt-0.5 whitespace-pre-wrap">
+                                {li.description}
+                              </p>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
                           <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
                           <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>

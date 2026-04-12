@@ -226,7 +226,9 @@ export default function RecurringInvoiceDetailScreen() {
   const statusColor = STATUS_COLORS[template.status as TemplateStatus] ?? STATUS_COLORS.expired;
   const freqLabel = FREQUENCY_LABELS[template.frequency] ?? template.frequency;
   const lineItems = (template.lineItems ?? []) as Array<{
-    description: string;
+    // Bug B: itemName is the required snapshot; description is optional notes.
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent?: string;
@@ -513,7 +515,12 @@ export default function RecurringInvoiceDetailScreen() {
                   {i > 0 && <View style={styles.detailDivider} />}
                   <View style={styles.lineItemRow}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.lineItemDesc}>{li.description}</Text>
+                      {/* Bug B: itemName is the primary display; description
+                          is the optional italic notes line beneath. */}
+                      <Text style={styles.lineItemDesc}>{li.itemName}</Text>
+                      {li.description && li.description.trim().length > 0 && (
+                        <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
+                      )}
                       <Text style={styles.lineItemMeta}>
                         {li.quantity} x {formatCurrency(li.unitPrice)}
                         {li.taxPercent && li.taxPercent !== "0" ? ` (GST ${li.taxPercent}%)` : ""}
@@ -742,6 +749,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   lineItemDesc: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
+  lineItemNotes: { fontSize: 11, fontStyle: "italic", color: colors.textSecondary, marginTop: 2, lineHeight: 14 },
   lineItemMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   lineItemTotal: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
 

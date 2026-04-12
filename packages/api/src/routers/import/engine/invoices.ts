@@ -1,5 +1,5 @@
 import { parties, items, invoices, invoiceItems, payments, shipments } from "@hisaabo/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { calcLineItem, money } from "@hisaabo/shared";
 import type { TenantDatabase } from "../../../trpc.js";
 import type { CanonicalInvoice } from "../types.js";
@@ -33,8 +33,12 @@ export async function runInvoicesImport(
     .from(parties).where(eq(parties.businessId, businessId));
   const partyByName = new Map(allParties.map(p => [p.name.toLowerCase(), p.id]));
 
+  // Active items only — soft-deleted items should not be matched during
+  // import. If an imported invoice references a name that matches a
+  // soft-deleted item, it falls through to "no match" (itemId = null)
+  // rather than linking to a removed catalog entry.
   const allItems = await db.select({ id: items.id, name: items.name })
-    .from(items).where(eq(items.businessId, businessId));
+    .from(items).where(and(eq(items.businessId, businessId), isNull(items.deletedAt)));
   const itemByName = new Map(allItems.map(i => [i.name.toLowerCase(), i.id]));
 
   const existingNumbers = new Set(

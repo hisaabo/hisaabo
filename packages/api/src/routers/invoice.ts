@@ -124,7 +124,11 @@ export const invoiceRouter = router({
       ]);
 
       // Fetch the base unit for each linked item so the UI can display a unit
-      // even when selectedUnit is null (i.e. the item's base unit was used)
+      // even when selectedUnit is null (i.e. the item's base unit was used).
+      //
+      // Historical join — soft-deleted items must still resolve here so
+      // legacy invoice detail pages render correctly after the item is
+      // removed from the active catalog. Do NOT add `isNull(deletedAt)`.
       const linkedItemIds = lineItems.map(li => li.itemId).filter((id): id is string => Boolean(id));
       const itemUnitMap = new Map<string, string>();
       if (linkedItemIds.length > 0) {
@@ -181,6 +185,13 @@ export const invoiceRouter = router({
       // Security: validate that every itemId in line items belongs to the current business.
       // Without this an attacker could reference items from another business — which would
       // allow stock manipulation on entities they do not own.
+      //
+      // Soft-delete note: this check intentionally does NOT filter by
+      // `deleted_at IS NULL`. The frontend item picker only shows active
+      // items, so legitimate new invoices never reference soft-deleted
+      // rows in practice. Allowing soft-deleted items here is what lets
+      // historical invoices still be re-submitted through the edit path
+      // (or replayed via the CLI) without manual unsoft-deletion.
       const lineItemIds = input.lineItems
         .map((li) => li.itemId)
         .filter((id): id is string => Boolean(id));
@@ -423,6 +434,10 @@ export const invoiceRouter = router({
           const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
           if (!biz) return;
 
+          // Historical join — the IRP submission is for a specific
+          // (already created) invoice. Soft-deleted items must still
+          // resolve so their HSN/itemType survive into the IRP payload.
+          // Do NOT filter by `deletedAt` here.
           const lineItemRows = await db
             .select({
               itemName: invoiceItems.itemName,
@@ -639,6 +654,10 @@ export const invoiceRouter = router({
         }
 
         // Security: validate itemIds in line items belong to this business.
+        // Soft-delete note: like `create`, this is an ownership check, not
+        // an active-state check. Allowing soft-deleted items keeps the
+        // edit path working for historical invoices whose line items
+        // reference rows the user has since removed from their catalog.
         if (input.lineItems) {
           const updateLineItemIds = input.lineItems
             .map((li) => li.itemId)
@@ -653,6 +672,7 @@ export const invoiceRouter = router({
           }
 
           // Security: validate variantIds belong to items in this business.
+          // Same soft-delete rationale as above.
           const updateVariantIds = input.lineItems
             .map((li) => li.variantId)
             .filter((id): id is string => Boolean(id));

@@ -83,6 +83,9 @@ async function generateIRNForInvoice(
   const [business] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
   if (!business) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
 
+  // Historical join — IRP e-invoice submission for an existing invoice
+  // must include HSN/itemType for every line. Soft-deleted items stay
+  // joined so the IRP payload is complete for legacy invoices.
   const lineItemRows = await db
     .select({
       itemName: invoiceItems.itemName,

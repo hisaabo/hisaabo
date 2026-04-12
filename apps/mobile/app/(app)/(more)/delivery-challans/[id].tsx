@@ -187,7 +187,12 @@ export default function DeliveryChallanDetailScreen() {
               {challan.lineItems.map((li: any, idx: number) => (
                 <View key={li.id ?? idx} style={[styles.lineItem, idx < challan.lineItems.length - 1 && styles.lineItemBorder]}>
                   <View style={styles.lineItemLeft}>
-                    <Text style={styles.lineItemName} numberOfLines={2}>{li.description}</Text>
+                    {/* Bug B: primary display is itemName; description is
+                        the optional italic notes line beneath. */}
+                    <Text style={styles.lineItemName} numberOfLines={2}>{li.itemName}</Text>
+                    {li.description && li.description.trim().length > 0 && (
+                      <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
+                    )}
                     <Text style={styles.lineItemMeta}>
                       {li.quantity} x {formatCurrency(li.unitPrice)}
                       {parseFloat(li.taxPercent ?? "0") > 0 ? ` + ${li.taxPercent}% GST` : ""}
@@ -374,6 +379,7 @@ const styles = StyleSheet.create({
   lineItemBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
   lineItemLeft: { flex: 1, paddingRight: 12 },
   lineItemName: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
+  lineItemNotes: { fontSize: 11, fontStyle: "italic", color: colors.textSecondary, marginTop: 2, lineHeight: 14 },
   lineItemMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   lineItemAmount: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
   notesCard: {

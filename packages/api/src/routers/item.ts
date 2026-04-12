@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
@@ -20,7 +20,9 @@ export const itemRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
-      const conditions = [eq(items.businessId, ctx.businessId)];
+      // Active catalog read — exclude soft-deleted items. Matches the
+      // `items_active_idx` partial index when the planner picks it up.
+      const conditions = [eq(items.businessId, ctx.businessId), isNull(items.deletedAt)];
       if (input.search) {
         conditions.push(ilike(items.name, `%${escapeLike(input.search)}%`));
       }
@@ -60,7 +62,12 @@ export const itemRouter = router({
           count: sql<number>`count(*)::int`,
           totalStock: sql<string>`COALESCE(SUM(${itemVariants.stockQuantity}::numeric), 0)::text`,
         }).from(itemVariants)
-          .where(sql`${itemVariants.itemId} IN (${sql.join(variantItemIds.map(id => sql`${id}`), sql`, `)})`)
+          .where(and(
+            sql`${itemVariants.itemId} IN (${sql.join(variantItemIds.map(id => sql`${id}`), sql`, `)})`,
+            // Active variant aggregation — soft-deleted variants must not
+            // inflate the visible count/stock on the parent item card.
+            isNull(itemVariants.deletedAt),
+          ))
           .groupBy(itemVariants.itemId);
         for (const r of rows) {
           variantSummaries[r.itemId] = { count: r.count, totalStock: r.totalStock };
@@ -80,14 +87,22 @@ export const itemRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
+      // Active lookup — soft-deleted items should not appear in the item
+      // detail page. If a caller needs to render a historical invoice line
+      // that joins to items, it goes through `invoice.getById`, which keeps
+      // the join without this filter.
       const [item] = await ctx.db.select().from(items)
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(items.id, input.id),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+        ))
         .limit(1);
       if (!item) return null;
 
       if (item.itemMode === "variants") {
         const variants = await ctx.db.select().from(itemVariants)
-          .where(eq(itemVariants.itemId, item.id))
+          .where(and(eq(itemVariants.itemId, item.id), isNull(itemVariants.deletedAt)))
           .orderBy(itemVariants.createdAt);
         return { ...item, variants };
       }
@@ -121,8 +136,10 @@ export const itemRouter = router({
       }
 
       if (input.itemMode === "variants") {
+        // Freshly created variants only — no historical data possible here,
+        // but keep the filter for consistency with the active-read contract.
         const variants = await tx.select().from(itemVariants)
-          .where(eq(itemVariants.itemId, item.id));
+          .where(and(eq(itemVariants.itemId, item.id), isNull(itemVariants.deletedAt)));
 
         logAudit(ctx.db, {
           businessId: ctx.businessId,
@@ -161,8 +178,15 @@ export const itemRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
       const result = await ctx.db.transaction(async (tx) => {
+        // Active mutation — a soft-deleted item must not be reachable via
+        // a stale client action. If the client believes it can switch the
+        // base unit, the item should still be visible on its side.
         const [item] = await tx.select().from(items)
-          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+          .where(and(
+            eq(items.id, input.id),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          ))
           .for("update")
           .limit(1);
 
@@ -242,10 +266,21 @@ export const itemRouter = router({
     .input(z.object({ id: z.string().uuid(), data: updateItemSchema }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
+      // Active-mutation contract: a soft-deleted item cannot be edited via
+      // the public API. Re-activation would require an explicit restore
+      // endpoint, which is deferred per FIXES.md.
       const [item] = await ctx.db.update(items)
         .set({ ...input.data, updatedAt: new Date() })
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(items.id, input.id),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+        ))
         .returning();
+
+      if (!item) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+      }
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -269,9 +304,14 @@ export const itemRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
       const result = await ctx.db.transaction(async (tx) => {
+        // Active mutation — see `update`.
         const [item] = await tx.select()
           .from(items)
-          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+          .where(and(
+            eq(items.id, input.id),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          ));
         if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
 
         const isBase = item.unit === input.oldUnit;
@@ -291,9 +331,15 @@ export const itemRouter = router({
 
         // Update the item and cascade to invoice line items atomically so a
         // crash between the two writes never leaves them in an inconsistent state.
+        // The `isNull` predicate catches a rare race where the item is
+        // soft-deleted between the SELECT above and this UPDATE.
         await tx.update(items)
           .set(updates)
-          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)));
+          .where(and(
+            eq(items.id, input.id),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          ));
 
         // Cascade: update selectedUnit on all invoice line items for this item
         await tx.update(invoiceItems)
@@ -323,23 +369,70 @@ export const itemRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Item");
-      const deleted = await ctx.db.delete(items)
-        .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
-        .returning();
 
-      if (deleted.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
-      }
+      // Soft delete — historical invoice line items carry `item_id` /
+      // `variant_id` FKs (ON DELETE SET NULL) and would lose their join on
+      // a physical delete, which would destroy the audit trail on every
+      // legacy invoice that referenced the item. See FIXES.md Stage 5.
+      //
+      // The `isNull(deletedAt)` clause in the WHERE makes the mutation
+      // idempotent: calling delete twice on the same id simply updates 0
+      // rows the second time instead of throwing a 500. We preserve the
+      // NOT_FOUND response for truly-missing ids by looking up the item
+      // (still scoped by deletedAt IS NULL) BEFORE the update, so a caller
+      // that sends a bogus id still gets a clear error.
+      const result = await ctx.db.transaction(async (tx) => {
+        const [existing] = await tx.select({ id: items.id, deletedAt: items.deletedAt })
+          .from(items)
+          .where(and(eq(items.id, input.id), eq(items.businessId, ctx.businessId)))
+          .limit(1);
 
-      logAudit(ctx.db, {
-        businessId: ctx.businessId,
-        userId: ctx.user.id,
-        action: "item.delete",
-        entityType: "item",
-        entityId: input.id,
-        metadata: { itemId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+        }
+
+        // Already soft-deleted — treat as success (idempotent).
+        if (existing.deletedAt !== null) {
+          return { alreadyDeleted: true };
+        }
+
+        const now = new Date();
+
+        // Stamp the parent item and cascade the same timestamp onto every
+        // active variant. This matches what a physical delete used to do
+        // (ON DELETE CASCADE on item_variants.item_id) while keeping the
+        // rows around for historical joins.
+        await tx.update(items)
+          .set({ deletedAt: now, updatedAt: now })
+          .where(and(
+            eq(items.id, input.id),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          ));
+
+        await tx.update(itemVariants)
+          .set({ deletedAt: now, updatedAt: now })
+          .where(and(
+            eq(itemVariants.itemId, input.id),
+            isNull(itemVariants.deletedAt),
+          ));
+
+        return { alreadyDeleted: false };
       });
+
+      // Audit log only on the first delete. A no-op idempotent delete
+      // shouldn't re-log the action every time a client retries.
+      if (!result.alreadyDeleted) {
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user.id,
+          action: "item.delete",
+          entityType: "item",
+          entityId: input.id,
+          metadata: { itemId: input.id },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+      }
 
       return { success: true };
     }),
@@ -546,14 +639,18 @@ export const itemRouter = router({
     .input(z.object({ itemId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
-      // Verify item belongs to business
+      // Active read — soft-deleted parent item is treated as "not found".
       const [item] = await ctx.db.select({ id: items.id }).from(items)
-        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(items.id, input.itemId),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+        ))
         .limit(1);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
 
       return ctx.db.select().from(itemVariants)
-        .where(eq(itemVariants.itemId, input.itemId))
+        .where(and(eq(itemVariants.itemId, input.itemId), isNull(itemVariants.deletedAt)))
         .orderBy(itemVariants.createdAt);
     }),
 
@@ -561,8 +658,13 @@ export const itemRouter = router({
     .input(z.object({ itemId: z.string().uuid(), variant: itemVariantSchema }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
+      // Cannot add a variant to a soft-deleted parent item.
       const [item] = await ctx.db.select().from(items)
-        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(items.id, input.itemId),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+        ))
         .limit(1);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
       if (item.itemMode !== "variants") {
@@ -599,14 +701,20 @@ export const itemRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
-      // Verify variant belongs to an item in this business
+      // Verify variant belongs to an active item in this business. Both
+      // sides (item + variant) must be non-deleted to allow edits.
       const [existing] = await ctx.db.select({
         variantId: itemVariants.id,
         itemId: itemVariants.itemId,
         businessId: items.businessId,
       }).from(itemVariants)
         .innerJoin(items, eq(items.id, itemVariants.itemId))
-        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(itemVariants.id, input.variantId),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+          isNull(itemVariants.deletedAt),
+        ))
         .limit(1);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
 
@@ -620,7 +728,7 @@ export const itemRouter = router({
 
       const [variant] = await ctx.db.update(itemVariants)
         .set(updates)
-        .where(eq(itemVariants.id, input.variantId))
+        .where(and(eq(itemVariants.id, input.variantId), isNull(itemVariants.deletedAt)))
         .returning();
 
       logAudit(ctx.db, {
@@ -640,26 +748,53 @@ export const itemRouter = router({
     .input(z.object({ variantId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Item");
-      const [existing] = await ctx.db.select({
-        variantId: itemVariants.id,
-        businessId: items.businessId,
-      }).from(itemVariants)
-        .innerJoin(items, eq(items.id, itemVariants.itemId))
-        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
-        .limit(1);
-      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
 
-      await ctx.db.delete(itemVariants).where(eq(itemVariants.id, input.variantId));
+      // Soft delete with the same idempotent semantics as `delete`: look up
+      // the variant (regardless of soft-delete state) so an unknown id still
+      // 404s, but a second delete on an already-deleted variant is a no-op.
+      const result = await ctx.db.transaction(async (tx) => {
+        const [existing] = await tx.select({
+          variantId: itemVariants.id,
+          deletedAt: itemVariants.deletedAt,
+          businessId: items.businessId,
+        }).from(itemVariants)
+          .innerJoin(items, eq(items.id, itemVariants.itemId))
+          .where(and(
+            eq(itemVariants.id, input.variantId),
+            eq(items.businessId, ctx.businessId),
+          ))
+          .limit(1);
 
-      logAudit(ctx.db, {
-        businessId: ctx.businessId,
-        userId: ctx.user.id,
-        action: "item.deleteVariant",
-        entityType: "itemVariant",
-        entityId: input.variantId,
-        metadata: { variantId: input.variantId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+        }
+
+        if (existing.deletedAt !== null) {
+          return { alreadyDeleted: true };
+        }
+
+        const now = new Date();
+        await tx.update(itemVariants)
+          .set({ deletedAt: now, updatedAt: now })
+          .where(and(
+            eq(itemVariants.id, input.variantId),
+            isNull(itemVariants.deletedAt),
+          ));
+
+        return { alreadyDeleted: false };
       });
+
+      if (!result.alreadyDeleted) {
+        logAudit(ctx.db, {
+          businessId: ctx.businessId,
+          userId: ctx.user.id,
+          action: "item.deleteVariant",
+          entityType: "itemVariant",
+          entityId: input.variantId,
+          metadata: { variantId: input.variantId },
+          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        });
+      }
 
       return { success: true };
     }),
@@ -671,8 +806,13 @@ export const itemRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");
+      // Cannot bulk-create variants on a soft-deleted parent item.
       const [item] = await ctx.db.select().from(items)
-        .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(items.id, input.itemId),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+        ))
         .limit(1);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
       if (item.itemMode !== "variants") {
@@ -696,7 +836,8 @@ export const itemRouter = router({
   // Suggest potential merge candidates — items with similar name prefixes
   suggestMerges: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "Item");
-    // Get all items for the business (exclude variant items — they're already organized)
+    // Get all active items for the business (exclude variant items —
+    // they're already organized — and soft-deleted rows).
     const allItems = await ctx.db.select({
       id: items.id,
       name: items.name,
@@ -704,7 +845,11 @@ export const itemRouter = router({
       salePrice: items.salePrice,
       stockQuantity: items.stockQuantity,
     }).from(items)
-      .where(and(eq(items.businessId, ctx.businessId), sql`${items.itemMode} != 'variants'`))
+      .where(and(
+        eq(items.businessId, ctx.businessId),
+        sql`${items.itemMode} != 'variants'`,
+        isNull(items.deletedAt),
+      ))
       .orderBy(items.name);
 
     // Group items by name prefix (strip trailing numbers, weights, fractions)
@@ -778,10 +923,21 @@ export const itemRouter = router({
       }
 
       return ctx.db.transaction(async (tx) => {
+        // Both sides must be active — merging into or from a soft-deleted
+        // item is nonsensical (the user shouldn't even be able to see them
+        // in the merge picker).
         const [source] = await tx.select().from(items)
-          .where(and(eq(items.id, input.sourceId), eq(items.businessId, ctx.businessId))).limit(1);
+          .where(and(
+            eq(items.id, input.sourceId),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          )).limit(1);
         const [target] = await tx.select().from(items)
-          .where(and(eq(items.id, input.targetId), eq(items.businessId, ctx.businessId))).limit(1);
+          .where(and(
+            eq(items.id, input.targetId),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          )).limit(1);
 
         if (!source || !target) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
         if (source.itemMode === "variants" || target.itemMode === "variants") {
@@ -830,8 +986,15 @@ export const itemRouter = router({
 
         await tx.update(items).set(updates).where(eq(items.id, input.targetId));
 
-        // Delete the source item
-        await tx.delete(items).where(eq(items.id, input.sourceId));
+        // Soft-delete the source item. Any invoice line item that was
+        // re-linked above now points at the target; anything that wasn't
+        // (e.g. cancelled drafts that were out of the re-link query's
+        // predicate) still resolves its item_id to the source row, which
+        // keeps the historical join intact after the merge.
+        const now = new Date();
+        await tx.update(items)
+          .set({ deletedAt: now, updatedAt: now })
+          .where(and(eq(items.id, input.sourceId), isNull(items.deletedAt)));
 
         return { success: true, mergedInto: input.targetId };
       });
@@ -855,18 +1018,29 @@ export const itemRouter = router({
         let previousStock: string;
 
         if (input.variantId) {
+          // Active read — can't adjust stock on a deleted variant.
           const [variant] = await tx.select({ stockQuantity: itemVariants.stockQuantity })
             .from(itemVariants)
             .innerJoin(items, eq(items.id, itemVariants.itemId))
-            .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+            .where(and(
+              eq(itemVariants.id, input.variantId),
+              eq(items.businessId, ctx.businessId),
+              isNull(items.deletedAt),
+              isNull(itemVariants.deletedAt),
+            ))
             .for("update")
             .limit(1);
           if (!variant) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
           previousStock = variant.stockQuantity;
         } else {
+          // Active read — can't adjust stock on a deleted item.
           const [item] = await tx.select({ stockQuantity: items.stockQuantity })
             .from(items)
-            .where(and(eq(items.id, input.itemId), eq(items.businessId, ctx.businessId)))
+            .where(and(
+              eq(items.id, input.itemId),
+              eq(items.businessId, ctx.businessId),
+              isNull(items.deletedAt),
+            ))
             .for("update")
             .limit(1);
           if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
@@ -940,6 +1114,9 @@ export const itemRouter = router({
 
   lowStockCount: viewerProcedure.query(async ({ ctx }) => {
     requireCan(ctx.ability, "read", "Item");
+    // Active low-stock alerts — never raise an alert for a soft-deleted
+    // item / variant. That would surface a notification for something the
+    // user already chose to hide from their catalog.
     const [[itemResult], [variantResult]] = await Promise.all([
       ctx.db.select({
         count: sql<number>`count(*)::int`,
@@ -947,7 +1124,8 @@ export const itemRouter = router({
         .where(and(
           eq(items.businessId, ctx.businessId),
           sql`${items.itemMode} != 'variants'`, // variant items track stock on variants, not parent
-          sql`${items.lowStockAlert} IS NOT NULL AND ${items.stockQuantity}::numeric <= ${items.lowStockAlert}::numeric`
+          sql`${items.lowStockAlert} IS NOT NULL AND ${items.stockQuantity}::numeric <= ${items.lowStockAlert}::numeric`,
+          isNull(items.deletedAt),
         )),
       ctx.db.select({
         count: sql<number>`count(*)::int`,
@@ -955,7 +1133,9 @@ export const itemRouter = router({
         .innerJoin(items, eq(items.id, itemVariants.itemId))
         .where(and(
           eq(items.businessId, ctx.businessId),
-          sql`${itemVariants.lowStockAlert} IS NOT NULL AND ${itemVariants.stockQuantity}::numeric <= ${itemVariants.lowStockAlert}::numeric`
+          sql`${itemVariants.lowStockAlert} IS NOT NULL AND ${itemVariants.stockQuantity}::numeric <= ${itemVariants.lowStockAlert}::numeric`,
+          isNull(items.deletedAt),
+          isNull(itemVariants.deletedAt),
         )),
     ]);
     return itemResult.count + variantResult.count;

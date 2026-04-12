@@ -193,6 +193,10 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
 
           // Security: validate that every itemId in line items belongs to the current business.
+          // Soft-delete note: mirrors `invoice.ts` — this is an ownership
+          // check, not an active-state check. Allowing soft-deleted items
+          // keeps backdated document creation (CLI, imports, historical
+          // re-entry) functional.
           const createLineItemIds = input.lineItems
             .map((li) => li.itemId)
             .filter((id): id is string => Boolean(id));

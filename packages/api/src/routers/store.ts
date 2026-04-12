@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc, gte, lte, inArray, or } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, gte, lte, inArray, or, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { businesses, items, itemVariants, storeOrders, invoices, invoiceItems } from "@hisaabo/db";
 import { paginationSchema } from "@hisaabo/shared";
@@ -126,7 +126,9 @@ export const storeRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Store");
-      const conditions = [eq(items.businessId, ctx.businessId)];
+      // Active store-admin catalog — soft-deleted items should not show
+      // up in the "manage store visibility" view.
+      const conditions = [eq(items.businessId, ctx.businessId), isNull(items.deletedAt)];
 
       if (input.search) {
         conditions.push(ilike(items.name, `%${escapeLike(input.search)}%`));
@@ -178,11 +180,14 @@ export const storeRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Store");
+      // Active mutation — skip soft-deleted items in the bulk toggle.
+      // A toggle on a deleted row is nonsense (it's not visible anywhere).
       await ctx.db.update(items)
         .set({ storeEnabled: input.storeEnabled, updatedAt: new Date() })
         .where(and(
           inArray(items.id, input.itemIds),
           eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
         ));
       return { updated: input.itemIds.length };
     }),
@@ -207,11 +212,13 @@ export const storeRouter = router({
       if (fields.storeCategory !== undefined) updateData.storeCategory = fields.storeCategory;
       if (fields.storeDescription !== undefined) updateData.storeDescription = fields.storeDescription;
 
+      // Active mutation — soft-deleted items cannot be re-configured.
       const [updated] = await ctx.db.update(items)
         .set(updateData)
         .where(and(
           eq(items.id, itemId),
           eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
         ))
         .returning({
           id: items.id,
@@ -235,13 +242,19 @@ export const storeRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Store");
 
-      // Verify variant belongs to an item in this business
+      // Active mutation — both the parent item and the variant must be
+      // non-deleted before the store settings can be changed.
       const [existing] = await ctx.db.select({
         variantId: itemVariants.id,
         businessId: items.businessId,
       }).from(itemVariants)
         .innerJoin(items, eq(items.id, itemVariants.itemId))
-        .where(and(eq(itemVariants.id, input.variantId), eq(items.businessId, ctx.businessId)))
+        .where(and(
+          eq(itemVariants.id, input.variantId),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+          isNull(itemVariants.deletedAt),
+        ))
         .limit(1);
 
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
@@ -252,7 +265,7 @@ export const storeRouter = router({
 
       const [updated] = await ctx.db.update(itemVariants)
         .set(updates)
-        .where(eq(itemVariants.id, input.variantId))
+        .where(and(eq(itemVariants.id, input.variantId), isNull(itemVariants.deletedAt)))
         .returning();
 
       return updated;

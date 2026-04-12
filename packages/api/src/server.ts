@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, gte, lte, inArray, sql } from "drizzle-orm";
+import { eq, and, gt, lt, gte, lte, inArray, isNull, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -439,7 +439,10 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   const lineItems = await db.select().from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(invoiceItems.sortOrder);
 
-  // Fetch HSN codes and base units for linked items
+  // Fetch HSN codes and base units for linked items.
+  // Historical join — intentionally no `isNull(items.deletedAt)` filter.
+  // The invoice was created when the item existed; deleting the item later
+  // must not blank out HSN or unit on a previously-generated PDF.
   const itemIds = lineItems.map(li => li.itemId).filter(Boolean) as string[];
   const itemMeta = itemIds.length > 0
     ? await db.select({ id: items.id, hsn: items.hsn, unit: items.unit }).from(items).where(inArray(items.id, itemIds))
@@ -808,6 +811,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
   const conditions = [
     eq(items.businessId, resolved.businessId),
     eq(items.storeEnabled, true),
+    // Active catalog read — soft-deleted items must never appear in the
+    // public store, even if `store_enabled` was not cleared before deletion.
+    isNull(items.deletedAt),
   ];
   if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
   if (search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(search) + "%"}`);
@@ -856,6 +862,9 @@ app.get("/store/:slug/catalog.json", async (c) => {
         .where(and(
           inArray(itemVariants.itemId, variantItemIds),
           eq(itemVariants.storeEnabled, true),
+          // Active variant read — soft-deleted variants must not appear in
+          // the store catalog. Parent already filtered on isNull(items.deletedAt).
+          isNull(itemVariants.deletedAt),
         ))
     : [];
 
@@ -1121,6 +1130,10 @@ app.post("/store/:slug/order", async (c) => {
       inArray(items.id, itemIds),
       eq(items.businessId, resolved.businessId),
       eq(items.storeEnabled, true),
+      // Active read — soft-deleted items are treated as unavailable.
+      // If a customer somehow sends a stale item ID, this causes the
+      // count mismatch below and returns a 400.
+      isNull(items.deletedAt),
     ));
 
   if (foundItems.length !== new Set(itemIds).size) {
@@ -1147,6 +1160,9 @@ app.post("/store/:slug/order", async (c) => {
         .where(and(
           inArray(itemVariants.id, requestedVariantIds),
           eq(itemVariants.storeEnabled, true),
+          // Active variant read — soft-deleted variants are treated as
+          // unavailable for new store orders.
+          isNull(itemVariants.deletedAt),
         ))
     : [];
 
@@ -1328,6 +1344,8 @@ app.post("/store/:slug/order", async (c) => {
 
       // Stock adjustment per line item — use PostgreSQL NUMERIC arithmetic
       // to avoid JS floating-point drift. Lock rows first for concurrency safety.
+      // No extra isNull filter needed here: items/variants were already confirmed
+      // active by the foundItems/foundVariants queries earlier in this handler.
       const itemIds = [...new Set(lineItemInputs.filter(li => !li.variantId).map(li => li.itemId))];
       const variantIds = [...new Set(lineItemInputs.filter(li => li.variantId).map(li => li.variantId!))];
       if (itemIds.length > 0) {

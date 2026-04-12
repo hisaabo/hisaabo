@@ -497,8 +497,10 @@ describe("item.delete", () => {
     expect(fetched).toBeNull();
   });
 
-  it("deleting an item with invoice line items sets invoiceItems.itemId to null — ON DELETE SET NULL", async () => {
-    // Create item + party + invoice referencing the item
+  it("soft-delete: item with invoice line items is hidden from active reads — itemId FK preserved in DB", async () => {
+    // Soft delete preserves the DB row so historical invoice joins
+    // still resolve the item_id FK. The active read returns null because
+    // deletedAt is now set, but the physical row exists.
     const item = await callerRamesh.item.create({
       name: "Referenced By Invoice Item",
       itemType: "product",
@@ -511,20 +513,69 @@ describe("item.delete", () => {
       name: "Invoice Reference Party",
     });
 
-    const { lineItems: _lineItems } = await createInvoiceWithItems(
+    await createInvoiceWithItems(
       getTenantTestDb(),
       business1.id,
       party.id,
-      [{ itemId: item.id, description: "Referenced item line", quantity: "1", unitPrice: "50.00" }],
+      [{ itemId: item.id, itemName: "Referenced By Invoice Item", quantity: "1", unitPrice: "50.00" }],
     );
 
-    // Delete the item — should succeed (FK is SET NULL, not RESTRICT)
+    // Soft-delete the item — should succeed
     const result = await callerRamesh.item.delete({ id: item.id });
     expect(result.success).toBe(true);
 
-    // Item is gone
+    // Active read returns null — soft-deleted item is invisible to catalog queries
     const fetched = await callerRamesh.item.getById({ id: item.id });
     expect(fetched).toBeNull();
+
+    // Should not appear in item list (max limit is 100)
+    const listed = await callerRamesh.item.list({ page: 1, limit: 100 });
+    const names = listed.data.map((i) => i.name);
+    expect(names).not.toContain("Referenced By Invoice Item");
+  });
+
+  it("soft-delete is idempotent — deleting the same item twice returns success both times", async () => {
+    const item = await callerRamesh.item.create({
+      name: "Idempotent Delete Test Item",
+      itemType: "product",
+      itemMode: "simple",
+      unit: "pcs",
+    });
+
+    const first = await callerRamesh.item.delete({ id: item.id });
+    expect(first.success).toBe(true);
+
+    // Second delete on the same id must not throw — idempotent no-op
+    const second = await callerRamesh.item.delete({ id: item.id });
+    expect(second.success).toBe(true);
+  });
+
+  it("soft-deleting a variant-mode item also soft-deletes all its active variants", async () => {
+    const item = await callerRamesh.item.create({
+      name: "Cascade Soft Delete Parent Item",
+      itemType: "product",
+      itemMode: "variants",
+      unit: "pcs",
+      variantAttributes: ["Size"],
+      variants: [
+        { attributeValues: { Size: "S" }, salePrice: "100.00" },
+        { attributeValues: { Size: "M" }, salePrice: "110.00" },
+      ],
+    });
+
+    const beforeDelete = await callerRamesh.item.listVariants({ itemId: item.id });
+    expect(beforeDelete.length).toBe(2);
+
+    await callerRamesh.item.delete({ id: item.id });
+
+    // Parent item is soft-deleted — should not appear
+    const fetched = await callerRamesh.item.getById({ id: item.id });
+    expect(fetched).toBeNull();
+
+    // listVariants on a soft-deleted parent should 404 (item no longer active)
+    await expect(
+      callerRamesh.item.listVariants({ itemId: item.id })
+    ).rejects.toThrow(/not found/i);
   });
 
   it("seller role cannot delete an item — permission denied by CASL", async () => {

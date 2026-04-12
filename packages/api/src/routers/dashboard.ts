@@ -452,6 +452,11 @@ export const dashboardRouter = router({
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
       if (input.itemType) conditions.push(eq(items.itemType, input.itemType));
 
+      // Historical aggregation — top-selling items over the period. A
+      // soft-deleted item that sold well in the period should still show
+      // up in the report (with its snapshot name from `invoice_items`),
+      // otherwise the user's historical analytics silently omit rows when
+      // they prune their catalog. Leave `items.deletedAt` unfiltered.
       const results = await ctx.db
         .select({
           itemId: invoiceItems.itemId,

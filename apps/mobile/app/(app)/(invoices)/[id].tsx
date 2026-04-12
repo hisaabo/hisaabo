@@ -644,9 +644,16 @@ export default function InvoiceDetailScreen() {
             <View key={idx}>
               <View style={styles.tableRow}>
                 <View style={styles.tableDescCol}>
+                  {/* Bug B: itemName is the primary display, description is
+                      the optional italic notes line underneath. */}
                   <Text style={styles.lineDesc} numberOfLines={2}>
-                    {li.description}
+                    {li.itemName}
                   </Text>
+                  {li.description && li.description.trim().length > 0 && (
+                    <Text style={styles.lineNotes} numberOfLines={3}>
+                      {li.description}
+                    </Text>
+                  )}
                   {parseFloat(li.taxPercent ?? "0") > 0 && (
                     <Text style={styles.lineTax}>GST {li.taxPercent}%</Text>
                   )}
@@ -1003,6 +1010,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: colors.textPrimary,
+  },
+  lineNotes: {
+    fontSize: 11,
+    fontStyle: "italic",
+    color: colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 14,
   },
   lineTax: {
     fontSize: 10,

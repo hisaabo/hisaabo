@@ -244,6 +244,11 @@ export const businessRouter = router({
     await enforceDataExport(ctx.tenantId!);
     const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
       ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
+      // Historical export — include soft-deleted items so the user's
+      // backup is a complete record of what ever lived in their catalog.
+      // A soft-deleted row still carries its `deletedAt` column, which
+      // the CSV schema ignores today (columns explicitly listed below);
+      // callers that need it can reach into the raw rows directly.
       ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),
       ctx.db.select().from(invoices).where(eq(invoices.businessId, ctx.businessId)).orderBy(invoices.invoiceDate),
       ctx.db

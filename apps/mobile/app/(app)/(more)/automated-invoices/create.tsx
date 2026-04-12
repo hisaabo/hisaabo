@@ -21,6 +21,7 @@ import { formatCurrency } from "../../../../src/lib/utils";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
+import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 
 /* ── Types & Helpers ──────────────────────────────────────────── */
 
@@ -28,7 +29,9 @@ type InvoiceType = "sale" | "purchase";
 type Frequency = "weekly" | "biweekly" | "monthly" | "quarterly" | "half_yearly" | "yearly" | "custom";
 
 interface LineItem {
-  description: string;
+  itemName: string;
+  /** Free-text per-line note (maps to backend `description`). */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -36,7 +39,7 @@ interface LineItem {
 }
 
 function newLineItem(): LineItem {
-  return { description: "", quantity: "1", unitPrice: "0", taxPercent: "0", discountPercent: "0" };
+  return { itemName: "", notes: "", quantity: "1", unitPrice: "0", taxPercent: "0", discountPercent: "0" };
 }
 
 function safeNum(s: string) {
@@ -157,13 +160,15 @@ function LineItemRow({ item, index, onChange, onRemove }: LineItemRowProps) {
 
       <TextInput
         style={styles.descInput}
-        value={item.description}
-        onChangeText={(v) => onChange(index, "description", v)}
-        placeholder="Item description"
+        value={item.itemName}
+        onChangeText={(v) => onChange(index, "itemName", v)}
+        placeholder="Item name"
         placeholderTextColor={colors.textMuted}
-        multiline
-        numberOfLines={2}
       />
+
+      {item.itemName.trim().length > 0 ? (
+        <LineItemNotesField value={item.notes} onChange={(v) => onChange(index, "notes", v)} />
+      ) : null}
 
       <View style={styles.lineItemFields}>
         {(["quantity", "unitPrice", "taxPercent", "discountPercent"] as const).map((field, fi) => (
@@ -241,9 +246,9 @@ export default function CreateRecurringInvoiceScreen() {
       return;
     }
 
-    const validItems = lineItems.filter((li) => li.description.trim().length > 0);
+    const validItems = lineItems.filter((li) => li.itemName.trim().length > 0);
     if (validItems.length === 0) {
-      Alert.alert("Validation", "Add at least one line item with a description");
+      Alert.alert("Validation", "Add at least one line item with a name");
       return;
     }
 
@@ -259,10 +264,11 @@ export default function CreateRecurringInvoiceScreen() {
       type,
       frequency,
       customIntervalDays: frequency === "custom" ? parseInt(customIntervalDays) : undefined,
-      // Post Bug B: map local description (display) onto backend itemName.
-      // Stage 3 will split the client state into two fields.
+      // Bug B: itemName is the required name snapshot; description is the
+      // optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
-        itemName: li.description.trim(),
+        itemName: li.itemName.trim(),
+        description: li.notes.trim() || undefined,
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

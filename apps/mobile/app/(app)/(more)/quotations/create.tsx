@@ -22,10 +22,13 @@ import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
+import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 
 interface LineItem {
   itemId?: string;
-  description: string;
+  itemName: string;
+  /** Free-text per-line note (maps to backend `description`). */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -34,7 +37,8 @@ interface LineItem {
 
 function newLineItem(): LineItem {
   return {
-    description: "",
+    itemName: "",
+    notes: "",
     quantity: "1",
     unitPrice: "0",
     taxPercent: "0",
@@ -215,8 +219,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
     <View style={styles.lineItemCard}>
       <View style={styles.lineItemHeader}>
         <TouchableOpacity style={styles.descPickerBtn} onPress={() => onPickItem(index)} activeOpacity={0.7}>
-          <Text style={item.description ? styles.descText : styles.descPlaceholder} numberOfLines={1}>
-            {item.description || "Tap to select item..."}
+          <Text style={item.itemName ? styles.descText : styles.descPlaceholder} numberOfLines={1}>
+            {item.itemName || "Tap to select item..."}
           </Text>
           <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
         </TouchableOpacity>
@@ -225,16 +229,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
         </TouchableOpacity>
       </View>
 
-      {item.description ? (
-        <TextInput
-          style={styles.descInput}
-          value={item.description}
-          onChangeText={(v) => onChange(index, "description", v)}
-          placeholder="Description"
-          placeholderTextColor={colors.textMuted}
-          multiline
-          numberOfLines={2}
-        />
+      {item.itemName ? (
+        <LineItemNotesField value={item.notes} onChange={(v) => onChange(index, "notes", v)} />
       ) : null}
 
       <View style={styles.lineItemFields}>
@@ -285,7 +281,7 @@ export default function QuotationCreateScreen() {
   });
 
   const totals = useMemo(() => {
-    const validItems = lineItems.filter((li) => li.description.trim().length > 0);
+    const validItems = lineItems.filter((li) => li.itemName.trim().length > 0);
     if (validItems.length === 0) {
       return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
     }
@@ -323,7 +319,7 @@ export default function QuotationCreateScreen() {
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
-          description: item.name,
+          itemName: item.name,
           unitPrice: item.salePrice ?? "0",
           taxPercent: item.taxPercent,
         };
@@ -339,7 +335,7 @@ export default function QuotationCreateScreen() {
       return;
     }
     const validItems = lineItems.filter(
-      (li) => li.description.trim().length > 0 && parseFloat(li.quantity) > 0
+      (li) => li.itemName.trim().length > 0 && parseFloat(li.quantity) > 0
     );
     if (validItems.length === 0) {
       Alert.alert("Validation", "Add at least one item.");
@@ -357,11 +353,12 @@ export default function QuotationCreateScreen() {
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
       roundOff: "0",
-      // Post Bug B: backend expects itemName (required); map local
-      // description display onto it until Stage 3 splits client state.
+      // Bug B: itemName is the required name snapshot; description is the
+      // optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        itemName: li.description.trim(),
+        itemName: li.itemName.trim(),
+        description: li.notes.trim() || undefined,
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",

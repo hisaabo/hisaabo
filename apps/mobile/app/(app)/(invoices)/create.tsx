@@ -24,6 +24,7 @@ import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
 import { useContacts, type PhoneContact } from "../../../src/hooks/useContacts";
 import { DatePickerField } from "../../../src/components/ui";
+import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -35,7 +36,18 @@ interface LineItem {
   conversionFactor?: string;
   // item mode cached from the selected item so sub-selectors can render
   itemMode?: "simple" | "alt_units" | "variants";
-  description: string;
+  /**
+   * Bug B: snapshot of the product name at billing time. This is the primary
+   * line-item display and is frozen into the invoice so later item renames
+   * don't rewrite history. Required.
+   */
+  itemName: string;
+  /**
+   * Bug B: optional free-text per-line note (e.g. "Keep separate from
+   * order #42"). Maps to the wire-format `description` field when
+   * submitting to the backend.
+   */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -44,7 +56,8 @@ interface LineItem {
 
 function newLineItem(): LineItem {
   return {
-    description: "",
+    itemName: "",
+    notes: "",
     quantity: "1",
     unitPrice: "0",
     taxPercent: "0",
@@ -1000,10 +1013,10 @@ function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem,
           activeOpacity={0.7}
         >
           <Text
-            style={item.description ? styles.descText : styles.descPlaceholder}
+            style={item.itemName ? styles.descText : styles.descPlaceholder}
             numberOfLines={1}
           >
-            {item.description || "Tap to select item..."}
+            {item.itemName || "Tap to select item..."}
           </Text>
           <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
         </TouchableOpacity>
@@ -1012,19 +1025,9 @@ function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem,
         </TouchableOpacity>
       </View>
 
-      {/* Optional description edit when an item is selected */}
-      {item.description ? (
-        <TextInput
-          style={styles.descInput}
-          value={item.description}
-          onChangeText={(v) => onChange(index, "description", v)}
-          placeholder="Description"
-          placeholderTextColor={colors.textMuted}
-          multiline
-          numberOfLines={2}
-          returnKeyType="next"
-          onSubmitEditing={() => qtyRef.current?.focus()}
-        />
+      {/* Bug B: free-text per-line notes. Default collapsed as "+ Add notes". */}
+      {item.itemName ? (
+        <LineItemNotesField value={item.notes} onChange={(v) => onChange(index, "notes", v)} />
       ) : null}
 
       {/* G-08: Variant sub-selector */}
@@ -1328,7 +1331,7 @@ export default function InvoiceCreateScreen() {
   });
 
   const totals = useMemo(() => {
-    const validItems = lineItems.filter((li) => li.description.trim().length > 0);
+    const validItems = lineItems.filter((li) => li.itemName.trim().length > 0);
     if (validItems.length === 0) {
       return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
     }
@@ -1384,7 +1387,7 @@ export default function InvoiceCreateScreen() {
         next[activeLineIndex] = {
           ...next[activeLineIndex],
           itemId: item.id,
-          description: item.name,
+          itemName: item.name,
           unitPrice: price,
           taxPercent: item.taxPercent,
           // G-08: store item mode so sub-selectors can render; clear prior selections
@@ -1417,7 +1420,7 @@ export default function InvoiceCreateScreen() {
         next[index] = {
           ...li,
           variantId: variant.id,
-          description: parentItem ? `${parentItem.name} - ${label}` : label,
+          itemName: parentItem ? `${parentItem.name} - ${label}` : label,
           unitPrice: variantPrice ?? "0",
         };
         return next;
@@ -1444,7 +1447,7 @@ export default function InvoiceCreateScreen() {
             selectedUnit: undefined,
             conversionFactor: undefined,
             unitPrice: basePrice,
-            description: parentItem.name,
+            itemName: parentItem.name,
           };
           return next;
         }
@@ -1460,7 +1463,7 @@ export default function InvoiceCreateScreen() {
           selectedUnit: uv.unit,
           conversionFactor: String(uv.conversionFactor),
           unitPrice: unitPrice ?? "0",
-          description: `${parentItem.name} (${uv.unit})`,
+          itemName: `${parentItem.name} (${uv.unit})`,
         };
         return next;
       });
@@ -1489,11 +1492,11 @@ export default function InvoiceCreateScreen() {
     }
 
     const validItems = lineItems.filter(
-      (li) => li.description.trim().length > 0 && parseFloat(li.quantity) > 0
+      (li) => li.itemName.trim().length > 0 && parseFloat(li.quantity) > 0
     );
 
     if (validItems.length === 0) {
-      Alert.alert("Validation", "Add at least one item with a description.");
+      Alert.alert("Validation", "Add at least one item.");
       return;
     }
 
@@ -1516,14 +1519,12 @@ export default function InvoiceCreateScreen() {
       invoiceDiscount: "0",
       invoiceDiscountType: "amount",
       roundOff: "0",
-      // Post Bug B: backend expects itemName (required snapshot) +
-      // description (optional notes). Stage 3 will split the client state
-      // into two fields; until then the local `description` field still
-      // holds the item-name display, so we map it straight onto itemName
-      // and leave the notes column unset.
+      // Bug B: itemName is the required name snapshot and description is
+      // the optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
         itemId: li.itemId,
-        itemName: li.description.trim(),
+        itemName: li.itemName.trim(),
+        description: li.notes.trim() || undefined,
         quantity: li.quantity || "1",
         unitPrice: li.unitPrice || "0",
         taxPercent: li.taxPercent || "0",
@@ -1643,7 +1644,7 @@ export default function InvoiceCreateScreen() {
             <View>
               <Text style={styles.sectionLabel}>Items</Text>
               <Text style={styles.lineCount}>
-                {lineItems.filter(l => l.description).length} {lineItems.filter(l => l.description).length === 1 ? "item" : "items"} · {formatCurrency(totals.total)}
+                {lineItems.filter(l => l.itemName).length} {lineItems.filter(l => l.itemName).length === 1 ? "item" : "items"} · {formatCurrency(totals.total)}
               </Text>
             </View>
             <TouchableOpacity style={styles.addItemBtn} onPress={handleAddLine} activeOpacity={0.7}>
