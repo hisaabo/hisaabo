@@ -370,8 +370,10 @@ describe("SECURITY — Zod validators reject malformed inputs before they reach 
   });
 
   describe("createInvoiceSchema (invoice data)", () => {
+    // Post Bug B: itemName is required and description is optional free-text
+    // notes. The base line item sets itemName so valid-case assertions pass.
     const validLineItem = {
-      description: "Amul Butter 500g",
+      itemName: "Amul Butter 500g",
       quantity: "2",
       unitPrice: "220.00",
       taxPercent: "5.00",

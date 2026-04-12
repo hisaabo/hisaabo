@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useId } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, cn } from "@/lib/utils";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
 import { toast } from "@/hooks/useToast";
@@ -40,18 +40,33 @@ interface UnitOption {
 interface LineItem {
   id: string;
   itemId?: string;
-  description: string;
+  /**
+   * Snapshot of the item name shown as the primary bold line on the invoice.
+   * On item-pick this is set to `product.name` and should only change if the
+   * user manually edits it. Wire-format key is `itemName` on the tRPC payload.
+   */
+  itemName: string;
+  /**
+   * Optional free-text notes for this line (per-invoice comments like
+   * "Keep separate from order #42"). Rendered as italic muted secondary text
+   * on the invoice detail view and PDF. Max 500 chars (validator-enforced).
+   * UI-only key; on submission we map this to the payload's `description`
+   * field (which the backend validator accepts as nullable/optional).
+   */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
   discountPercent: string;
   selectedUnit?: string;
+  conversionFactor?: string;
   availableUnits?: UnitOption[];
 }
 
 interface Charge {
   label: string;
   amount: string;
+  shipmentId?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -70,7 +85,8 @@ const documentTypeLabels: Record<DocumentType, string> = {
 function newLineItem(): LineItem {
   return {
     id: crypto.randomUUID(),
-    description: "",
+    itemName: "",
+    notes: "",
     quantity: "1",
     unitPrice: "",
     taxPercent: "0",
@@ -178,15 +194,17 @@ export function DocumentCreator({
 
     // Map charges from JSONB
     if (editData.charges && Array.isArray(editData.charges)) {
-      setCharges(editData.charges.map((c: any) => ({ label: c.label, amount: c.amount })));
+      setCharges(editData.charges.map((c: any) => ({ label: c.label, amount: c.amount, ...(c.shipmentId ? { shipmentId: c.shipmentId } : {}) })));
     }
 
-    // Map line items
+    // Map line items — backend now exposes `itemName` (required snapshot)
+    // and `description` (nullable free-text notes) as separate fields.
     if (editData.lineItems?.length) {
       setItems(editData.lineItems.map((li: any) => ({
         id: crypto.randomUUID(),
         itemId: li.itemId || undefined,
-        description: li.description,
+        itemName: li.itemName ?? "",
+        notes: li.description ?? "",
         quantity: li.quantity,
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent || "0",
@@ -322,7 +340,7 @@ export function DocumentCreator({
       setItems((prev) =>
         prev.map((li) =>
           li.id === lineId
-            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined }
+            ? { ...li, itemId: undefined, availableUnits: undefined, selectedUnit: undefined, conversionFactor: undefined }
             : li
         )
       );
@@ -345,10 +363,17 @@ export function DocumentCreator({
           ? {
               ...li,
               itemId: product.id,
-              description: product.name,
+              // itemName is the frozen snapshot shown as the primary line on
+              // the invoice. Notes are intentionally cleared on pick so the
+              // new line starts with a blank notes field — users then type a
+              // per-invoice comment (e.g. "Keep separate from order #42") if
+              // they want one.
+              itemName: product.name,
+              notes: "",
               unitPrice: basePrice,
               taxPercent: product.taxPercent,
-              selectedUnit: product.unit,
+              selectedUnit: undefined,
+              conversionFactor: undefined,
               availableUnits: allUnits.length > 1 ? allUnits : undefined,
             }
           : li
@@ -365,10 +390,28 @@ export function DocumentCreator({
     setItems((prev) => prev.filter((li) => li.id !== id));
   }
 
+  function handleSelectUnit(lineId: string, unitKey: string) {
+    setItems((prev) =>
+      prev.map((li) => {
+        if (li.id !== lineId) return li;
+        const unit = li.availableUnits?.find((u) =>
+          unitKey === "__base__" ? u.conversionFactor === 1 : u.unit === unitKey
+        );
+        if (!unit) return li;
+        return {
+          ...li,
+          selectedUnit: unitKey === "__base__" ? undefined : unit.unit,
+          unitPrice: unit.salePrice,
+          conversionFactor: unitKey === "__base__" ? undefined : String(unit.conversionFactor),
+        };
+      })
+    );
+  }
+
   function handleSubmit() {
-    const validItems = items.filter((li) => li.description && li.unitPrice);
+    const validItems = items.filter((li) => li.itemName.trim() && li.unitPrice);
     if (validItems.length === 0) {
-      toast.error("Add at least one line item with a description and price");
+      toast.error("Add at least one line item with an item name and price");
       return;
     }
     if (!partyId) {
@@ -378,20 +421,33 @@ export function DocumentCreator({
       return;
     }
 
-    const lineItemsPayload = validItems.map((li) => ({
-      itemId: li.itemId,
-      description: li.description,
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-      taxPercent: li.taxPercent,
-      discountPercent: li.discountPercent,
-      selectedUnit: li.selectedUnit || undefined,
-      conversionFactor: li.availableUnits?.find((u) => u.unit === li.selectedUnit)?.conversionFactor?.toString() || undefined,
-    }));
+    // Bug B: the backend validator requires `itemName` (the frozen snapshot
+    // shown as the primary bold line) and accepts an optional, nullable
+    // `description` (free-text notes rendered underneath). Empty or
+    // whitespace-only notes are sent as `undefined` so the validator keeps
+    // the stored column NULL instead of persisting an empty string.
+    const lineItemsPayload = validItems.map((li) => {
+      const trimmedNotes = li.notes.trim();
+      return {
+        itemId: li.itemId,
+        itemName: li.itemName.trim(),
+        description: trimmedNotes.length > 0 ? trimmedNotes : undefined,
+        quantity: li.quantity,
+        unitPrice: li.unitPrice,
+        taxPercent: li.taxPercent,
+        discountPercent: li.discountPercent,
+        selectedUnit: li.selectedUnit || undefined,
+        conversionFactor: li.conversionFactor || undefined,
+      };
+    });
 
     const chargesPayload = charges
       .filter((c) => c.label && c.amount && parseFloat(c.amount) > 0)
-      .map((c) => ({ label: c.label, amount: parseFloat(c.amount).toFixed(2) }));
+      .map((c) => ({
+        label: c.label,
+        amount: parseFloat(c.amount).toFixed(2),
+        ...(c.shipmentId ? { shipmentId: c.shipmentId } : {}),
+      }));
 
     if (isEditing) {
       updateMutation.mutate({
@@ -459,7 +515,7 @@ export function DocumentCreator({
             type="button"
             className="btn-primary"
             onClick={handleSubmit}
-            disabled={activeMutation.isPending}
+            disabled={activeMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {activeMutation.isPending
               ? isEditing ? "Saving..." : "Creating..."
@@ -522,29 +578,6 @@ export function DocumentCreator({
                       onQueryChange={setItemSearch}
                       isLoading={itemsFetching && !!debouncedItemSearch}
                     />
-                    {/* Unit variant selector - only if item has variants */}
-                    {li.availableUnits && li.availableUnits.length > 1 && (
-                      <select
-                        value={li.selectedUnit || ""}
-                        aria-label="Unit"
-                        onChange={(e) => {
-                          const selected = li.availableUnits?.find((u) => u.unit === e.target.value);
-                          if (selected) {
-                            updateItem(li.id, "unitPrice", selected.salePrice);
-                            setItems((prev) => prev.map((item) =>
-                              item.id === li.id ? { ...item, selectedUnit: selected.unit } : item
-                            ));
-                          }
-                        }}
-                        className="input py-1 text-[11px] mt-1.5"
-                      >
-                        {li.availableUnits.map((u) => (
-                          <option key={u.unit} value={u.unit}>
-                            {u.unit.toUpperCase()} {u.conversionFactor > 1 ? `(${u.conversionFactor} base)` : ""} — ₹{u.salePrice}
-                          </option>
-                        ))}
-                      </select>
-                    )}
                   </div>
                   <button
                     type="button"
@@ -559,16 +592,38 @@ export function DocumentCreator({
                   </button>
                 </div>
 
-                {/* Row 2: Description */}
-                <input
-                  id={`${lineItemIdPrefix}-${li.id}-desc`}
-                  value={li.description}
-                  onChange={(e) => updateItem(li.id, "description", e.target.value)}
-                  placeholder="Description *"
-                  required
-                  aria-label="Item description"
-                  className="input py-1.5 text-sm"
-                />
+                {/* Unit selector pills — only for items with alt units */}
+                {li.availableUnits && li.availableUnits.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pl-0.5" role="radiogroup" aria-label="Select unit">
+                    {li.availableUnits.map((u) => {
+                      const isSelected = (u.conversionFactor === 1 && !li.selectedUnit) || li.selectedUnit === u.unit;
+                      const isBase = u.conversionFactor === 1;
+                      return (
+                        <button
+                          key={u.unit}
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          onClick={() => handleSelectUnit(li.id, isBase ? "__base__" : u.unit)}
+                          className={cn(
+                            "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border",
+                            isSelected
+                              ? "bg-brand-600 text-white border-brand-600"
+                              : "border-border-light text-text-secondary hover:bg-surface-1"
+                          )}
+                        >
+                          <span>{u.unit.toUpperCase()}</span>
+                          <span className={cn("tabular-nums", isSelected ? "text-white/80" : "text-text-tertiary")}>
+                            ₹{u.salePrice}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Item name is set automatically from the picker — no separate
+                    input needed. The notes textarea below handles free-text. */}
 
                 {/* Row 3: Numbers grid + total */}
                 <div className="flex items-end gap-2">
@@ -658,6 +713,35 @@ export function DocumentCreator({
                     </p>
                   </div>
                 </div>
+
+                {/* Row 4: Free-text notes for this line (optional). Stored
+                    on the backend as `invoice_items.description` and
+                    rendered as italic muted secondary text on the PDF and
+                    detail views beneath the item name. */}
+                <div className="relative">
+                  <textarea
+                    id={`${lineItemIdPrefix}-${li.id}-notes`}
+                    value={li.notes}
+                    onChange={(e) => updateItem(li.id, "notes", e.target.value)}
+                    placeholder="Notes for this line (optional)"
+                    aria-label="Line notes"
+                    rows={2}
+                    maxLength={500}
+                    className="input py-1.5 text-xs resize-y min-h-[2.25rem]"
+                  />
+                  {li.notes.length > 400 && (
+                    <p
+                      className={`absolute right-2 bottom-1 text-[10px] tabular-nums pointer-events-none ${
+                        li.notes.length > 500
+                          ? "text-red-500"
+                          : "text-text-tertiary"
+                      }`}
+                      aria-live="polite"
+                    >
+                      {li.notes.length} / 500
+                    </p>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -740,36 +824,44 @@ export function DocumentCreator({
               {charges.map((charge, idx) => (
                 <div key={idx} className="flex justify-between items-center text-sm mb-1.5">
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <input
-                      value={charge.label}
-                      onChange={(e) => {
-                        const next = [...charges];
-                        next[idx] = { ...next[idx], label: e.target.value };
-                        setCharges(next);
-                      }}
-                      className="input py-1 text-xs w-28"
-                      placeholder="Label"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setCharges(charges.filter((_, i) => i !== idx))}
-                      className="text-text-tertiary hover:text-red-500 transition-colors p-0.5"
-                      aria-label="Remove charge"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <path d="M4 4l8 8M12 4l-8 8" />
-                      </svg>
-                    </button>
+                    {charge.shipmentId ? (
+                      <span className="text-xs text-text-tertiary italic truncate">{charge.label} (synced)</span>
+                    ) : (
+                      <>
+                        <input
+                          value={charge.label}
+                          onChange={(e) => {
+                            const next = [...charges];
+                            next[idx] = { ...next[idx], label: e.target.value };
+                            setCharges(next);
+                          }}
+                          className="input py-1 text-xs w-28"
+                          placeholder="Label"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setCharges(charges.filter((_, i) => i !== idx))}
+                          className="text-text-tertiary hover:text-red-500 transition-colors p-0.5"
+                          aria-label="Remove charge"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
                   </div>
                   <input
                     type="number"
                     value={charge.amount}
                     onChange={(e) => {
+                      if (charge.shipmentId) return; // synced charges are read-only
                       const next = [...charges];
                       next[idx] = { ...next[idx], amount: e.target.value };
                       setCharges(next);
                     }}
-                    className="input w-28 text-right tabular-nums py-1 text-xs"
+                    readOnly={!!charge.shipmentId}
+                    className={`input w-28 text-right tabular-nums py-1 text-xs ${charge.shipmentId ? "opacity-60 cursor-not-allowed" : ""}`}
                     step="0.01"
                     min="0"
                     placeholder="0.00"

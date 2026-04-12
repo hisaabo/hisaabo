@@ -185,12 +185,14 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
   const [mode, setMode] = useState("");
   const [carrier, setCarrier] = useState("");
   const [tracking, setTracking] = useState("");
+  const [cost, setCost] = useState("");
 
   const utils = trpc.useUtils();
 
   const createMutation = trpc.shipment.create.useMutation({
     onSuccess: () => {
       utils.shipment.list.invalidate();
+      utils.invoice.getById.invalidate({ id: invoiceId });
       toast.success("Shipment created");
       onCreated();
     },
@@ -219,13 +221,24 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
           className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
-      <input
-        type="text"
-        value={tracking}
-        onChange={(e) => setTracking(e.target.value)}
-        placeholder="Tracking number (optional)"
-        className="w-full text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
-      />
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="text"
+          value={tracking}
+          onChange={(e) => setTracking(e.target.value)}
+          placeholder="Tracking number (optional)"
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+        <input
+          type="number"
+          value={cost}
+          onChange={(e) => setCost(e.target.value)}
+          placeholder="Shipping cost (₹)"
+          min="0"
+          step="0.01"
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500 tabular-nums"
+        />
+      </div>
       <button
         onClick={() =>
           createMutation.mutate({
@@ -234,6 +247,7 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
             mode: mode || undefined,
             carrier: carrier || undefined,
             trackingNumber: tracking || undefined,
+            cost: cost || "0",
             status: "pending",
           })
         }
@@ -248,7 +262,7 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
 
 // ── Shipment card inside invoice detail ───────────────────────────
 
-function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
+function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId: string; partyId: string; invoiceStatus: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [showTrackingForm, setShowTrackingForm] = useState(false);
   const [trackingInput, setTrackingInput] = useState("");
@@ -292,7 +306,9 @@ function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
 
       {!shipment ? (
         <div>
-          {!showCreate ? (
+          {invoiceStatus === "paid" ? (
+            <p className="text-xs text-text-tertiary">Invoice is paid — shipment cannot be added.</p>
+          ) : !showCreate ? (
             <button
               onClick={() => setShowCreate(true)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -302,7 +318,7 @@ function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
           ) : (
             <CreateShipmentForm
               invoiceId={invoiceId}
-              partyId=""
+              partyId={partyId}
               onCreated={() => {
                 setShowCreate(false);
                 utils.shipment.list.invalidate();
@@ -560,7 +576,7 @@ function InvoiceDetailPanel({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-surface-1 border-b border-border-light">
-                    <th className="px-3 py-2 text-left font-medium text-text-tertiary">Description</th>
+                    <th className="px-3 py-2 text-left font-medium text-text-tertiary">Item</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Qty</th>
                     <th className="px-3 py-2 text-left font-medium text-text-tertiary">Unit</th>
                     <th className="px-3 py-2 text-right font-medium text-text-tertiary">Price</th>
@@ -572,18 +588,25 @@ function InvoiceDetailPanel({
                 <tbody className="divide-y divide-border-light">
                   {invoice.lineItems.map((li) => (
                     <tr key={li.id}>
-                      <td className="px-3 py-2 text-text-primary">{li.description}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
-                      <td className="px-3 py-2 text-text-secondary text-xs">
-                        {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
-                        {li.conversionFactor && parseFloat(li.conversionFactor) > 1 && (
-                          <span className="text-text-tertiary"> (×{li.conversionFactor})</span>
+                      <td className="px-3 py-2">
+                        {/* Primary: frozen item name snapshot. Secondary:
+                            optional italic notes — collapses with no
+                            placeholder gap when description is null/empty. */}
+                        <p className="font-medium text-text-primary">{li.itemName}</p>
+                        {li.description && (
+                          <p className="text-[11px] italic text-text-secondary mt-0.5 whitespace-pre-wrap">
+                            {li.description}
+                          </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.discountPercent}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(li.totalAmount)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.quantity}</td>
+                      <td className="px-3 py-2 text-text-secondary text-xs align-top">
+                        {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{formatCurrency(li.unitPrice)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.taxPercent}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.discountPercent}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary align-top">{formatCurrency(li.totalAmount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -728,7 +751,7 @@ function InvoiceDetailPanel({
 
           {/* Shipment card — sale invoices only */}
           {invoice.type === "sale" && (
-            <InvoiceShipmentCard invoiceId={invoice.id} />
+            <InvoiceShipmentCard invoiceId={invoice.id} partyId={invoice.partyId} invoiceStatus={invoice.status} />
           )}
         </div>
       )}

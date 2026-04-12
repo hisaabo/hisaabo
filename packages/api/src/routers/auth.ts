@@ -8,7 +8,7 @@ import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, in
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
-import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
+import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 
@@ -35,6 +35,8 @@ function generateSlug(name: string): string {
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
+
+const IS_SECURE = (process.env.APP_URL || "").startsWith("https");
 
 // Safe IP extraction from a raw Request — mirrors the logic in server.ts getClientIp().
 // Prefers cf-connecting-ip (Cloudflare, strips spoofed values at CDN edge).
@@ -104,6 +106,12 @@ async function createSessionForUser(
 
   // Evict oldest sessions if at plan limit (FIFO, never blocks login)
   await enforceSessionLimit(userId);
+
+  const previousSessionId = getSessionIdFromRequest(ctx.req);
+  if (previousSessionId && !previousSessionId.startsWith("hisaabo_key_")) {
+    controlDb.delete(sessions).where(eq(sessions.id, previousSessionId)).catch(() => {});
+    invalidateSessionCache(previousSessionId);
+  }
 
   const sessionId = nanoid(64);
   await controlDb.insert(sessions).values({
@@ -344,14 +352,31 @@ export const authRouter = router({
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
     const tokenParam = `token=${encodeURIComponent(rawToken)}`;
-    const webUrl = `${baseUrl}/auth/verify?${tokenParam}`;
+
+    // Primary email CTA is ALWAYS the HTTPS link — email clients (Gmail,
+    // Outlook, Apple Mail, corporate gateways) strip or refuse to render
+    // anchors with custom URL schemes like `hisaabo://`, treating them as
+    // phishing / protocol-hijack vectors. Shipping the deep link as the
+    // primary `<a href="...">` produces a plain-text, non-clickable line
+    // in most inboxes.
+    //
+    // When the sign-in was initiated from the desktop or mobile app we
+    // thread the `source` through the HTTPS URL as a query param so the
+    // /auth/verify page can hand off to the native app via the `hisaabo://`
+    // scheme from a real browser (where custom schemes ARE honored by the
+    // OS), instead of consuming the token inside the browser session.
+    const sourceSuffix =
+      input.source === "desktop" || input.source === "mobile"
+        ? `&source=${input.source}`
+        : "";
+    const webUrl = `${baseUrl}/auth/verify?${tokenParam}${sourceSuffix}`;
     const deepLinkUrl = `hisaabo://verify?${tokenParam}`;
 
-    // Primary link matches the initiator: desktop/mobile get the deep link,
-    // web gets the regular HTTPS link. The other is shown as secondary.
-    const isAppSource = input.source === "desktop" || input.source === "mobile";
-    const primaryUrl = isAppSource ? deepLinkUrl : webUrl;
-    const secondaryUrl = isAppSource ? webUrl : deepLinkUrl;
+    // Secondary is the raw deep link — some email clients do render it
+    // (and it serves as a copy-paste fallback) but we no longer depend
+    // on its clickability.
+    const primaryUrl = webUrl;
+    const secondaryUrl = deepLinkUrl;
 
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)
@@ -577,6 +602,7 @@ export const authRouter = router({
 
     await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
 
+    revokeAllUserSessions(ctx.user!.id);
     for (const s of userSessions) {
       invalidateSessionCache(s.id);
     }
@@ -668,7 +694,7 @@ export const authRouter = router({
 });
 
 function setSessionCookie(headers: Headers, sessionId: string) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = IS_SECURE ? "; Secure" : "";
   headers.set(
     "Set-Cookie",
     `session_id=${sessionId}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${30 * 24 * 60 * 60}`
@@ -676,5 +702,6 @@ function setSessionCookie(headers: Headers, sessionId: string) {
 }
 
 function clearSessionCookie(headers: Headers) {
-  headers.set("Set-Cookie", "session_id=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0");
+  const secure = IS_SECURE ? "; Secure" : "";
+  headers.set("Set-Cookie", `session_id=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`);
 }

@@ -14,8 +14,10 @@ const checks: EnvCheck[] = [
   {
     key: "ENCRYPTION_KEY",
     required: false,
-    condition: () => process.env.NODE_ENV === "production",
-    hint: "Required in production for field-level encryption of sensitive credentials (e-invoice, carrier API keys). Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+    condition: () =>
+      process.env.NODE_ENV === "production" ||
+      process.env.MULTI_TENANT === "true",
+    hint: "Required in production and multi-tenant mode for field-level encryption of sensitive credentials (e-invoice, carrier API keys). Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
   },
   {
     key: "RESEND_API_KEY",

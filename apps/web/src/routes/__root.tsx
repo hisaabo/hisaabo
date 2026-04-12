@@ -449,7 +449,7 @@ function RootLayout() {
     // invite link, was redirected to login, and is now back. The invite
     // page stored the token before redirecting; we pick it up here.
     if (!session.tenantId) {
-      const pendingToken = localStorage.getItem("pendingInviteToken");
+      const pendingToken = sessionStorage.getItem("pendingInviteToken");
       if (pendingToken && !pathname.startsWith("/invite")) {
         navigate({ to: `/invite/${pendingToken}` });
         return;
@@ -515,7 +515,7 @@ function RootLayout() {
     if (tenantList.length === 0) {
       // If a pending invite token exists, show spinner — the redirect useEffect
       // will navigate to /invite/$token momentarily.
-      const hasPendingInvite = !!localStorage.getItem("pendingInviteToken");
+      const hasPendingInvite = !!sessionStorage.getItem("pendingInviteToken");
       if (hasPendingInvite) return loadingSpinner;
 
       return <NoOrgScreen />;

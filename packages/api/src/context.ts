@@ -10,6 +10,34 @@ const sessionCache = new Map<string, { data: { userId: string; email: string; na
 const SESSION_CACHE_TTL = 60_000;
 const SESSION_CACHE_MAX = 1000;
 
+const revokedUsers = new Map<string, number>();
+const REVOKED_TTL = 65_000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, expiry] of revokedUsers) {
+    if (now >= expiry) revokedUsers.delete(uid);
+  }
+}, 120_000).unref();
+
+export function revokeAllUserSessions(userId: string) {
+  revokedUsers.set(userId, Date.now() + REVOKED_TTL);
+  for (const [key, entry] of sessionCache) {
+    if (entry.data.userId === userId) sessionCache.delete(key);
+  }
+}
+
+function getClientIp(req: Request): string | null {
+  const cfIp = req.headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+  return null;
+}
+
 export async function createContext(opts: FetchCreateContextFnOptions) {
   // NOTE: we intentionally do NOT use getSessionIdFromRequest() here because
   // createContext needs the raw token to detect the API key prefix on line 27.
@@ -81,11 +109,19 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
     } else {
       // ── Session path (cookie or Bearer session token) ──
       // Check cache first
+      let cacheHit = false;
       const cached = sessionCache.get(sessionId);
       if (cached && Date.now() < cached.expires) {
-        user = { id: cached.data.userId, email: cached.data.email, name: cached.data.name };
-        tenantId = cached.data.tenantId;
-      } else {
+        const revokedExpiry = revokedUsers.get(cached.data.userId);
+        if (revokedExpiry && Date.now() < revokedExpiry) {
+          sessionCache.delete(sessionId);
+        } else {
+          user = { id: cached.data.userId, email: cached.data.email, name: cached.data.name };
+          tenantId = cached.data.tenantId;
+          cacheHit = true;
+        }
+      }
+      if (!cacheHit) {
         // Cache miss — query DB
         const result = await controlDb
           .select({
@@ -134,6 +170,7 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
     businessId: businessId && user ? businessId : null,
     req: opts.req,
     resHeaders: opts.resHeaders,
+    ipAddress: getClientIp(opts.req),
   };
 }
 

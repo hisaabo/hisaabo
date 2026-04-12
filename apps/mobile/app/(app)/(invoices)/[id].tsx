@@ -222,10 +222,12 @@ function AddTrackingSheet({
 
 interface ShipmentSectionProps {
   invoiceId: string;
+  invoiceStatus: string;
 }
 
-function ShipmentSection({ invoiceId }: ShipmentSectionProps) {
+function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
+  const utils = trpc.useUtils();
 
   const { data, isLoading, refetch } = trpc.shipment.list.useQuery(
     { invoiceId, limit: 1 },
@@ -233,9 +235,17 @@ function ShipmentSection({ invoiceId }: ShipmentSectionProps) {
   );
 
   const updateShipment = trpc.shipment.update.useMutation({
-    onSuccess: () => { haptic.success(); refetch(); },
+    onSuccess: () => {
+      haptic.success();
+      refetch();
+      // Refresh invoice data so totals reflect synced shipping charges
+      utils.invoice.getById.invalidate({ id: invoiceId });
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
+
+  // Paid invoices: backend blocks mutations, UI hides action buttons
+  const isPaid = invoiceStatus === "paid";
 
   const shipment = data?.data?.[0] ?? null;
 
@@ -370,8 +380,8 @@ function ShipmentSection({ invoiceId }: ShipmentSectionProps) {
           </View>
         ) : null}
 
-        {/* Action buttons */}
-        {(shipment.status === "pending" ||
+        {/* Action buttons — hidden when invoice is paid */}
+        {!isPaid && (shipment.status === "pending" ||
           shipment.status === "shipped" ||
           shipment.status === "in_transit") ? (
           <View style={shipmentStyles.actionRow}>
@@ -644,9 +654,16 @@ export default function InvoiceDetailScreen() {
             <View key={idx}>
               <View style={styles.tableRow}>
                 <View style={styles.tableDescCol}>
+                  {/* Bug B: itemName is the primary display, description is
+                      the optional italic notes line underneath. */}
                   <Text style={styles.lineDesc} numberOfLines={2}>
-                    {li.description}
+                    {li.itemName}
                   </Text>
+                  {li.description && li.description.trim().length > 0 && (
+                    <Text style={styles.lineNotes} numberOfLines={3}>
+                      {li.description}
+                    </Text>
+                  )}
                   {parseFloat(li.taxPercent ?? "0") > 0 && (
                     <Text style={styles.lineTax}>GST {li.taxPercent}%</Text>
                   )}
@@ -723,7 +740,7 @@ export default function InvoiceDetailScreen() {
         ) : null}
 
         {/* Shipment tracking — sale invoices only */}
-        {invoice.type === "sale" && <ShipmentSection invoiceId={invoice.id} />}
+        {invoice.type === "sale" && <ShipmentSection invoiceId={invoice.id} invoiceStatus={invoice.status} />}
 
         {/* Actions */}
         <Text style={styles.sectionTitle}>Actions</Text>
@@ -1003,6 +1020,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: colors.textPrimary,
+  },
+  lineNotes: {
+    fontSize: 11,
+    fontStyle: "italic",
+    color: colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 14,
   },
   lineTax: {
     fontSize: 10,

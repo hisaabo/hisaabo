@@ -62,7 +62,7 @@ async function createSaleInvoice(totalAmount: string) {
     invoiceDate: new Date().toISOString(),
     lineItems: [
       {
-        description: `Invoice for ${totalAmount}`,
+        itemName: `Invoice for ${totalAmount}`,
         quantity: "1",
         unitPrice: totalAmount,
         taxPercent: "0",

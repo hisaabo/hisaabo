@@ -37,8 +37,13 @@ interface InvoicePDFData {
   invoiceNumber: string;
   invoiceDate: string;
   type: "sale" | "purchase";
+  // Mirrors the post Bug B shape on the real InvoicePDFData type:
+  // itemName is the required snapshot, description is the optional notes
+  // column. buildGstBreakdown does not read either field — they exist on
+  // the type for parity with production.
   lineItems: Array<{
-    description: string;
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent: string;
@@ -575,7 +580,8 @@ describe("buildGstBreakdown — rate-wise GST breakdown table for GSTR complianc
     taxAmount: string,
   ) {
     return {
-      description: "Item",
+      itemName: "Item",
+      description: null,
       quantity: "1",
       unitPrice: totalAmount,
       taxPercent,

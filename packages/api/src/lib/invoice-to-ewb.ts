@@ -46,7 +46,10 @@ export interface InvoiceForEWB {
 }
 
 export interface LineItemForEWB {
-  description: string;
+  /** Required snapshot of the item name (mapped to EWB productName/productDesc). */
+  itemName: string;
+  /** Optional free-text line notes — not used by EWB payload. */
+  description: string | null;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -242,8 +245,11 @@ export function mapInvoiceToEWB(
     const rates = splitTaxRate(taxPct, interState);
 
     return {
-      productName: li.description.slice(0, 100),
-      productDesc: li.description.slice(0, 100),
+      // EWB payload needs a human-readable product name — use itemName
+      // (required). productDesc historically mirrored productName in our
+      // payload; keep that behaviour.
+      productName: li.itemName.slice(0, 100),
+      productDesc: li.itemName.slice(0, 100),
       hsnCode: li.hsn ?? "",
       quantity: qty,
       qtyUnit: mapUnit(li.unit),

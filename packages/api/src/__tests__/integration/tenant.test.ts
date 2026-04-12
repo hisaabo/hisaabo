@@ -60,6 +60,7 @@ function callerForTenant(
     businessId: null,
     req,
     resHeaders: new Headers(),
+    ipAddress: null,
   });
 }
 
@@ -78,6 +79,7 @@ function callerNoTenant(sessionId: string, user: { id: string; email: string; na
     businessId: null,
     req,
     resHeaders: new Headers(),
+    ipAddress: null,
   });
 }
 

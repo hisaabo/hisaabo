@@ -135,7 +135,7 @@ function getLineRow(rowIndex = 0) {
   // Four spinbuttons per row: qty(0), price(1), tax%(2), disc%(3).
   const qtyInput = allSpinbuttons[rowIndex * 4];
   const priceInput = allSpinbuttons[rowIndex * 4 + 1];
-  const descInput = screen.getAllByPlaceholderText("Description *")[rowIndex];
+  const descInput = screen.getAllByPlaceholderText("Item name *")[rowIndex];
   return { qtyInput, priceInput, descInput };
 }
 
@@ -173,7 +173,7 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
       renderCreator();
 
       // There should be exactly one Description input on initial render.
-      expect(screen.getAllByPlaceholderText("Description *")).toHaveLength(1);
+      expect(screen.getAllByPlaceholderText("Item name *")).toHaveLength(1);
     });
 
     it("adds a new line item row when '+ Add line item' is clicked, enabling multi-item invoices", async () => {
@@ -181,7 +181,7 @@ describe("InvoiceCreator — invoice creation form with real-time GST calculatio
 
       await userEvent.click(screen.getByText("+ Add line item"));
 
-      expect(screen.getAllByPlaceholderText("Description *")).toHaveLength(2);
+      expect(screen.getAllByPlaceholderText("Item name *")).toHaveLength(2);
     });
 
     it("renders the party dropdown pre-populated with parties from the API so the user can immediately select a customer", () => {

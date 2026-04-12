@@ -25,10 +25,10 @@ function CompleteProfilePage() {
   const [error, setError] = useState("");
   const [doneMessage, setDoneMessage] = useState("");
 
-  const pendingToken = localStorage.getItem("pendingInviteToken");
+  const pendingToken = sessionStorage.getItem("pendingInviteToken");
 
   // Peek at invitation to show org name before accepting.
-  // Returns null for expired/accepted tokens — clears stale localStorage.
+  // Returns null for expired/accepted tokens — clears stale sessionStorage.
   const { data: inviteInfo, isFetched: invitePeekDone } = trpc.tenant.peekInvitation.useQuery(
     { token: pendingToken! },
     { enabled: !!pendingToken },
@@ -37,7 +37,7 @@ function CompleteProfilePage() {
   // Clean up stale token if peek returned null (expired or already accepted)
   useEffect(() => {
     if (pendingToken && invitePeekDone && inviteInfo === null) {
-      localStorage.removeItem("pendingInviteToken");
+      sessionStorage.removeItem("pendingInviteToken");
     }
   }, [pendingToken, invitePeekDone, inviteInfo]);
 
@@ -90,7 +90,7 @@ function CompleteProfilePage() {
       const result = await acceptInviteMutation.mutateAsync({ token: pendingToken });
       // acceptInvitation already calls autoSelectTenantInSession on the backend,
       // so no need for a separate selectTenant call.
-      localStorage.removeItem("pendingInviteToken");
+      sessionStorage.removeItem("pendingInviteToken");
       // Await ALL refetches before navigating — prevents the root layout from
       // seeing stale empty businesses and redirecting to /settings.
       await utils.auth.me.refetch();
@@ -100,13 +100,13 @@ function CompleteProfilePage() {
       setStep("done");
       setTimeout(() => navigate({ to: "/", search: { joined: result.tenantName } }), 800);
     } catch (err) {
-      localStorage.removeItem("pendingInviteToken");
+      sessionStorage.removeItem("pendingInviteToken");
       setError(err instanceof Error ? err.message : "Failed to accept invitation");
     }
   }
 
   function handleCreateOwn() {
-    localStorage.removeItem("pendingInviteToken");
+    sessionStorage.removeItem("pendingInviteToken");
     setDoneMessage("Setting up your organization...");
     setStep("done");
     setTimeout(() => navigate({ to: "/settings" }), 800);

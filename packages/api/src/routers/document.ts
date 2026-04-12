@@ -118,7 +118,9 @@ export const documentRouter = router({
         skipStockAdjustment,
         lineItems: sourceLineItems.map((li) => ({
           itemId: li.itemId ?? undefined,
-          description: li.description,
+          itemName: li.itemName,
+          // Carry forward optional notes verbatim. Null stays null.
+          description: li.description ?? null,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent,
@@ -128,7 +130,7 @@ export const documentRouter = router({
 
       // 3. Determine which router to delegate to and invoke its create procedure
       const targetType = input.targetDocumentType;
-      const callerCtx = { user: ctx.user, businessId: ctx.businessId, tenantId: ctx.tenantId, db: ctx.db, req: ctx.req, resHeaders: ctx.resHeaders };
+      const callerCtx = { user: ctx.user, businessId: ctx.businessId, tenantId: ctx.tenantId, db: ctx.db, req: ctx.req, resHeaders: ctx.resHeaders, ipAddress: ctx.ipAddress };
 
       // For invoice target type, import dynamically to avoid circular deps
       if (targetType === "invoice") {
@@ -144,7 +146,7 @@ export const documentRouter = router({
           entityType: "document",
           entityId: newDoc.id,
           metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return { id: newDoc.id, documentType: "invoice" as DocumentType, invoiceNumber: newDoc.invoiceNumber };
@@ -178,7 +180,7 @@ export const documentRouter = router({
         entityType: "document",
         entityId: newDoc.id,
         metadata: { sourceType: sourceDoc.documentType, targetType: input.targetDocumentType, sourceId: input.sourceDocumentId },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { id: newDoc.id, documentType: targetType, invoiceNumber: newDoc.invoiceNumber };

@@ -11,7 +11,7 @@ export const importPayments = adminProcedure
     source: z.string().default("mybillbook"),
     // Invoice numbers that were marked "Paid" in the source system.
     // After C&B allocation, any of these still without full payment get auto-payments.
-    paidInvoiceNumbers: z.array(z.string()).default([]),
+    paidInvoiceNumbers: z.array(z.string()).max(5000).default([]),
     payments: z.array(z.object({
       paymentNumber: z.string().optional(),
       paymentDate: z.string(),
@@ -21,7 +21,7 @@ export const importPayments = adminProcedure
       referenceNumber: z.string().optional(),
       notes: z.string().optional(),
       invoiceNumbers: z.array(z.string()).optional(), // explicit invoice linkage from CSV
-    })),
+    })).max(5000),
   }))
   .mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "manage", "Import");

@@ -38,7 +38,17 @@ export interface InvoicePDFData {
 
   // Line items
   lineItems: Array<{
-    description: string;
+    /**
+     * Required snapshot of the item name at billing time. Rendered as the
+     * primary bold line in every invoice template.
+     */
+    itemName: string;
+    /**
+     * Optional free-text line notes (e.g. "Keep separate from order #42").
+     * Rendered as a smaller italic secondary line below itemName when
+     * non-empty. Null/empty produces no extra line.
+     */
+    description?: string | null;
     quantity: string;
     unit?: string; // base unit or selected alt unit (e.g. "kg", "box")
     unitPrice: string;
@@ -456,8 +466,16 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   hLine(doc, margin - 4, y, contentW + 8, cBorder);
 
   // Table rows
+  //
+  // Each row renders itemName as the primary bold-eligible line. If the
+  // optional notes column (description) is non-empty, a second muted
+  // sub-line is rendered immediately below at smaller size — the same
+  // convention used for the thermal-receipt sub-line. Row height grows
+  // to accommodate the extra line so neighbouring columns don't overlap.
   data.lineItems.forEach((item, i) => {
-    const rowH = 18;
+    const hasNote = !!(item.description && item.description.trim().length > 0);
+    const noteH = hasNote ? 9 : 0;
+    const rowH = 18 + noteH;
     if (i % 2 === 1) {
       filledRect(doc, margin - 4, y, contentW + 8, rowH, "#f9fafb");
     }
@@ -468,7 +486,7 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     if (showHsn) {
       doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", COL_HSN, rowY, { width: 44 });
     }
-    doc.fontSize(8).text(item.description, COL_DESC, rowY, { width: DESCW });
+    doc.fontSize(8).text(item.itemName, COL_DESC, rowY, { width: DESCW });
     const qtyText = item.unit
       ? `${parseFloat(item.quantity).toLocaleString("en-IN")} ${item.unit}`
       : parseFloat(item.quantity).toLocaleString("en-IN");
@@ -477,6 +495,13 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     doc.text(`${item.taxPercent}%`, COL_TAXPCT, rowY, { width: 28, align: "right" });
     doc.text(fmt(item.taxAmount), COL_TAXAMT, rowY, { width: 54, align: "right" });
     doc.font("NotoSans-Bold").text(fmt(item.totalAmount), COL_AMT, rowY, { width: 60, align: "right" });
+
+    if (hasNote) {
+      // Slightly indented muted secondary line under the item name. Uses
+      // size 6.5 to match the existing tax-summary label convention.
+      doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
+        .text(item.description!, COL_DESC + 4, rowY + 10, { width: DESCW - 4 });
+    }
 
     y += rowH;
   });
@@ -921,7 +946,9 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   hLine(doc, margin, y, contentW, cBorder);
 
   data.lineItems.forEach((item, i) => {
-    const rowH = 17;
+    const hasNote = !!(item.description && item.description.trim().length > 0);
+    const noteH = hasNote ? 9 : 0;
+    const rowH = 17 + noteH;
     if (i % 2 === 1) {
       filledRect(doc, margin, y, contentW, rowH, "#fafafc");
     }
@@ -932,7 +959,7 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     if (showHsn) {
       doc.fontSize(7).text(data.lineItemHsn?.[i] || "—", C_HSN, rowY, { width: 40 });
     }
-    doc.fontSize(8).text(item.description, C_DESC, rowY, { width: C_DESCW });
+    doc.fontSize(8).text(item.itemName, C_DESC, rowY, { width: C_DESCW });
     const qtyTextA5 = item.unit
       ? `${parseFloat(item.quantity).toLocaleString("en-IN")} ${item.unit}`
       : parseFloat(item.quantity).toLocaleString("en-IN");
@@ -940,6 +967,11 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
     doc.text(fmt(item.unitPrice), C_RATE, rowY, { width: 62, align: "right" });
     doc.text(`${item.taxPercent}%`, C_TAX, rowY, { width: 34, align: "right" });
     doc.font("NotoSans-Bold").text(fmt(item.totalAmount), C_AMT, rowY, { width: 60, align: "right" });
+
+    if (hasNote) {
+      doc.fontSize(6.5).fillColor(cMuted).font("NotoSans")
+        .text(item.description!, C_DESC + 4, rowY + 10, { width: C_DESCW - 4 });
+    }
 
     y += rowH;
     hLine(doc, margin, y, contentW, cBorder, 0.3);
@@ -1228,8 +1260,8 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
     const nameW = contentW * 0.48;
 
     doc.fontSize(6).font("NotoSans").fillColor(colorBlack)
-      .text(item.description, margin, y, { width: nameW });
-    const nameH = doc.heightOfString(item.description, { width: nameW });
+      .text(item.itemName, margin, y, { width: nameW });
+    const nameH = doc.heightOfString(item.itemName, { width: nameW });
 
     const qtyTextThermal = item.unit
       ? `${parseFloat(item.quantity).toString()} ${item.unit}`
@@ -1240,6 +1272,14 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
       .text(fmt(item.totalAmount), margin + contentW * 0.7, y, { width: contentW * 0.3, align: "right" });
 
     y += Math.max(nameH, 8) + 1;
+
+    // Optional free-text notes line, indented and muted. Skipped when null
+    // or empty so receipts stay compact.
+    if (item.description && item.description.trim().length > 0) {
+      doc.fontSize(5).fillColor(colorGray).font("NotoSans")
+        .text(item.description, margin + 4, y, { width: contentW - 4 });
+      y += doc.heightOfString(item.description, { width: contentW - 4 }) + 1;
+    }
 
     // Sub-line: HSN (if GST mode) + rate + tax
     let subLine = `@ ${fmt(item.unitPrice)} + ${item.taxPercent}% tax`;

@@ -143,7 +143,7 @@ export const expenseRouter = router({
       entityType: "expense",
       entityId: expense.id,
       metadata: { amount: expense.amount, category: expense.category },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return expense;
@@ -249,7 +249,7 @@ export const expenseRouter = router({
         entityType: "expense",
         entityId: updated.id,
         metadata: { expenseId: updated.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;
@@ -325,7 +325,7 @@ export const expenseRouter = router({
         entityType: "expense",
         entityId: input.id,
         metadata: { expenseId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

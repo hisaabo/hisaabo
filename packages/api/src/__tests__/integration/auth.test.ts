@@ -65,6 +65,7 @@ function callerWithSession(sessionId: string, userId: string, email: string, ten
     businessId: null,
     req,
     resHeaders,
+    ipAddress: null,
   };
   return _callerFactory(ctx);
 }
@@ -441,21 +442,33 @@ describe("auth.logout", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// auth.requestMagicLink — deep link URL correctness
+// auth.sendMagicLink — email URL shape
 //
-// Regression: deep link was `hisaabo://auth/verify?token=...` but Expo Router
-// uses (auth) as a layout group, so the actual route is /verify. Desktop Tauri
-// handler translates /verify → /auth/verify for the webview.
+// CRITICAL INVARIANT: the primary email CTA is ALWAYS an HTTPS URL, never
+// a `hisaabo://` custom-scheme anchor. Email clients (Gmail, Outlook, Apple
+// Mail, corporate gateways) strip or refuse to render custom URL schemes as
+// clickable links, so a `hisaabo://` primary reaches the user as plain,
+// unclickable text. If this test fails because someone reverted the primary
+// URL to the custom scheme, DO NOT fix the test — fix the server to keep
+// shipping HTTPS as the primary and hand off to the native app from the
+// /auth/verify page. See apps/web/src/routes/auth/verify.tsx for the
+// browser-to-app hand-off logic this relies on.
+//
+// Historical regression the old suite guarded against (preserved below):
+// the deep link path must be `/verify`, never `/auth/verify`, because Expo
+// Router uses (auth) as a layout group, so the actual scheme path is
+// /verify. Desktop Tauri's deep-link handler translates /verify into the
+// webview path /auth/verify.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("auth.requestMagicLink — deep link URLs", () => {
+describe("auth.sendMagicLink — email URL shape", () => {
   const sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
 
   afterAll(() => {
     sendSpy.mockRestore();
   });
 
-  it("web source: primary is https, secondary is hisaabo://verify deep link", async () => {
+  it("web source: primary is an https link with no source suffix, secondary is the hisaabo://verify deep link", async () => {
     sendSpy.mockClear();
     const caller = unauthCaller();
     await caller.auth.sendMagicLink({ email: "deeplink-web@vyapar.in", source: "web" });
@@ -463,32 +476,53 @@ describe("auth.requestMagicLink — deep link URLs", () => {
     expect(sendSpy).toHaveBeenCalledOnce();
     const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
     expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    // Web source does not thread `source` through the URL — the verify
+    // page only hands off to the native app when source is desktop/mobile.
+    expect(primaryUrl).not.toContain("source=");
     expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    // Must NOT contain /auth/ in the deep link path
     expect(secondaryUrl).not.toContain("hisaabo://auth/");
   });
 
-  it("mobile source: primary is hisaabo://verify deep link, secondary is https", async () => {
+  it("mobile source: primary is an https link with source=mobile, secondary is the hisaabo://verify deep link — primary MUST NOT be a custom-scheme URL because email clients strip non-http anchors and the user ends up with plain, unclickable text", async () => {
     sendSpy.mockClear();
     const caller = unauthCaller();
     await caller.auth.sendMagicLink({ email: "deeplink-mobile@vyapar.in", source: "mobile" });
 
     expect(sendSpy).toHaveBeenCalledOnce();
     const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
-    expect(primaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    expect(primaryUrl).not.toContain("hisaabo://auth/");
-    expect(secondaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    expect(primaryUrl).toContain("&source=mobile");
+    // Regression guard: primary MUST be https so Gmail/Outlook render it as
+    // a clickable button.
+    expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
+    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
+    expect(secondaryUrl).not.toContain("hisaabo://auth/");
   });
 
-  it("desktop source: same deep link as mobile (hisaabo://verify)", async () => {
+  it("desktop source: primary is an https link with source=desktop, secondary is the hisaabo://verify deep link — same email-client rationale as mobile", async () => {
     sendSpy.mockClear();
     const caller = unauthCaller();
     await caller.auth.sendMagicLink({ email: "deeplink-desktop@vyapar.in", source: "desktop" });
 
     expect(sendSpy).toHaveBeenCalledOnce();
-    const [, primaryUrl] = sendSpy.mock.calls[0]!;
-    expect(primaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    expect(primaryUrl).not.toContain("hisaabo://auth/");
+    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
+    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    expect(primaryUrl).toContain("&source=desktop");
+    expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
+    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
+    expect(secondaryUrl).not.toContain("hisaabo://auth/");
+  });
+
+  it("primary URL is NEVER a hisaabo:// custom-scheme link for ANY source — this is the load-bearing invariant that kept desktop/mobile users stuck with unclickable email buttons; if this ever regresses, users report 'the link in the email does nothing, I have to copy-paste it into Firefox' (verbatim user report)", async () => {
+    for (const source of ["web", "desktop", "mobile"] as const) {
+      sendSpy.mockClear();
+      const caller = unauthCaller();
+      await caller.auth.sendMagicLink({ email: `deeplink-${source}-guard@vyapar.in`, source });
+
+      const [, primaryUrl] = sendSpy.mock.calls[0]!;
+      expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
+      expect(primaryUrl).toMatch(/^https?:\/\//);
+    }
   });
 });
 

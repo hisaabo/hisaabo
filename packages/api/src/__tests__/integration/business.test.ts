@@ -55,6 +55,7 @@ function tenantLevelCaller(
       headers: new Headers({ "content-type": "application/json" }),
     }),
     resHeaders: new Headers(),
+    ipAddress: null,
   });
 }
 
@@ -79,6 +80,7 @@ function businessLevelCaller(
       }),
     }),
     resHeaders: new Headers(),
+    ipAddress: null,
   });
 }
 
@@ -177,6 +179,7 @@ describe("business.create", () => {
       businessId: null,
       req: new Request("http://localhost:3000/api/trpc/test", { method: "POST", headers: new Headers() }),
       resHeaders: new Headers(),
+      ipAddress: null,
     });
     await expect(caller.business.create(validInput)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
@@ -332,7 +335,6 @@ describe("business.updateSequenceNumber", () => {
   it("advances the invoice sequence number — returns previous and new number", async () => {
     const caller = businessLevelCaller(owner, tenant.id, bizId);
     const result = await caller.business.updateSequenceNumber({
-      businessId: bizId,
       documentType: "invoice",
       newNumber: 100,
     });
@@ -346,7 +348,6 @@ describe("business.updateSequenceNumber", () => {
     const caller = businessLevelCaller(owner, tenant.id, bizId);
     await expect(
       caller.business.updateSequenceNumber({
-        businessId: bizId,
         documentType: "invoice",
         newNumber: 50,
       })
@@ -360,7 +361,6 @@ describe("business.updateSequenceNumber", () => {
     const caller = businessLevelCaller(owner, tenant.id, bizId);
     await expect(
       caller.business.updateSequenceNumber({
-        businessId: bizId,
         documentType: "nonexistent" as unknown as "invoice",
         newNumber: 1,
       })

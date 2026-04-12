@@ -1602,16 +1602,35 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
           const resolvedAlts = conflict.altUnits
             .filter((a) => parseFloat(a.conversionFactor) > 0)
-            .map((a) => ({
-              unit: a.unit,
-              conversionFactor: parseFloat(a.conversionFactor),
-              salePrice: item.salePrice || "0",
-            }));
+            .map((a) => {
+              // Direction A: conversionFactor = base units per 1 alt unit.
+              // Derived altPrice = basePrice × CF, formatted as NUMERIC(15,2).
+              // If either the base price or the CF fails to parse cleanly
+              // we fall back to the base price string so the downstream
+              // `unitVariantSchema` regex validator still passes.
+              const cf = parseFloat(a.conversionFactor);
+              const basePriceNum = parseFloat(item.salePrice || "0");
+              const derived =
+                Number.isFinite(cf) && cf > 0 && Number.isFinite(basePriceNum)
+                  ? (basePriceNum * cf).toFixed(2)
+                  : item.salePrice || "0";
+              return {
+                unit: a.unit,
+                conversionFactor: cf,
+                salePrice: derived,
+              };
+            });
 
           if (resolvedAlts.length > 0) {
             await updateItemMut.mutateAsync({
               id: item.id,
               data: {
+                // Sync the item's base unit to the conflict's baseUnit.
+                // Without this, the item may have been imported with a
+                // different default (e.g. "pcs" from Rate List) while
+                // conflict detection picked "kg" as base — resulting in
+                // both base and alt being "pcs".
+                unit: conflict.baseUnit as any,
                 itemMode: "alt_units" as const,
                 unitVariants: resolvedAlts,
               },

@@ -251,7 +251,8 @@ describe("mapInvoiceToIRP", () => {
       },
       [
         {
-          description: "Steel Pipes",
+          itemName: "Steel Pipes",
+          description: null,
           quantity: "10",
           unitPrice: "1000.00",
           taxPercent: "18",
@@ -331,7 +332,8 @@ describe("mapInvoiceToIRP", () => {
       },
       [
         {
-          description: "Cotton Fabric",
+          itemName: "Cotton Fabric",
+          description: null,
           quantity: "100",
           unitPrice: "100.00",
           taxPercent: "18",
@@ -396,7 +398,8 @@ describe("mapInvoiceToIRP", () => {
       },
       [
         {
-          description: "Return",
+          itemName: "Return",
+          description: null,
           quantity: "1",
           unitPrice: "1000.00",
           taxPercent: "18",

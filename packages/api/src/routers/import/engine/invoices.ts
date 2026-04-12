@@ -1,5 +1,5 @@
 import { parties, items, invoices, invoiceItems, payments, shipments } from "@hisaabo/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { calcLineItem, money } from "@hisaabo/shared";
 import type { TenantDatabase } from "../../../trpc.js";
 import type { CanonicalInvoice } from "../types.js";
@@ -33,8 +33,12 @@ export async function runInvoicesImport(
     .from(parties).where(eq(parties.businessId, businessId));
   const partyByName = new Map(allParties.map(p => [p.name.toLowerCase(), p.id]));
 
+  // Active items only — soft-deleted items should not be matched during
+  // import. If an imported invoice references a name that matches a
+  // soft-deleted item, it falls through to "no match" (itemId = null)
+  // rather than linking to a removed catalog entry.
   const allItems = await db.select({ id: items.id, name: items.name })
-    .from(items).where(eq(items.businessId, businessId));
+    .from(items).where(and(eq(items.businessId, businessId), isNull(items.deletedAt)));
   const itemByName = new Map(allItems.map(i => [i.name.toLowerCase(), i.id]));
 
   const existingNumbers = new Set(
@@ -116,10 +120,23 @@ export async function runInvoicesImport(
         lineItemRows.push({
           invoiceId,
           itemId,
-          description: li.description || li.itemName || "Imported item",
+          // Post Bug B: itemName is the required snapshot. The adapter
+          // already enforces a non-empty itemName via the canonical schema,
+          // but we keep the fallback as defence in depth in case a row
+          // somehow slipped through. description is the optional notes
+          // column — imported invoices have no user-authored notes, so
+          // it stays null.
+          itemName: li.itemName || "Imported item",
+          description: li.description ?? null,
           quantity: li.quantity,
           selectedUnit: li.unit || null,
           conversionFactor: cf,
+          // IMPORTANT: pass through the CSV unitPrice as-is. Do NOT derive
+          // from basePrice × conversionFactor here — the CSV is the source
+          // of truth for historical invoices (negotiated/discounted prices).
+          // Derivation only happens at item-creation time in ImportWizard
+          // and the items form. See import-transforms.test.ts "Bug A
+          // regression guard" for the covering test.
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent || "0",
           taxAmount: calc.taxAmount,
@@ -138,7 +155,11 @@ export async function runInvoicesImport(
       lineItemRows.push({
         invoiceId,
         itemId: null,
-        description: `Imported: ${inv.invoiceNumber}`,
+        // Synthetic single-line fallback when the source CSV had no line
+        // items. Use itemName as the placeholder display text; description
+        // (notes) stays null.
+        itemName: `Imported: ${inv.invoiceNumber}`,
+        description: null,
         quantity: "1",
         unitPrice: inv.totalAmount,
         taxPercent: "0",

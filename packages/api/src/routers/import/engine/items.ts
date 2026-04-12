@@ -1,5 +1,5 @@
 import { items } from "@hisaabo/db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { TenantDatabase } from "../../../trpc.js";
 import type { CanonicalItem } from "../types.js";
 
@@ -13,10 +13,15 @@ export async function runItemsImport(
   let created = 0;
   let skipped = 0;
 
-  // Pre-fetch all existing item names for this business into a Set for O(1) lookup
+  // Pre-fetch all ACTIVE item names for this business into a Set for O(1)
+  // lookup. The duplicate check only considers live catalog entries — a
+  // re-imported row whose name matches a soft-deleted item is treated as
+  // a fresh create, which is what the user wanted when they pruned the
+  // old row. (If they'd wanted to keep the old one, they wouldn't have
+  // soft-deleted it.)
   const existingItemNames = new Set(
     (await db.select({ name: items.name })
-      .from(items).where(eq(items.businessId, businessId)))
+      .from(items).where(and(eq(items.businessId, businessId), isNull(items.deletedAt))))
       .map(r => r.name.toLowerCase())
   );
 

@@ -4,6 +4,8 @@ import { shipments, invoices, parties } from "@hisaabo/db";
 import { router, memberProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { upsertShipmentCharge, removeShipmentCharge } from "../lib/shipment-invoice-sync.js";
+import { TRPCError } from "@trpc/server";
 
 // Known carriers with auto-generated tracking URLs
 const CARRIER_TRACKING_URLS: Record<string, (trackingNumber: string) => string> = {
@@ -134,24 +136,45 @@ export const shipmentRouter = router({
       // Auto-generate tracking URL if carrier is recognized
       const autoUrl = buildTrackingUrl(input.carrier || null, input.trackingNumber || null);
 
-      const [shipment] = await ctx.db.insert(shipments).values({
-        businessId: ctx.businessId,
-        invoiceId: input.invoiceId || null,
-        partyId: input.partyId || null,
-        carrier: input.carrier || null,
-        mode: input.mode || null,
-        trackingNumber: input.trackingNumber || null,
-        trackingUrl: input.trackingUrl || autoUrl || null,
-        cost: input.cost,
-        weight: input.weight || null,
-        shippingAddress: input.shippingAddress || null,
-        shippingCity: input.shippingCity || null,
-        shippingPincode: input.shippingPincode || null,
-        status: input.status,
-        shipmentDate: input.shipmentDate ? new Date(input.shipmentDate) : null,
-        estimatedDelivery: input.estimatedDelivery ? new Date(input.estimatedDelivery) : null,
-        notes: input.notes || null,
-      }).returning();
+      const shipment = await ctx.db.transaction(async (tx) => {
+        // Block creation if invoice is paid (pre-check before row-lock in sync helper)
+        if (input.invoiceId) {
+          const [inv] = await tx
+            .select({ status: invoices.status })
+            .from(invoices)
+            .where(and(eq(invoices.id, input.invoiceId), eq(invoices.businessId, ctx.businessId)))
+            .limit(1);
+          if (inv?.status === "paid") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot modify shipment on a paid invoice" });
+          }
+        }
+
+        const [newShipment] = await tx.insert(shipments).values({
+          businessId: ctx.businessId,
+          invoiceId: input.invoiceId || null,
+          partyId: input.partyId || null,
+          carrier: input.carrier || null,
+          mode: input.mode || null,
+          trackingNumber: input.trackingNumber || null,
+          trackingUrl: input.trackingUrl || autoUrl || null,
+          cost: input.cost,
+          weight: input.weight || null,
+          shippingAddress: input.shippingAddress || null,
+          shippingCity: input.shippingCity || null,
+          shippingPincode: input.shippingPincode || null,
+          status: input.status,
+          shipmentDate: input.shipmentDate ? new Date(input.shipmentDate) : null,
+          estimatedDelivery: input.estimatedDelivery ? new Date(input.estimatedDelivery) : null,
+          notes: input.notes || null,
+        }).returning();
+
+        // Sync shipping charge to invoice if applicable
+        if (input.invoiceId && parseFloat(input.cost) > 0) {
+          await upsertShipmentCharge(tx, input.invoiceId, ctx.businessId, newShipment.id, input.cost);
+        }
+
+        return newShipment;
+      });
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -160,7 +183,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: shipment.id,
         metadata: { trackingNumber: input.trackingNumber || null },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return shipment;
@@ -184,35 +207,59 @@ export const shipmentRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Invoice");
 
-      const updates: Record<string, unknown> = { updatedAt: new Date() };
-      if (input.carrier !== undefined) updates.carrier = input.carrier || null;
-      if (input.mode !== undefined) updates.mode = input.mode || null;
-      if (input.trackingNumber !== undefined) {
-        updates.trackingNumber = input.trackingNumber || null;
-        // Re-generate tracking URL if tracking number changed
-        if (input.trackingNumber && input.carrier) {
-          const autoUrl = buildTrackingUrl(input.carrier, input.trackingNumber);
-          if (autoUrl) updates.trackingUrl = autoUrl;
-        }
-      }
-      if (input.trackingUrl !== undefined) updates.trackingUrl = input.trackingUrl || null;
-      if (input.cost !== undefined) updates.cost = input.cost;
-      if (input.weight !== undefined) updates.weight = input.weight || null;
-      if (input.status !== undefined) {
-        updates.status = input.status;
-        if (input.status === "delivered" && !input.actualDelivery) {
-          updates.actualDelivery = new Date();
-        }
-      }
-      if (input.shipmentDate !== undefined) updates.shipmentDate = new Date(input.shipmentDate);
-      if (input.estimatedDelivery !== undefined) updates.estimatedDelivery = new Date(input.estimatedDelivery);
-      if (input.actualDelivery !== undefined) updates.actualDelivery = new Date(input.actualDelivery);
-      if (input.notes !== undefined) updates.notes = input.notes || null;
+      const shipment = await ctx.db.transaction(async (tx) => {
+        // Fetch the existing shipment to get current cost and invoiceId
+        const [existing] = await tx
+          .select({ id: shipments.id, cost: shipments.cost, invoiceId: shipments.invoiceId })
+          .from(shipments)
+          .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)))
+          .limit(1);
 
-      const [shipment] = await ctx.db.update(shipments)
-        .set(updates)
-        .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)))
-        .returning();
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Shipment not found" });
+        }
+
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (input.carrier !== undefined) updates.carrier = input.carrier || null;
+        if (input.mode !== undefined) updates.mode = input.mode || null;
+        if (input.trackingNumber !== undefined) {
+          updates.trackingNumber = input.trackingNumber || null;
+          // Re-generate tracking URL if tracking number changed
+          if (input.trackingNumber && input.carrier) {
+            const autoUrl = buildTrackingUrl(input.carrier, input.trackingNumber);
+            if (autoUrl) updates.trackingUrl = autoUrl;
+          }
+        }
+        if (input.trackingUrl !== undefined) updates.trackingUrl = input.trackingUrl || null;
+        if (input.cost !== undefined) updates.cost = input.cost;
+        if (input.weight !== undefined) updates.weight = input.weight || null;
+        if (input.status !== undefined) {
+          updates.status = input.status;
+          if (input.status === "delivered" && !input.actualDelivery) {
+            updates.actualDelivery = new Date();
+          }
+        }
+        if (input.shipmentDate !== undefined) updates.shipmentDate = new Date(input.shipmentDate);
+        if (input.estimatedDelivery !== undefined) updates.estimatedDelivery = new Date(input.estimatedDelivery);
+        if (input.actualDelivery !== undefined) updates.actualDelivery = new Date(input.actualDelivery);
+        if (input.notes !== undefined) updates.notes = input.notes || null;
+
+        const [updated] = await tx.update(shipments)
+          .set(updates)
+          .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)))
+          .returning();
+
+        // Sync invoice charges if cost changed and shipment is linked to an invoice
+        if (input.cost !== undefined && existing.invoiceId && input.cost !== existing.cost) {
+          if (parseFloat(input.cost) > 0) {
+            await upsertShipmentCharge(tx, existing.invoiceId, ctx.businessId, input.id, input.cost);
+          } else {
+            await removeShipmentCharge(tx, existing.invoiceId, ctx.businessId, input.id);
+          }
+        }
+
+        return updated;
+      });
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -221,7 +268,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: input.id,
         metadata: { shipmentId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return shipment;
@@ -231,8 +278,24 @@ export const shipmentRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Invoice");
-      await ctx.db.delete(shipments)
-        .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)));
+
+      await ctx.db.transaction(async (tx) => {
+        // Fetch the shipment to get its invoiceId before deletion
+        const [existing] = await tx
+          .select({ invoiceId: shipments.invoiceId })
+          .from(shipments)
+          .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)))
+          .limit(1);
+
+        // Sync invoice charges before deleting the shipment row
+        if (existing?.invoiceId) {
+          // removeShipmentCharge checks paid status and throws if blocked
+          await removeShipmentCharge(tx, existing.invoiceId, ctx.businessId, input.id);
+        }
+
+        await tx.delete(shipments)
+          .where(and(eq(shipments.id, input.id), eq(shipments.businessId, ctx.businessId)));
+      });
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -241,7 +304,7 @@ export const shipmentRouter = router({
         entityType: "shipment",
         entityId: input.id,
         metadata: { shipmentId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

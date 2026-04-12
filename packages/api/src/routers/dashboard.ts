@@ -452,10 +452,17 @@ export const dashboardRouter = router({
       if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
       if (input.itemType) conditions.push(eq(items.itemType, input.itemType));
 
+      // Historical aggregation — top-selling items over the period. A
+      // soft-deleted item that sold well in the period should still show
+      // up in the report (with its snapshot name from `invoice_items`),
+      // otherwise the user's historical analytics silently omit rows when
+      // they prune their catalog. Leave `items.deletedAt` unfiltered.
       const results = await ctx.db
         .select({
           itemId: invoiceItems.itemId,
-          itemName: sql<string>`COALESCE(${items.name}, ${invoiceItems.description})`,
+          // Prefer live item name, fall back to the frozen snapshot stored
+          // on the invoice line (post-rename: invoice_items.item_name).
+          itemName: sql<string>`COALESCE(${items.name}, ${invoiceItems.itemName})`,
           unit: items.unit,
           totalQty: sql<string>`SUM(${invoiceItems.quantity}::numeric * COALESCE(${invoiceItems.conversionFactor}::numeric, 1))::text`,
           totalAmount: sql<string>`SUM(${invoiceItems.totalAmount}::numeric)::text`,
@@ -465,7 +472,7 @@ export const dashboardRouter = router({
         .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
         .leftJoin(items, eq(items.id, invoiceItems.itemId))
         .where(and(...conditions))
-        .groupBy(invoiceItems.itemId, items.name, invoiceItems.description, items.unit)
+        .groupBy(invoiceItems.itemId, items.name, invoiceItems.itemName, items.unit)
         .orderBy(sql`SUM(${invoiceItems.totalAmount}::numeric) DESC`)
         .limit(input.limit);
 

@@ -52,9 +52,14 @@ export const canonicalItemSchema = z.object({
 export type CanonicalItem = z.infer<typeof canonicalItemSchema>;
 
 // ── Canonical Invoice Line Item ───────────────────────────────────────────────
+//
+// Post Bug B schema split: itemName is the required snapshot of the item
+// name at billing time and description is the optional free-text line notes
+// (almost always null for imported historical invoices — the source CSVs
+// don't carry user-authored notes).
 export const canonicalLineItemSchema = z.object({
-  itemName: z.string().optional(),
-  description: z.string(),
+  itemName: z.string().min(1),
+  description: z.string().nullable().optional(),
   quantity: z.string(),
   unit: z.string().optional(),
   conversionFactor: z.string().optional(),

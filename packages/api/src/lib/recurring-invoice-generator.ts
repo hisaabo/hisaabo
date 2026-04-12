@@ -18,7 +18,8 @@ interface TemplateRow {
   type: "sale" | "purchase";
   lineItems: Array<{
     itemId?: string;
-    description: string;
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent: string;
@@ -84,7 +85,15 @@ export async function generateInvoiceFromTemplate(
       .limit(1);
     if (!partyCheck) throw new Error("Party not found");
 
-    // Validate line item IDs belong to business
+    // Validate line item IDs belong to business.
+    //
+    // Soft-delete note: the recurring generator runs on a 60s tick in the
+    // background. Templates freeze `itemName`, `unitPrice`, and tax data
+    // at creation time, so even if the underlying item has since been
+    // soft-deleted, the generated invoice still carries a complete line.
+    // Treat this as a historical ownership check and do NOT filter by
+    // `deletedAt`. If the item was hard-deleted (only possible before
+    // Stage 5), the count mismatch still catches it.
     const lineItemIds = template.lineItems
       .map((li) => li.itemId)
       .filter((id): id is string => Boolean(id));
@@ -120,7 +129,8 @@ export async function generateInvoiceFromTemplate(
       });
       return {
         itemId: li.itemId || null,
-        description: li.description,
+        itemName: li.itemName,
+        description: li.description ?? null,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
         taxPercent: li.taxPercent || "0",

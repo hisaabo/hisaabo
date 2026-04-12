@@ -168,9 +168,14 @@ export default function StoreOrderDetailScreen() {
               {data.lineItems.map((li, idx) => (
                 <View key={li.id} style={[styles.lineItem, idx < data.lineItems.length - 1 && styles.lineItemBorder]}>
                   <View style={styles.lineItemLeft}>
-                    <Text style={styles.lineItemDesc} numberOfLines={2}>{li.description}</Text>
+                    {/* Bug B: itemName is the frozen name snapshot;
+                        description is the optional italic notes line. */}
+                    <Text style={styles.lineItemDesc} numberOfLines={2}>{li.itemName}</Text>
+                    {li.description && li.description.trim().length > 0 && (
+                      <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
+                    )}
                     <Text style={styles.lineItemMeta}>
-                      {li.quantity} x {formatCurrency(li.unitPrice)}
+                      {li.quantity}{li.selectedUnit ? ` ${li.selectedUnit}` : ""} x {formatCurrency(li.unitPrice)}
                       {parseFloat(li.taxPercent) > 0 ? ` + ${li.taxPercent}% GST` : ""}
                     </Text>
                   </View>
@@ -387,6 +392,7 @@ const styles = StyleSheet.create({
   lineItemBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
   lineItemLeft: { flex: 1, gap: 2 },
   lineItemDesc: { fontSize: 13, fontWeight: "600", color: colors.textPrimary },
+  lineItemNotes: { fontSize: 11, fontStyle: "italic", color: colors.textSecondary, marginTop: 2, lineHeight: 14 },
   lineItemMeta: { fontSize: 12, color: colors.textMuted },
   lineItemAmount: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
   totalCard: {

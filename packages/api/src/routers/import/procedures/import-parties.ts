@@ -22,7 +22,7 @@ export const importParties = adminProcedure
       city: z.string().optional(),
       state: z.string().optional(),
       pincode: z.string().optional(),
-    })),
+    })).max(5000),
   }))
   .mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "manage", "Import");

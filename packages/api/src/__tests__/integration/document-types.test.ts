@@ -99,7 +99,7 @@ function buildInvoiceInput(
     lineItems: [
       {
         itemId,
-        description: "Test item line",
+        itemName: "Test item line",
         quantity: qty,
         unitPrice,
         taxPercent: "5.00",

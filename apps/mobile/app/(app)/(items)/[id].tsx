@@ -714,7 +714,10 @@ export default function ItemDetailScreen() {
                   ]}
                 >
                   <View style={styles.historyLeft}>
-                    <Text style={styles.historyDocNum}>
+                    <Text
+                      style={[styles.historyDocNum, { color: colors.brand }]}
+                      onPress={() => router.push(`/(invoices)/${ph.invoiceId}` as never)}
+                    >
                       {ph.invoiceNumber}
                     </Text>
                     <Text style={styles.historyDate}>
@@ -792,7 +795,12 @@ export default function ItemDetailScreen() {
                     />
                   </View>
                   <View style={styles.movementInfo}>
-                    <Text style={styles.movementDoc}>{sm.invoiceNumber}</Text>
+                    <Text
+                      style={[styles.movementDoc, { color: colors.brand }]}
+                      onPress={() => router.push(`/(invoices)/${sm.invoiceId}` as never)}
+                    >
+                      {sm.invoiceNumber}
+                    </Text>
                     <Text style={styles.movementDate}>
                       {formatDate(sm.invoiceDate)}
                     </Text>

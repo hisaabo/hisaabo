@@ -133,7 +133,10 @@ function aggregateHsnLineItem(
   map: Map<string, HsnEntry>,
   lineItem: {
     itemId: string | null;
-    description: string;
+    // Post Bug B schema split: itemName is the required snapshot used for
+    // the HSN summary description label. The optional notes column on
+    // invoice_items is intentionally NOT consulted here.
+    itemName: string;
     quantity: string;
     totalAmount: string;
     taxAmount: string;
@@ -143,7 +146,7 @@ function aggregateHsnLineItem(
 ): void {
   const existing = map.get(hsnFromLookup) ?? {
     hsn: hsnFromLookup,
-    description: lineItem.description,
+    description: lineItem.itemName,
     quantity: 0,
     taxableValue: 0,
     cgst: 0,
@@ -470,13 +473,13 @@ describe("HSN aggregation — groups line items by HSN code", () => {
 
     aggregateHsnLineItem(
       map,
-      { itemId: "item-1", description: "Cotton Fabric", quantity: "10", totalAmount: "11800.00", taxAmount: "1800.00" },
+      { itemId: "item-1", itemName: "Cotton Fabric", quantity: "10", totalAmount: "11800.00", taxAmount: "1800.00" },
       "5208", // HSN for cotton fabric
       true
     );
     aggregateHsnLineItem(
       map,
-      { itemId: "item-2", description: "Cotton Fabric Roll", quantity: "5", totalAmount: "5900.00", taxAmount: "900.00" },
+      { itemId: "item-2", itemName: "Cotton Fabric Roll", quantity: "5", totalAmount: "5900.00", taxAmount: "900.00" },
       "5208",
       true
     );
@@ -496,7 +499,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
     // Steel pipes — HSN 7306
     aggregateHsnLineItem(
       map,
-      { itemId: "item-A", description: "Steel Pipe", quantity: "20", totalAmount: "23600.00", taxAmount: "3600.00" },
+      { itemId: "item-A", itemName: "Steel Pipe", quantity: "20", totalAmount: "23600.00", taxAmount: "3600.00" },
       "7306",
       true
     );
@@ -504,7 +507,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
     // Brass fittings — HSN 7412
     aggregateHsnLineItem(
       map,
-      { itemId: "item-B", description: "Brass Elbow", quantity: "50", totalAmount: "2950.00", taxAmount: "450.00" },
+      { itemId: "item-B", itemName: "Brass Elbow", quantity: "50", totalAmount: "2950.00", taxAmount: "450.00" },
       "7412",
       true
     );
@@ -527,7 +530,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
 
     aggregateHsnLineItem(
       map,
-      { itemId: null, description: "Miscellaneous Charges", quantity: "1", totalAmount: "1000.00", taxAmount: "0.00" },
+      { itemId: null, itemName: "Miscellaneous Charges", quantity: "1", totalAmount: "1000.00", taxAmount: "0.00" },
       "0000",
       true
     );
@@ -542,13 +545,13 @@ describe("HSN aggregation — groups line items by HSN code", () => {
 
     aggregateHsnLineItem(
       map,
-      { itemId: null, description: "Labour Charges", quantity: "1", totalAmount: "2000.00", taxAmount: "0.00" },
+      { itemId: null, itemName: "Labour Charges", quantity: "1", totalAmount: "2000.00", taxAmount: "0.00" },
       "0000",
       true
     );
     aggregateHsnLineItem(
       map,
-      { itemId: null, description: "Packing Material", quantity: "3", totalAmount: "600.00", taxAmount: "0.00" },
+      { itemId: null, itemName: "Packing Material", quantity: "3", totalAmount: "600.00", taxAmount: "0.00" },
       "0000",
       true
     );
@@ -564,7 +567,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
 
     aggregateHsnLineItem(
       map,
-      { itemId: "item-X", description: "Solar Panel", quantity: "2", totalAmount: "23600.00", taxAmount: "3600.00" },
+      { itemId: "item-X", itemName: "Solar Panel", quantity: "2", totalAmount: "23600.00", taxAmount: "3600.00" },
       "8541", // HSN for solar cells/panels
       false // inter-state
     );
@@ -581,7 +584,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
     // Intra-state item, HSN 8471 (computers)
     aggregateHsnLineItem(
       map,
-      { itemId: "laptop-1", description: "Laptop", quantity: "1", totalAmount: "94400.00", taxAmount: "14400.00" },
+      { itemId: "laptop-1", itemName: "Laptop", quantity: "1", totalAmount: "94400.00", taxAmount: "14400.00" },
       "8471",
       true
     );
@@ -589,7 +592,7 @@ describe("HSN aggregation — groups line items by HSN code", () => {
     // Inter-state item, same HSN 8471
     aggregateHsnLineItem(
       map,
-      { itemId: "laptop-2", description: "Laptop (export)", quantity: "2", totalAmount: "188800.00", taxAmount: "28800.00" },
+      { itemId: "laptop-2", itemName: "Laptop (export)", quantity: "2", totalAmount: "188800.00", taxAmount: "28800.00" },
       "8471",
       false
     );

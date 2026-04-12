@@ -80,6 +80,7 @@ function callerFor(opts: {
       }),
     }),
     resHeaders: new Headers(),
+    ipAddress: null,
   });
 }
 

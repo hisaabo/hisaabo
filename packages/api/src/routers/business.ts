@@ -99,7 +99,7 @@ export const businessRouter = router({
       entityType: "business",
       entityId: biz.id,
       metadata: { name: biz.name },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return biz;
@@ -131,16 +131,16 @@ export const businessRouter = router({
         entityType: "business",
         entityId: biz.id,
         metadata: { name: biz.name },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return biz;
     }),
 
-  updateSequenceNumber: tenantProcedure
-    .input(z.object({ businessId: z.string().uuid(), ...updateSequenceNumberSchema.shape }))
+  updateSequenceNumber: adminProcedure
+    .input(updateSequenceNumberSchema)
     .mutation(async ({ input, ctx }) => {
-      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+      requireCan(ctx.ability, "manage", "Business");
 
       // Map documentType to the correct counter column
       const counterColumns: Record<string, string> = {
@@ -159,7 +159,7 @@ export const businessRouter = router({
       const [biz] = await ctx.db
         .select()
         .from(businesses)
-        .where(eq(businesses.id, input.businessId))
+        .where(eq(businesses.id, ctx.businessId))
         .limit(1);
 
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
@@ -175,17 +175,17 @@ export const businessRouter = router({
 
       // Update using raw SQL for dynamic column name
       await ctx.db.execute(
-        sql`UPDATE businesses SET ${sql.identifier(column)} = ${input.newNumber} WHERE id = ${input.businessId}`
+        sql`UPDATE businesses SET ${sql.identifier(column)} = ${input.newNumber} WHERE id = ${ctx.businessId}`
       );
 
       logAudit(ctx.db, {
-        businessId: input.businessId,
+        businessId: ctx.businessId,
         userId: ctx.user.id,
         action: "business.updateSequenceNumber",
         entityType: "business",
-        entityId: input.businessId,
+        entityId: ctx.businessId,
         metadata: { field: input.documentType, value: input.newNumber },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true, previousNumber: currentNumber, newNumber: input.newNumber };
@@ -244,6 +244,11 @@ export const businessRouter = router({
     await enforceDataExport(ctx.tenantId!);
     const [partiesData, itemsData, invoicesData, lineItemsData, paymentsData, expensesData] = await Promise.all([
       ctx.db.select().from(parties).where(eq(parties.businessId, ctx.businessId)),
+      // Historical export — include soft-deleted items so the user's
+      // backup is a complete record of what ever lived in their catalog.
+      // A soft-deleted row still carries its `deletedAt` column, which
+      // the CSV schema ignores today (columns explicitly listed below);
+      // callers that need it can reach into the raw rows directly.
       ctx.db.select().from(items).where(eq(items.businessId, ctx.businessId)),
       ctx.db.select().from(invoices).where(eq(invoices.businessId, ctx.businessId)).orderBy(invoices.invoiceDate),
       ctx.db
@@ -259,7 +264,7 @@ export const businessRouter = router({
       parties: toCsv(partiesData, ["name", "type", "phone", "email", "gstin", "billingAddress", "city", "state", "pincode", "openingBalance", "category"]),
       items: toCsv(itemsData, ["name", "itemType", "unit", "salePrice", "purchasePrice", "taxPercent", "hsn", "sku", "stockQuantity", "category"]),
       invoices: toCsv(invoicesData, ["invoiceNumber", "type", "documentType", "invoiceDate", "dueDate", "status", "subtotal", "taxAmount", "discountAmount", "totalAmount", "amountPaid", "notes"]),
-      lineItems: toCsv(lineItemsData.map(r => r.invoice_items), ["invoiceId", "description", "quantity", "unitPrice", "taxPercent", "taxAmount", "discountPercent", "totalAmount"]),
+      lineItems: toCsv(lineItemsData.map(r => r.invoice_items), ["invoiceId", "itemName", "description", "quantity", "unitPrice", "taxPercent", "taxAmount", "discountPercent", "totalAmount"]),
       payments: toCsv(paymentsData, ["paymentNumber", "paymentDate", "amount", "mode", "referenceNumber", "notes"]),
       expenses: toCsv(expensesData, ["category", "description", "amount", "mode", "expenseDate", "referenceNumber"]),
     };

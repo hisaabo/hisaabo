@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
@@ -20,6 +20,12 @@ import { Combobox } from "@/components/ui/Combobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
+import { UnitVariantEditor } from "@/components/UnitVariantEditor";
+import {
+  type UiUnitVariant,
+  recomputeOnBasePriceChange,
+  toPayloadVariant,
+} from "@/lib/unit-variant-derivation";
 
 export const Route = createFileRoute("/items")({
   component: ItemsPage,
@@ -503,23 +509,30 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [stockQuantity, setStockQuantity] = useState("0");
   const [lowStockAlert, setLowStockAlert] = useState("");
   const [unit, setUnit] = useState("pcs");
-  const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+  const [unitVariants, setUnitVariants] = useState<UiUnitVariant[]>([]);
   const [variantAttributes, setVariantAttributes] = useState<string[]>([]);
   const [variantRows, setVariantRows] = useState<Array<{ attributeValues: Record<string, string>; sku: string; salePrice: string; purchasePrice: string; stockQuantity: string }>>([]);
   const [newAttrName, setNewAttrName] = useState("");
   const [attrValues, setAttrValues] = useState<Record<string, string[]>>({});
   const [newAttrValue, setNewAttrValue] = useState<Record<string, string>>({});
 
-  function updateUnitVariant(idx: number, field: string, value: string) {
-    setUnitVariants((prev) =>
-      prev.map((v, i) =>
-        i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
-      )
-    );
+  // Changing the base price re-derives every non-manual alt-unit row.
+  // Manual rows get a "stale base price" marker so the editor can show
+  // a recompute affordance instead of silently overwriting the user.
+  function handleSalePriceChange(next: string) {
+    setSalePrice(next);
+    setUnitVariants((prev) => recomputeOnBasePriceChange(prev, next));
   }
 
   function removeUnitVariant(idx: number) {
     setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function addUnitVariant() {
+    setUnitVariants((prev) => [
+      ...prev,
+      { unit: "", conversionFactor: 1, salePrice: "" },
+    ]);
   }
 
   // Variant attribute helpers
@@ -624,7 +637,9 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
     : "simple";
 
   function handleCreate() {
-    const validUnitVariants = unitVariants.filter((v) => v.unit && v.salePrice);
+    const validUnitVariants = unitVariants
+      .filter((v) => v.unit && v.salePrice)
+      .map(toPayloadVariant);
     const effectiveMode = derivedMode;
     createMutation.mutate({
       itemType,
@@ -703,7 +718,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
             step="0.01"
             min="0"
             value={salePrice}
-            onChange={(e) => setSalePrice(e.target.value)}
+            onChange={(e) => handleSalePriceChange(e.target.value)}
             placeholder="0.00"
           />
           <div className="flex flex-col gap-1">
@@ -824,64 +839,20 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
               count={unitVariants.filter((v) => v.unit && v.salePrice).length}
             >
               <div className="space-y-2">
-                {unitVariants.map((v, i) => {
-                  const usedUnits = new Set(unitVariants.filter((_, j) => j !== i).map((uv) => uv.unit));
-                  const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
-                  return (
-                    <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                      <Combobox
-                        label={i === 0 ? "Unit" : ""}
-                        value={v.unit}
-                        onChange={(val) => updateUnitVariant(i, "unit", val)}
-                        options={availableUnits}
-                        placeholder="Search unit"
-                      />
-                      <InputField
-                        label={i === 0 ? `Per ${unit}` : ""}
-                        type="number"
-                        min="0.01"
-                        step="any"
-                        value={String(v.conversionFactor)}
-                        onChange={(e) => updateUnitVariant(i, "conversionFactor", e.target.value)}
-                        placeholder="e.g. 5"
-                      />
-                      <InputField
-                        label={i === 0 ? "Sale Price (₹)" : ""}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={v.salePrice}
-                        onChange={(e) => updateUnitVariant(i, "salePrice", e.target.value)}
-                        placeholder="0.00"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeUnitVariant(i)}
-                        className={cn(
-                          "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
-                          i === 0 ? "mb-0.5" : ""
-                        )}
-                        aria-label="Remove alternate unit"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                          <path d="M4 4l8 8M12 4l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
-                  className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
-                >
-                  + Add alternate unit
-                </button>
-                {unitVariants.length > 0 && unit && (
-                  <p className="text-[11px] text-text-tertiary mt-1">
-                    Base unit: {unit.toUpperCase()}. Each alternate unit price is per that unit.
-                  </p>
-                )}
+                <UnitVariantEditor
+                  variants={unitVariants}
+                  onChange={setUnitVariants}
+                  baseUnit={unit}
+                  basePrice={salePrice}
+                  getAvailableUnits={(rowIndex) => {
+                    const usedUnits = new Set(
+                      unitVariants.filter((_, j) => j !== rowIndex).map((uv) => uv.unit),
+                    );
+                    return getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
+                  }}
+                  onRemoveRow={removeUnitVariant}
+                  onAddRow={addUnitVariant}
+                />
                 {unitVariants.some((v) => v.unit && v.salePrice) && (
                   <p className="text-[11px] text-teal-600 dark:text-teal-400 mt-1">
                     Adding alternate units makes this an alt-unit product.
@@ -1096,7 +1067,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
   const [stockQuantity, setStockQuantity] = useState("0");
   const [lowStockAlert, setLowStockAlert] = useState("");
   const [unit, setUnit] = useState("pcs");
-  const [unitVariants, setUnitVariants] = useState<Array<{ unit: string; conversionFactor: number; salePrice: string; purchasePrice?: string }>>([]);
+  const [unitVariants, setUnitVariants] = useState<UiUnitVariant[]>([]);
   const [itemMode, setItemMode] = useState<ItemMode>("simple");
   const [initialized, setInitialized] = useState(false);
 
@@ -1128,16 +1099,23 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     setInitialized(true);
   }, [item, initialized]);
 
-  function updateUnitVariant(idx: number, field: string, value: string) {
-    setUnitVariants((prev) =>
-      prev.map((v, i) =>
-        i === idx ? { ...v, [field]: field === "conversionFactor" ? parseFloat(value) || 0 : value } : v
-      )
-    );
+  // Changing the base price re-derives every non-manual alt-unit row.
+  // Manual rows stay frozen but get a "stale base price" marker so the
+  // editor can surface a recompute affordance.
+  function handleSalePriceChange(next: string) {
+    setSalePrice(next);
+    setUnitVariants((prev) => recomputeOnBasePriceChange(prev, next));
   }
 
   function removeUnitVariant(idx: number) {
     setUnitVariants((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function addUnitVariant() {
+    setUnitVariants((prev) => [
+      ...prev,
+      { unit: "", conversionFactor: 1, salePrice: "" },
+    ]);
   }
 
   const renameUnitMut = trpc.item.renameUnit.useMutation();
@@ -1216,7 +1194,9 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
       }
     }
 
-    const validVariants = unitVariants.filter((v) => v.unit && v.salePrice);
+    const validVariants = unitVariants
+      .filter((v) => v.unit && v.salePrice)
+      .map(toPayloadVariant);
     updateMutation.mutate({
       id: itemId,
       data: {
@@ -1302,7 +1282,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
             step="0.01"
             min="0"
             value={salePrice}
-            onChange={(e) => setSalePrice(e.target.value)}
+            onChange={(e) => handleSalePriceChange(e.target.value)}
             placeholder="0.00"
           />
           <div className="flex flex-col gap-1">
@@ -1428,66 +1408,20 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
               label="Alternate Units"
               count={unitVariants.filter((v) => v.unit && v.salePrice).length}
             >
-              <div className="space-y-2">
-                {unitVariants.map((v, i) => {
-                  const usedUnits = new Set(unitVariants.filter((_, j) => j !== i).map((uv) => uv.unit));
-                  const availableUnits = getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
-                  return (
-                    <div key={i} className="grid grid-cols-[1fr_80px_90px_28px] gap-2 items-end">
-                      <Combobox
-                        label={i === 0 ? "Unit" : ""}
-                        value={v.unit}
-                        onChange={(val) => updateUnitVariant(i, "unit", val)}
-                        options={availableUnits}
-                        placeholder="Search unit"
-                      />
-                      <InputField
-                        label={i === 0 ? `Per ${unit}` : ""}
-                        type="number"
-                        min="0.01"
-                        step="any"
-                        value={String(v.conversionFactor)}
-                        onChange={(e) => updateUnitVariant(i, "conversionFactor", e.target.value)}
-                        placeholder="e.g. 5"
-                      />
-                      <InputField
-                        label={i === 0 ? "Sale Price (₹)" : ""}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={v.salePrice}
-                        onChange={(e) => updateUnitVariant(i, "salePrice", e.target.value)}
-                        placeholder="0.00"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeUnitVariant(i)}
-                        className={cn(
-                          "p-1 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-500 transition-colors",
-                          i === 0 ? "mb-0.5" : ""
-                        )}
-                        aria-label="Remove alternate unit"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                          <path d="M4 4l8 8M12 4l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
+              <UnitVariantEditor
+                variants={unitVariants}
+                onChange={setUnitVariants}
+                baseUnit={unit}
+                basePrice={salePrice}
+                getAvailableUnits={(rowIndex) => {
+                  const usedUnits = new Set(
+                    unitVariants.filter((_, j) => j !== rowIndex).map((uv) => uv.unit),
                   );
-                })}
-                <button
-                  type="button"
-                  onClick={() => setUnitVariants([...unitVariants, { unit: "", conversionFactor: 1, salePrice: "" }])}
-                  className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors"
-                >
-                  + Add alternate unit
-                </button>
-                {unitVariants.length > 0 && unit && (
-                  <p className="text-[11px] text-text-tertiary mt-1">
-                    Base unit: {unit.toUpperCase()}. Each alternate unit price is per that unit.
-                  </p>
-                )}
-              </div>
+                  return getCompatibleAltUnits(unit).filter((o) => !usedUnits.has(o.value));
+                }}
+                onRemoveRow={removeUnitVariant}
+                onAddRow={addUnitVariant}
+              />
             </Disclosure>
           )}
 
@@ -1645,6 +1579,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
 // Sub-components for Price History and Stock Movements tabs
 
 type PriceHistoryRow = {
+  invoiceId: string;
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
@@ -1658,6 +1593,7 @@ type PriceHistoryRow = {
 };
 
 type StockMovementRow = {
+  invoiceId: string;
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
@@ -1773,7 +1709,11 @@ function PriceHistoryTab({
                 <tbody>
                   {priceChangedRows.map((h, i) => (
                     <tr key={i}>
-                      <td className="font-mono text-[13px] text-brand-600">{h.invoiceNumber}</td>
+                      <td className="font-mono text-[13px]">
+                        <Link to="/invoices" search={{ id: h.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                          {h.invoiceNumber}
+                        </Link>
+                      </td>
                       <td className="text-right tabular-nums font-medium">
                         {formatCurrency(String(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1")))}
                         {h.selectedUnit && h.conversionFactor && parseFloat(h.conversionFactor) !== 1 && (
@@ -1821,7 +1761,7 @@ function StockMovementsTab({
 
     // Starting stock = currentStock - totalChange in this window
     let running = currentStock - totalChange;
-    const rows: { date: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
+    const rows: { date: string; invoiceId: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
 
     for (const m of chronological) {
       const factor = parseFloat(m.conversionFactor || "1");
@@ -1830,6 +1770,7 @@ function StockMovementsTab({
       running += delta;
       rows.push({
         date: formatDate(m.invoiceDate),
+        invoiceId: m.invoiceId,
         invoiceNumber: m.invoiceNumber,
         qtyChange: delta,
         running,
@@ -1932,15 +1873,21 @@ function StockMovementsTab({
           <table className="data-table w-full">
             <thead className="sticky top-0 z-10">
               <tr>
-                <th style={{ width: "40%" }}>Date</th>
-                <th style={{ width: "30%" }} className="text-right">Qty Change</th>
-                <th style={{ width: "30%" }} className="text-right">Balance</th>
+                <th style={{ width: "30%" }}>Date</th>
+                <th style={{ width: "25%" }}>Invoice #</th>
+                <th style={{ width: "25%" }} className="text-right">Qty Change</th>
+                <th style={{ width: "20%" }} className="text-right">Balance</th>
               </tr>
             </thead>
             <tbody>
               {tableRows.map((r, i) => (
                 <tr key={i}>
                   <td className="text-text-secondary text-xs">{r.date}</td>
+                  <td className="font-mono text-[13px]">
+                    <Link to="/invoices" search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                      {r.invoiceNumber}
+                    </Link>
+                  </td>
                   <td className={cn(
                     "text-right tabular-nums font-medium",
                     r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"

@@ -159,7 +159,7 @@ export const partyRouter = router({
       entityType: "party",
       entityId: party.id,
       metadata: { name: party.name },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return party;
@@ -186,7 +186,7 @@ export const partyRouter = router({
         entityType: "party",
         entityId: party.id,
         metadata: { name: party.name },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return party;
@@ -211,7 +211,7 @@ export const partyRouter = router({
         entityType: "party",
         entityId: input.id,
         metadata: { partyId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };
@@ -221,6 +221,11 @@ export const partyRouter = router({
     .input(z.object({ partyId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Party");
+      // Historical join — top items a party has ever bought. Soft-deleted
+      // items must still count toward the totals (otherwise the report
+      // silently drops rows when the user prunes their catalog). The
+      // `innerJoin` means we still fetch the live `items.name`, but the
+      // row's deletedAt state is irrelevant to the aggregation.
       const rows = await ctx.db.select({
         itemId: invoiceItems.itemId,
         itemName: items.name,
@@ -275,7 +280,6 @@ export const partyRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot merge a party into itself" });
       }
 
-      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       const result = await ctx.db.transaction(async (tx) => {
         const [source] = await tx.select().from(parties)
           .where(and(eq(parties.id, input.sourceId), eq(parties.businessId, ctx.businessId))).limit(1);
@@ -329,7 +333,7 @@ export const partyRouter = router({
         entityType: "party",
         entityId: input.targetId,
         metadata: { sourceId: input.sourceId, sourceName: result.sourceName, targetName: result.targetName },
-        ipAddress,
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: result.success, mergedInto: result.mergedInto };

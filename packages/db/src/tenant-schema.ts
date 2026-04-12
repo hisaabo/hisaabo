@@ -151,11 +151,23 @@ export const items = pgTable("items", {
   storeDescription: text("store_description"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // Soft delete — historical invoice line items must still resolve item
+  // master data for audit/reporting, so deletions are logical rather than
+  // physical. Every active read filters on deletedAt IS NULL; historical
+  // joins (e.g. rendering a legacy invoice) intentionally include rows
+  // where deletedAt IS NOT NULL. See partial index below for query planner
+  // support on the active-read hot path.
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (t) => [
   index("items_business_idx").on(t.businessId),
   index("items_name_idx").on(t.businessId, t.name),
   index("items_sku_idx").on(t.businessId, t.sku),
   index("items_store_idx").on(t.businessId, t.storeEnabled),
+  // Partial index that mirrors the active-read path (`items.list`, catalog,
+  // store, dashboards). The query planner picks this up for any WHERE that
+  // includes `business_id` AND `deleted_at IS NULL`, keeping active-item
+  // queries off the full table once soft deletes accumulate.
+  index("items_active_idx").on(t.businessId, t.name).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Item Variants (for items with itemMode = "variants") ─────
@@ -173,9 +185,18 @@ export const itemVariants = pgTable("item_variants", {
   storePrice: numeric("store_price", { precision: 15, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // Soft delete — variants are deleted logically for the same reason as
+  // items: historical invoice line items may reference a variantId that
+  // was later removed from the catalog. The parent items.onDelete cascade
+  // is left in place (physical parent delete still cleans up physically),
+  // but both sides switched to soft-delete first so cascade rarely fires.
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
 }, (t) => [
   index("item_variants_item_idx").on(t.itemId),
   index("item_variants_sku_idx").on(t.sku),
+  // Partial index for the active-variant read path (variant lookups in
+  // item detail pages, stock/reporting joins). Mirrors items_active_idx.
+  index("item_variants_active_idx").on(t.itemId).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Invoices ───────────────────────────────────────────────────
@@ -193,7 +214,7 @@ export const invoices = pgTable("invoices", {
   subtotal: numeric("subtotal", { precision: 15, scale: 2 }).default("0").notNull(),
   taxAmount: numeric("tax_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   discountAmount: numeric("discount_amount", { precision: 15, scale: 2 }).default("0").notNull(),
-  charges: jsonb("charges").$type<Array<{ label: string; amount: string }>>(),
+  charges: jsonb("charges").$type<Array<{ label: string; amount: string; shipmentId?: string }>>(),
   additionalCharges: numeric("additional_charges", { precision: 15, scale: 2 }).default("0").notNull(),
   roundOff: numeric("round_off", { precision: 15, scale: 2 }).default("0").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
@@ -241,7 +262,12 @@ export const invoiceItems = pgTable("invoice_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
   itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
-  description: text("description").notNull(),
+  // Snapshot of the item name at billing time. Required — frozen at create.
+  // Preserves the name the customer was billed for even if the item is later renamed.
+  itemName: text("item_name").notNull(),
+  // Optional free-text line notes (e.g. "Keep separate from order #42").
+  // Not populated by imports — only set when the user types something.
+  description: text("description"),
   quantity: numeric("quantity", { precision: 15, scale: 3 }).notNull(),
   unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).notNull(),
   taxPercent: numeric("tax_percent", { precision: 5, scale: 2 }).default("0").notNull(),
@@ -581,7 +607,8 @@ export const recurringInvoiceTemplates = pgTable("recurring_invoice_templates", 
   customIntervalDays: integer("custom_interval_days"), // only when frequency = 'custom'
   lineItems: jsonb("line_items").$type<Array<{
     itemId?: string;
-    description: string;
+    itemName: string;
+    description?: string | null;
     quantity: string;
     unitPrice: string;
     taxPercent: string;

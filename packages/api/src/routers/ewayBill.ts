@@ -133,9 +133,13 @@ export const ewayBillRouter = router({
       }
 
       // ── 2. Fetch line items with item master data ──────────────────────────
+      // Historical join — e-way bill is for an existing invoice.
+      // Soft-deleted items still contribute HSN/unit/itemType to the
+      // generated EWB payload so legacy shipments don't break.
       const lineItemRows = await ctx.db
         .select({
           id: invoiceItems.id,
+          itemName: invoiceItems.itemName,
           description: invoiceItems.description,
           quantity: invoiceItems.quantity,
           unitPrice: invoiceItems.unitPrice,
@@ -240,6 +244,7 @@ export const ewayBillRouter = router({
       };
 
       const lineItemsForEWB: LineItemForEWB[] = lineItemRows.map((li) => ({
+        itemName: li.itemName,
         description: li.description,
         quantity: li.quantity,
         unitPrice: li.unitPrice,

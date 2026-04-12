@@ -124,7 +124,11 @@ export const invoiceRouter = router({
       ]);
 
       // Fetch the base unit for each linked item so the UI can display a unit
-      // even when selectedUnit is null (i.e. the item's base unit was used)
+      // even when selectedUnit is null (i.e. the item's base unit was used).
+      //
+      // Historical join — soft-deleted items must still resolve here so
+      // legacy invoice detail pages render correctly after the item is
+      // removed from the active catalog. Do NOT add `isNull(deletedAt)`.
       const linkedItemIds = lineItems.map(li => li.itemId).filter((id): id is string => Boolean(id));
       const itemUnitMap = new Map<string, string>();
       if (linkedItemIds.length > 0) {
@@ -147,7 +151,6 @@ export const invoiceRouter = router({
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
-    const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
     const invoice = await ctx.db.transaction(async (tx) => {
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
@@ -181,6 +184,13 @@ export const invoiceRouter = router({
       // Security: validate that every itemId in line items belongs to the current business.
       // Without this an attacker could reference items from another business — which would
       // allow stock manipulation on entities they do not own.
+      //
+      // Soft-delete note: this check intentionally does NOT filter by
+      // `deleted_at IS NULL`. The frontend item picker only shows active
+      // items, so legitimate new invoices never reference soft-deleted
+      // rows in practice. Allowing soft-deleted items here is what lets
+      // historical invoices still be re-submitted through the edit path
+      // (or replayed via the CLI) without manual unsoft-deletion.
       const lineItemIds = input.lineItems
         .map((li) => li.itemId)
         .filter((id): id is string => Boolean(id));
@@ -217,7 +227,8 @@ export const invoiceRouter = router({
         });
         return {
           itemId: li.itemId || null,
-          description: li.description,
+          itemName: li.itemName,
+          description: li.description || null,
           quantity: li.quantity,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent || "0",
@@ -313,18 +324,29 @@ export const invoiceRouter = router({
       // rolls back the whole invoice rather than leaving a charged invoice with
       // no corresponding shipment record.
       if (input.type === "sale") {
-        const shippingCharge = (input.charges ?? []).find((c) =>
+        const shippingChargeIdx = (input.charges ?? []).findIndex((c) =>
           /shipping|delivery|freight|transport/i.test(c.label)
         );
+        const shippingCharge = shippingChargeIdx >= 0 ? (input.charges ?? [])[shippingChargeIdx] : undefined;
         if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
-          await tx.insert(shipments).values({
+          const [newShipment] = await tx.insert(shipments).values({
             businessId: ctx.businessId,
             invoiceId: invoice.id,
             partyId: input.partyId,
             mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
             cost: shippingCharge.amount,
             status: "pending",
-          });
+          }).returning();
+
+          // Tag the charge entry in the invoice with the auto-created shipment ID
+          const taggedCharges = (invoice.charges ?? []).map((c, i) =>
+            i === shippingChargeIdx ? { ...c, shipmentId: newShipment.id } : c
+          );
+          await tx.update(invoices)
+            .set({ charges: taggedCharges })
+            .where(eq(invoices.id, invoice.id));
+          // Reflect the tag in the returned object so callers see the shipmentId
+          invoice.charges = taggedCharges as typeof invoice.charges;
         }
       }
 
@@ -381,7 +403,7 @@ export const invoiceRouter = router({
       entityType: "invoice",
       entityId: invoice.id,
       metadata: { invoiceNumber: invoice.invoiceNumber, type: invoice.type, totalAmount: invoice.totalAmount },
-      ipAddress,
+      ipAddress: ctx.ipAddress,
     });
 
     // ── Async e-invoice submission (fire-and-forget) ───────────────────────
@@ -422,8 +444,13 @@ export const invoiceRouter = router({
           const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
           if (!biz) return;
 
+          // Historical join — the IRP submission is for a specific
+          // (already created) invoice. Soft-deleted items must still
+          // resolve so their HSN/itemType survive into the IRP payload.
+          // Do NOT filter by `deletedAt` here.
           const lineItemRows = await db
             .select({
+              itemName: invoiceItems.itemName,
               description: invoiceItems.description,
               quantity: invoiceItems.quantity,
               unitPrice: invoiceItems.unitPrice,
@@ -461,6 +488,7 @@ export const invoiceRouter = router({
               isReverseCharge: inv.isReverseCharge ?? false,
             },
             lineItemRows.map((li) => ({
+              itemName: li.itemName,
               description: li.description,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
@@ -591,7 +619,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: input.id,
         metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return invoice;
@@ -636,6 +664,10 @@ export const invoiceRouter = router({
         }
 
         // Security: validate itemIds in line items belong to this business.
+        // Soft-delete note: like `create`, this is an ownership check, not
+        // an active-state check. Allowing soft-deleted items keeps the
+        // edit path working for historical invoices whose line items
+        // reference rows the user has since removed from their catalog.
         if (input.lineItems) {
           const updateLineItemIds = input.lineItems
             .map((li) => li.itemId)
@@ -650,6 +682,7 @@ export const invoiceRouter = router({
           }
 
           // Security: validate variantIds belong to items in this business.
+          // Same soft-delete rationale as above.
           const updateVariantIds = input.lineItems
             .map((li) => li.variantId)
             .filter((id): id is string => Boolean(id));
@@ -673,10 +706,16 @@ export const invoiceRouter = router({
         if (input.notes !== undefined) updates.notes = input.notes;
         if (input.termsAndConditions !== undefined) updates.termsAndConditions = input.termsAndConditions;
 
-        // 3. Handle charges
-        if (input.charges) {
-          updates.charges = input.charges;
-          updates.additionalCharges = money.sum(input.charges.map((c) => c.amount));
+        // 3. Handle charges — preserve shipment-linked entries that should not be
+        // directly edited by the user (they are managed via shipment mutations).
+        if (input.charges !== undefined) {
+          const existingShipmentCharges = (existing.charges ?? []).filter((c) => (c as { shipmentId?: string }).shipmentId);
+          const userCharges = (input.charges ?? []).filter((c) => !(c as { shipmentId?: string }).shipmentId);
+          const mergedCharges = [...userCharges, ...existingShipmentCharges];
+          updates.charges = mergedCharges.length > 0 ? mergedCharges : null;
+          updates.additionalCharges = mergedCharges.length > 0
+            ? money.sum(mergedCharges.map((c) => c.amount))
+            : "0.00";
         }
         if (input.roundOff !== undefined) updates.roundOff = input.roundOff;
 
@@ -727,7 +766,8 @@ export const invoiceRouter = router({
             return {
               invoiceId: input.id,
               itemId: li.itemId || null,
-              description: li.description,
+              itemName: li.itemName,
+              description: li.description || null,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
@@ -768,7 +808,13 @@ export const invoiceRouter = router({
             }
           }
 
-          // Recalculate totals using fixed-point arithmetic
+          // Recalculate totals using fixed-point arithmetic.
+          // Use merged charges (updates.charges) if charges were modified; otherwise
+          // fall back to existing charges. This ensures shipment-linked charge entries
+          // are included in the total even when the user didn't touch charges.
+          const chargesForTotals = updates.charges !== undefined
+            ? (updates.charges as Array<{ amount: string }> | null) ?? []
+            : (existing.charges as Array<{ amount: string }> | null) ?? [];
           const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
           const totals = calcInvoiceTotals({
             lineItems: input.lineItems.map((li) => ({
@@ -777,7 +823,7 @@ export const invoiceRouter = router({
               taxPercent: li.taxPercent || "0",
               discountPercent: li.discountPercent || "0",
             })),
-            charges: input.charges ? input.charges : undefined,
+            charges: chargesForTotals.length > 0 ? chargesForTotals : undefined,
             invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
             invoiceDiscountType: input.invoiceDiscountType || "amount",
             roundOff: roundOffStr,
@@ -805,7 +851,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: updated.id,
         metadata: { invoiceNumber: updated.invoiceNumber },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;
@@ -881,7 +927,6 @@ export const invoiceRouter = router({
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
       });
 
-      const ipAddress = ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("cf-connecting-ip") || null;
       await logAudit(ctx.db, {
         businessId: ctx.businessId,
         userId: ctx.user!.id,
@@ -889,7 +934,7 @@ export const invoiceRouter = router({
         entityType: "invoice",
         entityId: input.id,
         metadata: { invoiceNumber: inv.invoiceNumber, previousStatus: inv.status },
-        ipAddress,
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };

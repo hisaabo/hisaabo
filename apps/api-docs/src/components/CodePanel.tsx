@@ -78,6 +78,9 @@ function CopyButton({ text, className = "" }: { text: string; className?: string
 }
 
 function CodeWithLineNumbers({ code, lang }: { code: string; lang: string }) {
+  // SECURITY: code originates from static developer-authored content files
+  // (src/content/*.ts), never from user input. Prism.highlight() output is
+  // trusted HTML safe for dangerouslySetInnerHTML.
   const highlighted = highlight(code, lang);
   const lines = highlighted.split("\n");
 
@@ -273,6 +276,9 @@ export function CodePanel({ examples, outputExample }: Props) {
               >
                 <code
                   className="language-json"
+                  // SECURITY: responseJson is produced by JSON.stringify() on
+                  // static developer-authored outputExample objects from content
+                  // files, never from user input. Safe for dangerouslySetInnerHTML.
                   dangerouslySetInnerHTML={{
                     __html: highlight(responseJson, "json"),
                   }}

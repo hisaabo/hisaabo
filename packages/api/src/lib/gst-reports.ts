@@ -177,7 +177,12 @@ export async function generateGSTR1(
     lineItemsByInvoice.set(li.invoiceId, existing);
   }
 
-  // Pre-fetch HSN codes for all items referenced in these line items
+  // Pre-fetch HSN codes for all items referenced in these line items.
+  //
+  // Historical join — GSTR-1 aggregates taxable value per HSN across all
+  // invoices in the period. Soft-deleted items must still contribute
+  // their HSN (otherwise the HSN summary drops rows for items the user
+  // deleted between filing periods). Do NOT filter `itemsTable.deletedAt`.
   const allItemIds = new Set<string>();
   for (const li of allLineItems) {
     if (li.itemId) allItemIds.add(li.itemId);
@@ -270,7 +275,10 @@ export async function generateGSTR1(
         ? (itemHsnLookup.get(li.itemId) || "0000")
         : "0000";
       const existing = hsnSummaryMap.get(itemHsn) || {
-        hsn: itemHsn, description: li.description, quantity: 0,
+        // HSN summary description is a human-readable label for the HSN
+        // group — use itemName (required snapshot), not the optional notes
+        // column.
+        hsn: itemHsn, description: li.itemName, quantity: 0,
         taxableValue: 0, cgst: 0, sgst: 0, igst: 0, totalValue: 0,
       };
       const itemTaxable = parseFloat(li.totalAmount) - parseFloat(li.taxAmount);

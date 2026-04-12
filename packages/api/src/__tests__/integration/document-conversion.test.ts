@@ -97,7 +97,7 @@ describe("DOC-01: Quotation → Invoice conversion", () => {
       lineItems: [
         {
           itemId: item.id,
-          description: "Widget A",
+          itemName: "Widget A",
           quantity: "10",
           unitPrice: "500.00",
           taxPercent: "18.00",
@@ -159,7 +159,7 @@ describe("DOC-02: Proforma → Invoice conversion", () => {
       lineItems: [
         {
           itemId: item.id,
-          description: "Proforma item",
+          itemName: "Proforma item",
           quantity: "5",
           unitPrice: "200.00",
           taxPercent: "12.00",
@@ -207,7 +207,7 @@ describe("DOC-03: Delivery Challan → Invoice — skipStockAdjustment prevents 
       lineItems: [
         {
           itemId: item.id,
-          description: "Challan item",
+          itemName: "Challan item",
           quantity: "20",
           unitPrice: "300.00",
           taxPercent: "5.00",
@@ -263,7 +263,7 @@ describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", 
       lineItems: [
         {
           itemId: item.id,
-          description: "Sold item",
+          itemName: "Sold item",
           quantity: "5",
           unitPrice: "400.00",
           taxPercent: "18.00",
@@ -313,7 +313,7 @@ describe("DOC-05: Invoice → Sales Return — stock incremented on conversion",
       lineItems: [
         {
           itemId: item.id,
-          description: "Sold goods",
+          itemName: "Sold goods",
           quantity: "10",
           unitPrice: "250.00",
           taxPercent: "5.00",
@@ -380,7 +380,7 @@ describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document
       invoiceDate: isoNow(),
       lineItems: [{
         itemId: item.id,
-        description: "Full chain test",
+        itemName: "Full chain test",
         quantity: "5",
         unitPrice: "1000.00",
         taxPercent: "18.00",

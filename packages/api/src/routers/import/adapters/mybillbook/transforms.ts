@@ -83,11 +83,18 @@ export function transformInvoice(raw: Record<string, unknown>): CanonicalInvoice
   const paymentMode = rawMode ? normalizeMode(rawMode) : undefined;
 
   // Line items
+  //
+  // Post-schema-split (Bug B): the CSV's "Item Name" column is the primary
+  // source of truth; the legacy "Description" column (rare in MyBillBook
+  // exports) is a fallback so old CSVs don't break. Imported historical
+  // invoices never carry a user-authored description, so the optional notes
+  // column is left blank (null) — user notes only make sense when a human
+  // authored the line in Hisaabo.
   let lineItems: CanonicalInvoice["lineItems"] = undefined;
   if (Array.isArray(raw.lineItems) && raw.lineItems.length > 0) {
     lineItems = (raw.lineItems as Record<string, unknown>[]).map((li) => ({
-      itemName: str(li.itemName) || undefined,
-      description: str(li.description) || str(li.itemName) || "Imported item",
+      itemName: str(li.itemName) || str(li.description) || "Imported item",
+      description: null,
       quantity: str(li.quantity, "1") || "1",
       unit: str(li.unit) || undefined,
       conversionFactor: str(li.conversionFactor) || undefined,

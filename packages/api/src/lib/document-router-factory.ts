@@ -193,6 +193,10 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
 
           // Security: validate that every itemId in line items belongs to the current business.
+          // Soft-delete note: mirrors `invoice.ts` — this is an ownership
+          // check, not an active-state check. Allowing soft-deleted items
+          // keeps backdated document creation (CLI, imports, historical
+          // re-entry) functional.
           const createLineItemIds = input.lineItems
             .map((li) => li.itemId)
             .filter((id): id is string => Boolean(id));
@@ -255,7 +259,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             });
             return {
               itemId: li.itemId || null,
-              description: li.description,
+              itemName: li.itemName,
+              description: li.description || null,
               quantity: li.quantity,
               unitPrice: li.unitPrice,
               taxPercent: li.taxPercent || "0",
@@ -361,7 +366,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityType: config.documentType,
           entityId: doc.id,
           metadata: { invoiceNumber: doc.invoiceNumber, type: config.documentType },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return doc;
@@ -401,7 +406,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           entityType: config.documentType,
           entityId: input.id,
           metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: input.status },
-          ipAddress: ctx.req.headers.get("x-forwarded-for"),
+          ipAddress: ctx.ipAddress,
         });
 
         return doc;
@@ -483,7 +488,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             entityType: config.documentType,
             entityId: input.id,
             metadata: { invoiceNumber: deleteResult.invoiceNumber },
-            ipAddress: ctx.req.headers.get("x-forwarded-for"),
+            ipAddress: ctx.ipAddress,
           });
         }
 

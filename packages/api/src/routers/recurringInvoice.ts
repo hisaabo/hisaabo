@@ -135,7 +135,7 @@ export const recurringInvoiceRouter = router({
       entityType: "recurringInvoice",
       entityId: template.id,
       metadata: { templateName: input.name },
-      ipAddress: ctx.req.headers.get("x-forwarded-for"),
+      ipAddress: ctx.ipAddress,
     });
 
     return template;
@@ -176,7 +176,7 @@ export const recurringInvoiceRouter = router({
         entityType: "recurringInvoice",
         entityId: input.id,
         metadata: { templateId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;
@@ -196,7 +196,7 @@ export const recurringInvoiceRouter = router({
         entityType: "recurringInvoice",
         entityId: input.id,
         metadata: { templateId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return { success: true };
@@ -223,7 +223,7 @@ export const recurringInvoiceRouter = router({
         entityType: "recurringInvoice",
         entityId: input.id,
         metadata: { templateId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;
@@ -262,7 +262,7 @@ export const recurringInvoiceRouter = router({
         entityType: "recurringInvoice",
         entityId: input.id,
         metadata: { templateId: input.id },
-        ipAddress: ctx.req.headers.get("x-forwarded-for"),
+        ipAddress: ctx.ipAddress,
       });
 
       return updated;

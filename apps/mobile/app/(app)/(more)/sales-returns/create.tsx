@@ -22,10 +22,13 @@ import { calcInvoiceTotals } from "@hisaabo/shared";
 import { colors } from "../../../../src/lib/theme";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
+import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
 
 interface LineItem {
   itemId?: string;
-  description: string;
+  itemName: string;
+  /** Free-text per-line note (maps to backend `description`). */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -33,7 +36,7 @@ interface LineItem {
 }
 
 function newLineItem(): LineItem {
-  return { description: "", quantity: "1", unitPrice: "0", taxPercent: "0", discountPercent: "0" };
+  return { itemName: "", notes: "", quantity: "1", unitPrice: "0", taxPercent: "0", discountPercent: "0" };
 }
 function todayDate() { return new Date(); }
 function safeNum(s: string) { const n = parseFloat(s); return isNaN(n) ? 0 : n; }
@@ -124,13 +127,13 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
     <View style={s.lineItemCard}>
       <View style={s.lineItemHeader}>
         <TouchableOpacity style={s.descPickerBtn} onPress={() => onPickItem(index)} activeOpacity={0.7}>
-          <Text style={item.description ? s.descText : s.descPlaceholder} numberOfLines={1}>{item.description || "Tap to select item..."}</Text>
+          <Text style={item.itemName ? s.descText : s.descPlaceholder} numberOfLines={1}>{item.itemName || "Tap to select item..."}</Text>
           <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
         </TouchableOpacity>
         <TouchableOpacity onPress={() => onRemove(index)} style={s.removeBtn}><Ionicons name="close-circle" size={20} color={colors.danger} /></TouchableOpacity>
       </View>
-      {item.description ? (
-        <TextInput style={s.descInput} value={item.description} onChangeText={(v) => onChange(index, "description", v)} placeholder="Description" placeholderTextColor={colors.textMuted} multiline numberOfLines={2} />
+      {item.itemName ? (
+        <LineItemNotesField value={item.notes} onChange={(v) => onChange(index, "notes", v)} />
       ) : null}
       <View style={s.lineItemFields}>
         {(["quantity", "unitPrice", "taxPercent", "discountPercent"] as const).map((field, fi) => (
@@ -164,7 +167,7 @@ export default function SalesReturnCreateScreen() {
   });
 
   const totals = useMemo(() => {
-    const validItems = lineItems.filter((li) => li.description.trim().length > 0);
+    const validItems = lineItems.filter((li) => li.itemName.trim().length > 0);
     if (validItems.length === 0) return { subtotal: "0", taxTotal: "0", lineDiscountTotal: "0", invoiceDiscountAmount: "0", chargesTotal: "0", roundOff: "0", total: "0" };
     return calcInvoiceTotals({ lineItems: validItems.map((li) => ({ quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })) });
   }, [lineItems]);
@@ -180,18 +183,28 @@ export default function SalesReturnCreateScreen() {
   const handlePickItemForLine = useCallback((index: number) => { setActiveLineIndex(index); setShowItemPicker(true); }, []);
 
   const handleItemSelected = useCallback((item: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => {
-    setLineItems((prev) => { const next = [...prev]; next[activeLineIndex] = { ...next[activeLineIndex], itemId: item.id, description: item.name, unitPrice: item.salePrice ?? "0", taxPercent: item.taxPercent }; return next; });
+    setLineItems((prev) => { const next = [...prev]; next[activeLineIndex] = { ...next[activeLineIndex], itemId: item.id, itemName: item.name, unitPrice: item.salePrice ?? "0", taxPercent: item.taxPercent }; return next; });
   }, [activeLineIndex]);
 
   const handleCreate = useCallback(() => {
     if (!selectedParty) { Alert.alert("Validation", "Please select a customer."); return; }
-    const validItems = lineItems.filter((li) => li.description.trim().length > 0 && parseFloat(li.quantity) > 0);
+    const validItems = lineItems.filter((li) => li.itemName.trim().length > 0 && parseFloat(li.quantity) > 0);
     if (validItems.length === 0) { Alert.alert("Validation", "Add at least one item."); return; }
     createMutation.mutate({
       partyId: selectedParty.id, type: "sale", documentType: "sales_return",
       invoiceDate: invoiceDate.toISOString(), notes: notes.trim() || undefined,
       additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
-      lineItems: validItems.map((li) => ({ itemId: li.itemId, description: li.description.trim(), quantity: li.quantity || "1", unitPrice: li.unitPrice || "0", taxPercent: li.taxPercent || "0", discountPercent: li.discountPercent || "0" })),
+      // Bug B: itemName is the required name snapshot; description is the
+      // optional free-text per-line note (empty → omitted).
+      lineItems: validItems.map((li) => ({
+        itemId: li.itemId,
+        itemName: li.itemName.trim(),
+        description: li.notes.trim() || undefined,
+        quantity: li.quantity || "1",
+        unitPrice: li.unitPrice || "0",
+        taxPercent: li.taxPercent || "0",
+        discountPercent: li.discountPercent || "0",
+      })),
     });
   }, [selectedParty, lineItems, invoiceDate, notes, createMutation]);
 
@@ -258,7 +271,7 @@ export default function SalesReturnCreateScreen() {
         </ScrollView>
 
         <View style={s.footer}>
-          <TouchableOpacity style={[s.createBtn, createMutation.isPending && s.createBtnDisabled]} onPress={handleCreate} activeOpacity={0.85} disabled={createMutation.isPending}>
+          <TouchableOpacity style={[s.createBtn, (createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && s.createBtnDisabled]} onPress={handleCreate} activeOpacity={0.85} disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}>
             {createMutation.isPending ? <ActivityIndicator color={colors.textPrimary} size="small" /> : (
               <>
                 <Ionicons name="checkmark-circle-outline" size={20} color={colors.textPrimary} />

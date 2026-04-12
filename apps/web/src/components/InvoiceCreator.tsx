@@ -9,7 +9,10 @@ interface LineItem {
   variantId?: string;
   selectedUnit?: string;
   conversionFactor?: string;
-  description: string;
+  /** Primary bold text on the invoice — frozen at create time. */
+  itemName: string;
+  /** Free-text line notes (optional). Sent as `description` on the wire. */
+  notes: string;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -19,7 +22,8 @@ interface LineItem {
 function newLineItem(): LineItem {
   return {
     id: crypto.randomUUID(),
-    description: "",
+    itemName: "",
+    notes: "",
     quantity: "1",
     unitPrice: "",
     taxPercent: "0",
@@ -99,7 +103,9 @@ export function InvoiceCreator({ type, onClose }: Props) {
         variantId: undefined,
         selectedUnit: undefined,
         conversionFactor: undefined,
-        description: product.name,
+        // itemName is the frozen snapshot; notes stay blank on fresh pick.
+        itemName: product.name,
+        notes: "",
         unitPrice: (type === "sale" ? product.salePrice : product.purchasePrice) || "",
         taxPercent: product.taxPercent,
       } : li
@@ -116,7 +122,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
       l.id === lineId ? {
         ...l,
         variantId: variant.id,
-        description: `${product.name} - ${label}`,
+        itemName: `${product.name} - ${label}`,
         unitPrice: (type === "sale"
           ? (variant.salePrice || product.salePrice)
           : (variant.purchasePrice || product.purchasePrice)) || "",
@@ -138,7 +144,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
           selectedUnit: undefined,
           conversionFactor: undefined,
           unitPrice: (type === "sale" ? product.salePrice : product.purchasePrice) || "",
-          description: product.name,
+          itemName: product.name,
         } : l
       ));
       return;
@@ -152,7 +158,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
         selectedUnit: uv.unit,
         conversionFactor: String(uv.conversionFactor),
         unitPrice: (type === "sale" ? uv.salePrice : (uv.purchasePrice || uv.salePrice)) || "",
-        description: `${product.name} (${uv.unit})`,
+        itemName: `${product.name} (${uv.unit})`,
       } : l
     ));
   }
@@ -168,7 +174,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const validItems = items.filter((li) => li.description && li.unitPrice);
+    const validItems = items.filter((li) => li.itemName.trim() && li.unitPrice);
     if (validItems.length === 0) return;
 
     createMutation.mutate({
@@ -178,17 +184,24 @@ export function InvoiceCreator({ type, onClose }: Props) {
       dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
       notes: notes || undefined,
       termsAndConditions: terms || undefined,
-      lineItems: validItems.map((li) => ({
-        itemId: li.itemId,
-        description: li.description,
-        quantity: li.quantity,
-        unitPrice: li.unitPrice,
-        taxPercent: li.taxPercent,
-        discountPercent: li.discountPercent,
-        variantId: li.variantId || undefined,
-        selectedUnit: li.selectedUnit || undefined,
-        conversionFactor: li.conversionFactor || undefined,
-      })),
+      // Bug B: itemName is the required frozen snapshot; description carries
+      // the optional free-text notes. Empty notes become `undefined` so the
+      // validator keeps the stored column NULL rather than persisting "".
+      lineItems: validItems.map((li) => {
+        const trimmedNotes = li.notes.trim();
+        return {
+          itemId: li.itemId,
+          itemName: li.itemName.trim(),
+          description: trimmedNotes.length > 0 ? trimmedNotes : undefined,
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent,
+          discountPercent: li.discountPercent,
+          variantId: li.variantId || undefined,
+          selectedUnit: li.selectedUnit || undefined,
+          conversionFactor: li.conversionFactor || undefined,
+        };
+      }),
     });
   }
 
@@ -268,7 +281,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
                 }}
               >
                 <span>Product</span>
-                <span>Description</span>
+                <span>Item name</span>
                 <span className="text-right">Qty</span>
                 <span className="text-right">Price</span>
                 <span className="text-right">Tax %</span>
@@ -302,13 +315,14 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         {itemsData?.data.map((p) => <option key={p.id} value={p.id}>{p.name}{p.itemMode === "variants" ? " (variants)" : p.itemMode === "alt_units" ? ` (${p.unit})` : ""}</option>)}
                       </select>
 
-                      {/* Description */}
+                      {/* Item name (primary bold line on the invoice) */}
                       <input
-                        value={li.description}
-                        onChange={(e) => updateItem(li.id, "description", e.target.value)}
-                        placeholder="Description *"
-                        aria-label="Description"
+                        value={li.itemName}
+                        onChange={(e) => updateItem(li.id, "itemName", e.target.value)}
+                        placeholder="Item name *"
+                        aria-label="Item name"
                         required
+                        maxLength={200}
                         className="w-full px-2 py-1.5 rounded text-xs outline-none"
                         style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
                       />
@@ -398,6 +412,34 @@ export function InvoiceCreator({ type, onClose }: Props) {
                         />
                       </div>
                     )}
+
+                    {/* Line notes (free-text). Stored on the backend as
+                        invoice_items.description and rendered as italic
+                        secondary text under the item name on the PDF. */}
+                    <div className="px-3 pb-2">
+                      <div className="relative">
+                        <textarea
+                          value={li.notes}
+                          onChange={(e) => updateItem(li.id, "notes", e.target.value)}
+                          placeholder="Notes for this line (optional)"
+                          aria-label="Line notes"
+                          rows={2}
+                          maxLength={500}
+                          className="w-full px-2 py-1.5 rounded text-xs outline-none resize-y min-h-[2.25rem]"
+                          style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
+                        />
+                        {li.notes.length > 400 && (
+                          <p
+                            className={`absolute right-2 bottom-1 text-[10px] tabular-nums pointer-events-none ${
+                              li.notes.length > 500 ? "text-red-500" : "text-text-tertiary"
+                            }`}
+                            aria-live="polite"
+                          >
+                            {li.notes.length} / 500
+                          </p>
+                        )}
+                      </div>
+                    </div>
 
                     {/* Alt unit sub-selector */}
                     {isAltUnitProduct && (selectedProduct?.unitVariants as any[])?.length > 0 && (
@@ -527,7 +569,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
               </button>
               <button
                 type="submit"
-                disabled={createMutation.isPending}
+                disabled={createMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
                 className="px-5 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
               >
                 {createMutation.isPending ? "Creating..." : "Create invoice"}

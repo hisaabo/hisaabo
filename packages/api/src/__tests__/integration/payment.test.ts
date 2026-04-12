@@ -88,7 +88,7 @@ async function createSaleInvoice(totalAmount: string) {
     invoiceDate: new Date().toISOString(),
     lineItems: [
       {
-        description: `Invoice for ${totalAmount}`,
+        itemName: `Invoice for ${totalAmount}`,
         quantity: "1",
         unitPrice: totalAmount,
         taxPercent: "0",
@@ -688,7 +688,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Draft", quantity: "1", unitPrice: "100.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Draft", quantity: "1", unitPrice: "100.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     // Leave as draft
@@ -699,7 +699,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Sent", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Sent", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await caller.invoice.updateStatus({ id: sentInv.id, status: "sent" });
@@ -710,7 +710,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Partial", quantity: "1", unitPrice: "800.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Partial", quantity: "1", unitPrice: "800.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await caller.invoice.updateStatus({ id: partialInv.id, status: "sent" });
@@ -727,7 +727,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Paid", quantity: "1", unitPrice: "200.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Paid", quantity: "1", unitPrice: "200.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await caller.invoice.updateStatus({ id: paidInv.id, status: "sent" });
@@ -744,7 +744,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Cancelled", quantity: "1", unitPrice: "150.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Cancelled", quantity: "1", unitPrice: "150.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await caller.invoice.delete({ id: cancelledInv.id }); // sets status=cancelled
@@ -777,7 +777,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "Balance test item", quantity: "1", unitPrice: "1000.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "Balance test item", quantity: "1", unitPrice: "1000.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await caller.invoice.updateStatus({ id: inv.id, status: "sent" });
@@ -807,7 +807,7 @@ describe("payment.unpaidInvoices", () => {
       type: "sale" as const,
       invoiceDate: new Date().toISOString(),
       lineItems: [
-        { description: "B2 item", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+        { itemName: "B2 item", quantity: "1", unitPrice: "500.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
       ],
     });
     await callerB2.invoice.updateStatus({ id: b2Inv.id, status: "sent" });
