@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PillTabs } from "@/components/ui/Tabs";
 import { SegmentedControl } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
 
@@ -96,9 +97,10 @@ const typeOptions = [
 
 interface DocumentListPageProps {
   config: DocumentListPageConfig;
+  initialSelectedId?: string;
 }
 
-export function DocumentListPage({ config }: DocumentListPageProps) {
+export function DocumentListPage({ config, initialSelectedId }: DocumentListPageProps) {
   const {
     trpcRouter,
     documentType,
@@ -126,12 +128,30 @@ export function DocumentListPage({ config }: DocumentListPageProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
+
+  // Auto-open slider when navigated with ?id= param
+  useEffect(() => {
+    if (initialSelectedId) setSelectedId(initialSelectedId);
+  }, [initialSelectedId]);
 
   const utils = trpc.useUtils();
 
   // Because trpc is typed as `any` (see lib/trpc.ts), dynamic key access is safe.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const router = (trpc as any)[trpcRouter];
+
+  const { data: selectedDoc } = trpc.invoice.getById.useQuery(
+    { id: selectedId! },
+    { enabled: !!selectedId }
+  );
+
+  // Resolve reference invoice number for clickable link
+  const refDocId = selectedDoc?.referenceDocumentId ?? "";
+  const { data: refDoc } = trpc.invoice.getById.useQuery(
+    { id: refDocId },
+    { enabled: !!refDocId }
+  );
 
   const { data, isLoading } = router.list.useQuery({
     type,
@@ -253,7 +273,7 @@ export function DocumentListPage({ config }: DocumentListPageProps) {
             <tbody>
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               {data.data.map((doc: any) => (
-                <tr key={doc.id} className="group">
+                <tr key={doc.id} className="group cursor-pointer" onClick={() => setSelectedId(doc.id)}>
                   <td className="font-medium">{doc.partyName}</td>
                   <td className="font-mono text-[13px] text-text-secondary">
                     {doc.invoiceNumber}
@@ -282,7 +302,7 @@ export function DocumentListPage({ config }: DocumentListPageProps) {
                   <td className="text-right tabular-nums font-medium">
                     {formatCurrency(doc.totalAmount)}
                   </td>
-                  <td className="text-right">
+                  <td className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       {markSent && doc.status === "draft" && (
                         <button
@@ -333,6 +353,181 @@ export function DocumentListPage({ config }: DocumentListPageProps) {
           </table>
         </div>
       )}
+
+      {/* Document detail slide-over */}
+      <SlideOver
+        open={!!selectedId}
+        onClose={() => setSelectedId(null)}
+        title={selectedDoc ? selectedDoc.invoiceNumber : "Loading…"}
+        description={selectedDoc ? `${selectedDoc.party?.name ?? ""} — ${formatDate(selectedDoc.invoiceDate)}` : undefined}
+        footer={
+          selectedDoc ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex gap-2">
+                {selectedDoc.status === "draft" && (
+                  <button
+                    onClick={() => {
+                      setSelectedId(null);
+                      confirmDelete(selectedDoc.id, selectedDoc.invoiceNumber);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950 border border-red-200 dark:border-red-800 transition-colors"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {selectedDoc.status === "draft" && (
+                  <button
+                    onClick={() => {
+                      setSelectedId(null);
+                      setShowCreate(true);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        {!selectedDoc ? (
+          <div className="space-y-3 animate-pulse">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-8 bg-surface-2 rounded-lg" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {/* Header info */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Party</p>
+                  <p className="font-semibold text-text-primary">{selectedDoc.party?.name ?? "—"}</p>
+                  {selectedDoc.party?.phone && (
+                    <p className="text-xs text-text-tertiary">{selectedDoc.party.phone}</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Status</p>
+                  <StatusBadge status={selectedDoc.status} size="sm" />
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Date</p>
+                  <p className="text-sm text-text-primary">{formatDate(selectedDoc.invoiceDate)}</p>
+                </div>
+                {selectedDoc.dueDate && (
+                  <div>
+                    <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Due Date</p>
+                    <p className="text-sm text-text-primary">{formatDate(selectedDoc.dueDate)}</p>
+                  </div>
+                )}
+                {selectedDoc.referenceDocumentId && (
+                  <div>
+                    <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Reference Invoice</p>
+                    <button
+                      onClick={() => {
+                        setSelectedId(null);
+                        window.location.href = `/invoices?id=${selectedDoc.referenceDocumentId}`;
+                      }}
+                      className="text-sm font-mono text-brand-600 hover:text-brand-700 hover:underline"
+                    >
+                      {refDoc?.invoiceNumber ?? "Loading…"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Line items */}
+            <div>
+              <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-2">Items</p>
+              <div className={cn("overflow-hidden rounded-xl border border-border-light")}>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-surface-1 border-b border-border-light">
+                      <th className="px-3 py-2 text-left font-medium text-text-tertiary">Item</th>
+                      <th className="px-3 py-2 text-right font-medium text-text-tertiary">Qty</th>
+                      <th className="px-3 py-2 text-right font-medium text-text-tertiary">Price</th>
+                      <th className="px-3 py-2 text-right font-medium text-text-tertiary">Tax%</th>
+                      <th className="px-3 py-2 text-right font-medium text-text-tertiary">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-light">
+                    {selectedDoc.lineItems.map((li: any) => (
+                      <tr key={li.id}>
+                        <td className="px-3 py-2">
+                          <p className="font-medium text-text-primary">{li.itemName}</p>
+                          {li.description && (
+                            <p className="text-[11px] italic text-text-secondary mt-0.5">{li.description}</p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(li.totalAmount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Totals */}
+            <div className="flex justify-end">
+              <div className="w-64 space-y-1.5">
+                <div className="flex justify-between text-sm">
+                  <span className="text-text-secondary">Subtotal</span>
+                  <span className="tabular-nums text-text-primary">{formatCurrency(selectedDoc.subtotal)}</span>
+                </div>
+                {parseFloat(selectedDoc.discountAmount) > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-secondary">Discount</span>
+                    <span className="tabular-nums text-emerald-600">-{formatCurrency(selectedDoc.discountAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-text-secondary">Tax</span>
+                  <span className="tabular-nums text-text-primary">{formatCurrency(selectedDoc.taxAmount)}</span>
+                </div>
+                {parseFloat(selectedDoc.additionalCharges ?? "0") > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-secondary">Additional Charges</span>
+                    <span className="tabular-nums text-text-primary">{formatCurrency(selectedDoc.additionalCharges ?? "0")}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-border-light flex justify-between">
+                  <span className="text-sm font-semibold text-text-primary">Total</span>
+                  <span className="text-base font-bold tabular-nums text-text-primary">{formatCurrency(selectedDoc.totalAmount)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Notes & Terms */}
+            {(selectedDoc.notes || selectedDoc.termsAndConditions) && (
+              <div className="grid grid-cols-2 gap-4">
+                {selectedDoc.notes && (
+                  <div>
+                    <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Notes</p>
+                    <p className="text-xs text-text-secondary whitespace-pre-wrap">{selectedDoc.notes}</p>
+                  </div>
+                )}
+                {selectedDoc.termsAndConditions && (
+                  <div>
+                    <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Terms &amp; Conditions</p>
+                    <p className="text-xs text-text-secondary whitespace-pre-wrap">{selectedDoc.termsAndConditions}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </SlideOver>
 
       {/* Delete confirm dialog */}
       <ConfirmDialog

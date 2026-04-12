@@ -480,6 +480,24 @@ export default function InvoiceDetailScreen() {
     onError: (err) => Alert.alert("Error", err.message),
   });
 
+  const handleIssueCreditNote = () => {
+    if (!invoice) return;
+    haptic.light();
+    router.push({
+      pathname: "/(app)/(more)/credit-notes/create",
+      params: { prefillFromInvoiceId: invoice.id },
+    } as never);
+  };
+
+  const handleCreateSalesReturn = () => {
+    if (!invoice) return;
+    haptic.light();
+    router.push({
+      pathname: "/(app)/(more)/sales-returns/create",
+      params: { prefillFromInvoiceId: invoice.id },
+    } as never);
+  };
+
   const handleStatusChange = (status: StatusKey) => {
     if (!invoice) return;
     haptic.medium();
@@ -781,6 +799,28 @@ export default function InvoiceDetailScreen() {
             >
               <Ionicons name="card-outline" size={18} color={colors.success} style={styles.actionIcon} />
               <Text style={[styles.actionBtnText, { color: colors.success }]}>Record Payment</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Credit Note / Sales Return conversions */}
+        {invoice.status !== "draft" && invoice.status !== "cancelled" && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={handleIssueCreditNote}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="document-text-outline" size={18} color={colors.warning} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.warning }]}>Issue Credit Note</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={handleCreateSalesReturn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="return-down-back-outline" size={18} color={colors.warning} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.warning }]}>Create Sales Return</Text>
             </TouchableOpacity>
           </View>
         )}

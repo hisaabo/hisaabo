@@ -310,8 +310,10 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
 
       {!shipment ? (
         <div>
-          {invoiceStatus === "paid" ? (
-            <p className="text-xs text-text-tertiary">Invoice is paid — shipment cannot be added.</p>
+          {invoiceStatus === "paid" || invoiceStatus === "adjusted" ? (
+            <p className="text-xs text-text-tertiary">
+              {invoiceStatus === "adjusted" ? "Invoice is adjusted — shipment cannot be added." : "Invoice is paid — shipment cannot be added."}
+            </p>
           ) : !showCreate ? (
             <button
               onClick={() => setShowCreate(true)}
@@ -430,6 +432,8 @@ interface InvoiceDetailPanelProps {
   onRecordPayment: (partyId: string, invoiceId: string, balance: string) => void;
   onStatusChange: (id: string, status: string) => void;
   onEdit: (invoiceId: string, type: "sale" | "purchase") => void;
+  onIssueCN?: (id: string, type: "sale" | "purchase") => void;
+  onCreateSR?: (id: string, type: "sale" | "purchase") => void;
 }
 
 function InvoiceDetailPanel({
@@ -438,6 +442,8 @@ function InvoiceDetailPanel({
   onRecordPayment,
   onStatusChange,
   onEdit,
+  onIssueCN,
+  onCreateSR,
 }: InvoiceDetailPanelProps) {
   const navigate = useNavigate();
   const { data: invoice, isLoading } = trpc.invoice.getById.useQuery(
@@ -464,15 +470,31 @@ function InvoiceDetailPanel({
 
   if (!invoiceId) return null;
 
+  // Compute how much has been credited/returned against this invoice (combined limit)
+  const relatedCNs = invoice?.relatedDocuments?.filter((d: any) => d.documentType === "credit_note") ?? [];
+  const relatedSRs = invoice?.relatedDocuments?.filter((d: any) => d.documentType === "sales_return") ?? [];
+  const allRelated = [...relatedCNs, ...relatedSRs];
+  const totalAdjusted = allRelated.reduce((sum: number, d: any) => sum + parseFloat(d.totalAmount), 0);
+  const invoiceTotal = invoice ? parseFloat(invoice.totalAmount) : 0;
+  const fullyAdjusted = totalAdjusted >= invoiceTotal;
+
+  const canConvert =
+    invoice &&
+    invoice.status !== "draft" &&
+    invoice.status !== "cancelled" &&
+    !fullyAdjusted;
+
   const balance = invoice
-    ? parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid)
+    ? parseFloat(invoice.totalAmount) - parseFloat(invoice.amountPaid) - parseFloat(invoice.totalAdjusted || "0")
     : 0;
 
   const canRecordPayment =
     invoice &&
     invoice.status !== "draft" &&
     invoice.status !== "cancelled" &&
-    invoice.status !== "paid";
+    invoice.status !== "paid" &&
+    invoice.status !== "adjusted" &&
+    balance > 0.01;
 
   const isDraftLike = invoice?.status === "draft" || invoice?.status === "unfulfilled";
 
@@ -505,6 +527,42 @@ function InvoiceDetailPanel({
                 >
                   {invoice.status === "unfulfilled" ? "Mark Fulfilled" : "Mark Sent"}
                 </button>
+              )}
+              {/* Existing CN/SR links */}
+              {relatedCNs.map((cn: any) => (
+                <a
+                  key={cn.id}
+                  href={`/credit-notes?id=${cn.id}`}
+                  className="inline-flex items-center text-xs px-2.5 py-1.5 rounded font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950 transition-colors"
+                >
+                  See {cn.invoiceNumber}
+                </a>
+              ))}
+              {relatedSRs.map((sr: any) => (
+                <a
+                  key={sr.id}
+                  href={`/sales-returns?id=${sr.id}`}
+                  className="inline-flex items-center text-xs px-2.5 py-1.5 rounded font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950 transition-colors"
+                >
+                  See {sr.invoiceNumber}
+                </a>
+              ))}
+              {/* Create buttons — only when not fully adjusted */}
+              {canConvert && (
+                <>
+                  <button
+                    onClick={() => { onClose(); onIssueCN?.(invoice.id, invoice.type as "sale" | "purchase"); }}
+                    className="inline-flex items-center text-xs px-2.5 py-1.5 rounded font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950 transition-colors"
+                  >
+                    Issue Credit Note
+                  </button>
+                  <button
+                    onClick={() => { onClose(); onCreateSR?.(invoice.id, invoice.type as "sale" | "purchase"); }}
+                    className="inline-flex items-center text-xs px-2.5 py-1.5 rounded font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950 transition-colors"
+                  >
+                    Create Sales Return
+                  </button>
+                </>
               )}
             </div>
             <div className="flex gap-2">
@@ -642,13 +700,19 @@ function InvoiceDetailPanel({
                 <span className="text-sm font-semibold text-text-primary">Total</span>
                 <span className="text-base font-bold tabular-nums text-text-primary">{formatCurrency(invoice.totalAmount)}</span>
               </div>
+              {parseFloat(invoice.totalAdjusted || "0") > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-text-secondary">CN/SR Adjusted</span>
+                  <span className="tabular-nums text-purple-600">-{formatCurrency(invoice.totalAdjusted)}</span>
+                </div>
+              )}
               {parseFloat(invoice.amountPaid) > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-text-secondary">Amount Paid</span>
                   <span className="tabular-nums text-emerald-600">{formatCurrency(invoice.amountPaid)}</span>
                 </div>
               )}
-              {balance > 0 && !isDraftLike && (
+              {balance > 0.01 && !isDraftLike && (
                 <div className="flex justify-between text-sm font-semibold">
                   <span className="text-amber-600">Balance Due</span>
                   <span className="tabular-nums text-amber-600">{formatCurrency(balance)}</span>
@@ -737,10 +801,15 @@ function InvoiceDetailPanel({
             </div>
           )}
 
-          {/* No payments yet message for unpaid invoices */}
-          {invoicePayments && invoicePayments.data.length === 0 && !isDraftLike && invoice.status !== "cancelled" && (
+          {/* No payments yet message — but not when settled via CN/SR */}
+          {invoicePayments && invoicePayments.data.length === 0 && !isDraftLike && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
             <div className="text-center py-4">
               <p className="text-xs text-text-tertiary">No payments recorded for this invoice</p>
+            </div>
+          )}
+          {invoice.status === "adjusted" && invoicePayments?.data.length === 0 && (
+            <div className="text-center py-4">
+              <p className="text-xs text-text-tertiary">This invoice has been settled via credit note / sales return</p>
             </div>
           )}
 
@@ -778,6 +847,8 @@ function InvoicesPage() {
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
+  const [cnSource, setCnSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
+  const [srSource, setSrSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
 
@@ -1065,13 +1136,15 @@ function InvoicesPage() {
                             )}
                             {inv.status !== "draft" &&
                               inv.status !== "cancelled" &&
-                              inv.status !== "paid" && (
+                              inv.status !== "paid" &&
+                              inv.status !== "adjusted" &&
+                              (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - parseFloat(inv.totalAdjusted || "0")) > 0.01 && (
                                 <button
                                   onClick={() =>
                                     openPaymentPanel(
                                       inv.partyId,
                                       inv.id,
-                                      (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid)).toFixed(2)
+                                      (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - parseFloat(inv.totalAdjusted || "0")).toFixed(2)
                                     )
                                   }
                                   title="Record payment"
@@ -1174,7 +1247,29 @@ function InvoicesPage() {
           updateStatus.mutate({ id, status: status as any })
         }
         onEdit={(id, invType) => setEditInvoice({ id, type: invType })}
+        onIssueCN={(id, invType) => setCnSource({ id, type: invType })}
+        onCreateSR={(id, invType) => setSrSource({ id, type: invType })}
       />
+
+      {/* DocumentCreator pre-filled from source invoice for Credit Note */}
+      {cnSource && (
+        <DocumentCreator
+          documentType="credit_note"
+          invoiceType={cnSource.type}
+          prefillFromInvoiceId={cnSource.id}
+          onClose={() => setCnSource(null)}
+        />
+      )}
+
+      {/* DocumentCreator pre-filled from source invoice for Sales Return */}
+      {srSource && (
+        <DocumentCreator
+          documentType="sales_return"
+          invoiceType={srSource.type}
+          prefillFromInvoiceId={srSource.id}
+          onClose={() => setSrSource(null)}
+        />
+      )}
 
       {/* Record Payment panel — pre-filled from invoice row */}
       <RecordPaymentPanel

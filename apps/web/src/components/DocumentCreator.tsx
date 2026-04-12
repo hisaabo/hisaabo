@@ -27,6 +27,8 @@ export interface DocumentCreatorProps {
   onSuccess?: (partyId?: string) => void;
   // Edit mode: pass existing invoice ID to pre-fill
   editInvoiceId?: string;
+  // Pre-fill from an existing invoice without entering edit mode (for CN/SR creation)
+  prefillFromInvoiceId?: string;
   // Pre-select a party on mount (e.g. "Create another" for same customer)
   initialPartyId?: string;
 }
@@ -117,6 +119,7 @@ export function DocumentCreator({
   onClose,
   onSuccess,
   editInvoiceId,
+  prefillFromInvoiceId,
   initialPartyId,
 }: DocumentCreatorProps) {
   const [partyId, setPartyId] = useState(initialPartyId ?? "");
@@ -136,6 +139,7 @@ export function DocumentCreator({
   const [invoiceDiscount, setInvoiceDiscount] = useState("0");
   const [invoiceDiscountType, setInvoiceDiscountType] = useState<"amount" | "percent">("amount");
   const [roundOff, setRoundOff] = useState("0");
+  const [referenceDocumentId, _setReferenceDocumentId] = useState<string | undefined>(prefillFromInvoiceId || undefined);
 
   // Server-side search for party picker
   const [partySearch, setPartySearch] = useState("");
@@ -159,6 +163,7 @@ export function DocumentCreator({
   });
 
   const isEditing = !!editInvoiceId;
+  const prefillId = editInvoiceId || prefillFromInvoiceId;
 
   // Auto-calculate due date: party's credit period or default 7 days
   useEffect(() => {
@@ -173,8 +178,8 @@ export function DocumentCreator({
   const utils = trpc.useUtils();
 
   const { data: editData } = trpc.invoice.getById.useQuery(
-    { id: editInvoiceId! },
-    { enabled: !!editInvoiceId }
+    { id: prefillId! },
+    { enabled: !!prefillId }
   );
 
   useEffect(() => {
@@ -475,6 +480,7 @@ export function DocumentCreator({
         invoiceDiscount: invoiceDiscount || "0",
         invoiceDiscountType,
         roundOff: roundOff || undefined,
+        referenceDocumentId: referenceDocumentId || undefined,
         lineItems: lineItemsPayload,
       });
     }

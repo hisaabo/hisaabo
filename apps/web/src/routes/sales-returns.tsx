@@ -1,13 +1,17 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { z } from "zod";
 import { DocumentListPage } from "@/components/DocumentListPage";
 
 export const Route = createFileRoute("/sales-returns")({
+  validateSearch: (search) => z.object({ id: z.string().uuid().optional() }).parse(search),
   component: SalesReturnsPage,
 });
 
 function SalesReturnsPage() {
+  const { id } = useSearch({ from: "/sales-returns" });
   return (
     <DocumentListPage
+      initialSelectedId={id}
       config={{
         trpcRouter: "salesReturn",
         documentType: "sales_return",

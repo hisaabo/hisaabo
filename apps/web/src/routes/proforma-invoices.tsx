@@ -1,10 +1,12 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
+import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { DocumentListPage } from "@/components/DocumentListPage";
 
 export const Route = createFileRoute("/proforma-invoices")({
+  validateSearch: (search) => z.object({ id: z.string().uuid().optional() }).parse(search),
   component: ProformaInvoicesPage,
 });
 

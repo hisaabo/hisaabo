@@ -1,13 +1,17 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { z } from "zod";
 import { DocumentListPage } from "@/components/DocumentListPage";
 
 export const Route = createFileRoute("/credit-notes")({
+  validateSearch: (search) => z.object({ id: z.string().uuid().optional() }).parse(search),
   component: CreditNotesPage,
 });
 
 function CreditNotesPage() {
+  const { id } = useSearch({ from: "/credit-notes" });
   return (
     <DocumentListPage
+      initialSelectedId={id}
       config={{
         trpcRouter: "creditNote",
         documentType: "credit_note",

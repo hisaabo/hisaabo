@@ -188,7 +188,7 @@ export const updateItemSchema = createItemBaseSchema.partial();
 // ── Invoice ────────────────────────────────────────────────────
 
 export const invoiceTypes = ["sale", "purchase"] as const;
-export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
+export const invoiceStatuses = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled", "adjusted"] as const;
 export const deliveryMethods = ["self_pickup", "hand_delivery", "courier", "bus", "transport", "post"] as const;
 export type DeliveryMethod = (typeof deliveryMethods)[number];
 

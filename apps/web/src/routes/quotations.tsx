@@ -1,10 +1,12 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
+import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { DocumentListPage } from "@/components/DocumentListPage";
 
 export const Route = createFileRoute("/quotations")({
+  validateSearch: (search) => z.object({ id: z.string().uuid().optional() }).parse(search),
   component: QuotationsPage,
 });
 
@@ -17,6 +19,7 @@ const STATUS_TABS = [
 
 function QuotationsPage() {
   const navigate = useNavigate();
+  const { id: idFromSearch } = useSearch({ from: "/quotations" });
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const utils = trpc.useUtils();
 
@@ -40,6 +43,7 @@ function QuotationsPage() {
 
   return (
     <DocumentListPage
+      initialSelectedId={idFromSearch}
       config={{
         trpcRouter: "quotation",
         documentType: "quotation",

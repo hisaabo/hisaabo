@@ -8,6 +8,7 @@ const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }>
   partial: { bg: "rgba(245, 158, 11, 0.2)", text: "#fbbf24", label: "Partial" },
   overdue: { bg: "rgba(239, 68, 68, 0.2)", text: "#f87171", label: "Overdue" },
   cancelled: { bg: "rgba(107, 114, 128, 0.15)", text: "#6b7280", label: "Cancelled" },
+  adjusted: { bg: "rgba(147, 51, 234, 0.2)", text: "#a78bfa", label: "Adjusted" },
   pending: { bg: "rgba(245, 158, 11, 0.2)", text: "#fbbf24", label: "Pending" },
   confirmed: { bg: "rgba(59, 130, 246, 0.2)", text: "#60a5fa", label: "Confirmed" },
   delivered: { bg: "rgba(16, 185, 129, 0.2)", text: "#34d399", label: "Delivered" },
