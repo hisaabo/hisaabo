@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
@@ -1579,6 +1579,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
 // Sub-components for Price History and Stock Movements tabs
 
 type PriceHistoryRow = {
+  invoiceId: string;
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
@@ -1592,6 +1593,7 @@ type PriceHistoryRow = {
 };
 
 type StockMovementRow = {
+  invoiceId: string;
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
@@ -1707,7 +1709,11 @@ function PriceHistoryTab({
                 <tbody>
                   {priceChangedRows.map((h, i) => (
                     <tr key={i}>
-                      <td className="font-mono text-[13px] text-brand-600">{h.invoiceNumber}</td>
+                      <td className="font-mono text-[13px]">
+                        <Link to="/invoices" search={{ id: h.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                          {h.invoiceNumber}
+                        </Link>
+                      </td>
                       <td className="text-right tabular-nums font-medium">
                         {formatCurrency(String(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1")))}
                         {h.selectedUnit && h.conversionFactor && parseFloat(h.conversionFactor) !== 1 && (
@@ -1755,7 +1761,7 @@ function StockMovementsTab({
 
     // Starting stock = currentStock - totalChange in this window
     let running = currentStock - totalChange;
-    const rows: { date: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
+    const rows: { date: string; invoiceId: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
 
     for (const m of chronological) {
       const factor = parseFloat(m.conversionFactor || "1");
@@ -1764,6 +1770,7 @@ function StockMovementsTab({
       running += delta;
       rows.push({
         date: formatDate(m.invoiceDate),
+        invoiceId: m.invoiceId,
         invoiceNumber: m.invoiceNumber,
         qtyChange: delta,
         running,
@@ -1866,15 +1873,21 @@ function StockMovementsTab({
           <table className="data-table w-full">
             <thead className="sticky top-0 z-10">
               <tr>
-                <th style={{ width: "40%" }}>Date</th>
-                <th style={{ width: "30%" }} className="text-right">Qty Change</th>
-                <th style={{ width: "30%" }} className="text-right">Balance</th>
+                <th style={{ width: "30%" }}>Date</th>
+                <th style={{ width: "25%" }}>Invoice #</th>
+                <th style={{ width: "25%" }} className="text-right">Qty Change</th>
+                <th style={{ width: "20%" }} className="text-right">Balance</th>
               </tr>
             </thead>
             <tbody>
               {tableRows.map((r, i) => (
                 <tr key={i}>
                   <td className="text-text-secondary text-xs">{r.date}</td>
+                  <td className="font-mono text-[13px]">
+                    <Link to="/invoices" search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                      {r.invoiceNumber}
+                    </Link>
+                  </td>
                   <td className={cn(
                     "text-right tabular-nums font-medium",
                     r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"

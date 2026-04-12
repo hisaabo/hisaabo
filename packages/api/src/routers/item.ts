@@ -492,6 +492,7 @@ export const itemRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
       const rows = await ctx.db.select({
+        invoiceId: invoices.id,
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
         invoiceType: invoices.type,
