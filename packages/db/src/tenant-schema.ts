@@ -214,7 +214,7 @@ export const invoices = pgTable("invoices", {
   subtotal: numeric("subtotal", { precision: 15, scale: 2 }).default("0").notNull(),
   taxAmount: numeric("tax_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   discountAmount: numeric("discount_amount", { precision: 15, scale: 2 }).default("0").notNull(),
-  charges: jsonb("charges").$type<Array<{ label: string; amount: string }>>(),
+  charges: jsonb("charges").$type<Array<{ label: string; amount: string; shipmentId?: string }>>(),
   additionalCharges: numeric("additional_charges", { precision: 15, scale: 2 }).default("0").notNull(),
   roundOff: numeric("round_off", { precision: 15, scale: 2 }).default("0").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),

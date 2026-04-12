@@ -175,7 +175,7 @@ export default function StoreOrderDetailScreen() {
                       <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
                     )}
                     <Text style={styles.lineItemMeta}>
-                      {li.quantity} x {formatCurrency(li.unitPrice)}
+                      {li.quantity}{li.selectedUnit ? ` ${li.selectedUnit}` : ""} x {formatCurrency(li.unitPrice)}
                       {parseFloat(li.taxPercent) > 0 ? ` + ${li.taxPercent}% GST` : ""}
                     </Text>
                   </View>

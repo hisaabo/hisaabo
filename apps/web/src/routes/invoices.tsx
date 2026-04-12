@@ -185,12 +185,14 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
   const [mode, setMode] = useState("");
   const [carrier, setCarrier] = useState("");
   const [tracking, setTracking] = useState("");
+  const [cost, setCost] = useState("");
 
   const utils = trpc.useUtils();
 
   const createMutation = trpc.shipment.create.useMutation({
     onSuccess: () => {
       utils.shipment.list.invalidate();
+      utils.invoice.getById.invalidate({ id: invoiceId });
       toast.success("Shipment created");
       onCreated();
     },
@@ -219,13 +221,24 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
           className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
-      <input
-        type="text"
-        value={tracking}
-        onChange={(e) => setTracking(e.target.value)}
-        placeholder="Tracking number (optional)"
-        className="w-full text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
-      />
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="text"
+          value={tracking}
+          onChange={(e) => setTracking(e.target.value)}
+          placeholder="Tracking number (optional)"
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+        <input
+          type="number"
+          value={cost}
+          onChange={(e) => setCost(e.target.value)}
+          placeholder="Shipping cost (₹)"
+          min="0"
+          step="0.01"
+          className="text-xs border border-border-light rounded-lg px-2 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500 tabular-nums"
+        />
+      </div>
       <button
         onClick={() =>
           createMutation.mutate({
@@ -234,6 +247,7 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
             mode: mode || undefined,
             carrier: carrier || undefined,
             trackingNumber: tracking || undefined,
+            cost: cost || "0",
             status: "pending",
           })
         }
@@ -248,7 +262,7 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
 
 // ── Shipment card inside invoice detail ───────────────────────────
 
-function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
+function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId: string; partyId: string; invoiceStatus: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [showTrackingForm, setShowTrackingForm] = useState(false);
   const [trackingInput, setTrackingInput] = useState("");
@@ -292,7 +306,9 @@ function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
 
       {!shipment ? (
         <div>
-          {!showCreate ? (
+          {invoiceStatus === "paid" ? (
+            <p className="text-xs text-text-tertiary">Invoice is paid — shipment cannot be added.</p>
+          ) : !showCreate ? (
             <button
               onClick={() => setShowCreate(true)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -302,7 +318,7 @@ function InvoiceShipmentCard({ invoiceId }: { invoiceId: string }) {
           ) : (
             <CreateShipmentForm
               invoiceId={invoiceId}
-              partyId=""
+              partyId={partyId}
               onCreated={() => {
                 setShowCreate(false);
                 utils.shipment.list.invalidate();
@@ -738,7 +754,7 @@ function InvoiceDetailPanel({
 
           {/* Shipment card — sale invoices only */}
           {invoice.type === "sale" && (
-            <InvoiceShipmentCard invoiceId={invoice.id} />
+            <InvoiceShipmentCard invoiceId={invoice.id} partyId={invoice.partyId} invoiceStatus={invoice.status} />
           )}
         </div>
       )}

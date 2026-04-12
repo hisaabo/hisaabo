@@ -195,6 +195,7 @@ export type DeliveryMethod = (typeof deliveryMethods)[number];
 export const invoiceChargeSchema = z.object({
   label: z.string().min(1).max(100),
   amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/),
+  shipmentId: z.string().uuid().optional(),
 });
 
 export const invoiceLineItemSchema = z.object({

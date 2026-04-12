@@ -66,6 +66,7 @@ interface LineItem {
 interface Charge {
   label: string;
   amount: string;
+  shipmentId?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -193,7 +194,7 @@ export function DocumentCreator({
 
     // Map charges from JSONB
     if (editData.charges && Array.isArray(editData.charges)) {
-      setCharges(editData.charges.map((c: any) => ({ label: c.label, amount: c.amount })));
+      setCharges(editData.charges.map((c: any) => ({ label: c.label, amount: c.amount, ...(c.shipmentId ? { shipmentId: c.shipmentId } : {}) })));
     }
 
     // Map line items — backend now exposes `itemName` (required snapshot)
@@ -442,7 +443,11 @@ export function DocumentCreator({
 
     const chargesPayload = charges
       .filter((c) => c.label && c.amount && parseFloat(c.amount) > 0)
-      .map((c) => ({ label: c.label, amount: parseFloat(c.amount).toFixed(2) }));
+      .map((c) => ({
+        label: c.label,
+        amount: parseFloat(c.amount).toFixed(2),
+        ...(c.shipmentId ? { shipmentId: c.shipmentId } : {}),
+      }));
 
     if (isEditing) {
       updateMutation.mutate({
@@ -510,7 +515,7 @@ export function DocumentCreator({
             type="button"
             className="btn-primary"
             onClick={handleSubmit}
-            disabled={activeMutation.isPending}
+            disabled={activeMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {activeMutation.isPending
               ? isEditing ? "Saving..." : "Creating..."
@@ -617,17 +622,8 @@ export function DocumentCreator({
                   </div>
                 )}
 
-                {/* Row 2: Item name (primary bold line on the invoice) */}
-                <input
-                  id={`${lineItemIdPrefix}-${li.id}-name`}
-                  value={li.itemName}
-                  onChange={(e) => updateItem(li.id, "itemName", e.target.value)}
-                  placeholder="Item name *"
-                  required
-                  maxLength={200}
-                  aria-label="Item name"
-                  className="input py-1.5 text-sm"
-                />
+                {/* Item name is set automatically from the picker — no separate
+                    input needed. The notes textarea below handles free-text. */}
 
                 {/* Row 3: Numbers grid + total */}
                 <div className="flex items-end gap-2">
@@ -828,36 +824,44 @@ export function DocumentCreator({
               {charges.map((charge, idx) => (
                 <div key={idx} className="flex justify-between items-center text-sm mb-1.5">
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <input
-                      value={charge.label}
-                      onChange={(e) => {
-                        const next = [...charges];
-                        next[idx] = { ...next[idx], label: e.target.value };
-                        setCharges(next);
-                      }}
-                      className="input py-1 text-xs w-28"
-                      placeholder="Label"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setCharges(charges.filter((_, i) => i !== idx))}
-                      className="text-text-tertiary hover:text-red-500 transition-colors p-0.5"
-                      aria-label="Remove charge"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <path d="M4 4l8 8M12 4l-8 8" />
-                      </svg>
-                    </button>
+                    {charge.shipmentId ? (
+                      <span className="text-xs text-text-tertiary italic truncate">{charge.label} (synced)</span>
+                    ) : (
+                      <>
+                        <input
+                          value={charge.label}
+                          onChange={(e) => {
+                            const next = [...charges];
+                            next[idx] = { ...next[idx], label: e.target.value };
+                            setCharges(next);
+                          }}
+                          className="input py-1 text-xs w-28"
+                          placeholder="Label"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setCharges(charges.filter((_, i) => i !== idx))}
+                          className="text-text-tertiary hover:text-red-500 transition-colors p-0.5"
+                          aria-label="Remove charge"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
                   </div>
                   <input
                     type="number"
                     value={charge.amount}
                     onChange={(e) => {
+                      if (charge.shipmentId) return; // synced charges are read-only
                       const next = [...charges];
                       next[idx] = { ...next[idx], amount: e.target.value };
                       setCharges(next);
                     }}
-                    className="input w-28 text-right tabular-nums py-1 text-xs"
+                    readOnly={!!charge.shipmentId}
+                    className={`input w-28 text-right tabular-nums py-1 text-xs ${charge.shipmentId ? "opacity-60 cursor-not-allowed" : ""}`}
                     step="0.01"
                     min="0"
                     placeholder="0.00"

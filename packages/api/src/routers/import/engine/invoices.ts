@@ -131,6 +131,12 @@ export async function runInvoicesImport(
           quantity: li.quantity,
           selectedUnit: li.unit || null,
           conversionFactor: cf,
+          // IMPORTANT: pass through the CSV unitPrice as-is. Do NOT derive
+          // from basePrice × conversionFactor here — the CSV is the source
+          // of truth for historical invoices (negotiated/discounted prices).
+          // Derivation only happens at item-creation time in ImportWizard
+          // and the items form. See import-transforms.test.ts "Bug A
+          // regression guard" for the covering test.
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent || "0",
           taxAmount: calc.taxAmount,

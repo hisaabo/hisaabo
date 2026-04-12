@@ -222,9 +222,12 @@ function AddTrackingSheet({
 
 interface ShipmentSectionProps {
   invoiceId: string;
+  invoiceStatus: string;
 }
 
-function ShipmentSection({ invoiceId }: ShipmentSectionProps) {
+function ShipmentSection({ invoiceId, invoiceStatus: _invoiceStatus }: ShipmentSectionProps) {
+  // TODO: Mobile engineer to use _invoiceStatus to hide shipment action
+  // buttons when invoice is paid (backend already blocks the mutations).
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
 
   const { data, isLoading, refetch } = trpc.shipment.list.useQuery(
@@ -730,7 +733,7 @@ export default function InvoiceDetailScreen() {
         ) : null}
 
         {/* Shipment tracking — sale invoices only */}
-        {invoice.type === "sale" && <ShipmentSection invoiceId={invoice.id} />}
+        {invoice.type === "sale" && <ShipmentSection invoiceId={invoice.id} invoiceStatus={invoice.status} />}
 
         {/* Actions */}
         <Text style={styles.sectionTitle}>Actions</Text>

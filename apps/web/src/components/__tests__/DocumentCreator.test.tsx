@@ -188,14 +188,25 @@ function renderCreator(props: Partial<React.ComponentProps<typeof DocumentCreato
   );
 }
 
-function getFirstItemNameInput() {
-  return screen.getAllByPlaceholderText("Item name *")[0] as HTMLInputElement;
-}
-
 function getFirstNotesTextarea() {
   return screen.getAllByPlaceholderText(
     "Notes for this line (optional)"
   )[0] as HTMLTextAreaElement;
+}
+
+/** Pick a party from the customer combobox. */
+async function pickParty(user: ReturnType<typeof userEvent.setup>) {
+  const partyCombobox = screen.getByRole("combobox", { name: /customer/i });
+  await user.click(partyCombobox);
+  await user.click(screen.getByText("Ramesh Traders"));
+}
+
+/** Pick "Steel Rod" (item-1) from the product combobox. */
+async function pickSteelRod(user: ReturnType<typeof userEvent.setup>) {
+  const combobox = screen.getByPlaceholderText("Select product or custom item");
+  await user.click(combobox);
+  const option = await screen.findByRole("option", { name: /steel rod/i });
+  await user.click(option);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────
@@ -210,192 +221,146 @@ describe("DocumentCreator — Bug B itemName / description split", () => {
   });
 
   describe("form structure", () => {
-    it("renders a line item row with an item-name input and a notes textarea — they are separate controls", () => {
+    it("renders a notes textarea below each line item (no separate item-name input — name comes from picker)", () => {
       renderCreator();
 
-      // The item name input is the primary bold field on each line.
-      expect(
-        screen.getAllByPlaceholderText("Item name *").length
-      ).toBeGreaterThan(0);
+      // No standalone "Item name *" input — name is set from the product picker.
+      expect(screen.queryByPlaceholderText("Item name *")).not.toBeInTheDocument();
 
-      // The notes textarea is a separate control, below the qty/price grid.
+      // The notes textarea IS present for free-text line comments.
       const notes = screen.getAllByPlaceholderText("Notes for this line (optional)");
       expect(notes.length).toBeGreaterThan(0);
-      // The notes control is a <textarea> so users can enter multi-line
-      // comments. A single-line <input> would be wrong for this UX.
       expect(notes[0].tagName).toBe("TEXTAREA");
     });
   });
 
-  describe("item pick — sets itemName, leaves notes empty", () => {
-    it("typing into the item-name field updates the line's itemName state (smoke test for rename from description)", () => {
+  describe("item pick — sets itemName automatically, notes start empty", () => {
+    it("selecting a product from the combobox auto-fills itemName and leaves notes blank", async () => {
       renderCreator();
+      const user = userEvent.setup();
+      await pickSteelRod(user);
 
-      const nameInput = getFirstItemNameInput();
-      fireEvent.change(nameInput, { target: { value: "Custom steel pipe" } });
-
-      expect(nameInput.value).toBe("Custom steel pipe");
-
-      // Notes should still be blank — the two fields are independent.
+      // Notes should be blank after item pick.
       const notesInput = getFirstNotesTextarea();
       expect(notesInput.value).toBe("");
     });
   });
 
   describe("notes input behaviour", () => {
-    it("typing into the notes textarea updates only the notes state, not the item name", () => {
+    it("typing into the notes textarea updates only notes, not the item name in the payload", async () => {
       renderCreator();
+      const user = userEvent.setup();
+      await pickParty(user);
+      await pickSteelRod(user);
 
-      const nameInput = getFirstItemNameInput();
       const notesInput = getFirstNotesTextarea();
-
-      fireEvent.change(nameInput, { target: { value: "Steel Rod" } });
-      fireEvent.change(notesInput, {
-        target: { value: "Keep separate from order #42" },
-      });
-
-      expect(nameInput.value).toBe("Steel Rod");
+      fireEvent.change(notesInput, { target: { value: "Keep separate from order #42" } });
       expect(notesInput.value).toBe("Keep separate from order #42");
+
+      // Submit and check the payload carries both fields independently.
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      await user.click(submit);
+
+      await waitFor(() => expect(invoiceCreateMutate).toHaveBeenCalledTimes(1));
+      const payload = invoiceCreateMutate.mock.calls[0][0];
+      expect(payload.lineItems[0].itemName).toBe("Steel Rod");
+      expect(payload.lineItems[0].description).toBe("Keep separate from order #42");
     });
 
     it("shows a 500-char counter once the notes exceed 400 characters (soft warning zone)", () => {
       renderCreator();
-
       const notesInput = getFirstNotesTextarea();
 
-      // Under 400: no counter visible.
       fireEvent.change(notesInput, { target: { value: "a".repeat(100) } });
       expect(screen.queryByText(/\/ 500/)).not.toBeInTheDocument();
 
-      // Above 400: counter appears.
       fireEvent.change(notesInput, { target: { value: "a".repeat(450) } });
       expect(screen.getByText("450 / 500")).toBeInTheDocument();
     });
 
-    it("the notes textarea enforces a 500-character maximum via the browser-native maxLength attribute", () => {
+    it("the notes textarea enforces a 500-character maximum via maxLength", () => {
       renderCreator();
       const notesInput = getFirstNotesTextarea();
       expect(notesInput.maxLength).toBe(500);
     });
   });
 
-  describe("submission payload — itemName is always sent, description is conditional", () => {
-    /**
-     * Fills the minimum required fields (party + item name + unit price)
-     * so handleSubmit can complete. The party picker is a Combobox — we
-     * drive it by typing and picking the option; failing that, we manually
-     * dispatch a change to the underlying state via clicking the option.
-     */
-    async function primeMinimalInvoice({
-      itemName,
-      notes,
-    }: {
-      itemName: string;
-      notes?: string;
-    }) {
-      // Pick the party via the combobox.
+  describe("submission payload — itemName from picker, description from notes", () => {
+    async function primeInvoiceWithItem(notes?: string) {
       const user = userEvent.setup();
-      const partyCombobox = screen.getByRole("combobox", { name: /customer/i });
-      await user.click(partyCombobox);
-      await user.click(screen.getByText("Ramesh Traders"));
-
-      // Fill the item-name and unit price.
-      const nameInput = getFirstItemNameInput();
-      fireEvent.change(nameInput, { target: { value: itemName } });
-
-      const priceInputs = screen.getAllByLabelText("Unit price");
-      fireEvent.change(priceInputs[0], { target: { value: "500" } });
+      await pickParty(user);
+      await pickSteelRod(user);
 
       if (notes !== undefined) {
         const notesInput = getFirstNotesTextarea();
         fireEvent.change(notesInput, { target: { value: notes } });
       }
+      return user;
     }
 
-    it("sends the trimmed itemName and the trimmed description when notes are provided", async () => {
+    it("sends itemName from the picked product and description from notes", async () => {
       renderCreator();
-
-      await primeMinimalInvoice({
-        itemName: "Steel Rod",
-        notes: "Keep separate from order #42",
-      });
-
-      const submit = screen.getByRole("button", { name: /create invoice/i });
-      await userEvent.setup().click(submit);
-
-      await waitFor(() => {
-        expect(invoiceCreateMutate).toHaveBeenCalledTimes(1);
-      });
-
-      const payload = invoiceCreateMutate.mock.calls[0][0];
-      expect(payload.lineItems).toHaveLength(1);
-      expect(payload.lineItems[0].itemName).toBe("Steel Rod");
-      expect(payload.lineItems[0].description).toBe(
-        "Keep separate from order #42"
-      );
-    });
-
-    it("omits description (sends undefined) when notes are empty so the DB column stays NULL", async () => {
-      renderCreator();
-
-      await primeMinimalInvoice({
-        itemName: "Steel Rod",
-        // notes intentionally not set
-      });
-
-      const submit = screen.getByRole("button", { name: /create invoice/i });
-      await userEvent.setup().click(submit);
-
-      await waitFor(() => {
-        expect(invoiceCreateMutate).toHaveBeenCalledTimes(1);
-      });
-
-      const payload = invoiceCreateMutate.mock.calls[0][0];
-      expect(payload.lineItems[0].itemName).toBe("Steel Rod");
-      // Whether it's omitted entirely or set to undefined, the validator
-      // (optional().nullable()) accepts both. What we MUST NOT send is an
-      // empty string — that would be a regression that persists "" in the
-      // DB column and shows an italic blank line on the PDF.
-      expect(payload.lineItems[0].description).toBeUndefined();
-    });
-
-    it("omits description when notes are only whitespace — the trim() guard keeps whitespace-only garbage out of the DB", async () => {
-      renderCreator();
-
-      await primeMinimalInvoice({
-        itemName: "Steel Rod",
-        notes: "   \n\t  ",
-      });
-
-      const submit = screen.getByRole("button", { name: /create invoice/i });
-      await userEvent.setup().click(submit);
-
-      await waitFor(() => {
-        expect(invoiceCreateMutate).toHaveBeenCalledTimes(1);
-      });
-
-      const payload = invoiceCreateMutate.mock.calls[0][0];
-      expect(payload.lineItems[0].description).toBeUndefined();
-    });
-
-    it("refuses to submit when the item name is empty — no mutate fires, user gets a toast error", async () => {
-      renderCreator();
-
-      // Pick the party so the "no party" branch doesn't short-circuit first.
-      const user = userEvent.setup();
-      const partyCombobox = screen.getByRole("combobox", { name: /customer/i });
-      await user.click(partyCombobox);
-      await user.click(screen.getByText("Ramesh Traders"));
-
-      // Set a price but leave item name empty.
-      const priceInputs = screen.getAllByLabelText("Unit price");
-      fireEvent.change(priceInputs[0], { target: { value: "500" } });
+      const user = await primeInvoiceWithItem("Keep separate from order #42");
 
       const submit = screen.getByRole("button", { name: /create invoice/i });
       await user.click(submit);
 
-      expect(invoiceCreateMutate).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalled();
+      await waitFor(() => expect(invoiceCreateMutate).toHaveBeenCalledTimes(1));
+      const payload = invoiceCreateMutate.mock.calls[0][0];
+      expect(payload.lineItems).toHaveLength(1);
+      expect(payload.lineItems[0].itemName).toBe("Steel Rod");
+      expect(payload.lineItems[0].description).toBe("Keep separate from order #42");
+    });
+
+    it("omits description when notes are empty so the DB column stays NULL", async () => {
+      renderCreator();
+      const user = await primeInvoiceWithItem();
+
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      await user.click(submit);
+
+      await waitFor(() => expect(invoiceCreateMutate).toHaveBeenCalledTimes(1));
+      const payload = invoiceCreateMutate.mock.calls[0][0];
+      expect(payload.lineItems[0].itemName).toBe("Steel Rod");
+      expect(payload.lineItems[0].description).toBeUndefined();
+    });
+
+    it("omits description when notes are only whitespace", async () => {
+      renderCreator();
+      const user = await primeInvoiceWithItem("   \n\t  ");
+
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      await user.click(submit);
+
+      await waitFor(() => expect(invoiceCreateMutate).toHaveBeenCalledTimes(1));
+      expect(invoiceCreateMutate.mock.calls[0][0].lineItems[0].description).toBeUndefined();
+    });
+  });
+
+  describe("create button disabled state", () => {
+    it("create button is disabled when no party is selected", () => {
+      renderCreator();
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      expect(submit).toBeDisabled();
+    });
+
+    it("create button is disabled when party is selected but no item picked", async () => {
+      renderCreator();
+      const user = userEvent.setup();
+      await pickParty(user);
+
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      expect(submit).toBeDisabled();
+    });
+
+    it("create button becomes enabled when party + item are both selected", async () => {
+      renderCreator();
+      const user = userEvent.setup();
+      await pickParty(user);
+      await pickSteelRod(user);
+
+      const submit = screen.getByRole("button", { name: /create invoice/i });
+      expect(submit).not.toBeDisabled();
     });
   });
 });

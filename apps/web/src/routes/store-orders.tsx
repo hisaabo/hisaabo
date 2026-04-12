@@ -26,10 +26,13 @@ type OrderStatus =
 interface LineItem {
   id: string;
   itemName: string;
+  description?: string | null;
   quantity: string | number;
   unitPrice: string;
   amount: string;
   unit?: string | null;
+  selectedUnit?: string | null;
+  conversionFactor?: string | null;
 }
 
 interface OrderDetail {
@@ -426,13 +429,16 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
                     {o.lineItems.map((item) => (
                       <tr key={item.id} className="border-b border-border-light last:border-0">
                         <td className="px-4 py-3 font-medium text-text-primary">
-                          {item.itemName}
+                          <span>{item.itemName}</span>
+                          {item.description && item.description.trim() && (
+                            <span className="block text-xs text-text-tertiary font-normal italic mt-0.5">{item.description}</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-center text-text-secondary tabular-nums">
                           {item.quantity}
-                          {item.unit ? (
+                          {(item.selectedUnit || item.unit) ? (
                             <span className="text-text-tertiary ml-0.5 text-[11px]">
-                              {item.unit}
+                              {item.selectedUnit || item.unit}
                             </span>
                           ) : null}
                         </td>

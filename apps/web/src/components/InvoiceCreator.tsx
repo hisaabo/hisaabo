@@ -569,7 +569,7 @@ export function InvoiceCreator({ type, onClose }: Props) {
               </button>
               <button
                 type="submit"
-                disabled={createMutation.isPending}
+                disabled={createMutation.isPending || !partyId || !items.some((li) => li.itemName.trim() && li.unitPrice)}
                 className="px-5 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
               >
                 {createMutation.isPending ? "Creating..." : "Create invoice"}

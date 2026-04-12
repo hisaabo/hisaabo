@@ -1718,10 +1718,10 @@ export default function InvoiceCreateScreen() {
         {/* Sticky Create Button */}
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.createBtn, createMutation.isPending && styles.createBtnDisabled]}
+            style={[styles.createBtn, (createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)) && styles.createBtnDisabled]}
             onPress={handleCreate}
             activeOpacity={0.85}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || !selectedParty || !lineItems.some((li) => li.itemName.trim() && li.unitPrice)}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.textPrimary} size="small" />

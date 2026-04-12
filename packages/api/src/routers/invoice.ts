@@ -325,18 +325,29 @@ export const invoiceRouter = router({
       // rolls back the whole invoice rather than leaving a charged invoice with
       // no corresponding shipment record.
       if (input.type === "sale") {
-        const shippingCharge = (input.charges ?? []).find((c) =>
+        const shippingChargeIdx = (input.charges ?? []).findIndex((c) =>
           /shipping|delivery|freight|transport/i.test(c.label)
         );
+        const shippingCharge = shippingChargeIdx >= 0 ? (input.charges ?? [])[shippingChargeIdx] : undefined;
         if (shippingCharge && parseFloat(shippingCharge.amount) > 0) {
-          await tx.insert(shipments).values({
+          const [newShipment] = await tx.insert(shipments).values({
             businessId: ctx.businessId,
             invoiceId: invoice.id,
             partyId: input.partyId,
             mode: input.deliveryMethod === "self_pickup" ? "hand_delivery" : (input.deliveryMethod || "hand_delivery"),
             cost: shippingCharge.amount,
             status: "pending",
-          });
+          }).returning();
+
+          // Tag the charge entry in the invoice with the auto-created shipment ID
+          const taggedCharges = (invoice.charges ?? []).map((c, i) =>
+            i === shippingChargeIdx ? { ...c, shipmentId: newShipment.id } : c
+          );
+          await tx.update(invoices)
+            .set({ charges: taggedCharges })
+            .where(eq(invoices.id, invoice.id));
+          // Reflect the tag in the returned object so callers see the shipmentId
+          invoice.charges = taggedCharges as typeof invoice.charges;
         }
       }
 
@@ -696,10 +707,16 @@ export const invoiceRouter = router({
         if (input.notes !== undefined) updates.notes = input.notes;
         if (input.termsAndConditions !== undefined) updates.termsAndConditions = input.termsAndConditions;
 
-        // 3. Handle charges
-        if (input.charges) {
-          updates.charges = input.charges;
-          updates.additionalCharges = money.sum(input.charges.map((c) => c.amount));
+        // 3. Handle charges — preserve shipment-linked entries that should not be
+        // directly edited by the user (they are managed via shipment mutations).
+        if (input.charges !== undefined) {
+          const existingShipmentCharges = (existing.charges ?? []).filter((c) => (c as { shipmentId?: string }).shipmentId);
+          const userCharges = (input.charges ?? []).filter((c) => !(c as { shipmentId?: string }).shipmentId);
+          const mergedCharges = [...userCharges, ...existingShipmentCharges];
+          updates.charges = mergedCharges.length > 0 ? mergedCharges : null;
+          updates.additionalCharges = mergedCharges.length > 0
+            ? money.sum(mergedCharges.map((c) => c.amount))
+            : "0.00";
         }
         if (input.roundOff !== undefined) updates.roundOff = input.roundOff;
 
@@ -792,7 +809,13 @@ export const invoiceRouter = router({
             }
           }
 
-          // Recalculate totals using fixed-point arithmetic
+          // Recalculate totals using fixed-point arithmetic.
+          // Use merged charges (updates.charges) if charges were modified; otherwise
+          // fall back to existing charges. This ensures shipment-linked charge entries
+          // are included in the total even when the user didn't touch charges.
+          const chargesForTotals = updates.charges !== undefined
+            ? (updates.charges as Array<{ amount: string }> | null) ?? []
+            : (existing.charges as Array<{ amount: string }> | null) ?? [];
           const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
           const totals = calcInvoiceTotals({
             lineItems: input.lineItems.map((li) => ({
@@ -801,7 +824,7 @@ export const invoiceRouter = router({
               taxPercent: li.taxPercent || "0",
               discountPercent: li.discountPercent || "0",
             })),
-            charges: input.charges ? input.charges : undefined,
+            charges: chargesForTotals.length > 0 ? chargesForTotals : undefined,
             invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
             invoiceDiscountType: input.invoiceDiscountType || "amount",
             roundOff: roundOffStr,
