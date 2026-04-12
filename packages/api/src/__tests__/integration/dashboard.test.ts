@@ -23,7 +23,7 @@ import {
   type TestWorld,
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
-import { truncateAllTables, closeTestDb } from "../helpers/test-db.js";
+import { truncateAllTables, closeTestDb, getTenantTestDb } from "../helpers/test-db.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -454,5 +454,195 @@ describe("dashboard.topSellingItems", () => {
     const result = await caller2.dashboard.topSellingItems({});
 
     expect(result.length).toBe(0);
+  });
+});
+
+// ── receivable/payable with CN/SR adjustments ──────────────────────────────────
+
+describe("dashboard.summary — receivable/payable with CN/SR adjustments", () => {
+  // Use a separate month to avoid polluting the shared beforeAll fixture data
+  const ADJ_YEAR = 2025;
+  const ADJ_MONTH = 7; // July 2025
+
+  function adjDate(): Date {
+    return new Date(ADJ_YEAR, ADJ_MONTH - 1, 15, 12, 0, 0);
+  }
+
+  beforeAll(async () => {
+    // This nested beforeAll runs after the outer beforeAll, so world is already set.
+    // We create sale/purchase invoices and their return documents via DB helpers
+    // to keep them in a known month separate from the shared fixture data.
+    const tenantDb = getTenantTestDb();
+
+    // Create a sale invoice for ₹1,000 (no tax) to use as the base for CN/SR tests
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Goods for CN/SR test",
+          quantity: "10",
+          unitPrice: "100.00",
+          taxPercent: "0.00",
+        },
+      ],
+      {
+        type: "sale",
+        documentType: "invoice",
+        status: "sent",
+        invoiceDate: adjDate(),
+      },
+    );
+
+    // Create a purchase invoice for ₹500 (no tax) to use as the base for PR test
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Purchase for PR test",
+          quantity: "5",
+          unitPrice: "100.00",
+          taxPercent: "0.00",
+        },
+      ],
+      {
+        type: "purchase",
+        documentType: "invoice",
+        status: "sent",
+        invoiceDate: adjDate(),
+      },
+    );
+  });
+
+  it("receivable is reduced by credit notes against sale invoices", async () => {
+    const tenantDb = getTenantTestDb();
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    // Capture receivable before the credit note
+    const before = await caller.dashboard.summary(undefined);
+    const receivableBefore = parseFloat(before.receivable);
+
+    // Create a credit note for ₹300 against the sale invoice
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Credit Note return",
+          quantity: "3",
+          unitPrice: "100.00",
+          taxPercent: "0.00",
+        },
+      ],
+      {
+        type: "sale",
+        documentType: "credit_note",
+        status: "sent",
+        invoiceDate: adjDate(),
+      },
+    );
+
+    const after = await caller.dashboard.summary(undefined);
+    const receivableAfter = parseFloat(after.receivable);
+
+    // Receivable must have decreased by the CN amount (₹300)
+    expect(receivableAfter).toBeCloseTo(receivableBefore - 300, 2);
+    expect(receivableAfter).toBeLessThan(receivableBefore);
+  });
+
+  it("receivable is reduced by sales returns", async () => {
+    const tenantDb = getTenantTestDb();
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    // Capture receivable before the sales return
+    const before = await caller.dashboard.summary(undefined);
+    const receivableBefore = parseFloat(before.receivable);
+
+    // Create a sales return for ₹200
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Sales Return item",
+          quantity: "2",
+          unitPrice: "100.00",
+          taxPercent: "0.00",
+        },
+      ],
+      {
+        type: "sale",
+        documentType: "sales_return",
+        status: "sent",
+        invoiceDate: adjDate(),
+      },
+    );
+
+    const after = await caller.dashboard.summary(undefined);
+    const receivableAfter = parseFloat(after.receivable);
+
+    // Receivable must have decreased by the SR amount (₹200)
+    expect(receivableAfter).toBeCloseTo(receivableBefore - 200, 2);
+    expect(receivableAfter).toBeLessThan(receivableBefore);
+  });
+
+  it("payable is reduced by purchase returns", async () => {
+    const tenantDb = getTenantTestDb();
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    // Capture payable before the purchase return
+    const before = await caller.dashboard.summary(undefined);
+    const payableBefore = parseFloat(before.payable);
+
+    // Create a purchase return for ₹200
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          description: "Purchase Return item",
+          quantity: "2",
+          unitPrice: "100.00",
+          taxPercent: "0.00",
+        },
+      ],
+      {
+        type: "purchase",
+        documentType: "purchase_return",
+        status: "sent",
+        invoiceDate: adjDate(),
+      },
+    );
+
+    const after = await caller.dashboard.summary(undefined);
+    const payableAfter = parseFloat(after.payable);
+
+    // Payable must have decreased by the PR amount (₹200)
+    expect(payableAfter).toBeCloseTo(payableBefore - 200, 2);
+    expect(payableAfter).toBeLessThan(payableBefore);
   });
 });

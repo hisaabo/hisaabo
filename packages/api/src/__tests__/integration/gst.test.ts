@@ -394,6 +394,126 @@ describe("gst.gstr3b", () => {
   });
 });
 
+// ── GSTR-1 — sales_return in CDN section ──────────────────────────────────────
+
+describe("GSTR-1 — includes sales_return in credit note section", () => {
+  // Use a separate month to avoid polluting the main fixture month
+  const SR_YEAR = 2025;
+  const SR_MONTH = 11; // November 2025
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a sales_return in the test month so it appears in the CDN section
+    // 2 × 500 = 1,000 subtotal, 5% tax = 50 → CGST 25 + SGST 25
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          itemId: world.item1.id,
+          description: "Sales Return item",
+          quantity: "2",
+          unitPrice: "500.00",
+          taxPercent: "5.00",
+        },
+      ],
+      {
+        type: "sale",
+        documentType: "sales_return",
+        status: "sent",
+        invoiceDate: new Date(SR_YEAR, SR_MONTH - 1, 15, 12, 0, 0),
+      },
+    );
+  });
+
+  it("sales_return appears in GSTR-1 CDN section alongside credit notes", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    const report = await caller.gst.gstr1({ year: SR_YEAR, month: SR_MONTH });
+
+    // The sales_return must appear in the creditNotes array (CDN section)
+    expect(Array.isArray(report.creditNotes)).toBe(true);
+    expect(report.creditNotes.length).toBeGreaterThanOrEqual(1);
+
+    // Each entry must have the expected shape
+    const srEntry = report.creditNotes[0]!;
+    expect(typeof srEntry.invoiceNumber).toBe("string");
+    expect(typeof srEntry.totalAmount).toBe("string");
+    expect(parseFloat(srEntry.totalAmount)).toBeGreaterThan(0);
+
+    // The sales_return must NOT appear in the regular sale invoice list (b2b)
+    // — only the sales_return row is in this month, so b2b should be empty
+    const b2bEntriesThisMonth = report.b2b;
+    const srInvoiceNumber = srEntry.invoiceNumber;
+    const srInB2b = b2bEntriesThisMonth.some((e) => e.invoiceNumber === srInvoiceNumber);
+    expect(srInB2b).toBe(false);
+  });
+});
+
+// ── GSTR-1 — purchase_return in debit note section ────────────────────────────
+
+describe("GSTR-1 — includes purchase_return in debit note section", () => {
+  const PR_YEAR = 2025;
+  const PR_MONTH = 12; // December 2025
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+
+    // Create a purchase_return in the test month so it appears in debit note section
+    // 1 × 800 = 800 subtotal, 12% tax = 96
+    await createInvoiceWithItems(
+      tenantDb,
+      world.business1.id,
+      world.party1.id,
+      [
+        {
+          itemId: world.item1.id,
+          description: "Purchase Return item",
+          quantity: "1",
+          unitPrice: "800.00",
+          taxPercent: "12.00",
+        },
+      ],
+      {
+        type: "purchase",
+        documentType: "purchase_return",
+        status: "sent",
+        invoiceDate: new Date(PR_YEAR, PR_MONTH - 1, 15, 12, 0, 0),
+      },
+    );
+  });
+
+  it("purchase_return appears alongside debit notes in ITC reversal", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+
+    const report = await caller.gst.gstr1({ year: PR_YEAR, month: PR_MONTH });
+
+    // The purchase_return must appear in the debitNotes array
+    expect(Array.isArray(report.debitNotes)).toBe(true);
+    expect(report.debitNotes.length).toBeGreaterThanOrEqual(1);
+
+    // Each entry must have the expected shape
+    const prEntry = report.debitNotes[0]!;
+    expect(typeof prEntry.invoiceNumber).toBe("string");
+    expect(typeof prEntry.totalAmount).toBe("string");
+    expect(parseFloat(prEntry.totalAmount)).toBeGreaterThan(0);
+  });
+});
+
 // ── gstr1CSV ───────────────────────────────────────────────────────────────────
 
 describe("gst.gstr1CSV", () => {

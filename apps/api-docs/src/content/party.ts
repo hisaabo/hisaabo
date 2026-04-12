@@ -75,7 +75,7 @@ resp = httpx.get(
       method: "query",
       path: "party.getById",
       title: "Get Party",
-      description: "Fetch a party by ID with their calculated ledger balance. The balance is computed as: `openingBalance + totalInvoiced - totalPaid`.",
+      description: "Fetch a party by ID with their calculated ledger balance. The balance is computed as: `openingBalance + totalInvoiced - totalPaid - totalAdjusted`, where `totalAdjusted` is the sum of amounts offset by linked credit notes and sales returns.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -415,7 +415,7 @@ resp = httpx.post(
       method: "query",
       path: "party.ledgerReport",
       title: "Ledger Report",
-      description: "Full ledger for a party with date range. Returns interleaved invoices and payments sorted chronologically, with running balance, plus summary totals and closing balance.",
+      description: "Full ledger for a party with date range. Returns interleaved invoices, payments, credit notes, and sales returns sorted chronologically, with running balance, plus summary totals and closing balance. Credit notes and sales returns appear as credit entries that reduce the party's outstanding balance.",
       auth: "business",
       requiredRole: "viewer",
       input: [
@@ -455,7 +455,8 @@ resp = httpx.get(
       gotchas: [
         "Returns `null` if the party is not found in the active business.",
         "Requires `Report:read` permission.",
-        "For customers: invoice = debit (money owed), payment = credit. For suppliers: reversed.",
+        "For customers: invoice = debit (money owed), payment = credit, credit note / sales return = credit (reduces balance). For suppliers: reversed.",
+        "Credit notes (`credit_note`) and sales returns (`sales_return`) linked to an invoice appear as separate credit entries in the ledger. The linked invoice's `totalAdjusted` reflects the cumulative offset.",
       ],
       relatedEndpoints: ["party-ledger-report-csv", "reports-party-statement"],
     },
@@ -554,7 +555,7 @@ resp = httpx.get(
       method: "query",
       path: "party.ledger",
       title: "Paginated Ledger",
-      description: "Chronological UNION ALL of invoices and payments for a party, with pagination and running balance computed via SQL window functions. More efficient than `ledgerReport` for large ledgers.",
+      description: "Chronological UNION ALL of invoices, payments, credit notes, and sales returns for a party, with pagination and running balance computed via SQL window functions. Credit notes and sales returns reduce the running balance as credit entries. More efficient than `ledgerReport` for large ledgers.",
       auth: "business",
       requiredRole: "viewer",
       input: [

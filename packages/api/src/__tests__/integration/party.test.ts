@@ -593,6 +593,455 @@ describe("party.ledger", () => {
   });
 });
 
+// ── party.getById — balance with CN/SR deductions ────────────────────────────
+
+/**
+ * Verifies that party.getById correctly subtracts CN/SR/PR amounts from the
+ * outstanding balance. The balance formula is:
+ *   openingBalance + sum(invoices) - sum(CN + SR + PR)
+ *
+ * We create dedicated parties for each scenario to avoid cross-test interference.
+ */
+describe("party.getById — balance with CN/SR deductions", () => {
+  it("subtracts credit note amount from customer outstanding", async () => {
+    const db = getTenantTestDb();
+
+    // Create a fresh party with no opening balance
+    const party = await createParty(db, business1.id, {
+      name: "CN Balance Test Customer",
+      type: "customer",
+      openingBalance: "0.00",
+    });
+
+    // Create an item and invoice for ₹1000
+    const item = await createItem(db, business1.id, {
+      name: "CN Balance Test Item",
+      salePrice: "1000.00",
+      taxPercent: "0.00",
+    });
+
+    await createInvoiceWithItems(
+      db,
+      business1.id,
+      party.id,
+      [{ itemId: item.id, description: "Invoice line", quantity: "1", unitPrice: "1000.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" },
+    );
+
+    // Check balance before CN — should be 1000
+    const beforeResult = await callerRamesh.party.getById({ id: party.id });
+    expect(beforeResult).not.toBeNull();
+    expect(parseFloat(beforeResult!.balance)).toBeCloseTo(1000, 1);
+
+    // Issue a CN for ₹400 against this party via the router (triggers server-side logic)
+    await callerRamesh.creditNote.create({
+      partyId: party.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "CN deduction line",
+          quantity: "4",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Balance must be reduced by the CN amount: 1000 - 400 = 600
+    const afterResult = await callerRamesh.party.getById({ id: party.id });
+    expect(afterResult).not.toBeNull();
+    expect(parseFloat(afterResult!.balance)).toBeCloseTo(600, 1);
+  });
+
+  it("subtracts sales return amount from customer outstanding", async () => {
+    const db = getTenantTestDb();
+
+    const party = await createParty(db, business1.id, {
+      name: "SR Balance Test Customer",
+      type: "customer",
+      openingBalance: "0.00",
+    });
+
+    const item = await createItem(db, business1.id, {
+      name: "SR Balance Test Item",
+      salePrice: "500.00",
+      taxPercent: "0.00",
+    });
+
+    await createInvoiceWithItems(
+      db,
+      business1.id,
+      party.id,
+      [{ itemId: item.id, description: "Invoice line", quantity: "2", unitPrice: "500.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" },
+    );
+
+    // Invoice total = 1000, issue SR for ₹250
+    await callerRamesh.salesReturn.create({
+      partyId: party.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "SR line",
+          quantity: "1",
+          unitPrice: "250.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Balance: 1000 - 250 = 750
+    const result = await callerRamesh.party.getById({ id: party.id });
+    expect(result).not.toBeNull();
+    expect(parseFloat(result!.balance)).toBeCloseTo(750, 1);
+  });
+
+  it("subtracts purchase return amount from supplier payable", async () => {
+    const db = getTenantTestDb();
+
+    const supplier = await createParty(db, business1.id, {
+      name: "PR Balance Test Supplier",
+      type: "supplier",
+      openingBalance: "0.00",
+    });
+
+    const item = await createItem(db, business1.id, {
+      name: "PR Balance Test Item",
+      purchasePrice: "200.00",
+      taxPercent: "0.00",
+    });
+
+    // Purchase invoice for ₹600 (we owe supplier)
+    await createInvoiceWithItems(
+      db,
+      business1.id,
+      supplier.id,
+      [{ itemId: item.id, description: "Purchase line", quantity: "3", unitPrice: "200.00" }],
+      { status: "sent", type: "purchase", documentType: "invoice" },
+    );
+
+    // Before PR: balance = 600
+    const beforeResult = await callerRamesh.party.getById({ id: supplier.id });
+    expect(beforeResult).not.toBeNull();
+    expect(parseFloat(beforeResult!.balance)).toBeCloseTo(600, 1);
+
+    // Issue purchase return for ₹200
+    await callerRamesh.purchaseReturn.create({
+      partyId: supplier.id,
+      type: "purchase" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "PR line",
+          quantity: "1",
+          unitPrice: "200.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Balance: 600 - 200 = 400
+    const afterResult = await callerRamesh.party.getById({ id: supplier.id });
+    expect(afterResult).not.toBeNull();
+    expect(parseFloat(afterResult!.balance)).toBeCloseTo(400, 1);
+  });
+
+  it("combined CN+SR correctly reduces outstanding", async () => {
+    const db = getTenantTestDb();
+
+    const party = await createParty(db, business1.id, {
+      name: "Combined CN+SR Balance Customer",
+      type: "customer",
+      openingBalance: "0.00",
+    });
+
+    const item = await createItem(db, business1.id, {
+      name: "Combined Adj Balance Item",
+      salePrice: "500.00",
+      taxPercent: "0.00",
+    });
+
+    // Invoice for ₹1000
+    const { invoice } = await createInvoiceWithItems(
+      db,
+      business1.id,
+      party.id,
+      [{ itemId: item.id, description: "Main invoice line", quantity: "2", unitPrice: "500.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" },
+    );
+
+    // CN for ₹300 referencing the invoice
+    await callerRamesh.creditNote.create({
+      partyId: party.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: invoice.id,
+      lineItems: [
+        {
+          itemName: "Combined CN line",
+          quantity: "3",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // SR for ₹200 referencing the invoice
+    await callerRamesh.salesReturn.create({
+      partyId: party.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: invoice.id,
+      lineItems: [
+        {
+          itemName: "Combined SR line",
+          quantity: "2",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Balance: 1000 - 300 (CN) - 200 (SR) = 500
+    const result = await callerRamesh.party.getById({ id: party.id });
+    expect(result).not.toBeNull();
+    expect(parseFloat(result!.balance)).toBeCloseTo(500, 1);
+  });
+});
+
+// ── party.ledger — includes CN/SR/DN entries ──────────────────────────────────
+
+/**
+ * Verifies that party.ledger returns entries for credit_note, sales_return,
+ * and debit_note document types with the correct debit/credit direction, and
+ * that the running balance accounts for these adjustments correctly.
+ */
+describe("party.ledger — includes CN/SR/DN entries", () => {
+  let ledgerCnSrParty: Awaited<ReturnType<typeof createParty>>;
+
+  beforeAll(async () => {
+    const db = getTenantTestDb();
+
+    ledgerCnSrParty = await createParty(db, business1.id, {
+      name: "Ledger CN SR DN Test Customer",
+      type: "customer",
+      openingBalance: "0.00",
+    });
+
+    const item = await createItem(db, business1.id, {
+      name: "Ledger CN SR DN Item",
+      salePrice: "200.00",
+      taxPercent: "0.00",
+    });
+
+    // Sale invoice for ₹1000
+    const { invoice } = await createInvoiceWithItems(
+      db,
+      business1.id,
+      ledgerCnSrParty.id,
+      [{ itemId: item.id, description: "Main ledger invoice", quantity: "5", unitPrice: "200.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" },
+    );
+
+    // CN for ₹400 against the invoice
+    await callerRamesh.creditNote.create({
+      partyId: ledgerCnSrParty.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: invoice.id,
+      lineItems: [
+        {
+          itemName: "Ledger CN line",
+          quantity: "2",
+          unitPrice: "200.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // SR for ₹200 against the invoice
+    await callerRamesh.salesReturn.create({
+      partyId: ledgerCnSrParty.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: invoice.id,
+      lineItems: [
+        {
+          itemName: "Ledger SR line",
+          quantity: "1",
+          unitPrice: "200.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Debit note for ₹100 (increases what customer owes)
+    await callerRamesh.debitNote.create({
+      partyId: ledgerCnSrParty.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "Ledger DN line",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+  });
+
+  it("includes credit_note entry with amount in credit column for sale type", async () => {
+    const result = await callerRamesh.party.ledger({
+      partyId: ledgerCnSrParty.id,
+      page: 1,
+      limit: 50,
+    });
+
+    const cnEntry = result.data.find((e) => e.type === "credit_note");
+    expect(cnEntry).toBeDefined();
+    // For a sale-type CN: credit column holds the amount (reduces what customer owes)
+    expect(parseFloat(cnEntry!.credit)).toBeGreaterThan(0);
+    expect(parseFloat(cnEntry!.debit)).toBe(0);
+  });
+
+  it("includes sales_return entry with amount in credit column", async () => {
+    const result = await callerRamesh.party.ledger({
+      partyId: ledgerCnSrParty.id,
+      page: 1,
+      limit: 50,
+    });
+
+    const srEntry = result.data.find((e) => e.type === "sales_return");
+    expect(srEntry).toBeDefined();
+    // Sales return reduces customer balance — goes in credit column
+    expect(parseFloat(srEntry!.credit)).toBeGreaterThan(0);
+    expect(parseFloat(srEntry!.debit)).toBe(0);
+  });
+
+  it("includes debit_note entry with amount in debit column for sale type", async () => {
+    const result = await callerRamesh.party.ledger({
+      partyId: ledgerCnSrParty.id,
+      page: 1,
+      limit: 50,
+    });
+
+    const dnEntry = result.data.find((e) => e.type === "debit_note");
+    expect(dnEntry).toBeDefined();
+    // Debit note increases what customer owes — goes in debit column
+    expect(parseFloat(dnEntry!.debit)).toBeGreaterThan(0);
+    expect(parseFloat(dnEntry!.credit)).toBe(0);
+  });
+
+  it("running balance correctly accounts for CN/SR entries", async () => {
+    const result = await callerRamesh.party.ledger({
+      partyId: ledgerCnSrParty.id,
+      page: 1,
+      limit: 50,
+    });
+
+    // All entries must have a valid running balance
+    result.data.forEach((entry) => {
+      expect(typeof entry.runningBalance).toBe("string");
+      expect(entry.runningBalance).toMatch(/^-?\d+(\.\d+)?$/);
+    });
+
+    // Final running balance: openingBalance(0) + invoice(1000) - CN(400) - SR(200) + DN(100) = 500
+    const lastEntry = result.data[result.data.length - 1];
+    expect(lastEntry).toBeDefined();
+    expect(parseFloat(lastEntry!.runningBalance)).toBeCloseTo(500, 1);
+  });
+
+  it("excludes cancelled CN/SR from ledger", async () => {
+    const db = getTenantTestDb();
+
+    // Create a separate party for this isolation test
+    const isolatedParty = await createParty(db, business1.id, {
+      name: "Cancelled CN Exclusion Party",
+      type: "customer",
+      openingBalance: "0.00",
+    });
+
+    const item = await createItem(db, business1.id, {
+      name: "Cancelled CN Exclusion Item",
+      salePrice: "300.00",
+      taxPercent: "0.00",
+    });
+
+    await createInvoiceWithItems(
+      db,
+      business1.id,
+      isolatedParty.id,
+      [{ itemId: item.id, description: "Exclusion invoice line", quantity: "2", unitPrice: "300.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" },
+    );
+
+    // Create a CN then cancel it
+    const cn = await callerRamesh.creditNote.create({
+      partyId: isolatedParty.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        {
+          itemName: "To-cancel CN line",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Cancel the CN
+    await callerRamesh.creditNote.updateStatus({ id: cn.id, status: "cancelled" });
+
+    const result = await callerRamesh.party.ledger({
+      partyId: isolatedParty.id,
+      page: 1,
+      limit: 50,
+    });
+
+    // Ledger must NOT include the cancelled CN
+    const entryTypes = result.data.map((e) => e.type);
+    expect(entryTypes).not.toContain("credit_note");
+
+    // Balance should equal invoice total only (cancelled CN excluded)
+    const invoiceEntry = result.data.find((e) => e.type === "invoice");
+    expect(invoiceEntry).toBeDefined();
+    // Running balance after invoice = 600 (no CN subtracted)
+    const lastEntry = result.data[result.data.length - 1];
+    expect(parseFloat(lastEntry!.runningBalance)).toBeCloseTo(600, 1);
+  });
+});
+
 // ── N+1 detection ─────────────────────────────────────────────────────────────
 
 describe("party.list N+1 detection", () => {
