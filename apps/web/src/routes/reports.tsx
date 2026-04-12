@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { StatCard } from "@/components/ui/StatCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
@@ -258,12 +259,7 @@ function DaybookReport({
       {/* Type filter + Export row */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <DaybookTypeTabs value={typeFilter} onChange={setTypeFilter} />
-        <button onClick={handleExport} className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 ml-auto shrink-0">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-          </svg>
-          Download CSV
-        </button>
+        <ExportButton onClick={handleExport} />
       </div>
 
       {/* Table grouped by day */}
@@ -578,12 +574,7 @@ function OutstandingReport({
             {t === "all" ? "All Parties" : t === "customer" ? "Customers" : "Suppliers"}
           </button>
         ))}
-        <button onClick={handleExport} className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 ml-auto shrink-0">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-          </svg>
-          Download CSV
-        </button>
+        <ExportButton onClick={handleExport} />
       </div>
 
       {!hasAny ? (
@@ -852,25 +843,7 @@ function RegisterReport({
 
       {/* Export */}
       <div className="flex justify-end mb-3">
-        <button
-          onClick={handleExport}
-          className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5"
-        >
-          <svg
-            className="w-3.5 h-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3"
-            />
-          </svg>
-          Download CSV
-        </button>
+        <ExportButton onClick={handleExport} />
       </div>
 
       {/* Table */}
@@ -1260,12 +1233,7 @@ function PartyStatementReport({
 
       {/* Export */}
       <div className="flex justify-end mb-3">
-        <button onClick={handleExport} className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-          </svg>
-          Download CSV
-        </button>
+        <ExportButton onClick={handleExport} />
       </div>
 
       {data.entries.length === 0 ? (
@@ -1541,12 +1509,7 @@ function StockSummaryReport() {
         >
           Show Zero Stock
         </button>
-        <button onClick={handleExport} className="btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 ml-auto shrink-0">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
-          </svg>
-          Download CSV
-        </button>
+        <ExportButton onClick={handleExport} />
       </div>
 
       {totalItems === 0 ? (
@@ -2425,20 +2388,12 @@ function SummaryCard({
   value: string;
   accent?: "red" | "green" | "blue";
 }) {
-  const valueClass = cn(
-    "text-xl font-semibold tabular-nums mt-1",
-    accent === "red" && "text-red-600 dark:text-red-400",
-    accent === "green" && "text-emerald-600 dark:text-emerald-400",
-    accent === "blue" && "text-brand-700 dark:text-brand-400",
-    !accent && "text-text-primary"
-  );
-
-  return (
-    <div className="bg-surface rounded-xl border border-border px-4 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{label}</p>
-      <p className={valueClass}>{value}</p>
-    </div>
-  );
+  const valueColor =
+    accent === "red" ? "text-red-600 dark:text-red-400" :
+    accent === "green" ? "text-emerald-600 dark:text-emerald-400" :
+    accent === "blue" ? "text-brand-700 dark:text-brand-400" :
+    undefined;
+  return <StatCard size="lg" label={label} value={value} valueColor={valueColor} />;
 }
 
 // ── Collection Efficiency Report ────────────────────────────────

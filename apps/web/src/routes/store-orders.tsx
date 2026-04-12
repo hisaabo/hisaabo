@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { PillTabs } from "@/components/ui/Tabs";
 
 export const Route = createFileRoute("/store-orders")({
@@ -346,11 +347,7 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
         }
       >
         {isLoading ? (
-          <div className="space-y-3 animate-pulse">
-            {Array.from({ length: 7 }).map((_, i) => (
-              <div key={i} className="skeleton h-8 rounded-lg" />
-            ))}
-          </div>
+          <SkeletonRows count={7} height="h-8" className="space-y-3 animate-pulse" />
         ) : !o ? (
           <p className="text-text-tertiary text-sm">Order not found.</p>
         ) : (
@@ -613,11 +610,7 @@ function StoreOrdersPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="skeleton h-14 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={7} height="h-14" />
       ) : !orders.length ? (
         <EmptyState
           icon={

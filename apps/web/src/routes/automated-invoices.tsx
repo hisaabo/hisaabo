@@ -2,9 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, TextareaField } from "@/components/ui/FormField";
@@ -13,7 +16,7 @@ import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 
 export const Route = createFileRoute("/automated-invoices")({
   component: AutomatedInvoicesPage,
@@ -66,15 +69,15 @@ function frequencyLabel(frequency: string, customDays?: number | null): string {
 function statusColor(status: string): string {
   switch (status) {
     case "active":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "paused":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     case "completed":
-      return "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400";
+      return badgeColor("blue");
     case "expired":
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -140,7 +143,7 @@ function AutomatedInvoicesPage() {
 
   const [showFormSlideOver, setShowFormSlideOver] = useState(false);
   const [editTemplateId, setEditTemplateId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [detailTemplateId, setDetailTemplateId] = useState<string | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(true);
 
@@ -206,7 +209,7 @@ function AutomatedInvoicesPage() {
       utils.recurringInvoice.list.invalidate();
       utils.recurringInvoice.planUsage.invalidate();
       toast.success("Template deleted");
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -596,14 +599,9 @@ function AutomatedInvoicesPage() {
                         {frequencyLabel(template.frequency, template.customIntervalDays)}
                       </td>
                       <td>
-                        <span
-                          className={cn(
-                            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase",
-                            statusColor(template.status)
-                          )}
-                        >
+                        <Badge size="sm" color={statusColor(template.status)} className="uppercase">
                           {template.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-text-secondary whitespace-nowrap text-xs">
                         {template.nextRunDate ? formatDate(template.nextRunDate) : "—"}
@@ -656,7 +654,7 @@ function AutomatedInvoicesPage() {
                             <EditIcon />
                           </button>
                           <button
-                            onClick={() => setDeleteId(template.id)}
+                            onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
                             className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
                             aria-label="Delete template"
                             title="Delete"
@@ -1016,15 +1014,12 @@ function AutomatedInvoicesPage() {
       />
 
       {/* Delete confirmation */}
-      <ConfirmDialog
-        open={!!deleteId}
-        onCancel={() => setDeleteId(null)}
-        onConfirm={() => deleteId && deleteMutation.mutate({ id: deleteId })}
-        title="Delete Template"
-        description="This will permanently delete this recurring invoice template and stop all future runs. This action cannot be undone."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Template"
         loading={deleteMutation.isPending}
+        onConfirm={() => deleteConfirm.deleteTarget && deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id })}
+        onCancel={deleteConfirm.cancelDelete}
       />
     </div>
   );
@@ -1133,17 +1128,12 @@ function TemplateDetailSlideOver({
         <div className="space-y-5">
           {/* Status + Type badges */}
           <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium uppercase",
-                statusColor(template.status)
-              )}
-            >
+            <Badge size="md" color={statusColor(template.status)} className="uppercase rounded">
               {template.status}
-            </span>
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-surface-2 text-text-secondary uppercase">
+            </Badge>
+            <Badge size="md" color="bg-surface-2 text-text-secondary" className="uppercase rounded">
               {template.type}
-            </span>
+            </Badge>
           </div>
 
           {/* Info grid */}
@@ -1253,16 +1243,13 @@ function TemplateDetailSlideOver({
                           {exec.invoiceNumber || "—"}
                         </td>
                         <td className="px-3 py-2">
-                          <span
-                            className={cn(
-                              "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase",
-                              exec.status === "success"
-                                ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400"
-                                : "bg-red-600/[0.08] text-red-700 dark:text-red-400"
-                            )}
+                          <Badge
+                            size="sm"
+                            color={exec.status === "success" ? badgeColor("emerald") : badgeColor("red")}
+                            className="uppercase"
                           >
                             {exec.status}
-                          </span>
+                          </Badge>
                         </td>
                         <td className="px-3 py-2 text-xs text-red-500 max-w-[200px] truncate">
                           {exec.errorMessage || "—"}

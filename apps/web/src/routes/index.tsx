@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, cn } from "@/lib/utils";
+import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PillTabs } from "@/components/ui/Tabs";
@@ -1091,12 +1092,13 @@ function SummaryCards({
       <p className="text-[11px] font-medium text-text-tertiary mb-2">{periodLabel} — Receivable & Payable are current totals</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {cards.map((c) => (
-          <div key={c.label} className="card px-4 py-3">
-            <p className="text-[11px] font-medium text-text-tertiary mb-1 truncate">{c.label}</p>
-            <p className={`text-base font-bold tabular-nums truncate ${c.color}`}>
-              {formatCurrency(c.value)}
-            </p>
-          </div>
+          <StatCard
+            key={c.label}
+            label={c.label}
+            value={formatCurrency(c.value)}
+            valueColor={c.color}
+            className="truncate"
+          />
         ))}
       </div>
     </div>

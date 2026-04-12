@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatDate, cn } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PillTabs } from "@/components/ui/Tabs";
@@ -84,15 +86,15 @@ const STATUS_OPTIONS = [
 function statusBadgeColor(status: string): string {
   switch (status) {
     case "generated":
-      return "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400";
+      return badgeColor("blue");
     case "active":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "cancelled":
-      return "bg-red-600/[0.08] text-red-700 dark:text-red-400";
+      return badgeColor("red");
     case "expired":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -704,12 +706,9 @@ function DashboardTab({
                         )}
                       </td>
                       <td>
-                        <span className={cn(
-                          "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase",
-                          statusBadgeColor(row.status),
-                        )}>
+                        <Badge size="sm" color={statusBadgeColor(row.status)} className="uppercase">
                           {row.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -850,14 +849,13 @@ function ExpiringTab({
                   </td>
                   <td>
                     {hours !== null ? (
-                      <span className={cn(
-                        "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold",
-                        urgent
-                          ? "bg-red-600/[0.08] text-red-700 dark:text-red-400"
-                          : "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400",
-                      )}>
+                      <Badge
+                        size="sm"
+                        color={urgent ? badgeColor("red") : badgeColor("amber")}
+                        className="font-semibold"
+                      >
                         {hours < 1 ? `${Math.floor(hours * 60)}m` : `${Math.floor(hours)}h`} left
-                      </span>
+                      </Badge>
                     ) : "—"}
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -911,12 +909,9 @@ function EWBDetailModal({
             <div className="grid grid-cols-2 gap-3 text-sm">
               <DetailRow label="EWB Number" value={data.ewbNumber ?? "—"} mono />
               <DetailRow label="Status">
-                <span className={cn(
-                  "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase",
-                  statusBadgeColor(data.status),
-                )}>
+                <Badge size="sm" color={statusBadgeColor(data.status)} className="uppercase">
                   {data.status}
-                </span>
+                </Badge>
               </DetailRow>
               <DetailRow label="Generated On" value={data.ewbDate ? formatDate(data.ewbDate) : "—"} />
               <DetailRow

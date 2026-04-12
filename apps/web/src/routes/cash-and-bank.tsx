@@ -2,6 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { Badge } from "@/components/ui/Badge";
+import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -9,6 +11,7 @@ import { InputField, SelectField } from "@/components/ui/FormField";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { Listbox } from "@/components/ui/Listbox";
 import { Pagination } from "@/components/ui/Pagination";
 import { SearchInput } from "@/components/ui/SearchInput";
@@ -256,24 +259,22 @@ function CashAndBankPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="card px-5 py-4">
-          <p className="text-xs font-medium text-text-tertiary mb-1">Total Balance</p>
-          <p className="text-xl font-bold tabular-nums text-text-primary">
-            {formatCurrency(summary?.totalBalance || "0")}
-          </p>
-        </div>
-        <div className="card px-5 py-4">
-          <p className="text-xs font-medium text-text-tertiary mb-1">Cash in Hand</p>
-          <p className="text-xl font-bold tabular-nums text-emerald-600">
-            {formatCurrency(summary?.cashInHand || "0")}
-          </p>
-        </div>
-        <div className="card px-5 py-4">
-          <p className="text-xs font-medium text-text-tertiary mb-1">Bank Balance</p>
-          <p className="text-xl font-bold tabular-nums text-text-primary">
-            {formatCurrency(summary?.bankBalance || "0")}
-          </p>
-        </div>
+        <StatCard
+          size="md"
+          label="Total Balance"
+          value={formatCurrency(summary?.totalBalance || "0")}
+        />
+        <StatCard
+          size="md"
+          label="Cash in Hand"
+          value={formatCurrency(summary?.cashInHand || "0")}
+          valueColor="text-emerald-600"
+        />
+        <StatCard
+          size="md"
+          label="Bank Balance"
+          value={formatCurrency(summary?.bankBalance || "0")}
+        />
       </div>
 
       {/* Main Content */}
@@ -320,9 +321,9 @@ function CashAndBankPage() {
                               {account.accountName}
                             </p>
                             {account.accountType === "payment_gateway" && (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-600/[0.1] text-purple-700 dark:text-purple-400 shrink-0">
+                              <Badge size="sm" color="bg-purple-600/[0.1] text-purple-700 dark:text-purple-400" className="font-semibold shrink-0">
                                 Gateway
-                              </span>
+                              </Badge>
                             )}
                             {account.isDefault && (
                               <svg className="w-3 h-3 text-amber-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
@@ -689,11 +690,7 @@ function CashAndBankPage() {
 
           {/* Table */}
           {untrackedFetching && !untrackedData && (
-            <div className="space-y-2">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="skeleton h-10 rounded-lg" />
-              ))}
-            </div>
+            <SkeletonRows count={3} height="h-10" />
           )}
           {untrackedData && untrackedData.data.length === 0 && (
             <div className="card px-4 py-8 text-center">
@@ -761,15 +758,17 @@ function CashAndBankPage() {
                       <td className="font-medium">{pmt.partyName}</td>
                       <td className="text-text-secondary">{formatDate(pmt.paymentDate)}</td>
                       <td>
-                        <span className={cn(
-                          "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
-                          pmt.mode === "upi" ? "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400" :
+                        <Badge
+                          size="sm"
+                          color={
+                            pmt.mode === "upi" ? "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400" :
                             pmt.mode === "cash" ? "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400" :
-                              pmt.mode === "bank" ? "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400" :
-                                "bg-surface-2 text-text-secondary"
-                        )}>
+                            pmt.mode === "bank" ? "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400" :
+                            "bg-surface-2 text-text-secondary"
+                          }
+                        >
                           {pmt.mode.toUpperCase()}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-right tabular-nums font-semibold text-emerald-600">
                         {formatCurrency(pmt.amount)}

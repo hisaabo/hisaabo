@@ -9,7 +9,10 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PillTabs } from "@/components/ui/Tabs";
 import { SegmentedControl } from "@/components/ui/Tabs";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
+import { DetailField } from "@/components/ui/DetailField";
+import { LinkButton } from "@/components/ui/LinkButton";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator } from "@/components/DocumentCreator";
 import { SearchInput } from "@/components/ui/SearchInput";
@@ -19,6 +22,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
@@ -397,12 +401,11 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
                 </button>
               </div>
             ) : (
-              <button
+              <LinkButton
                 onClick={() => setShowTrackingForm(true)}
-                className="text-brand-600 hover:underline"
               >
                 Add tracking
-              </button>
+              </LinkButton>
             )}
           </div>
 
@@ -531,11 +534,7 @@ function InvoiceDetailPanel({
       }
     >
       {isLoading ? (
-        <div className="space-y-3 animate-pulse">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-8 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={5} height="h-8" className="space-y-3 animate-pulse" />
       ) : !invoice ? (
         <p className="text-text-tertiary text-sm">Invoice not found.</p>
       ) : (
@@ -543,28 +542,24 @@ function InvoiceDetailPanel({
           {/* Header info */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-3">
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Party</p>
-                <p className="text-sm font-semibold text-text-primary">{invoice.party?.name ?? "—"}</p>
+              <DetailField label="Party">
+                <p className="font-semibold text-text-primary">{invoice.party?.name ?? "—"}</p>
                 {invoice.party?.phone && (
                   <p className="text-xs text-text-tertiary">{invoice.party.phone}</p>
                 )}
-              </div>
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Status</p>
+              </DetailField>
+              <DetailField label="Status">
                 <StatusBadge status={invoice.status} size="sm" />
-              </div>
+              </DetailField>
             </div>
             <div className="space-y-3">
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Invoice Date</p>
-                <p className="text-sm text-text-primary">{formatDate(invoice.invoiceDate)}</p>
-              </div>
+              <DetailField label="Invoice Date">
+                <p>{formatDate(invoice.invoiceDate)}</p>
+              </DetailField>
               {invoice.dueDate && (
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Due Date</p>
-                  <p className="text-sm text-text-primary">{formatDate(invoice.dueDate)}</p>
-                </div>
+                <DetailField label="Due Date">
+                  <p>{formatDate(invoice.dueDate)}</p>
+                </DetailField>
               )}
             </div>
           </div>
@@ -779,8 +774,7 @@ function InvoicesPage() {
   const [showCreate, setShowCreate] = useState(false);
   // Tracks the partyId of the last-created invoice so "Create another" can pre-fill it
   const [lastCreatedPartyId, setLastCreatedPartyId] = useState<string | undefined>(undefined);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [deleteNumber, setDeleteNumber] = useState("");
+  const deleteConfirm = useDeleteConfirmation();
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
@@ -847,21 +841,20 @@ function InvoicesPage() {
   const deleteMutation = trpc.invoice.delete.useMutation({
     onSuccess: () => {
       // Optimistically remove from infinite list immediately
-      if (deleteId) list.removeItem(deleteId);
+      if (deleteConfirm.deleteTarget) list.removeItem(deleteConfirm.deleteTarget.id);
       utils.invoice.list.invalidate();
       utils.dashboard.summary.invalidate();
       toast.success("Invoice deleted");
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
     },
     onError: (err) => {
       toast.error("Failed to delete invoice", err.message);
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
     },
   });
 
   function confirmDelete(id: string, number: string) {
-    setDeleteId(id);
-    setDeleteNumber(number);
+    deleteConfirm.requestDelete(id, number);
   }
 
   function openPaymentPanel(partyId: string, invoiceId: string, balance: string) {
@@ -957,11 +950,7 @@ function InvoicesPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="skeleton h-14 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={6} height="h-14" />
       ) : !list.items.length && !isFetching ? (
         <EmptyState
           icon={
@@ -1142,15 +1131,12 @@ function InvoicesPage() {
       )}
 
       {/* Delete confirm dialog */}
-      <ConfirmDialog
-        open={!!deleteId}
-        title="Delete Invoice"
-        description={`Delete invoice ${deleteNumber}? This action cannot be undone.`}
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Invoice"
         loading={deleteMutation.isPending}
-        onConfirm={() => deleteId && deleteMutation.mutate({ id: deleteId })}
-        onCancel={() => setDeleteId(null)}
+        onConfirm={() => deleteConfirm.deleteTarget && deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id })}
+        onCancel={deleteConfirm.cancelDelete}
       />
 
       {/* Document creator — new invoice.

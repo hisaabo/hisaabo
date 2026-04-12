@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -159,38 +160,17 @@ function GSTR1View({ year, month }: { year: number; month: number }) {
     <div className="space-y-5">
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Invoice Count</p>
-          <p className="text-lg font-bold tabular-nums text-text-primary">{data.invoiceCount}</p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Taxable Value</p>
-          <p className="text-lg font-bold tabular-nums text-text-primary">{fmt(data.totalTaxableValue)}</p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Total Tax</p>
-          <p className="text-lg font-bold tabular-nums text-amber-600">{fmt(data.totalTax)}</p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">Total Value</p>
-          <p className="text-lg font-bold tabular-nums text-emerald-600">{fmt(data.totalInvoiceValue)}</p>
-        </div>
+        <StatCard label="Invoice Count" value={data.invoiceCount} />
+        <StatCard label="Taxable Value" value={fmt(data.totalTaxableValue)} />
+        <StatCard label="Total Tax" value={fmt(data.totalTax)} valueColor="text-amber-600" />
+        <StatCard label="Total Value" value={fmt(data.totalInvoiceValue)} valueColor="text-emerald-600" />
       </div>
 
       {/* Tax split cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">CGST</p>
-          <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.totalCgst)}</p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">SGST</p>
-          <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.totalSgst)}</p>
-        </div>
-        <div className="card px-4 py-3">
-          <p className="text-xs text-text-tertiary mb-1">IGST</p>
-          <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.totalIgst)}</p>
-        </div>
+        <StatCard label="CGST" value={fmt(data.totalCgst)} />
+        <StatCard label="SGST" value={fmt(data.totalSgst)} />
+        <StatCard label="IGST" value={fmt(data.totalIgst)} />
       </div>
 
       {/* B2B Table */}
@@ -334,24 +314,12 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
           <h3 className="text-sm font-semibold text-text-primary">4 — Eligible input tax credit</h3>
         </div>
         <div className="grid grid-cols-3 gap-4 p-4">
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">ITC — IGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.itc.igst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">ITC — CGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.itc.cgst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">ITC — SGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.itc.sgst)}</p>
-          </div>
+          <StatCard label="ITC — IGST" value={fmt(data.itc.igst)} />
+          <StatCard label="ITC — CGST" value={fmt(data.itc.cgst)} />
+          <StatCard label="ITC — SGST" value={fmt(data.itc.sgst)} />
         </div>
         <div className="px-4 pb-4">
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Total ITC available</p>
-            <p className="text-base font-semibold tabular-nums text-emerald-600">{fmt(data.itc.total)}</p>
-          </div>
+          <StatCard label="Total ITC available" value={fmt(data.itc.total)} valueColor="text-emerald-600" />
         </div>
       </div>
 
@@ -361,18 +329,9 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
           <h3 className="text-sm font-semibold text-text-primary">5 — Values of exempt, nil-rated and non-GST inward supplies</h3>
         </div>
         <div className="grid grid-cols-3 gap-4 p-4">
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Output IGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.taxPayable.igst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Output CGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.taxPayable.cgst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Output SGST</p>
-            <p className="text-base font-semibold tabular-nums text-text-primary">{fmt(data.taxPayable.sgst)}</p>
-          </div>
+          <StatCard label="Output IGST" value={fmt(data.taxPayable.igst)} />
+          <StatCard label="Output CGST" value={fmt(data.taxPayable.cgst)} />
+          <StatCard label="Output SGST" value={fmt(data.taxPayable.sgst)} />
         </div>
       </div>
 
@@ -382,18 +341,9 @@ function GSTR3BView({ year, month }: { year: number; month: number }) {
           <h3 className="text-sm font-semibold text-text-primary">Net tax liability (after ITC)</h3>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4">
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Net IGST</p>
-            <p className="text-base font-semibold tabular-nums text-amber-600">{fmt(data.netTax.igst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Net CGST</p>
-            <p className="text-base font-semibold tabular-nums text-amber-600">{fmt(data.netTax.cgst)}</p>
-          </div>
-          <div className="card px-4 py-3">
-            <p className="text-xs text-text-tertiary mb-1">Net SGST</p>
-            <p className="text-base font-semibold tabular-nums text-amber-600">{fmt(data.netTax.sgst)}</p>
-          </div>
+          <StatCard label="Net IGST" value={fmt(data.netTax.igst)} valueColor="text-amber-600" />
+          <StatCard label="Net CGST" value={fmt(data.netTax.cgst)} valueColor="text-amber-600" />
+          <StatCard label="Net SGST" value={fmt(data.netTax.sgst)} valueColor="text-amber-600" />
           <div className="card px-4 py-3 border-2 border-border-color">
             <p className="text-xs text-text-tertiary mb-1 font-medium">Total payable</p>
             <p className="text-xl font-bold tabular-nums text-red-600">{fmt(data.netTax.total)}</p>

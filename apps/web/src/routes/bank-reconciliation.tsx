@@ -2,7 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -11,6 +14,7 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField } from "@/components/ui/FormField";
 import { Listbox } from "@/components/ui/Listbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { Pagination } from "@/components/ui/Pagination";
 
@@ -60,17 +64,17 @@ function fmt(n: string | number | null | undefined): string {
 function matchStatusColor(status: string): string {
   switch (status) {
     case "auto_matched":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "manual_matched":
-      return "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400";
+      return badgeColor("blue");
     case "unmatched":
-      return "bg-red-600/[0.08] text-red-700 dark:text-red-400";
+      return badgeColor("red");
     case "created":
-      return "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400";
+      return badgeColor("brand");
     case "ignored":
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -87,10 +91,10 @@ function matchStatusLabel(status: string): string {
 
 function importStatusColor(status: string): string {
   switch (status) {
-    case "review": return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
-    case "completed": return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
-    case "pending": return "bg-surface-2 text-text-secondary";
-    default: return "bg-surface-2 text-text-secondary";
+    case "review": return badgeColor("amber");
+    case "completed": return badgeColor("emerald");
+    case "pending": return badgeColorFallback;
+    default: return badgeColorFallback;
   }
 }
 
@@ -254,9 +258,9 @@ function HubTab({
                     <tr key={imp.id} className="border-b border-border-light last:border-0 hover:bg-surface-hover">
                       <td className="px-4 py-3 text-text-primary font-medium">{imp.fileName}</td>
                       <td className="px-4 py-3">
-                        <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium", importStatusColor(imp.status))}>
+                        <Badge size="md" color={importStatusColor(imp.status)}>
                           {imp.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="px-4 py-3 text-right text-text-secondary">{imp.totalLines}</td>
                       <td className="px-4 py-3 text-right text-emerald-600">{imp.matchedLines}</td>
@@ -958,9 +962,9 @@ function ReviewTab({ importId }: { importId: string | null }) {
                         ) : "—"}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium", matchStatusColor(line.matchStatus))}>
+                        <Badge size="md" color={matchStatusColor(line.matchStatus)}>
                           {matchStatusLabel(line.matchStatus)}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="px-4 py-3 text-right text-text-secondary text-xs">
                         {line.matchConfidence
@@ -1379,7 +1383,7 @@ function RulesTab() {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<RuleForm>(EMPTY_RULE_FORM);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const utils = trpc.useUtils();
 
   const { data: rules, isLoading } = trpc.bankRecon.ruleList.useQuery();
@@ -1408,7 +1412,7 @@ function RulesTab() {
   const deleteMutation = trpc.bankRecon.ruleDelete.useMutation({
     onSuccess: () => {
       utils.bankRecon.ruleList.invalidate();
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
       toast.success("Rule deleted");
     },
     onError: (err) => toast.error(err.message),
@@ -1531,7 +1535,7 @@ function RulesTab() {
                       </button>
                       <button
                         className="text-red-500 hover:text-red-600 text-xs font-medium"
-                        onClick={() => setDeleteId(rule.id)}
+                        onClick={() => deleteConfirm.requestDelete(rule.id, rule.matchValue)}
                       >
                         Delete
                       </button>
@@ -1646,13 +1650,11 @@ function RulesTab() {
       </Modal>
 
       {/* Delete confirm */}
-      <ConfirmDialog
-        open={!!deleteId}
-        title="Delete Rule"
-        description="Are you sure you want to delete this rule?"
-        confirmLabel="Delete"
-        onConfirm={() => { if (deleteId) deleteMutation.mutate({ id: deleteId }); }}
-        onCancel={() => setDeleteId(null)}
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Rule"
+        onConfirm={() => { if (deleteConfirm.deleteTarget) deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id }); }}
+        onCancel={deleteConfirm.cancelDelete}
       />
     </div>
   );
@@ -1667,7 +1669,7 @@ function templateTypeBadge(t: { isSeeded: boolean; forkedFromId: string | null }
 }
 
 function TemplatesTab() {
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
 
@@ -1686,7 +1688,7 @@ function TemplatesTab() {
   const deleteMutation = trpc.bankRecon.templateDelete.useMutation({
     onSuccess: () => {
       utils.bankRecon.templateList.invalidate();
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
       toast.success("Template deleted");
     },
     onError: (err) => toast.error(err.message),
@@ -1761,7 +1763,7 @@ function TemplatesTab() {
                         ) : (
                           <button
                             className="text-red-500 hover:text-red-600 text-xs font-medium"
-                            onClick={() => setDeleteId(t.id)}
+                            onClick={() => deleteConfirm.requestDelete(t.id, t.bankDisplayName)}
                           >
                             Delete
                           </button>
@@ -1781,13 +1783,11 @@ function TemplatesTab() {
         />
       )}
 
-      <ConfirmDialog
-        open={!!deleteId}
-        title="Delete Template"
-        description="Are you sure you want to delete this template? This cannot be undone."
-        confirmLabel="Delete"
-        onConfirm={() => { if (deleteId) deleteMutation.mutate({ id: deleteId }); }}
-        onCancel={() => setDeleteId(null)}
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Template"
+        onConfirm={() => { if (deleteConfirm.deleteTarget) deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id }); }}
+        onCancel={deleteConfirm.cancelDelete}
       />
     </div>
   );
