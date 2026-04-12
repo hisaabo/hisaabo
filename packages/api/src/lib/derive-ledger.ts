@@ -20,8 +20,9 @@
  *   Payment Received → Dr 1000/1010 Cash/Bank / Cr 1100 Receivable
  *   Payment Made     → Dr 2000 Payable / Cr 1000/1010 Cash/Bank
  *   Expense          → Dr 5xxx (by category) / Cr 1000/1010 Cash/Bank
- *   Credit Note (sale)  → Dr 4010 Sales Returns / Cr 1100 Receivable
- *   Debit Note (purchase) → Dr 2000 Payable / Cr 5010 Purchase Returns
+ *   Credit Note / Sales Return  → Dr 4010 Sales Returns + Dr Output GST / Cr 1100 Receivable
+ *   Debit Note (sale-side)      → Dr 1100 Receivable / Cr 4000 Sales + Cr Output GST
+ *   Debit Note / Purchase Return → Dr 2000 Payable / Cr 5010 Purchase Returns + Cr Input GST
  */
 
 import { eq, and, gte, lte, isNull } from "drizzle-orm";
@@ -341,8 +342,8 @@ export async function deriveLedger(
         sourceNumber: inv.invoiceNumber,
         lines,
       });
-    } else if (inv.documentType === "credit_note") {
-      // ── Credit Note (sale return) ────────────────────────────────
+    } else if (inv.documentType === "credit_note" || inv.documentType === "sales_return") {
+      // ── Credit Note / Sales Return (sale-side return) ────────────
       // Reverses original sale: Dr Sales Returns (subtotal) + Dr Output GST (tax), Cr Receivable (total)
       const salesReturns = getAccount(coa, "4010");
       const receivable = getAccount(coa, "1100");
@@ -362,16 +363,49 @@ export async function deriveLedger(
       }
       lines.push(creditLine(receivable, inv.totalAmount));
 
+      const cnLabel = inv.documentType === "sales_return" ? "Sales Return" : "Credit Note";
       entries.push({
         date: inv.invoiceDate,
-        narration: `Credit Note ${inv.invoiceNumber}`,
+        narration: `${cnLabel} ${inv.invoiceNumber}`,
         sourceType: "invoice",
         sourceId: inv.id,
         sourceNumber: inv.invoiceNumber,
         lines,
       });
-    } else if (inv.documentType === "debit_note") {
-      // ── Debit Note (purchase return) ────────────────────────────
+    } else if (inv.documentType === "debit_note" && inv.type === "sale") {
+      // ── Debit Note (sale-side) ───────────────────────────────────
+      // Issued by seller to increase what the buyer owes (e.g. price correction upward).
+      // Mirrors a sale invoice: Dr Receivable (total) / Cr Sales (subtotal) + Cr Output GST (tax)
+      const receivable = getAccount(coa, "1100");
+      const sales = getAccount(coa, "4000");
+      const taxStr = inv.taxAmount;
+
+      lines.push(debitLine(receivable, inv.totalAmount));
+      lines.push(creditLine(sales, inv.subtotal));
+      if (parseFloat(taxStr) > 0) {
+        const sameState = isSameState(biz?.stateCode, inv.partyStateCode, biz?.state, inv.partyState);
+        if (sameState) {
+          const [cgstAmt, sgstAmt] = splitTax(taxStr);
+          lines.push(creditLine(getAccount(coa, "2100"), cgstAmt));
+          lines.push(creditLine(getAccount(coa, "2101"), sgstAmt));
+        } else {
+          lines.push(creditLine(getAccount(coa, "2102"), taxStr));
+        }
+      }
+
+      entries.push({
+        date: inv.invoiceDate,
+        narration: `Debit Note ${inv.invoiceNumber}`,
+        sourceType: "invoice",
+        sourceId: inv.id,
+        sourceNumber: inv.invoiceNumber,
+        lines,
+      });
+    } else if (
+      (inv.documentType === "debit_note" && inv.type === "purchase") ||
+      inv.documentType === "purchase_return"
+    ) {
+      // ── Debit Note (purchase-side) / Purchase Return ─────────────
       // Reverses original purchase: Dr Payable (total), Cr Purchase Returns (subtotal) + Cr Input GST (tax)
       const payable = getAccount(coa, "2000");
       const purchaseReturns = getAccount(coa, "5010");
@@ -391,9 +425,10 @@ export async function deriveLedger(
         }
       }
 
+      const dnLabel = inv.documentType === "purchase_return" ? "Purchase Return" : "Debit Note";
       entries.push({
         date: inv.invoiceDate,
-        narration: `Debit Note ${inv.invoiceNumber}`,
+        narration: `${dnLabel} ${inv.invoiceNumber}`,
         sourceType: "invoice",
         sourceId: inv.id,
         sourceNumber: inv.invoiceNumber,

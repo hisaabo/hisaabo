@@ -1592,11 +1592,23 @@ type StockMovementRow = {
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
+  documentType: string;
   quantity: string;
   partyName: string;
   direction: "in" | "out";
   selectedUnit: string | null;
   conversionFactor: string | null;
+};
+
+const DOC_TYPE_ROUTE: Record<string, string> = {
+  invoice: "/invoices",
+  credit_note: "/credit-notes",
+  sales_return: "/sales-returns",
+  delivery_challan: "/delivery-challans",
+  quotation: "/quotations",
+  proforma: "/proforma-invoices",
+  purchase_return: "/invoices",
+  debit_note: "/invoices",
 };
 
 function PriceHistoryTab({
@@ -1756,7 +1768,7 @@ function StockMovementsTab({
 
     // Starting stock = currentStock - totalChange in this window
     let running = currentStock - totalChange;
-    const rows: { date: string; invoiceId: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
+    const rows: { date: string; invoiceId: string; invoiceNumber: string; documentType: string; qtyChange: number; running: number }[] = [];
 
     for (const m of chronological) {
       const factor = parseFloat(m.conversionFactor || "1");
@@ -1767,6 +1779,7 @@ function StockMovementsTab({
         date: formatDate(m.invoiceDate),
         invoiceId: m.invoiceId,
         invoiceNumber: m.invoiceNumber,
+        documentType: m.documentType,
         qtyChange: delta,
         running,
       });
@@ -1879,7 +1892,7 @@ function StockMovementsTab({
                 <tr key={i}>
                   <td className="text-text-secondary text-xs">{r.date}</td>
                   <td className="font-mono text-[13px]">
-                    <Link to="/invoices" search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                    <Link to={DOC_TYPE_ROUTE[r.documentType] ?? "/invoices"} search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
                       {r.invoiceNumber}
                     </Link>
                   </td>

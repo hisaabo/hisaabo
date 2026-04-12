@@ -250,7 +250,7 @@ export default function CreditNoteCreateScreen() {
 
       <View style={s.infoBox}>
         <Ionicons name="information-circle-outline" size={16} color={colors.info} />
-        <Text style={s.infoText}>Creating a credit note will increment stock (returns).</Text>
+        <Text style={s.infoText}>Credit notes reduce the party's outstanding balance without affecting stock.</Text>
       </View>
 
       <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>

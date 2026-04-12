@@ -240,11 +240,11 @@ describe("DOC-03: Delivery Challan → Invoice — skipStockAdjustment prevents 
 });
 
 // =============================================================================
-// DOC-04: Invoice → Credit Note (stock incremented — returned items)
+// DOC-04: Invoice → Credit Note (financial only — no stock change)
 // =============================================================================
 
-describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", () => {
-  it("creates a credit note from an invoice and increments stock (items returned)", async () => {
+describe("DOC-04: Invoice → Credit Note — no stock change on conversion", () => {
+  it("creates a credit note from an invoice without changing stock (financial adjustment only)", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
 
@@ -276,7 +276,7 @@ describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", 
 
     expect(await getStockQty(item.id)).toBe("95.000");
 
-    // Convert invoice → credit note (stockEffect=increment — items returned)
+    // Convert invoice → credit note (stockEffect=none — financial adjustment only)
     const converted = await caller.document.convert({
       sourceDocumentId: invoice.id,
       targetDocumentType: "credit_note",
@@ -284,8 +284,8 @@ describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", 
 
     expect(converted.documentType).toBe("credit_note");
 
-    // Stock should be back to 100 (95 + 5 returned)
-    expect(await getStockQty(item.id)).toBe("100.000");
+    // Stock remains at 95 — credit notes don't affect inventory
+    expect(await getStockQty(item.id)).toBe("95.000");
   });
 });
 
@@ -362,7 +362,7 @@ describe("DOC-06: Convert from non-existent source", () => {
 // =============================================================================
 
 describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document lifecycle)", () => {
-  it("stock follows the complete lifecycle: unchanged → decremented → restored", async () => {
+  it("stock follows the complete lifecycle: unchanged → decremented → unchanged (CN is financial)", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
 
@@ -398,12 +398,12 @@ describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document
     });
     expect(await getStockQty(item.id)).toBe("45.000");
 
-    // 3. Convert invoice → credit note (stock restored: 45 + 5 = 50)
+    // 3. Convert invoice → credit note (stock unchanged — CN is financial only)
     const creditNote = await caller.document.convert({
       sourceDocumentId: invoice.id,
       targetDocumentType: "credit_note",
     });
-    expect(await getStockQty(item.id)).toBe("50.000");
+    expect(await getStockQty(item.id)).toBe("45.000");
 
     // Verify the chain of references
     const [inv] = await db.select({ refId: invoices.referenceDocumentId })

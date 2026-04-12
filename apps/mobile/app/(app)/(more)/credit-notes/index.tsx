@@ -114,7 +114,7 @@ export default function CreditNotesScreen() {
 
       <View style={styles.infoBox}>
         <Ionicons name="information-circle-outline" size={16} color={colors.info} />
-        <Text style={styles.infoText}>Stock is incremented on creation (returns)</Text>
+        <Text style={styles.infoText}>Financial adjustment only — does not affect stock</Text>
       </View>
 
       <View style={styles.searchWrap}>

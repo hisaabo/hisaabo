@@ -525,14 +525,21 @@ export default function PartyDetailScreen() {
                   </Text>
                 </View>
                 {ledgerData.data.map((entry, idx) => {
-                  const isTappable = entry.type === "invoice" || entry.type === "payment";
+                  const docTypes = ["invoice", "credit_note", "sales_return", "purchase_return", "debit_note"];
+                  const isTappable = docTypes.includes(entry.type) || entry.type === "payment";
+                  const docRoutes: Record<string, string> = {
+                    invoice: "/(invoices)/",
+                    credit_note: "/(more)/credit-notes/",
+                    sales_return: "/(more)/sales-returns/",
+                    debit_note: "/(invoices)/",
+                    purchase_return: "/(invoices)/",
+                  };
                   const handleLedgerRowPress = () => {
-                    if (entry.type === "invoice") {
-                      haptic.light();
-                      router.push(`/(invoices)/${entry.documentId}`);
-                    } else if (entry.type === "payment") {
-                      haptic.light();
+                    haptic.light();
+                    if (entry.type === "payment") {
                       router.push(`/(more)/payments/${entry.documentId}`);
+                    } else if (docRoutes[entry.type]) {
+                      router.push(`${docRoutes[entry.type]}${entry.documentId}` as never);
                     }
                   };
                   return isTappable ? (
@@ -546,9 +553,9 @@ export default function PartyDetailScreen() {
                         <View
                           style={[
                             styles.ledgerTypeIcon,
-                            entry.type === "invoice" || entry.type === "purchase"
-                              ? styles.ledgerTypeIconInvoice
-                              : styles.ledgerTypeIconPayment,
+                            entry.type === "payment"
+                              ? styles.ledgerTypeIconPayment
+                              : styles.ledgerTypeIconInvoice,
                           ]}
                         >
                           <Ionicons

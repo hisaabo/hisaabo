@@ -310,7 +310,7 @@ export async function generateGSTR1(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      eq(invoices.documentType, "credit_note"),
+      inArray(invoices.documentType, ["credit_note", "sales_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),
@@ -332,7 +332,7 @@ export async function generateGSTR1(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      eq(invoices.documentType, "debit_note"),
+      inArray(invoices.documentType, ["debit_note", "purchase_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       gte(invoices.invoiceDate, startDate),

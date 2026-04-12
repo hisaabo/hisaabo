@@ -21,7 +21,7 @@ export const creditNoteRouter = createDocumentRouter({
   prefixColumn: "creditNotePrefix",
   counterColumn: "nextCreditNoteNumber",
   allowedStatuses: ["draft", "sent", "paid", "cancelled"],
-  stockEffect: "increment", // returning items to stock
+  stockEffect: "none", // financial adjustment only — no stock change
 });
 
 export const debitNoteRouter = createDocumentRouter({

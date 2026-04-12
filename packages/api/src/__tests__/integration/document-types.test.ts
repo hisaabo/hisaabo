@@ -331,11 +331,11 @@ describe("delivery_challan via document factory", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CREDIT NOTE — stockEffect: "increment", prefix: business.creditNotePrefix ("CN")
+// CREDIT NOTE — stockEffect: "none" (financial adjustment only), prefix: business.creditNotePrefix ("CN")
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("credit_note via document factory", () => {
-  it("creditNote.create generates CN- prefix and INCREMENTS stock (items returned to stock)", async () => {
+  it("creditNote.create generates CN- prefix and does NOT change stock (financial only)", async () => {
     const caller = createTestCaller({
       userId: world.ramesh.id,
       email: world.ramesh.email,
@@ -354,10 +354,10 @@ describe("credit_note via document factory", () => {
     expect(doc.documentType).toBe("credit_note");
 
     const stockAfter = await getStockQty(world.tenantDb, stockItemIncrement.id);
-    expect(stockAfter).toBeCloseTo(stockBefore + 8, 3);
+    expect(stockAfter).toBeCloseTo(stockBefore, 3); // no stock change
   });
 
-  it("creditNote.delete reverses stock increment — stock decremented on delete", async () => {
+  it("creditNote.delete does not affect stock (was financial only)", async () => {
     const caller = createTestCaller({
       userId: world.ramesh.id,
       email: world.ramesh.email,
@@ -373,12 +373,12 @@ describe("credit_note via document factory", () => {
     );
 
     const stockAfterCreate = await getStockQty(world.tenantDb, stockItemIncrement.id);
-    expect(stockAfterCreate).toBeCloseTo(stockBefore + 5, 3);
+    expect(stockAfterCreate).toBeCloseTo(stockBefore, 3); // no change
 
     await caller.creditNote.delete({ id: doc.id });
 
     const stockAfterDelete = await getStockQty(world.tenantDb, stockItemIncrement.id);
-    expect(stockAfterDelete).toBeCloseTo(stockBefore, 3);
+    expect(stockAfterDelete).toBeCloseTo(stockBefore, 3); // still no change
   });
 
   it("creditNote.list returns only credit_note documents", async () => {
