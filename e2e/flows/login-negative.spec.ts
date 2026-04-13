@@ -13,7 +13,7 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/login");
-    await page.waitForTimeout(1000);
+    await page.getByPlaceholder("you@yourcompany.com").waitFor({ state: "visible", timeout: 10_000 });
 
     // Should show Hisaabo branding
     await expect(page.getByText("Hisaabo").first()).toBeVisible();
@@ -36,11 +36,10 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/login");
-    await page.waitForTimeout(1000);
+    await page.getByPlaceholder("you@yourcompany.com").waitFor({ state: "visible", timeout: 10_000 });
 
     // Switch to password mode
     await page.getByText(/use password instead/i).first().click();
-    await page.waitForTimeout(500);
 
     // Should now show password field
     await expect(page.getByPlaceholder("Min 8 characters")).toBeVisible();
@@ -57,11 +56,10 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/login");
-    await page.waitForTimeout(1000);
+    await page.getByPlaceholder("you@yourcompany.com").waitFor({ state: "visible", timeout: 10_000 });
 
     // Switch to password mode
     await page.getByText(/use password instead/i).first().click();
-    await page.waitForTimeout(500);
 
     // Fill in email and wrong password
     await page.getByPlaceholder("you@yourcompany.com").fill("nonexistent-user@test.hisaabo.in");
@@ -69,7 +67,6 @@ test.describe("Login Negative Paths", () => {
 
     // Click Sign in
     await page.getByRole("button", { name: /sign in/i }).first().click();
-    await page.waitForTimeout(2000);
 
     // Should show error message (e.g., "Invalid credentials", "Invalid email or password", etc.)
     const hasError = await page.getByText(/invalid|error|incorrect|wrong|not found|failed/i).first().isVisible().catch(() => false);
@@ -85,13 +82,11 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/login");
-    await page.waitForTimeout(1000);
+    await page.getByPlaceholder("you@yourcompany.com").waitFor({ state: "visible", timeout: 10_000 });
 
     // Switch to password mode then register
     await page.getByText(/use password instead/i).first().click();
-    await page.waitForTimeout(500);
     await page.getByText(/create one/i).first().click();
-    await page.waitForTimeout(500);
 
     // Should show register form
     await expect(page.getByPlaceholder("Your name")).toBeVisible();
@@ -105,7 +100,6 @@ test.describe("Login Negative Paths", () => {
 
     // Click Create account
     await page.getByRole("button", { name: /create account/i }).first().click();
-    await page.waitForTimeout(1000);
 
     // Should show error about password mismatch
     const hasError = await page.getByText(/match|mismatch|same|don't match|do not match/i).first().isVisible().catch(() => false);
@@ -120,10 +114,7 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/invoices");
-    await page.waitForTimeout(3000);
-
-    // Should be redirected to login
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 
     await page.close();
     await ctx.close();
@@ -134,9 +125,7 @@ test.describe("Login Negative Paths", () => {
     const page = await ctx.newPage();
 
     await page.goto("/parties");
-    await page.waitForTimeout(3000);
-
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 
     await page.close();
     await ctx.close();

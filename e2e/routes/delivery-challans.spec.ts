@@ -94,16 +94,12 @@ test.describe("Delivery Challans — Interaction", () => {
 
   test("status tabs filter the list", async ({ page }) => {
     await page.getByRole("button", { name: /^draft$/i }).click();
-    await page.waitForTimeout(500);
     await page.getByRole("button", { name: /^all$/i }).click();
   });
 
   test("type toggle switches between Sales and Purchases", async ({ page }) => {
     await page.getByText("Sales").click();
-    await page.waitForTimeout(300);
-
     await page.getByText("Purchases").click();
-    await page.waitForTimeout(300);
   });
 
   test("clicking a row opens detail panel", async ({ page }) => {

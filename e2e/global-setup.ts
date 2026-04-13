@@ -11,8 +11,10 @@
 import { test as setup, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
+import type { GlobalSeed } from "./helpers/seed";
 
 const AUTH_FILE = path.join(__dirname, ".auth", "user.json");
+const SEED_FILE = path.join(__dirname, ".auth", "seed.json");
 
 setup("authenticate", async ({ page, request }) => {
   // Ensure .auth directory exists
@@ -55,7 +57,8 @@ setup("authenticate", async ({ page, request }) => {
     data: {
       json: {
         name: "E2E Test Business",
-        gstRegistrationType: "unregistered",
+        gstRegistrationType: "regular",
+        gstin: "27AABCE2E00R1ZM",
         pan: "AAACE0000A",
         phone: "9876500000",
         email: email,
@@ -71,7 +74,65 @@ setup("authenticate", async ({ page, request }) => {
 
   expect(createBizRes.ok(), `business.create failed: ${await createBizRes.text()}`).toBeTruthy();
 
-  // ── Step 3: Verify we're in the main app ──────────────────────
+  const bizData = await createBizRes.json();
+  const businessId = bizData.result?.data?.json?.id ?? bizData.result?.data?.id;
+
+  // ── Step 3: Seed a standard party + item ──────────────────────
+  const partyName = "E2E Standard Customer";
+  const itemName = "E2E Standard Product";
+
+  const createPartyRes = await request.post(`${apiUrl}/api/trpc/party.create`, {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "hisaabo",
+      Cookie: cookieHeader,
+      "x-business-id": businessId,
+    },
+    data: {
+      json: {
+        name: partyName,
+        type: "customer",
+        phone: "9123400000",
+        gstin: "",
+        state: "Maharashtra",
+        stateCode: "27",
+      },
+    },
+  });
+  expect(createPartyRes.ok(), `party.create failed: ${await createPartyRes.text()}`).toBeTruthy();
+  const partyData = await createPartyRes.json();
+  const partyId = partyData.result?.data?.json?.id ?? partyData.result?.data?.id;
+
+  const createItemRes = await request.post(`${apiUrl}/api/trpc/item.create`, {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "hisaabo",
+      Cookie: cookieHeader,
+      "x-business-id": businessId,
+    },
+    data: {
+      json: {
+        name: itemName,
+        hsn: "5208",
+        unit: "pcs",
+        itemMode: "simple",
+        salePrice: "500.00",
+        purchasePrice: "400.00",
+        taxPercent: "18.00",
+        itemType: "product",
+        taxInclusive: false,
+      },
+    },
+  });
+  expect(createItemRes.ok(), `item.create failed: ${await createItemRes.text()}`).toBeTruthy();
+  const itemData = await createItemRes.json();
+  const itemId = itemData.result?.data?.json?.id ?? itemData.result?.data?.id;
+
+  // Write seed IDs for tests to read
+  const seed: GlobalSeed = { businessId, partyId, itemId, partyName, itemName };
+  fs.writeFileSync(SEED_FILE, JSON.stringify(seed, null, 2));
+
+  // ── Step 4: Verify we're in the main app ──────────────────────
   // Reload to pick up the new business
   await page.goto("/invoices");
   await expect(page.locator("h1").first()).toContainText("Invoices", { timeout: 10_000 });

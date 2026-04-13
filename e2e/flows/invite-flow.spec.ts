@@ -12,11 +12,9 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Invite Flow — Team Tab", () => {
   test("owner can navigate to Settings > Team tab", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForTimeout(500);
 
     // Click the Team tab in settings nav
     await page.getByText("Team").first().click();
-    await page.waitForTimeout(500);
 
     // Should see the team section with invite button
     await expect(page.getByRole("button", { name: /invite/i }).first()).toBeVisible();
@@ -24,10 +22,8 @@ test.describe("Invite Flow — Team Tab", () => {
 
   test("invite modal has email and role fields", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForTimeout(500);
 
     await page.getByText("Team").first().click();
-    await page.waitForTimeout(500);
 
     // Click Invite button
     await page.getByRole("button", { name: /invite/i }).first().click();
@@ -52,10 +48,8 @@ test.describe("Invite Flow — Team Tab", () => {
 
   test("sending invite shows invite link", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForTimeout(500);
 
     await page.getByText("Team").first().click();
-    await page.waitForTimeout(500);
 
     await page.getByRole("button", { name: /invite/i }).first().click();
     const modal = page.locator('[role="dialog"]').first();
@@ -83,10 +77,8 @@ test.describe("Invite Flow — Team Tab", () => {
 
   test("pending invitation appears in team list", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForTimeout(500);
 
     await page.getByText("Team").first().click();
-    await page.waitForTimeout(500);
 
     // Look for a "Pending" section or badge
     // The TeamTab shows pending invitations with email and role

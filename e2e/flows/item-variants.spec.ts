@@ -12,19 +12,16 @@
  *   - The item.create API derives itemMode from variantAttributes: if variantAttributes.length > 0
  *     the server stores itemMode = "variants". No need to pass itemMode explicitly.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
-import { ensureBusiness } from "../helpers/seed";
+import { test, expect } from "../helpers/fixtures";
+import { loadSeed, SeedApi } from "../helpers/seed";
 
 let businessId: string;
 let variantItemName: string;
 let variantItemCreated = false;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
 
   const ts = Date.now();
   variantItemName = `Variant Shirt ${ts}`;
@@ -72,9 +69,6 @@ test.beforeAll(async ({ browser }) => {
       variantItemCreated = false;
     }
   }
-
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Item Variants Flow", () => {
@@ -86,7 +80,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     // At least one row should appear and the item name should be visible
     const rows = page.locator("tbody tr");
@@ -102,7 +95,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -126,7 +118,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -151,7 +142,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -164,7 +154,6 @@ test.describe("Item Variants Flow", () => {
 
     // Click the Price History tab
     await panel.getByRole("button", { name: /price history/i }).first().click();
-    await page.waitForTimeout(500);
 
     // After clicking, the tab should remain visible (no crash, no unmount)
     await expect(panel.getByRole("button", { name: /price history/i }).first()).toBeVisible();
@@ -178,7 +167,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -191,7 +179,6 @@ test.describe("Item Variants Flow", () => {
 
     // Click the Stock Movements tab
     await panel.getByRole("button", { name: /stock movements/i }).first().click();
-    await page.waitForTimeout(500);
 
     // Tab should remain visible and panel should not crash
     await expect(panel.getByRole("button", { name: /stock movements/i }).first()).toBeVisible();
@@ -205,7 +192,6 @@ test.describe("Item Variants Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

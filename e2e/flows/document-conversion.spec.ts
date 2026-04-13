@@ -14,10 +14,9 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Document Conversion Flow", () => {
   test("quotations page has convert action available", async ({ page }) => {
     await page.goto("/quotations");
-    await page.waitForTimeout(1000);
 
     // Verify quotations page loads with the correct header
-    await expect(page.getByText("Quotations").first()).toBeVisible();
+    await expect(page.getByText("Quotations").first()).toBeVisible({ timeout: 10_000 });
 
     // Verify the create button exists
     await expect(
@@ -38,9 +37,8 @@ test.describe("Document Conversion Flow", () => {
     page,
   }) => {
     await page.goto("/delivery-challans");
-    await page.waitForTimeout(1000);
 
-    await expect(page.getByText("Delivery Challans").first()).toBeVisible();
+    await expect(page.getByText("Delivery Challans").first()).toBeVisible({ timeout: 10_000 });
 
     await expect(
       page.getByRole("button", { name: /new.*challan/i }).first(),
@@ -51,9 +49,8 @@ test.describe("Document Conversion Flow", () => {
     page,
   }) => {
     await page.goto("/proforma-invoices");
-    await page.waitForTimeout(1000);
 
-    await expect(page.getByText("Proforma").first()).toBeVisible();
+    await expect(page.getByText("Proforma").first()).toBeVisible({ timeout: 10_000 });
 
     await expect(
       page.getByRole("button", { name: /new.*proforma/i }).first(),
@@ -62,9 +59,8 @@ test.describe("Document Conversion Flow", () => {
 
   test("sales returns page loads correctly", async ({ page }) => {
     await page.goto("/sales-returns");
-    await page.waitForTimeout(1000);
 
-    await expect(page.getByText("Sales Returns").first()).toBeVisible();
+    await expect(page.getByText("Sales Returns").first()).toBeVisible({ timeout: 10_000 });
 
     await expect(
       page.getByRole("button", { name: /new.*sales.*return/i }).first(),

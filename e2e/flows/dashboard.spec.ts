@@ -71,7 +71,6 @@ test.describe("Dashboard Flow", () => {
   test("switching date preset to Last Month refetches data", async ({ page }) => {
     // Click "Last Month" preset and verify the button becomes active (no crash)
     await page.getByRole("button", { name: "Last Month" }).first().click();
-    await page.waitForTimeout(500); // allow query refetch
 
     // Page should still show Dashboard heading — no error state
     await expect(page.locator("h1").first()).toContainText("Dashboard");
@@ -81,7 +80,6 @@ test.describe("Dashboard Flow", () => {
 
   test("switching date preset to This FY refetches data", async ({ page }) => {
     await page.getByRole("button", { name: "This FY" }).first().click();
-    await page.waitForTimeout(500);
 
     await expect(page.locator("h1").first()).toContainText("Dashboard");
     await expect(page.getByText("Net Profit").first()).toBeVisible();

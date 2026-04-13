@@ -6,7 +6,103 @@
  * This ensures the full middleware chain (auth, business isolation, etc.)
  * is exercised during seeding.
  */
-import type { ApiHelper } from "./fixtures";
+import fs from "fs";
+import path from "path";
+
+// ── Shared API interface ─────────────────────────────────────────
+
+/** Common interface for ApiHelper (browser-based) and SeedApi (fetch-based). */
+export interface ApiClient {
+  mutate<T = unknown>(procedure: string, input: unknown, headers?: Record<string, string>): Promise<T>;
+  query<T = unknown>(procedure: string, input?: unknown, headers?: Record<string, string>): Promise<T>;
+}
+
+// ── Global seed ──────────────────────────────────────────────────
+
+export interface GlobalSeed {
+  businessId: string;
+  partyId: string;
+  itemId: string;
+  partyName: string;
+  itemName: string;
+}
+
+const SEED_FILE = path.join(__dirname, "../.auth/seed.json");
+const STORAGE_STATE_FILE = path.join(__dirname, "../.auth/user.json");
+
+/**
+ * Load pre-seeded IDs written by global-setup.
+ * Available after the setup project runs.
+ */
+export function loadSeed(): GlobalSeed {
+  return JSON.parse(fs.readFileSync(SEED_FILE, "utf-8"));
+}
+
+// ── Lightweight API for beforeAll seeding ────────────────────────
+
+/**
+ * Lightweight tRPC API client that reads auth cookies from the
+ * storageState file and uses native fetch — no browser needed.
+ * Use in beforeAll blocks instead of spinning up a browser context.
+ */
+export class SeedApi implements ApiClient {
+  private cookies: string;
+  private baseUrl: string;
+
+  constructor(baseUrl?: string) {
+    this.baseUrl = baseUrl ?? process.env.API_URL ?? "http://localhost:3000";
+    const storageState = JSON.parse(fs.readFileSync(STORAGE_STATE_FILE, "utf-8"));
+    this.cookies = storageState.cookies
+      .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
+      .join("; ");
+  }
+
+  async mutate<T = unknown>(
+    procedure: string,
+    input: unknown,
+    headers?: Record<string, string>,
+  ): Promise<T> {
+    const res = await fetch(`${this.baseUrl}/api/trpc/${procedure}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "hisaabo",
+        Cookie: this.cookies,
+        ...headers,
+      },
+      body: JSON.stringify({ json: input }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`tRPC ${procedure} failed (${res.status}): ${text}`);
+    }
+    const data = await res.json();
+    return data.result?.data?.json ?? data.result?.data ?? data;
+  }
+
+  async query<T = unknown>(
+    procedure: string,
+    input?: unknown,
+    headers?: Record<string, string>,
+  ): Promise<T> {
+    const inputParam = input
+      ? `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`
+      : "";
+    const res = await fetch(`${this.baseUrl}/api/trpc/${procedure}${inputParam}`, {
+      headers: {
+        "X-Requested-With": "hisaabo",
+        Cookie: this.cookies,
+        ...headers,
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`tRPC ${procedure} query failed (${res.status}): ${text}`);
+    }
+    const data = await res.json();
+    return data.result?.data?.json ?? data.result?.data ?? data;
+  }
+}
 
 export interface SeededBusiness {
   id: string;
@@ -38,7 +134,7 @@ export interface SeededInvoice {
  * Ensure the test user has at least one business.
  * Returns the first business from business.list, or creates one if none exist.
  */
-export async function ensureBusiness(api: ApiHelper): Promise<SeededBusiness> {
+export async function ensureBusiness(api: ApiClient): Promise<SeededBusiness> {
   const businesses = await api.query<SeededBusiness[]>("business.list");
   if (businesses.length > 0) return businesses[0];
 
@@ -62,7 +158,7 @@ export async function ensureBusiness(api: ApiHelper): Promise<SeededBusiness> {
  * Create a party (customer) in the active business.
  */
 export async function createParty(
-  api: ApiHelper,
+  api: ApiClient,
   businessId: string,
   overrides: Partial<{
     name: string;
@@ -89,7 +185,7 @@ export async function createParty(
  * Create an item (product) in the active business.
  */
 export async function createItem(
-  api: ApiHelper,
+  api: ApiClient,
   businessId: string,
   overrides: Partial<{
     name: string;
@@ -121,7 +217,7 @@ export async function createItem(
  * Create a sale invoice with one line item via the API.
  */
 export async function createInvoice(
-  api: ApiHelper,
+  api: ApiClient,
   businessId: string,
   partyId: string,
   itemId: string,
@@ -167,7 +263,7 @@ export async function createInvoice(
  * Update an invoice's status via the API.
  */
 export async function updateInvoiceStatus(
-  api: ApiHelper,
+  api: ApiClient,
   businessId: string,
   invoiceId: string,
   status: string,
@@ -182,7 +278,7 @@ export async function updateInvoiceStatus(
 /**
  * Seed a complete test world: business + party + item.
  */
-export async function seedTestWorld(api: ApiHelper) {
+export async function seedTestWorld(api: ApiClient) {
   const business = await ensureBusiness(api);
   const party = await createParty(api, business.id);
   const item = await createItem(api, business.id);
@@ -193,7 +289,7 @@ export async function seedTestWorld(api: ApiHelper) {
  * Seed a test world with an invoice in a specific status.
  */
 export async function seedWorldWithInvoice(
-  api: ApiHelper,
+  api: ApiClient,
   invoiceStatus?: string,
 ) {
   const { business, party, item } = await seedTestWorld(api);
@@ -214,7 +310,7 @@ export interface SeededExpense {
  * Create an expense in the active business.
  */
 export async function createExpense(
-  api: ApiHelper,
+  api: ApiClient,
   businessId: string,
   overrides: Partial<{
     category: string;
@@ -250,7 +346,7 @@ export interface InviteResult {
  * Returns the raw invite token.
  */
 export async function sendInvite(
-  api: ApiHelper,
+  api: ApiClient,
   email: string,
   role: "admin" | "seller_manager" | "seller" | "accountant",
 ): Promise<InviteResult> {

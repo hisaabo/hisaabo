@@ -43,14 +43,12 @@ test.describe("Settings — Presence", () => {
 
   test("renders Documents tab", async ({ page }) => {
     await page.getByText("Documents", { exact: true }).first().click();
-    await page.waitForTimeout(500);
     // Documents tab renders some visible heading or label
     await expect(page.locator("h1, h2, h3, label").first()).toBeVisible();
   });
 
   test("renders Team tab with invite functionality", async ({ page }) => {
     await page.getByText("Team", { exact: true }).first().click();
-    await page.waitForTimeout(500);
     await expect(
       page.getByRole("button", { name: /invite/i }).first(),
     ).toBeVisible();
@@ -58,13 +56,11 @@ test.describe("Settings — Presence", () => {
 
   test("renders Appearance tab", async ({ page }) => {
     await page.getByText("Appearance", { exact: true }).first().click();
-    await page.waitForTimeout(500);
     await expect(page.locator("h1, h2, h3, label").first()).toBeVisible();
   });
 
   test("renders Data tab", async ({ page }) => {
     await page.getByText("Data", { exact: true }).first().click();
-    await page.waitForTimeout(500);
     await expect(
       page.locator("h1, h2, h3, label, button").first(),
     ).toBeVisible();
@@ -72,7 +68,6 @@ test.describe("Settings — Presence", () => {
 
   test("renders Account tab", async ({ page }) => {
     await page.getByText("Account", { exact: true }).first().click();
-    await page.waitForTimeout(500);
     await expect(page.locator("h1, h2, h3, label").first()).toBeVisible();
   });
 });

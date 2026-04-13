@@ -11,7 +11,8 @@
 import { test, expect } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import {
-  ensureBusiness,
+  loadSeed,
+  SeedApi,
   createParty,
   createItem,
   createInvoice,
@@ -22,18 +23,14 @@ let businessId: string;
 let partyId: string;
 let itemId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  const seed = loadSeed();
+  businessId = seed.businessId;
+  const api = new SeedApi();
   const party = await createParty(api, businessId, { name: "Payment Test Customer" });
   partyId = party.id;
   const item = await createItem(api, businessId, { name: "Payment Test Widget", salePrice: "1000.00" });
   itemId = item.id;
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Payments — Record Payment Panel", () => {
@@ -45,7 +42,6 @@ test.describe("Payments — Record Payment Panel", () => {
 
     // Open invoice detail
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -54,7 +50,6 @@ test.describe("Payments — Record Payment Panel", () => {
     await panel.getByRole("button", { name: /record.*payment/i }).click();
 
     // Invoice detail closes, payment panel opens
-    await page.waitForTimeout(1000);
     const paymentPanel = page.locator('[role="dialog"]').first();
     await expect(paymentPanel).toBeVisible({ timeout: 5_000 });
 
@@ -69,13 +64,11 @@ test.describe("Payments — Record Payment Panel", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
     await panel.getByRole("button", { name: /record.*payment/i }).click();
 
-    await page.waitForTimeout(1000);
     const paymentPanel = page.locator('[role="dialog"]').first();
     await expect(paymentPanel).toBeVisible({ timeout: 5_000 });
 
@@ -85,7 +78,6 @@ test.describe("Payments — Record Payment Panel", () => {
 
   test("Record Payment button on payments page opens panel", async ({ page }) => {
     await page.goto("/payments");
-    await page.waitForTimeout(1000);
 
     // Click "Record Payment" in header
     await page.getByRole("button", { name: /record payment/i }).first().click();
@@ -104,7 +96,6 @@ test.describe("Payments — Record Payment Panel", () => {
 test.describe("Payments — Payment Detail", () => {
   test("payment detail panel shows payment info and linked invoice", async ({ page }) => {
     await page.goto("/payments");
-    await page.waitForTimeout(1000);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

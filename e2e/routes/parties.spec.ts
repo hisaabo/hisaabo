@@ -64,20 +64,17 @@ test.describe("Parties — Interaction", () => {
     await parties.closeModal();
   });
 
-  test("type filter switches between All, Customers, Suppliers", async ({ page }) => {
+  test("type filter switches between All, Customers, Suppliers", async () => {
     await parties.clickTypeTab("Customers");
-    await page.waitForTimeout(300);
 
     await parties.clickTypeTab("Suppliers");
-    await page.waitForTimeout(300);
 
     await parties.clickTypeTab("All");
   });
 
-  test("search input filters parties", async ({ page }) => {
+  test("search input filters parties", async () => {
     const initialRows = await parties.rowCount();
     await parties.searchParties("nonexistent-party-xyz-99999");
-    await page.waitForTimeout(500);
     // Should show fewer or equal results after searching for nonsense
     const rows = await parties.rowCount();
     expect(rows).toBeLessThanOrEqual(initialRows);

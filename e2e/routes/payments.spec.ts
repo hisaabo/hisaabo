@@ -53,18 +53,15 @@ test.describe("Payments — Interaction", () => {
     await payments.goto();
   });
 
-  test("date preset buttons switch the date range", async ({ page }) => {
+  test("date preset buttons switch the date range", async () => {
     await payments.clickTypeTab("Last Month");
-    await page.waitForTimeout(300);
 
     await payments.clickTypeTab("This Month");
-    await page.waitForTimeout(300);
   });
 
-  test("search input filters payments", async ({ page }) => {
+  test("search input filters payments", async () => {
     const initialRows = await payments.rowCount();
     await payments.searchPayments("nonexistent-payment-xyz");
-    await page.waitForTimeout(500);
     // Should show fewer or equal results after searching for nonsense
     const rows = await payments.rowCount();
     expect(rows).toBeLessThanOrEqual(initialRows);

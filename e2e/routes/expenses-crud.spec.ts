@@ -10,16 +10,13 @@
  */
 import { test, expect } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
-import { ensureBusiness, createExpense } from "../helpers/seed";
+import { loadSeed, SeedApi, createExpense } from "../helpers/seed";
 
 let businessId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
   // Seed one expense so edit/delete tests always have a row to work with
   await createExpense(api, businessId, {
     category: "CRUD Test Category",
@@ -27,8 +24,6 @@ test.beforeAll(async ({ browser }) => {
     amount: "999.00",
     mode: "cash",
   });
-  await page.close();
-  await ctx.close();
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -38,7 +33,6 @@ test.beforeAll(async ({ browser }) => {
 test.describe("Expenses — Create", () => {
   test("create expense with all fields, verify it appears in list", async ({ page }) => {
     await page.goto("/expenses");
-    await page.waitForTimeout(500);
 
     // Open slide-over
     await page.getByRole("button", { name: /new expense/i }).first().click();
@@ -63,7 +57,6 @@ test.describe("Expenses — Create", () => {
 
     // Search for the newly created category and confirm it appears in the list
     await page.getByPlaceholder(/search category or description/i).fill(uniqueCategory);
-    await page.waitForTimeout(500);
     const row = page.locator("tbody tr").first();
     await expect(row).toContainText(uniqueCategory);
   });
@@ -76,7 +69,6 @@ test.describe("Expenses — Create", () => {
 test.describe("Expenses — Edit", () => {
   test("clicking edit button opens slide-over with title 'Edit Expense'", async ({ page }) => {
     await page.goto("/expenses");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -93,7 +85,6 @@ test.describe("Expenses — Edit", () => {
 
   test("editing amount and saving persists changes", async ({ page }) => {
     await page.goto("/expenses");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -126,7 +117,6 @@ test.describe("Expenses — Edit", () => {
 test.describe("Expenses — Delete", () => {
   test("delete button opens delete confirmation dialog", async ({ page }) => {
     await page.goto("/expenses");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -152,11 +142,9 @@ test.describe("Expenses — Delete", () => {
     });
 
     await page.goto("/expenses");
-    await page.waitForTimeout(500);
 
     // Search for the seeded expense to isolate it
     await page.getByPlaceholder(/search category or description/i).fill("DeleteMe Category");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -174,7 +162,6 @@ test.describe("Expenses — Delete", () => {
 
     // Dialog should close and list should update
     await expect(confirmDialog).not.toBeVisible({ timeout: 10_000 });
-    await page.waitForTimeout(500);
 
     // The deleted row should no longer appear
     const remainingRows = await page.locator("tbody tr").count();

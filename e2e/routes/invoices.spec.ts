@@ -9,25 +9,15 @@
  */
 import { test, expect } from "../helpers/fixtures";
 import { InvoicesPage } from "../helpers/page-objects/invoices.page";
-import { ensureBusiness, createParty, createItem } from "../helpers/seed";
+import { loadSeed, SeedApi, createParty, createItem } from "../helpers/seed";
 
 // ── Shared state seeded once for the entire file ──────────────────
 let businessId: string;
 
-test.beforeAll(async ({ browser }) => {
-  // Seed a business + party + item via API for mutation tests.
-  // We use a fresh browser context to get auth cookies.
-  const ctx = await browser.newContext({
-    storageState: "e2e/.auth/user.json",
-  });
-  const page = await ctx.newPage();
-
-  // Import ApiHelper manually for seeding
-  const { ApiHelper } = await import("../helpers/fixtures");
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  const seed = loadSeed();
+  businessId = seed.businessId;
+  const api = new SeedApi();
 
   // Seed a party and item for invoice creation tests
   await createParty(api, businessId, { name: "Invoice Test Customer" });
@@ -36,9 +26,6 @@ test.beforeAll(async ({ browser }) => {
     salePrice: "1000.00",
     taxPercent: "18.00",
   });
-
-  await page.close();
-  await ctx.close();
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -116,20 +103,18 @@ test.describe("Invoices — Interaction", () => {
     await expect(page.getByText("Sales").first()).toBeVisible();
   });
 
-  test("status tabs filter the list", async ({ page }) => {
+  test("status tabs filter the list", async () => {
     // Click "Draft" tab
     await invoices.clickStatusTab("Draft");
     // The tab should appear selected/active
-    await page.waitForTimeout(500); // Allow query to refetch
 
     // Click "All" to reset
     await invoices.clickStatusTab("All");
   });
 
-  test("search input filters invoices", async ({ page }) => {
+  test("search input filters invoices", async () => {
     const initialRows = await invoices.rowCount();
     await invoices.searchInvoices("nonexistent-invoice-xyz");
-    await page.waitForTimeout(500); // debounce
 
     // Should show fewer or equal results after searching for nonsense
     const rows = await invoices.rowCount();

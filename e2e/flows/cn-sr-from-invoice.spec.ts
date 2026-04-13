@@ -9,10 +9,10 @@
  *
  * Also verifies that CN/SR buttons disappear once invoice is fully adjusted.
  */
-import { test, expect } from "../helpers/fixtures";
-import { ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper } from "../helpers/fixtures";
 import {
-  ensureBusiness,
+  loadSeed,
+  SeedApi,
   createParty,
   createItem,
   createInvoice,
@@ -23,18 +23,13 @@ let businessId: string;
 let partyId: string;
 let itemId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
   const party = await createParty(api, businessId, { name: "CN/SR Test Customer" });
   partyId = party.id;
   const item = await createItem(api, businessId, { name: "CN/SR Test Widget", salePrice: "1000.00" });
   itemId = item.id;
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Issue Credit Note from Invoice", () => {
@@ -46,7 +41,6 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     // Open invoice detail
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -54,8 +48,7 @@ test.describe("Issue Credit Note from Invoice", () => {
     // Click "Issue Credit Note"
     await panel.getByRole("button", { name: /issue.*credit.*note/i }).click();
 
-    // Wait for panel to close and creator to open
-    await page.waitForTimeout(1000);
+    // Wait for creator to open
     const creator = page.locator('[role="dialog"]').first();
     await expect(creator).toBeVisible({ timeout: 5_000 });
 
@@ -77,7 +70,6 @@ test.describe("Issue Credit Note from Invoice", () => {
     // Leave as draft — don't update status
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -94,7 +86,6 @@ test.describe("Issue Credit Note from Invoice", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "cancelled");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -112,7 +103,6 @@ test.describe("Create Sales Return from Invoice", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -120,7 +110,6 @@ test.describe("Create Sales Return from Invoice", () => {
     // Click "Create Sales Return"
     await panel.getByRole("button", { name: /create.*sales.*return/i }).click();
 
-    await page.waitForTimeout(1000);
     const creator = page.locator('[role="dialog"]').first();
     await expect(creator).toBeVisible({ timeout: 5_000 });
 
@@ -136,7 +125,6 @@ test.describe("Create Sales Return from Invoice", () => {
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -154,7 +142,6 @@ test.describe("CN/SR Button Visibility — Status Matrix", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -169,7 +156,6 @@ test.describe("CN/SR Button Visibility — Status Matrix", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "paid");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -185,7 +171,6 @@ test.describe("CN/SR Button Visibility — Status Matrix", () => {
     await updateInvoiceStatus(api, businessId, invoice.id, "partial");
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });

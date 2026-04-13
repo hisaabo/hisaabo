@@ -65,20 +65,17 @@ test.describe("Items — Interaction", () => {
     await items.closeModal();
   });
 
-  test("type filter switches between All, Products, and Services", async ({ page }) => {
+  test("type filter switches between All, Products, and Services", async () => {
     await items.clickTypeTab("Products");
-    await page.waitForTimeout(300);
 
     await items.clickTypeTab("Services");
-    await page.waitForTimeout(300);
 
     await items.clickTypeTab("All");
   });
 
-  test("search input filters items", async ({ page }) => {
+  test("search input filters items", async () => {
     const initialRows = await items.rowCount();
     await items.searchItems("nonexistent-item-xyz-12345");
-    await page.waitForTimeout(500); // debounce
     // Should show fewer or equal results after searching for nonsense
     const rows = await items.rowCount();
     expect(rows).toBeLessThanOrEqual(initialRows);

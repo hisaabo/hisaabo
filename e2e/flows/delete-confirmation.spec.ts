@@ -6,7 +6,7 @@
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
 import {
-  ensureBusiness,
+  loadSeed,
   createParty,
   createItem,
   createInvoice,
@@ -15,21 +15,15 @@ import {
 
 let businessId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
-  await page.close();
-  await ctx.close();
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
 });
 
 test.describe("Delete Confirmation Flows", () => {
   test("delete expense shows confirmation dialog", async ({ page }) => {
     // Seed an expense
     const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-    const expense = await createExpense(api, businessId, {
+    await createExpense(api, businessId, {
       category: `Delete Test ${Date.now()}`,
       amount: "100.00",
     });
@@ -37,7 +31,6 @@ test.describe("Delete Confirmation Flows", () => {
     await page.goto("/expenses");
     await page.locator(".animate-pulse").first()
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(500);
 
     // Find expense row and hover to reveal actions
     const rows = page.locator("tbody tr");
@@ -45,7 +38,6 @@ test.describe("Delete Confirmation Flows", () => {
     test.skip(rowCount === 0, "No expense rows visible");
 
     await rows.first().hover();
-    await page.waitForTimeout(300);
 
     // Click delete button
     const deleteBtn = rows.first().locator('[aria-label="Delete expense"]');
@@ -68,14 +60,12 @@ test.describe("Delete Confirmation Flows", () => {
     await page.goto("/expenses");
     await page.locator(".animate-pulse").first()
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const initialCount = await rows.count();
     test.skip(initialCount === 0, "No expense rows");
 
     await rows.first().hover();
-    await page.waitForTimeout(300);
 
     const deleteBtn = rows.first().locator('[aria-label="Delete expense"]');
     const isVisible = await deleteBtn.isVisible().catch(() => false);
@@ -88,7 +78,6 @@ test.describe("Delete Confirmation Flows", () => {
 
     // Click Cancel
     await page.getByRole("button", { name: /cancel|no/i }).first().click();
-    await page.waitForTimeout(500);
 
     // Row count should be same
     const afterCount = await rows.count();
@@ -105,14 +94,12 @@ test.describe("Delete Confirmation Flows", () => {
     await page.goto("/expenses");
     await page.locator(".animate-pulse").first()
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const initialCount = await rows.count();
     test.skip(initialCount === 0, "No expense rows");
 
     await rows.first().hover();
-    await page.waitForTimeout(300);
 
     const deleteBtn = rows.first().locator('[aria-label="Delete expense"]');
     const isVisible = await deleteBtn.isVisible().catch(() => false);
@@ -124,11 +111,9 @@ test.describe("Delete Confirmation Flows", () => {
     await expect(page.getByText(/delete.*expense|are you sure/i).first()).toBeVisible({ timeout: 5_000 });
     // Click the confirm/delete button (not the cancel)
     await page.getByRole("button", { name: /delete|confirm|yes/i }).last().click();
-    await page.waitForTimeout(1000);
 
     // Row count should decrease
-    const afterCount = await rows.count();
-    expect(afterCount).toBeLessThan(initialCount);
+    await expect(rows).toHaveCount(initialCount - 1, { timeout: 5_000 });
   });
 
   test("draft invoice row shows delete action on hover", async ({ page }) => {
@@ -145,7 +130,6 @@ test.describe("Delete Confirmation Flows", () => {
 
     // Search for the invoice
     await page.getByPlaceholder(/search invoices/i).fill(invoice.invoiceNumber);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").first();
     const count = await row.count();
@@ -153,7 +137,6 @@ test.describe("Delete Confirmation Flows", () => {
 
     // Hover row to reveal actions
     await row.hover();
-    await page.waitForTimeout(300);
 
     // Draft invoice should have a delete button
     const deleteBtn = row.locator('button:has(svg)').last();

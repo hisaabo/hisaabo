@@ -16,7 +16,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("CN/SR Balance Chain", () => {
   test("credit notes page shows reference invoice column", async ({ page }) => {
     await page.goto("/credit-notes");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     // Only assert column when the table actually renders (not empty state)
     const hasTable = await page.locator("thead").count() > 0;
@@ -29,7 +29,7 @@ test.describe("CN/SR Balance Chain", () => {
 
   test("sales returns page shows reference invoice column", async ({ page }) => {
     await page.goto("/sales-returns");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     // Only assert column when the table actually renders (not empty state)
     const hasTable = await page.locator("thead").count() > 0;
@@ -44,7 +44,7 @@ test.describe("CN/SR Balance Chain", () => {
     page,
   }) => {
     await page.goto("/credit-notes");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     // Open the creator
     await page.getByRole("button", { name: /new credit note/i }).first().click();
@@ -62,17 +62,14 @@ test.describe("CN/SR Balance Chain", () => {
   }) => {
     // Start on invoices
     await page.goto("/invoices");
-    await page.waitForTimeout(1000);
-    await expect(page.getByText("Invoices").first()).toBeVisible();
+    await expect(page.getByText("Invoices").first()).toBeVisible({ timeout: 10_000 });
 
     // Navigate to credit notes
     await page.goto("/credit-notes");
-    await page.waitForTimeout(1000);
-    await expect(page.getByText("Credit Notes").first()).toBeVisible();
+    await expect(page.getByText("Credit Notes").first()).toBeVisible({ timeout: 10_000 });
 
     // Navigate back to invoices
     await page.goto("/invoices");
-    await page.waitForTimeout(1000);
-    await expect(page.getByText("Invoices").first()).toBeVisible();
+    await expect(page.getByText("Invoices").first()).toBeVisible({ timeout: 10_000 });
   });
 });

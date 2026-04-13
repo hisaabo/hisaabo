@@ -47,7 +47,6 @@ test.describe("Credit Notes — Presence", () => {
   test("shows empty state when no credit notes exist", async () => {
     // Switch to a filtered state that should be empty
     await cn.clickStatusTab("Cancelled");
-    await cn.page.waitForTimeout(500);
     // May or may not show empty state depending on data
   });
 });
@@ -69,17 +68,14 @@ test.describe("Credit Notes — Interaction", () => {
     await cn.expectCreatorOpen();
   });
 
-  test("type toggle switches between Sales and Purchases", async ({ page }) => {
+  test("type toggle switches between Sales and Purchases", async () => {
     await cn.switchToSales();
-    await page.waitForTimeout(300);
 
     await cn.switchToPurchases();
-    await page.waitForTimeout(300);
   });
 
-  test("status tabs filter the list", async ({ page }) => {
+  test("status tabs filter the list", async () => {
     await cn.clickStatusTab("Draft");
-    await page.waitForTimeout(300);
 
     await cn.clickStatusTab("All");
   });

@@ -90,7 +90,6 @@ test.describe("Sales Returns — Interaction", () => {
 
   test("status tabs filter the list", async ({ page }) => {
     await page.getByRole("button", { name: /^draft$/i }).click();
-    await page.waitForTimeout(500);
     await page.getByRole("button", { name: /^all$/i }).click();
   });
 

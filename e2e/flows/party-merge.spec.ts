@@ -12,19 +12,16 @@
  *   - Submit button text: "Merge & Delete" — disabled until target selected + checkbox confirmed.
  *   - Confirmation checkbox appears after target is selected.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
-import { ensureBusiness, createParty } from "../helpers/seed";
+import { test, expect } from "../helpers/fixtures";
+import { loadSeed, SeedApi, createParty } from "../helpers/seed";
 
 let businessId: string;
 let sourcePartyName: string;
 let targetPartyName: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
 
   const ts = Date.now();
   sourcePartyName = `Merge Source ${ts}`;
@@ -32,9 +29,6 @@ test.beforeAll(async ({ browser }) => {
 
   await createParty(api, businessId, { name: sourcePartyName });
   await createParty(api, businessId, { name: targetPartyName });
-
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Party Merge Flow", () => {
@@ -45,7 +39,6 @@ test.describe("Party Merge Flow", () => {
 
     // Search for the source party to confirm it was seeded
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     await expect(page.getByText(sourcePartyName).first()).toBeVisible({ timeout: 5_000 });
   });
@@ -57,7 +50,6 @@ test.describe("Party Merge Flow", () => {
 
     // Search for source party and click its row
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await expect(row).toBeVisible({ timeout: 5_000 });
@@ -77,7 +69,6 @@ test.describe("Party Merge Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -97,7 +88,6 @@ test.describe("Party Merge Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -129,7 +119,6 @@ test.describe("Party Merge Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -143,7 +132,6 @@ test.describe("Party Merge Flow", () => {
     // Type target name in the search input inside the modal
     const searchInput = page.getByPlaceholder(/search parties/i).first();
     await searchInput.fill(targetPartyName);
-    await page.waitForTimeout(500);
 
     // Click the target party in the dropdown list
     const targetOption = page.getByRole("button", { name: new RegExp(targetPartyName, "i") }).first();
@@ -165,7 +153,6 @@ test.describe("Party Merge Flow", () => {
       .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     const rowCount = await row.count();
@@ -183,7 +170,6 @@ test.describe("Party Merge Flow", () => {
     // Select the target party
     const searchInput = page.getByPlaceholder(/search parties/i).first();
     await searchInput.fill(targetPartyName);
-    await page.waitForTimeout(500);
 
     const targetOption = page.getByRole("button", { name: new RegExp(targetPartyName, "i") }).first();
     await expect(targetOption).toBeVisible({ timeout: 5_000 });
@@ -205,7 +191,6 @@ test.describe("Party Merge Flow", () => {
 
     // Search for the now-deleted source party — it should be gone
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
-    await page.waitForTimeout(800);
     await expect(page.getByText(sourcePartyName)).toHaveCount(0, { timeout: 5_000 });
   });
 });

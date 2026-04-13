@@ -14,7 +14,8 @@
 import { test, expect } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import {
-  ensureBusiness,
+  loadSeed,
+  SeedApi,
   createParty,
   createItem,
   createInvoice,
@@ -25,18 +26,14 @@ let businessId: string;
 let partyId: string;
 let itemId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  const seed = loadSeed();
+  businessId = seed.businessId;
+  const api = new SeedApi();
   const party = await createParty(api, businessId, { name: "Status Test Customer" });
   partyId = party.id;
   const item = await createItem(api, businessId, { name: "Status Test Widget", salePrice: "1000.00" });
   itemId = item.id;
-  await page.close();
-  await ctx.close();
 });
 
 /** Helper: seed an invoice and open its detail panel */
@@ -52,7 +49,6 @@ async function seedAndOpenInvoice(
   }
   // Navigate to invoices with the ?id param to open detail panel directly
   await page.goto(`/invoices?id=${invoice.id}`);
-  await page.waitForTimeout(1500);
   const panel = page.locator('[role="dialog"]').first();
   await expect(panel).toBeVisible({ timeout: 10_000 });
   return { invoiceId: invoice.id, panel };
@@ -99,9 +95,6 @@ test.describe("Invoice Status — Draft", () => {
       .getByRole("button", { name: /mark.*sent/i })
       .or(panel.getByRole("button", { name: /mark sent/i }))
       .click();
-
-    // Wait for status to update
-    await page.waitForTimeout(2_000);
 
     // After marking sent, the "Mark Sent" button should disappear
     // and "Record Payment" should appear
@@ -213,11 +206,9 @@ test.describe("Invoice Table Row Actions", () => {
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto("/invoices");
-    await page.waitForTimeout(1000);
 
     // Search for the specific invoice
     await page.getByPlaceholder(/search invoices/i).fill(invoice.invoiceNumber);
-    await page.waitForTimeout(500);
 
     const row = page.locator("tbody tr").first();
     const count = await row.count();

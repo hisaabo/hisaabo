@@ -14,7 +14,6 @@
 import { test, expect, ApiHelper } from "../helpers/fixtures";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
 
 /** Nav items that each role should see in the sidebar */
 const ROLE_NAV_VISIBLE: Record<string, string[]> = {
@@ -99,7 +98,6 @@ async function createRoleUser(
 
   // Step 3: Visit the invite acceptance page
   await page.goto(`/invite/${invite.token}`);
-  await page.waitForTimeout(3_000);
 
   // The invite page should auto-accept and show "You've joined [org]!"
   // or the user may already be redirected
@@ -109,11 +107,11 @@ async function createRoleUser(
   if (isJoined) {
     // Click "Continue with [org]"
     await page.getByText(/continue with/i).first().click();
-    await page.waitForTimeout(2_000);
+    await expect(page).toHaveURL(/\/(invoices|dashboard|items|parties)/, { timeout: 10_000 });
+  } else {
+    // Already redirected into the app — wait for a known page
+    await expect(page).toHaveURL(/\/(invoices|dashboard|items|parties|settings)/, { timeout: 10_000 });
   }
-
-  // We should now be in the app — wait for any page to load
-  await page.waitForTimeout(2_000);
 
   return { context, page };
 }
@@ -145,7 +143,7 @@ test.describe("Role: Seller", () => {
 
   test("seller sees expected nav items", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -158,7 +156,7 @@ test.describe("Role: Seller", () => {
 
   test("seller does NOT see restricted nav items", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_000);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -171,45 +169,39 @@ test.describe("Role: Seller", () => {
 
   test("seller is redirected from dashboard to invoices", async () => {
     await rolePage.goto("/");
-    await rolePage.waitForTimeout(2_000);
     // Seller can't see Dashboard (no Report:read), should redirect to /invoices
-    await expect(rolePage).toHaveURL(/\/invoices/);
+    await expect(rolePage).toHaveURL(/\/invoices/, { timeout: 10_000 });
   });
 
   test("seller can access invoices page", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Invoices");
+    await expect(rolePage.locator("h1").first()).toContainText("Invoices", { timeout: 10_000 });
   });
 
   test("seller can access items page", async () => {
     await rolePage.goto("/items");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Items");
+    await expect(rolePage.locator("h1").first()).toContainText("Items", { timeout: 10_000 });
   });
 
   test("seller can access parties page", async () => {
     await rolePage.goto("/parties");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Parties");
+    await expect(rolePage.locator("h1").first()).toContainText("Parties", { timeout: 10_000 });
   });
 
   test("seller can access payments page", async () => {
     await rolePage.goto("/payments");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Payments");
+    await expect(rolePage.locator("h1").first()).toContainText("Payments", { timeout: 10_000 });
   });
 
   test("seller does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     // If there are rows, hover and check for absence of delete
     if (count > 0) {
       await rows.first().hover();
-      await rolePage.waitForTimeout(300);
       // Seller should NOT have delete/trash button
       const deleteBtn = rows.first().locator('[aria-label*="delete" i], [aria-label*="Delete" i], [title*="delete" i]');
       await expect(deleteBtn).not.toBeVisible();
@@ -218,13 +210,12 @@ test.describe("Role: Seller", () => {
 
   test("seller does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
-      await rolePage.waitForTimeout(1_000);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {
@@ -278,7 +269,7 @@ test.describe("Role: Accountant", () => {
 
   test("accountant sees expected nav items", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -291,7 +282,7 @@ test.describe("Role: Accountant", () => {
 
   test("accountant does NOT see restricted nav items", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_000);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -304,37 +295,32 @@ test.describe("Role: Accountant", () => {
 
   test("accountant can access expenses page", async () => {
     await rolePage.goto("/expenses");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Expenses");
+    await expect(rolePage.locator("h1").first()).toContainText("Expenses", { timeout: 10_000 });
   });
 
   test("accountant can access cash & bank page", async () => {
     await rolePage.goto("/cash-and-bank");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText(/cash|bank/i);
+    await expect(rolePage.locator("h1").first()).toContainText(/cash|bank/i, { timeout: 10_000 });
   });
 
   test("accountant can access reports page", async () => {
     await rolePage.goto("/reports");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Reports");
+    await expect(rolePage.locator("h1").first()).toContainText("Reports", { timeout: 10_000 });
   });
 
   test("accountant can access invoices page", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_000);
-    await expect(rolePage.locator("h1").first()).toContainText("Invoices");
+    await expect(rolePage.locator("h1").first()).toContainText("Invoices", { timeout: 10_000 });
   });
 
   test("accountant does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().hover();
-      await rolePage.waitForTimeout(300);
       const deleteBtn = rows.first().locator('[aria-label*="delete" i], [aria-label*="Delete" i], [title*="delete" i]');
       await expect(deleteBtn).not.toBeVisible();
     }
@@ -342,13 +328,12 @@ test.describe("Role: Accountant", () => {
 
   test("accountant does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
-    await rolePage.waitForTimeout(1_500);
+    await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
-      await rolePage.waitForTimeout(1_000);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {

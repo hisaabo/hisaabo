@@ -9,26 +9,13 @@
  */
 import { test, expect } from "../helpers/fixtures";
 import { ExpensesPage } from "../helpers/page-objects/expenses.page";
-import { ensureBusiness } from "../helpers/seed";
+import { loadSeed } from "../helpers/seed";
 
 // ── Shared state seeded once for the entire file ──────────────────
 let _businessId: string;
 
-test.beforeAll(async ({ browser }) => {
-  // Seed a business via API so mutation tests have a valid context.
-  const ctx = await browser.newContext({
-    storageState: "e2e/.auth/user.json",
-  });
-  const page = await ctx.newPage();
-
-  const { ApiHelper } = await import("../helpers/fixtures");
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-
-  const biz = await ensureBusiness(api);
-  _businessId = biz.id;
-
-  await page.close();
-  await ctx.close();
+test.beforeAll(async () => {
+  _businessId = loadSeed().businessId;
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -90,10 +77,9 @@ test.describe("Expenses — Interaction", () => {
     await expect(expenses.addSlideOver).not.toBeVisible({ timeout: 5_000 });
   });
 
-  test("search input filters expenses", async ({ page }) => {
+  test("search input filters expenses", async () => {
     const initialRows = await expenses.rowCount();
     await expenses.searchExpenses("nonexistent-expense-xyz-12345");
-    await page.waitForTimeout(500); // debounce
 
     const rows = await expenses.rowCount();
     expect(rows).toBeLessThanOrEqual(initialRows);

@@ -7,7 +7,7 @@
  * creator opens with the expected fields.
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
-import { ensureBusiness, createParty, createItem } from "../helpers/seed";
+import { loadSeed, SeedApi, createParty, createItem } from "../helpers/seed";
 
 let businessId: string;
 let partyName: string;
@@ -15,13 +15,9 @@ let item1Name: string;
 let item2Name: string;
 let item3Name: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
 
   const ts = Date.now();
   partyName = `ML-Invoice Customer ${ts}`;
@@ -33,9 +29,6 @@ test.beforeAll(async ({ browser }) => {
   await createItem(api, businessId, { name: item1Name, salePrice: "1000.00", taxPercent: "18.00" });
   await createItem(api, businessId, { name: item2Name, salePrice: "500.00", taxPercent: "12.00" });
   await createItem(api, businessId, { name: item3Name, salePrice: "250.00", taxPercent: "5.00" });
-
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Multi-line Invoice Creation", () => {
@@ -109,7 +102,6 @@ test.describe("Multi-line Invoice Creation", () => {
 
     // Open the invoice detail panel via URL
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -192,7 +184,6 @@ test.describe("Multi-line Invoice Creation", () => {
     );
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });

@@ -12,7 +12,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Invoice Lifecycle Flow", () => {
   test("parties page shows seeded data", async ({ page }) => {
     await page.goto("/parties");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     // Verify the page loads correctly
     await expect(page.locator("h1").first()).toContainText("Parties");
@@ -32,7 +32,7 @@ test.describe("Invoice Lifecycle Flow", () => {
 
   test("items page shows seeded data", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     await expect(page.locator("h1").first()).toContainText("Items");
 
@@ -49,7 +49,7 @@ test.describe("Invoice Lifecycle Flow", () => {
 
   test("invoice creator opens with party and item selectors", async ({ page }) => {
     await page.goto("/invoices");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     await page.getByRole("button", { name: /new invoice/i }).first().click();
     const creator = page.locator('[role="dialog"]').first();
@@ -61,7 +61,7 @@ test.describe("Invoice Lifecycle Flow", () => {
 
   test("invoice detail panel shows all financial fields", async ({ page }) => {
     await page.goto("/invoices");
-    await page.waitForTimeout(1000);
+    await page.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

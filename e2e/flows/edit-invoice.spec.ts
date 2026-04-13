@@ -6,19 +6,15 @@
  * draft status is shown and the invoice number is visible in the panel.
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
-import { ensureBusiness, createParty, createItem, createInvoice } from "../helpers/seed";
+import { loadSeed, SeedApi, createParty, createItem, createInvoice } from "../helpers/seed";
 
 let businessId: string;
 let partyId: string;
 let itemId: string;
 
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
+test.beforeAll(async () => {
+  businessId = loadSeed().businessId;
+  const api = new SeedApi();
 
   const ts = Date.now();
   const party = await createParty(api, businessId, { name: `Edit Test Customer ${ts}` });
@@ -30,9 +26,6 @@ test.beforeAll(async ({ browser }) => {
     taxPercent: "18.00",
   });
   itemId = item.id;
-
-  await page.close();
-  await ctx.close();
 });
 
 test.describe("Edit Invoice Flow", () => {
@@ -42,7 +35,6 @@ test.describe("Edit Invoice Flow", () => {
 
     // Open detail panel via URL query param
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -60,7 +52,6 @@ test.describe("Edit Invoice Flow", () => {
 
     // Open the invoice detail panel
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -69,9 +60,6 @@ test.describe("Edit Invoice Flow", () => {
     const editBtn = panel.getByRole("button", { name: /^edit$/i });
     await expect(editBtn).toBeVisible({ timeout: 5_000 });
     await editBtn.click();
-
-    // Allow the creator/editor slide-over to animate in
-    await page.waitForTimeout(1000);
 
     // After clicking Edit, a dialog (the creator in edit mode) should be visible
     const creator = page.locator('[role="dialog"]').first();
@@ -86,7 +74,6 @@ test.describe("Edit Invoice Flow", () => {
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -94,7 +81,6 @@ test.describe("Edit Invoice Flow", () => {
     const editBtn = panel.getByRole("button", { name: /^edit$/i });
     await expect(editBtn).toBeVisible({ timeout: 5_000 });
     await editBtn.click();
-    await page.waitForTimeout(1000);
 
     const creator = page.locator('[role="dialog"]').first();
     await expect(creator).toBeVisible({ timeout: 5_000 });
@@ -111,7 +97,6 @@ test.describe("Edit Invoice Flow", () => {
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);
-    await page.waitForTimeout(1500);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
@@ -119,11 +104,13 @@ test.describe("Edit Invoice Flow", () => {
     const editBtn = panel.getByRole("button", { name: /^edit$/i });
     await expect(editBtn).toBeVisible({ timeout: 5_000 });
     await editBtn.click();
-    await page.waitForTimeout(1000);
+
+    // Wait for creator to open before dismissing
+    const creator = page.locator('[role="dialog"]').first();
+    await expect(creator).toBeVisible({ timeout: 5_000 });
 
     // Dismiss via Escape
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
 
     // The invoices route should still be active
     await expect(page).toHaveURL(/\/invoices/);

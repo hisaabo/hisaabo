@@ -8,25 +8,10 @@
  *   - Detail panel tabs and content
  */
 import { test, expect } from "../helpers/fixtures";
-import { ensureBusiness } from "../helpers/seed";
-
-let businessId: string;
-
-test.beforeAll(async ({ browser }) => {
-  const ctx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
-  const page = await ctx.newPage();
-  const { ApiHelper } = await import("../helpers/fixtures");
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
-  const biz = await ensureBusiness(api);
-  businessId = biz.id;
-  await page.close();
-  await ctx.close();
-});
 
 test.describe("Items — Create", () => {
   test("create a simple product via Add Item modal", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     // Open Add Item modal
     await page.getByRole("button", { name: /add item/i }).first().click();
@@ -53,14 +38,12 @@ test.describe("Items — Create", () => {
 
     // Verify item appears in the list
     await page.getByPlaceholder(/search items/i).fill(uniqueName);
-    await page.waitForTimeout(500);
     const row = page.locator("tbody tr").first();
     await expect(row).toContainText(uniqueName);
   });
 
   test("create item form validates required name field", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     await page.getByRole("button", { name: /add item/i }).first().click();
     const dialog = page.locator('[role="dialog"]').first();
@@ -79,7 +62,6 @@ test.describe("Items — Create", () => {
 test.describe("Items — Edit", () => {
   test("edit item name and price via detail panel", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     // Click first item to open detail
     const rows = page.locator("tbody tr");
@@ -115,7 +97,6 @@ test.describe("Items — Stock Adjustment", () => {
   test("adjust stock via detail panel → Adjust Stock button", async ({ page }) => {
     // First create a product item so we know it has stock capabilities
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     // Create a dedicated product for stock testing
     await page.getByRole("button", { name: /add item/i }).first().click();
@@ -129,7 +110,6 @@ test.describe("Items — Stock Adjustment", () => {
 
     // Search for it and open detail
     await page.getByPlaceholder(/search items/i).fill(stockItemName);
-    await page.waitForTimeout(500);
     await page.locator("tbody tr").first().click();
 
     const panel = page.locator('[role="dialog"]').first();
@@ -158,14 +138,10 @@ test.describe("Items — Stock Adjustment", () => {
 
     // Submit — the primary "Add Stock" button (second one; first is the tab toggle)
     await page.getByRole("button", { name: /^add stock$/i }).last().click();
-
-    // Wait for success
-    await page.waitForTimeout(2_000);
   });
 
   test("stock adjustment Remove Stock mode works", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -198,7 +174,6 @@ test.describe("Items — Stock Adjustment", () => {
 test.describe("Items — Detail Panel Tabs", () => {
   test("detail panel shows Overview, Price History, Stock Movements tabs", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -215,11 +190,9 @@ test.describe("Items — Detail Panel Tabs", () => {
 
     // Switch to Price History
     await panel.getByText(/price history/i).click();
-    await page.waitForTimeout(300);
 
     // Switch to Stock Movements
     await panel.getByText(/stock movements/i).click();
-    await page.waitForTimeout(300);
 
     // Back to Overview
     await panel.getByText("Overview").click();
@@ -227,7 +200,6 @@ test.describe("Items — Detail Panel Tabs", () => {
 
   test("detail panel overview shows item info fields", async ({ page }) => {
     await page.goto("/items");
-    await page.waitForTimeout(500);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

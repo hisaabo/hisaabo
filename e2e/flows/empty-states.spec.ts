@@ -39,7 +39,6 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search invoices/i).fill(NONSENSE);
-    await page.waitForTimeout(500); // debounce
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -56,7 +55,6 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search/i).first().fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -73,7 +71,6 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search items/i).fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -92,7 +89,6 @@ test.describe("Empty States", () => {
     await page
       .getByPlaceholder(/search category or description/i)
       .fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -114,7 +110,6 @@ test.describe("Empty States", () => {
       .or(page.getByText("Cancelled"))
       .first()
       .click();
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -133,7 +128,6 @@ test.describe("Empty States", () => {
     // Quotations uses the shared DocumentListPage search input
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -156,7 +150,6 @@ test.describe("Empty States", () => {
 
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -177,7 +170,6 @@ test.describe("Empty States", () => {
 
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
-    await page.waitForTimeout(500);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
