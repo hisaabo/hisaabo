@@ -67,7 +67,7 @@ test.describe("Expenses — Interaction", () => {
   test("New Expense button opens Add Expense slide-over", async () => {
     await expenses.clickCreateButton();
     await expenses.expectSlideOverOpen();
-    await expect(expenses.addSlideOver.getByText("Add Expense")).toBeVisible();
+    await expect(expenses.addSlideOver.getByRole("heading", { name: "Add Expense" })).toBeVisible();
   });
 
   test("slide-over closes on Escape", async () => {
@@ -90,7 +90,7 @@ test.describe("Expenses — Interaction", () => {
     await page.locator("body").click();
     await page.keyboard.press("n");
     await expenses.expectSlideOverOpen();
-    await expect(expenses.addSlideOver.getByText("Add Expense")).toBeVisible();
+    await expect(expenses.addSlideOver.getByRole("heading", { name: "Add Expense" })).toBeVisible();
   });
 });
 
@@ -129,7 +129,7 @@ test.describe("Expenses — Mutation", () => {
     // Validation error messages should appear
     const dialog = expenses.addSlideOver;
     await expect(
-      dialog.getByText(/category is required/i).or(dialog.getByText(/valid amount required/i)),
+      dialog.getByText(/category is required/i).first(),
     ).toBeVisible({ timeout: 3_000 });
   });
 

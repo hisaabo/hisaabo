@@ -120,21 +120,18 @@ test.describe("Empty States", () => {
     await page.goto("/quotations");
     await waitForLoad(page);
 
-    // Quotations uses the shared DocumentListPage search input
-    const searchInput = page.getByPlaceholder(/search/i).first();
-    await searchInput.fill(NONSENSE);
-    await waitForSearchResults(page);
+    // Quotations uses DocumentListPage which has no search input.
+    // Use the "Cancelled" status tab to find an empty state instead.
+    await page.getByRole("button", { name: /^cancelled$/i }).click();
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
-      // Accept any reasonable empty-state text
       const emptyVisible = await page
         .getByText(/no.*quotations|no.*found|no results/i)
         .first()
         .waitFor({ state: "visible", timeout: 5_000 })
         .then(() => true)
         .catch(() => false);
-      // If no explicit message, just verify zero rows (already confirmed above)
       expect(rows === 0 || emptyVisible).toBe(true);
     }
   });
@@ -145,9 +142,9 @@ test.describe("Empty States", () => {
     await page.goto("/proforma-invoices");
     await waitForLoad(page);
 
-    const searchInput = page.getByPlaceholder(/search/i).first();
-    await searchInput.fill(NONSENSE);
-    await waitForSearchResults(page);
+    // Proforma invoices uses DocumentListPage which has no search input.
+    // Use the "Cancelled" status tab to find an empty state instead.
+    await page.getByRole("button", { name: /^cancelled$/i }).click();
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {

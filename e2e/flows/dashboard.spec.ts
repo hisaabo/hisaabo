@@ -53,8 +53,8 @@ test.describe("Dashboard Flow", () => {
     await expect(page.getByText("Net Profit").first()).toBeVisible();
   });
 
-  test("dashboard shows Sales Trend chart section", async ({ page }) => {
-    await expect(page.getByText("Sales Trend").first()).toBeVisible();
+  test("dashboard shows Sales & Collections chart section", async ({ page }) => {
+    await expect(page.getByText("Sales & Collections").first()).toBeVisible();
   });
 
   test("dashboard shows Invoice Status chart section", async ({ page }) => {

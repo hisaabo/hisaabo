@@ -55,10 +55,8 @@ test.describe("Settings — Presence", () => {
   });
 
   test("renders Data tab", async ({ page }) => {
-    await page.getByText("Data", { exact: true }).first().click();
-    await expect(
-      page.locator("h1, h2, h3, label, button").first(),
-    ).toBeVisible();
+    await page.getByRole("button", { name: "Data" }).first().click();
+    await expect(page.getByText("Export Data").first()).toBeVisible({ timeout: 5_000 });
   });
 
   test("renders Account tab", async ({ page }) => {

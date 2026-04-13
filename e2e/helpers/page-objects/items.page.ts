@@ -55,7 +55,7 @@ export class ItemsPage extends BasePage {
     const hasTable = await this.page.locator("thead").count() > 0;
     if (!hasTable) return;
 
-    const headers = ["Name", "Price", "Stock", "Unit"];
+    const headers = ["Item", "Sale Price", "Stock", "Unit"];
     for (const h of headers) {
       await expect(
         this.page.locator("thead").getByText(h, { exact: false }).first(),

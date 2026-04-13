@@ -34,8 +34,11 @@ test.describe("Delivery Challans — Presence", () => {
   });
 
   test("renders type toggle (Sales / Purchases)", async ({ page }) => {
-    await expect(page.getByText("Sales")).toBeVisible();
-    await expect(page.getByText("Purchases")).toBeVisible();
+    // "Purchases" only appears in the type toggle (not the sidebar nav),
+    // so asserting it is visible is sufficient to confirm the toggle is rendered.
+    // We then confirm "Sales" is also visible within the same toggle container.
+    await expect(page.getByRole("button", { name: "Purchases" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sales" }).first()).toBeVisible();
   });
 
   test("renders status tabs", async ({ page }) => {
@@ -90,8 +93,9 @@ test.describe("Delivery Challans — Interaction", () => {
   });
 
   test("type toggle switches between Sales and Purchases", async ({ page }) => {
-    await page.getByText("Sales").click();
-    await page.getByText("Purchases").click();
+    // "Sales" appears in the sidebar nav too — use getByRole("button") to target the toggle buttons
+    await page.getByRole("button", { name: "Sales" }).first().click();
+    await page.getByRole("button", { name: "Purchases" }).click();
   });
 
   test("clicking a row opens detail panel", async ({ page }) => {

@@ -38,7 +38,7 @@ test.describe("Expenses — Create", () => {
     await page.getByRole("button", { name: /new expense/i }).first().click();
     const dialog = page.locator('[role="dialog"]').first();
     await expect(dialog).toBeVisible({ timeout: 5_000 });
-    await expect(dialog.getByText("Add Expense")).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Add Expense" })).toBeVisible();
 
     // Fill all fields
     const uniqueCategory = `Fuel ${Date.now()}`;
@@ -81,7 +81,7 @@ test.describe("Expenses — Edit", () => {
 
     const dialog = page.locator('[role="dialog"]').first();
     await expect(dialog).toBeVisible({ timeout: 5_000 });
-    await expect(dialog.getByText("Edit Expense")).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Edit Expense" })).toBeVisible();
   });
 
   test("editing amount and saving persists changes", async ({ page }) => {

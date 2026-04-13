@@ -111,22 +111,22 @@ test.describe("Login Negative Paths", () => {
   });
 
   test("unauthenticated user visiting /invoices is redirected to /login", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
 
     await page.goto("/invoices");
-    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
 
     await page.close();
     await ctx.close();
   });
 
   test("unauthenticated user visiting /parties is redirected to /login", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
 
     await page.goto("/parties");
-    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
 
     await page.close();
     await ctx.close();

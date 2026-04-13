@@ -49,6 +49,7 @@ test.describe("GST / Tax Reports — Presence", () => {
   test("renders period selector with current year", async ({ page }) => {
     // Month + year <select> elements are shown for GSTR-1 / GSTR-3B (default tab)
     const currentYear = new Date().getFullYear().toString();
-    await expect(page.getByText(currentYear).first()).toBeVisible();
+    // <option> inside a native <select> is hidden per Playwright — assert via select value
+    await expect(page.locator(`select option[value="${currentYear}"]`).first()).toBeAttached();
   });
 });

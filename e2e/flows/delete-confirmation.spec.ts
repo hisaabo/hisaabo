@@ -74,8 +74,9 @@ test.describe("Delete Confirmation Flows", () => {
     // Wait for dialog
     await expect(page.getByText(/delete.*expense|are you sure/i).first()).toBeVisible({ timeout: 5_000 });
 
-    // Click Cancel
-    await page.getByRole("button", { name: /cancel|no/i }).first().click();
+    // Click Cancel — scope to the dialog to avoid backdrop interception
+    const confirmDialog = page.locator('[role="dialog"]').last();
+    await confirmDialog.getByRole("button", { name: /cancel|no/i }).first().click();
 
     // Row count should be same
     const afterCount = await rows.count();
@@ -84,17 +85,22 @@ test.describe("Delete Confirmation Flows", () => {
 
   test("confirming delete removes expense from list", async ({ page }) => {
     const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const uniqueCategory = `Confirm Delete ${Date.now()}`;
     await createExpense(api, businessId, {
-      category: `Confirm Delete ${Date.now()}`,
+      category: uniqueCategory,
       amount: "300.00",
     });
 
     await page.goto("/expenses");
     await waitForPageReady(page);
 
+    // Search for the seeded expense to isolate it
+    await page.getByPlaceholder(/search category or description/i).fill(uniqueCategory);
+    await waitForSearchResults(page);
+
     const rows = page.locator("tbody tr");
     const initialCount = await rows.count();
-    test.skip(initialCount === 0, "No expense rows");
+    test.skip(initialCount === 0, "Seeded expense not found in list");
 
     await rows.first().hover();
 
@@ -104,13 +110,14 @@ test.describe("Delete Confirmation Flows", () => {
 
     await deleteBtn.click();
 
-    // Confirm deletion
-    await expect(page.getByText(/delete.*expense|are you sure/i).first()).toBeVisible({ timeout: 5_000 });
-    // Click the confirm/delete button (not the cancel)
-    await page.getByRole("button", { name: /delete|confirm|yes/i }).last().click();
+    // Confirm deletion — scope to dialog to avoid backdrop interception
+    const confirmDialog = page.locator('[role="dialog"]').last();
+    await expect(confirmDialog.getByText(/delete.*expense|are you sure/i).first()).toBeVisible({ timeout: 5_000 });
+    await confirmDialog.getByRole("button", { name: /delete|confirm|yes/i }).first().click();
 
-    // Row count should decrease
-    await expect(rows).toHaveCount(initialCount - 1, { timeout: 5_000 });
+    // Wait for confirm dialog to close, then the row should be gone
+    await expect(confirmDialog).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("tbody tr").filter({ hasText: uniqueCategory })).toHaveCount(0, { timeout: 10_000 });
   });
 
   test("draft invoice row shows delete action on hover", async ({ page }) => {
