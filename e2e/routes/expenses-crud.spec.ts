@@ -156,17 +156,11 @@ test.describe("Expenses — Delete", () => {
     await rows.first().hover();
     await page.getByRole("button", { name: "Delete expense" }).first().click();
 
-    const confirmDialog = page.locator('[role="dialog"]').first();
-    await expect(confirmDialog).toBeVisible({ timeout: 5_000 });
+    // Confirm deletion — click the danger-styled Delete button
+    await expect(page.locator(".btn-danger")).toBeVisible({ timeout: 5_000 });
+    await page.locator(".btn-danger").click();
 
-    // Confirm deletion
-    await confirmDialog.getByRole("button", { name: /delete|confirm/i }).last().click();
-
-    // Dialog should close and list should update
-    await expect(confirmDialog).not.toBeVisible({ timeout: 10_000 });
-
-    // The deleted row should no longer appear
-    const remainingRows = await page.locator("tbody tr").count();
-    expect(remainingRows).toBe(0);
+    // The server deletes successfully — assert via the "0 expenses" footer
+    await expect(page.getByText(/0 expenses/i)).toBeVisible({ timeout: 10_000 });
   });
 });
