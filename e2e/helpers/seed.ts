@@ -204,6 +204,41 @@ export async function seedWorldWithInvoice(
   return { business, party, item, invoice };
 }
 
+export interface SeededExpense {
+  id: string;
+  category: string;
+  amount: string;
+}
+
+/**
+ * Create an expense in the active business.
+ */
+export async function createExpense(
+  api: ApiHelper,
+  businessId: string,
+  overrides: Partial<{
+    category: string;
+    description: string;
+    amount: string;
+    mode: string;
+    expenseDate: string;
+    referenceNumber: string;
+  }> = {},
+): Promise<SeededExpense> {
+  return api.mutate<SeededExpense>(
+    "expense.create",
+    {
+      category: overrides.category ?? "Office Supplies",
+      description: overrides.description ?? "E2E test expense",
+      amount: overrides.amount ?? "500.00",
+      mode: overrides.mode ?? "cash",
+      expenseDate: overrides.expenseDate ?? new Date().toISOString(),
+      referenceNumber: overrides.referenceNumber ?? "",
+    },
+    { "x-business-id": businessId },
+  );
+}
+
 // ── Invite & role helpers ──────────────────────────────────────
 
 export interface InviteResult {

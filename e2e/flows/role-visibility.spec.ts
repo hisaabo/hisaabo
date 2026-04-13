@@ -199,6 +199,42 @@ test.describe("Role: Seller", () => {
     await rolePage.waitForTimeout(1_000);
     await expect(rolePage.locator("h1").first()).toContainText("Payments");
   });
+
+  test("seller does NOT see delete button on invoice rows", async () => {
+    await rolePage.goto("/invoices");
+    await rolePage.waitForTimeout(1_500);
+
+    const rows = rolePage.locator("tbody tr");
+    const count = await rows.count();
+    // If there are rows, hover and check for absence of delete
+    if (count > 0) {
+      await rows.first().hover();
+      await rolePage.waitForTimeout(300);
+      // Seller should NOT have delete/trash button
+      const deleteBtn = rows.first().locator('[aria-label*="delete" i], [aria-label*="Delete" i], [title*="delete" i]');
+      await expect(deleteBtn).not.toBeVisible();
+    }
+  });
+
+  test("seller does NOT see delete button in invoice detail panel", async () => {
+    await rolePage.goto("/invoices");
+    await rolePage.waitForTimeout(1_500);
+
+    const rows = rolePage.locator("tbody tr");
+    const count = await rows.count();
+    if (count > 0) {
+      await rows.first().click();
+      await rolePage.waitForTimeout(1_000);
+      const panel = rolePage.locator('[role="dialog"]').first();
+      const panelVisible = await panel.isVisible().catch(() => false);
+      if (panelVisible) {
+        // Seller should NOT see Delete button in the detail panel
+        await expect(
+          panel.getByRole("button", { name: /^delete$/i }),
+        ).not.toBeVisible();
+      }
+    }
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -288,5 +324,38 @@ test.describe("Role: Accountant", () => {
     await rolePage.goto("/invoices");
     await rolePage.waitForTimeout(1_000);
     await expect(rolePage.locator("h1").first()).toContainText("Invoices");
+  });
+
+  test("accountant does NOT see delete button on invoice rows", async () => {
+    await rolePage.goto("/invoices");
+    await rolePage.waitForTimeout(1_500);
+
+    const rows = rolePage.locator("tbody tr");
+    const count = await rows.count();
+    if (count > 0) {
+      await rows.first().hover();
+      await rolePage.waitForTimeout(300);
+      const deleteBtn = rows.first().locator('[aria-label*="delete" i], [aria-label*="Delete" i], [title*="delete" i]');
+      await expect(deleteBtn).not.toBeVisible();
+    }
+  });
+
+  test("accountant does NOT see delete button in invoice detail panel", async () => {
+    await rolePage.goto("/invoices");
+    await rolePage.waitForTimeout(1_500);
+
+    const rows = rolePage.locator("tbody tr");
+    const count = await rows.count();
+    if (count > 0) {
+      await rows.first().click();
+      await rolePage.waitForTimeout(1_000);
+      const panel = rolePage.locator('[role="dialog"]').first();
+      const panelVisible = await panel.isVisible().catch(() => false);
+      if (panelVisible) {
+        await expect(
+          panel.getByRole("button", { name: /^delete$/i }),
+        ).not.toBeVisible();
+      }
+    }
   });
 });
