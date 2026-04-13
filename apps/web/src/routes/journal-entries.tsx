@@ -5,12 +5,14 @@ import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, TextareaField } from "@/components/ui/FormField";
 import { Combobox, type ComboboxOption } from "@/components/ui/Combobox";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { SegmentedControl } from "@/components/ui/Tabs";
 
@@ -62,7 +64,7 @@ function JournalEntriesPage() {
   const [voidEntryId, setVoidEntryId] = useState<string | null>(null);
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [form, setForm] = useState<EntryFormState>({ ...EMPTY_FORM });
-  const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
+  const deleteTemplateConfirm = useDeleteConfirmation();
   const [saveAsTemplateName, setSaveAsTemplateName] = useState("");
   const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
   const [saveAsTemplateEntry, setSaveAsTemplateEntry] = useState<any>(null);
@@ -153,7 +155,7 @@ function JournalEntriesPage() {
     onSuccess: () => {
       utils.journal.templateList.invalidate();
       toast.success("Template deleted");
-      setDeleteTemplateId(null);
+      deleteTemplateConfirm.cancelDelete();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -348,7 +350,7 @@ function JournalEntriesPage() {
         <TemplatesTab
           templates={templates}
           onUse={openFromTemplate}
-          onDelete={(id) => setDeleteTemplateId(id)}
+          onDelete={(id, name) => deleteTemplateConfirm.requestDelete(id, name)}
         />
       )}
 
@@ -636,18 +638,15 @@ function JournalEntriesPage() {
       )}
 
       {/* Delete template confirmation */}
-      <ConfirmDialog
-        open={!!deleteTemplateId}
-        onCancel={() => setDeleteTemplateId(null)}
-        onConfirm={() =>
-          deleteTemplateId &&
-          templateDeleteMutation.mutate({ id: deleteTemplateId })
-        }
-        title="Delete Template"
-        description="This will permanently delete this template. This action cannot be undone."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteTemplateConfirm.deleteTarget}
+        entityName="Template"
         loading={templateDeleteMutation.isPending}
+        onConfirm={() =>
+          deleteTemplateConfirm.deleteTarget &&
+          templateDeleteMutation.mutate({ id: deleteTemplateConfirm.deleteTarget.id })
+        }
+        onCancel={deleteTemplateConfirm.cancelDelete}
       />
     </div>
   );
@@ -1022,7 +1021,7 @@ function TemplatesTab({
 }: {
   templates: any;
   onUse: (template: any) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
 }) {
   if (!templates) {
     return (
@@ -1076,7 +1075,7 @@ function TemplatesTab({
                     Use
                   </button>
                   <button
-                    onClick={() => onDelete(tpl.id)}
+                    onClick={() => onDelete(tpl.id, tpl.name)}
                     className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
                     aria-label="Delete template"
                   >

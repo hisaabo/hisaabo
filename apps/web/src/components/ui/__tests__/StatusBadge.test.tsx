@@ -42,6 +42,12 @@ describe("StatusBadge — coloured status pill used on every document list row",
       expect(screen.getByText("Unfulfilled")).toBeInTheDocument();
     });
 
+    it("capitalises 'adjusted' to 'Adjusted' so it reads as a proper label", () => {
+      render(<StatusBadge status="adjusted" />);
+
+      expect(screen.getByText("Adjusted")).toBeInTheDocument();
+    });
+
     it("handles unknown status values by rendering them capitalised without crashing, providing a safe fallback for future status additions", () => {
       render(<StatusBadge status="pending_review" />);
 
@@ -106,6 +112,14 @@ describe("StatusBadge — coloured status pill used on every document list row",
 
       const badge = container.firstChild as HTMLElement;
       expect(badge.className).toMatch(/bg-surface-2/);
+    });
+
+    it("applies purple colouring to 'adjusted' status to signal the document has been adjusted by a credit or debit note", () => {
+      const { container } = render(<StatusBadge status="adjusted" />);
+
+      const badge = container.firstChild as HTMLElement;
+      expect(badge.className).toMatch(/bg-purple-50/);
+      expect(badge.className).toMatch(/text-purple-700/);
     });
 
     it("falls back to neutral styling for unknown statuses rather than rendering a broken badge", () => {
@@ -174,6 +188,12 @@ describe("StatusBadge — coloured status pill used on every document list row",
 
     it("draft badge has no WCAG 2.1 AA violations", async () => {
       const { container } = render(<StatusBadge status="draft" />);
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    });
+
+    it("adjusted badge has no WCAG 2.1 AA violations — purple text must meet contrast requirements", async () => {
+      const { container } = render(<StatusBadge status="adjusted" />);
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });

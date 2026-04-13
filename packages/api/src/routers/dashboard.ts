@@ -86,25 +86,25 @@ export const dashboardRouter = router({
         )),
 
       // Receivable = current outstanding balance (balance sheet metric, NOT period-scoped)
+      // Credit notes and sales returns reduce the receivable balance; invoices and debit notes add to it.
       ctx.db.select({
-        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
+        total: sql<string>`coalesce(sum(CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return') THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)::text`,
       }).from(invoices)
         .where(and(
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
-          eq(invoices.documentType, "invoice"),
           isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),
 
       // Payable = current outstanding balance (balance sheet metric, NOT period-scoped)
+      // Purchase returns reduce the payable balance; invoices and debit notes add to it.
       ctx.db.select({
-        total: sql<string>`coalesce(sum(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)::text`,
+        total: sql<string>`coalesce(sum(CASE WHEN ${invoices.documentType} IN ('purchase_return') THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)::text`,
       }).from(invoices)
         .where(and(
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
-          eq(invoices.documentType, "invoice"),
           isNull(invoices.deletedAt),
           sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
         )),

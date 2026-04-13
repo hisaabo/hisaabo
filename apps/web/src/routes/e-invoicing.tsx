@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PillTabs } from "@/components/ui/Tabs";
@@ -35,15 +37,15 @@ const PAGE_SIZE = 25;
 function statusColor(status: string | null | undefined): string {
   switch (status) {
     case "generated":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "pending":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     case "failed":
-      return "bg-red-600/[0.08] text-red-700 dark:text-red-400";
+      return badgeColor("red");
     case "cancelled":
       return "bg-surface-2 text-text-tertiary";
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -194,9 +196,9 @@ function DashboardTab() {
                       {inv.irnAckDate ? formatDate(inv.irnAckDate) : "—"}
                     </td>
                     <td>
-                      <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase", statusColor(inv.eInvoiceStatus))}>
+                      <Badge size="sm" color={statusColor(inv.eInvoiceStatus)} className="uppercase">
                         {statusLabel(inv.eInvoiceStatus)}
-                      </span>
+                      </Badge>
                       {inv.eInvoiceError && (
                         <span className="ml-1.5 text-[10px] text-red-500" title={inv.eInvoiceError}>
                           ⚠

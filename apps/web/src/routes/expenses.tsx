@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -13,9 +15,10 @@ import { Listbox } from "@/components/ui/Listbox";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 
 export const Route = createFileRoute("/expenses")({
   component: ExpensesPage,
@@ -34,15 +37,15 @@ const MODE_OPTIONS = [
 function modeColor(mode: string) {
   switch (mode) {
     case "upi":
-      return "bg-brand-600/[0.08] text-brand-700 dark:text-brand-400";
+      return badgeColor("brand");
     case "cash":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "bank":
-      return "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400";
+      return badgeColor("blue");
     case "cheque":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -73,7 +76,7 @@ function ExpensesPage() {
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editExpenseId, setEditExpenseId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [form, setForm] = useState<ExpenseFormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof ExpenseFormState, string>>>({});
   const [exporting, setExporting] = useState(false);
@@ -159,7 +162,7 @@ function ExpensesPage() {
       utils.expense.summary.invalidate();
       utils.dashboard.summary.invalidate();
       toast.success("Expense deleted");
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -337,17 +340,17 @@ function ExpensesPage() {
                         {formatDate(exp.expenseDate)}
                       </td>
                       <td>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-surface-2 text-text-secondary">
+                        <Badge size="md" color="bg-surface-2 text-text-secondary">
                           {exp.category}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-text-primary max-w-[200px] truncate">
                         {exp.description || "—"}
                       </td>
                       <td>
-                        <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase", modeColor(exp.mode))}>
+                        <Badge size="sm" color={modeColor(exp.mode)} className="uppercase">
                           {exp.mode}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-text-tertiary font-mono text-xs">
                         {exp.referenceNumber || "—"}
@@ -367,7 +370,7 @@ function ExpensesPage() {
                             </svg>
                           </button>
                           <button
-                            onClick={() => setDeleteId(exp.id)}
+                            onClick={() => deleteConfirm.requestDelete(exp.id, exp.description || exp.category)}
                             className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
                             aria-label="Delete expense"
                           >
@@ -515,15 +518,12 @@ function ExpensesPage() {
         </div>
       </SlideOver>
 
-      <ConfirmDialog
-        open={!!deleteId}
-        onCancel={() => setDeleteId(null)}
-        onConfirm={() => deleteId && deleteMutation.mutate({ id: deleteId })}
-        title="Delete Expense"
-        description="This will permanently delete this expense. This action cannot be undone."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Expense"
         loading={deleteMutation.isPending}
+        onConfirm={() => deleteConfirm.deleteTarget && deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id })}
+        onCancel={deleteConfirm.cancelDelete}
       />
     </div>
   );

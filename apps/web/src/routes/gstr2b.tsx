@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { badgeColor } from "@/lib/badge-colors";
+import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -35,16 +37,16 @@ function fmt(v: string | number | null | undefined): string {
 function matchBadge(status: string): { label: string; cls: string } {
   switch (status) {
     case "matched":
-      return { label: "Matched", cls: "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400" };
+      return { label: "Matched", cls: badgeColor("emerald") };
     case "mismatched":
-      return { label: "Mismatch", cls: "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400" };
+      return { label: "Mismatch", cls: badgeColor("amber") };
     case "missing_in_books":
-      return { label: "Not in Books", cls: "bg-red-600/[0.08] text-red-700 dark:text-red-400" };
+      return { label: "Not in Books", cls: badgeColor("red") };
     case "ignored":
       return { label: "Ignored", cls: "bg-surface-2 text-text-tertiary" };
     case "pending":
     default:
-      return { label: "Pending", cls: "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400" };
+      return { label: "Pending", cls: badgeColor("blue") };
   }
 }
 
@@ -59,29 +61,6 @@ function mismatchLabel(reason: string): string {
   }
 }
 
-// ── Summary Card ──────────────────────────────────────────────
-
-function SummaryCard({
-  label,
-  count,
-  amount,
-  color,
-}: {
-  label: string;
-  count: number;
-  amount?: string;
-  color: string;
-}) {
-  return (
-    <div className={cn("rounded-xl border p-4", "bg-surface-0 border-border-light")}>
-      <div className={cn("text-xs font-medium mb-1", color)}>{label}</div>
-      <div className="text-2xl font-semibold text-text-primary">{count}</div>
-      {amount != null && (
-        <div className="text-sm text-text-secondary mt-0.5">{amount}</div>
-      )}
-    </div>
-  );
-}
 
 // ── Upload Section ────────────────────────────────────────────
 
@@ -327,27 +306,35 @@ function ReconciliationSection({
     <div>
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <SummaryCard
+        <StatCard
+          size="lg"
           label="Matched"
-          count={summary.matched}
-          color="text-emerald-700 dark:text-emerald-400"
+          value={summary.matched}
+          labelColor="text-emerald-700 dark:text-emerald-400"
+          className="bg-surface-0 border-border-light"
         />
-        <SummaryCard
+        <StatCard
+          size="lg"
           label="Mismatched"
-          count={summary.mismatched}
-          color="text-amber-700 dark:text-amber-400"
+          value={summary.mismatched}
+          labelColor="text-amber-700 dark:text-amber-400"
+          className="bg-surface-0 border-border-light"
         />
-        <SummaryCard
+        <StatCard
+          size="lg"
           label="Not in Books"
-          count={summary.missingInBooks}
-          amount={summary.itcAtRisk?.total ? `ITC at risk: ${fmt(summary.itcAtRisk.total)}` : undefined}
-          color="text-red-700 dark:text-red-400"
+          value={summary.missingInBooks}
+          labelColor="text-red-700 dark:text-red-400"
+          note={summary.itcAtRisk?.total ? `ITC at risk: ${fmt(summary.itcAtRisk.total)}` : undefined}
+          className="bg-surface-0 border-border-light"
         />
-        <SummaryCard
+        <StatCard
+          size="lg"
           label="ITC Available"
-          count={summary.matched + summary.pending}
-          amount={summary.itcAvailable?.total ? fmt(summary.itcAvailable.total) : undefined}
-          color="text-blue-700 dark:text-blue-400"
+          value={summary.matched + summary.pending}
+          labelColor="text-blue-700 dark:text-blue-400"
+          note={summary.itcAvailable?.total ? fmt(summary.itcAvailable.total) : undefined}
+          className="bg-surface-0 border-border-light"
         />
       </div>
 

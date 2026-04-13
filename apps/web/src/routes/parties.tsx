@@ -6,6 +6,7 @@ import { formatCurrency, formatDate, getInitials, cn, downloadCSV } from "@/lib/
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import type { PartyType } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -13,7 +14,9 @@ import { InputField, TextareaField } from "@/components/ui/FormField";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
+import { LinkButton } from "@/components/ui/LinkButton";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
@@ -48,7 +51,7 @@ function PartiesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -111,7 +114,7 @@ function PartiesPage() {
   const deleteMutation = trpc.party.delete.useMutation({
     onSuccess: () => {
       utils.party.list.invalidate();
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
       toast.success("Party deleted");
     },
     onError: (err) => {
@@ -128,8 +131,8 @@ function PartiesPage() {
     },
   ]);
 
-  function confirmDelete(id: string) {
-    setDeleteId(id);
+  function confirmDelete(id: string, name: string) {
+    deleteConfirm.requestDelete(id, name);
   }
 
   return (
@@ -193,11 +196,7 @@ function PartiesPage() {
 
       {/* Table */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-12 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={5} height="h-12" />
       ) : !data?.data.length ? (
         <EmptyState
           title="No parties found"
@@ -262,7 +261,7 @@ function PartiesPage() {
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
                     <button
                       className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                      onClick={() => confirmDelete(party.id)}
+                      onClick={() => confirmDelete(party.id, party.name)}
                       aria-label="Delete party"
                     >
                       <svg
@@ -302,17 +301,14 @@ function PartiesPage() {
       />
 
       {/* Delete Confirmation */}
-      <ConfirmDialog
-        open={deleteId !== null}
-        title="Delete party?"
-        description="This action cannot be undone. All data associated with this party will be permanently removed."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Party"
         loading={deleteMutation.isPending}
         onConfirm={() => {
-          if (deleteId) deleteMutation.mutate({ id: deleteId });
+          if (deleteConfirm.deleteTarget) deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id });
         }}
-        onCancel={() => setDeleteId(null)}
+        onCancel={deleteConfirm.cancelDelete}
       />
 
       {/* Party Detail SlideOver */}
@@ -478,12 +474,12 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                   <p className="text-xs font-semibold text-text-secondary">
                     {party.type === "customer" ? "Items purchased by" : "Items supplied by"} {party.name}
                   </p>
-                  <button
-                    className="text-xs text-brand-600 hover:underline"
+                  <LinkButton
+                    className="text-xs"
                     onClick={() => setTab("top-items")}
                   >
                     View all
-                  </button>
+                  </LinkButton>
                 </div>
                 <div className="rounded-xl border border-border-light overflow-hidden">
                   <table className="data-table">
@@ -529,12 +525,12 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-semibold text-text-secondary">Recent Activity</p>
-                  <button
-                    className="text-xs text-brand-600 hover:underline"
+                  <LinkButton
+                    className="text-xs"
                     onClick={() => setTab("ledger")}
                   >
                     View all
-                  </button>
+                  </LinkButton>
                 </div>
                 <div className="rounded-xl border border-border-light overflow-hidden">
                   <table className="data-table">
@@ -556,10 +552,12 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                                 "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
                                 row.type === "payment"
                                   ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                                  : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                                  : row.type === "credit_note" || row.type === "sales_return"
+                                    ? "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
+                                    : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
                               )}
                             >
-                              {row.type === "payment" ? "Payment" : row.type === "purchase" ? "Purchase" : "Invoice"}
+                              {{ payment: "Payment", purchase: "Purchase", invoice: "Invoice", credit_note: "Credit Note", sales_return: "Sales Return", purchase_return: "Purchase Return", debit_note: "Debit Note" }[row.type] ?? row.type}
                             </span>
                           </td>
                           <td className="font-mono text-[13px] text-text-secondary">{row.documentNumber}</td>
@@ -610,22 +608,33 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                                 "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
                                 row.type === "payment"
                                   ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                                  : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                                  : row.type === "credit_note" || row.type === "sales_return"
+                                    ? "bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-400"
+                                    : "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
                               )}
                             >
-                              {row.type === "payment" ? "Payment" : row.type === "purchase" ? "Purchase" : "Invoice"}
+                              {{ payment: "Payment", purchase: "Purchase", invoice: "Invoice", credit_note: "Credit Note", sales_return: "Sales Return", purchase_return: "Purchase Return", debit_note: "Debit Note" }[row.type] ?? row.type}
                             </span>
                           </td>
                           <td>
-                            <button
-                              className="font-mono text-[13px] text-brand-600 hover:underline"
+                            <LinkButton
+                              className="font-mono text-[13px]"
                               onClick={() => {
+                                const routes: Record<string, string> = {
+                                  payment: "/payments",
+                                  invoice: "/invoices",
+                                  purchase: "/invoices",
+                                  credit_note: "/credit-notes",
+                                  sales_return: "/sales-returns",
+                                  purchase_return: "/invoices",
+                                  debit_note: "/invoices",
+                                };
                                 onClose();
-                                navigate({ to: row.type === "payment" ? "/payments" : "/invoices" });
+                                navigate({ to: routes[row.type] ?? "/invoices", search: { id: row.documentId } });
                               }}
                             >
                               {row.documentNumber}
-                            </button>
+                            </LinkButton>
                           </td>
                           <td className="text-right tabular-nums text-text-secondary">
                             {debitNum > 0 ? formatCurrency(row.debit) : "—"}

@@ -194,6 +194,97 @@ describe("derive-ledger engine", () => {
     expect(totalDebit).toBe(totalCredit);
   });
 
+  it("sales_return produces Dr Sales Returns (4010), Cr Receivable (1100) for sale-type sales return", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create a sales_return via the salesReturn router (sale-type, same state as business1)
+    await caller.salesReturn.create({
+      type: "sale",
+      partyId: world.party1.id,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [{
+        itemName: "Returned Goods",
+        quantity: "2",
+        unitPrice: "300.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+
+    const { deriveLedger } = await import("../lib/derive-ledger.js");
+    const entries = await deriveLedger(db, world.business1.id, new Date("2020-01-01"), new Date("2030-12-31"));
+
+    // sales_return narration is "Sales Return <number>"
+    const srEntries = entries.filter((e) => e.sourceType === "invoice" && e.narration.startsWith("Sales Return"));
+    expect(srEntries.length).toBeGreaterThan(0);
+
+    const srEntry = srEntries[srEntries.length - 1]!;
+
+    // Dr Sales Returns (4010)
+    const salesReturnDebit = srEntry.lines.find((l) => l.accountCode === "4010" && l.debit !== "0.00");
+    expect(salesReturnDebit).toBeDefined();
+
+    // Cr Receivable (1100)
+    const receivableCredit = srEntry.lines.find((l) => l.accountCode === "1100" && l.credit !== "0.00");
+    expect(receivableCredit).toBeDefined();
+
+    // Must be balanced
+    const totalDebit = money.sum(srEntry.lines.map((l) => l.debit));
+    const totalCredit = money.sum(srEntry.lines.map((l) => l.credit));
+    expect(totalDebit).toBe(totalCredit);
+  });
+
+  it("purchase_return produces Dr Payable (2000), Cr Purchase Returns (5010) for purchase return", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create a supplier party for the purchase return
+    const supplier = await caller.party.create({
+      name: "Surat Fabric Suppliers",
+      type: "supplier",
+      phone: "9871234560",
+      state: "Gujarat",
+      stateCode: "24",
+    });
+
+    // Create a purchase_return via the purchaseReturn router
+    await caller.purchaseReturn.create({
+      type: "purchase",
+      partyId: supplier.id,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [{
+        itemName: "Returned Raw Material",
+        quantity: "5",
+        unitPrice: "200.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+
+    const { deriveLedger } = await import("../lib/derive-ledger.js");
+    const entries = await deriveLedger(db, world.business1.id, new Date("2020-01-01"), new Date("2030-12-31"));
+
+    // purchase_return narration is "Purchase Return <number>"
+    const prEntries = entries.filter((e) => e.sourceType === "invoice" && e.narration.startsWith("Purchase Return"));
+    expect(prEntries.length).toBeGreaterThan(0);
+
+    const prEntry = prEntries[prEntries.length - 1]!;
+
+    // Dr Payable (2000)
+    const payableDebit = prEntry.lines.find((l) => l.accountCode === "2000" && l.debit !== "0.00");
+    expect(payableDebit).toBeDefined();
+
+    // Cr Purchase Returns (5010)
+    const purchaseReturnCredit = prEntry.lines.find((l) => l.accountCode === "5010" && l.credit !== "0.00");
+    expect(purchaseReturnCredit).toBeDefined();
+
+    // Must be balanced
+    const totalDebit = money.sum(prEntry.lines.map((l) => l.debit));
+    const totalCredit = money.sum(prEntry.lines.map((l) => l.credit));
+    expect(totalDebit).toBe(totalCredit);
+  });
+
   it("purchase invoice debits Purchases (5000), credits Payable (2000)", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
@@ -246,6 +337,97 @@ describe("derive-ledger engine", () => {
     // Must be balanced
     const totalDebit = money.sum(purchEntry.lines.map((l) => l.debit));
     const totalCredit = money.sum(purchEntry.lines.map((l) => l.credit));
+    expect(totalDebit).toBe(totalCredit);
+  });
+});
+
+// ── debit_note by type ─────────────────────────────────────────────────────────
+
+describe("derive-ledger — debit_note by type", () => {
+  it("sale-side debit_note produces Dr Receivable (1100), Cr Sales (4000)", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create a sale-side debit note via the debitNote router
+    // (same-state party1: Maharashtra → CGST+SGST)
+    await caller.debitNote.create({
+      type: "sale",
+      partyId: world.party1.id,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [{
+        itemName: "Price Correction Upward",
+        quantity: "1",
+        unitPrice: "400.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+
+    const { deriveLedger } = await import("../lib/derive-ledger.js");
+    const entries = await deriveLedger(db, world.business1.id, new Date("2020-01-01"), new Date("2030-12-31"));
+
+    // sale-side debit_note narration is "Debit Note <number>"
+    const dnEntries = entries.filter((e) => e.sourceType === "invoice" && e.narration.startsWith("Debit Note"));
+    expect(dnEntries.length).toBeGreaterThan(0);
+
+    const dnEntry = dnEntries[dnEntries.length - 1]!;
+
+    // Dr Receivable (1100)
+    const receivableDebit = dnEntry.lines.find((l) => l.accountCode === "1100" && l.debit !== "0.00");
+    expect(receivableDebit).toBeDefined();
+
+    // Cr Sales (4000)
+    const salesCredit = dnEntry.lines.find((l) => l.accountCode === "4000" && l.credit !== "0.00");
+    expect(salesCredit).toBeDefined();
+
+    // Must be balanced
+    const totalDebit = money.sum(dnEntry.lines.map((l) => l.debit));
+    const totalCredit = money.sum(dnEntry.lines.map((l) => l.credit));
+    expect(totalDebit).toBe(totalCredit);
+  });
+
+  it("purchase-side debit_note produces Dr Payable (2000), Cr Purchase Returns (5010)", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create a purchase-side debit note — business sends a debit note TO a supplier
+    // (same-state → CGST+SGST path; use party1 which is Maharashtra "27")
+    await caller.debitNote.create({
+      type: "purchase",
+      partyId: world.party1.id,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [{
+        itemName: "Overcharge correction to supplier",
+        quantity: "1",
+        unitPrice: "600.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+
+    const { deriveLedger } = await import("../lib/derive-ledger.js");
+    const entries = await deriveLedger(db, world.business1.id, new Date("2020-01-01"), new Date("2030-12-31"));
+
+    // purchase-side debit_note narration is also "Debit Note <number>"
+    // Filter for debit notes on the purchase side (Payable debit + Purchase Returns credit)
+    const dnEntries = entries.filter((e) => e.sourceType === "invoice" && e.narration.startsWith("Debit Note"));
+    // Find the purchase-side one — it will have a debit on Payable (2000), not Receivable (1100)
+    const purchaseDnEntry = dnEntries.find((e) =>
+      e.lines.some((l) => l.accountCode === "2000" && l.debit !== "0.00"),
+    );
+    expect(purchaseDnEntry).toBeDefined();
+
+    // Dr Payable (2000)
+    const payableDebit = purchaseDnEntry!.lines.find((l) => l.accountCode === "2000" && l.debit !== "0.00");
+    expect(payableDebit).toBeDefined();
+
+    // Cr Purchase Returns (5010)
+    const purchaseReturnCredit = purchaseDnEntry!.lines.find((l) => l.accountCode === "5010" && l.credit !== "0.00");
+    expect(purchaseReturnCredit).toBeDefined();
+
+    // Must be balanced
+    const totalDebit = money.sum(purchaseDnEntry!.lines.map((l) => l.debit));
+    const totalCredit = money.sum(purchaseDnEntry!.lines.map((l) => l.credit));
     expect(totalDebit).toBe(totalCredit);
   });
 });

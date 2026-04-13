@@ -82,7 +82,15 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
     process.stdout.write(`│  ${"─".repeat(inner - 2)}  │\n`);
     line(`Total:`, (hasColor() ? chalk.bold(formatAmount(inv.totalAmount)) : formatAmount(inv.totalAmount)).padStart(16));
     line(`Paid:`, formatAmount(inv.amountPaid).padStart(16));
-    line(`Balance:`, formatAmount(inv.balanceDue).padStart(16));
+    if (inv.totalAdjusted && parseFloat(inv.totalAdjusted) > 0)
+      line(`Adjusted:`, ("-" + formatAmount(inv.totalAdjusted)).padStart(16));
+    const balance = inv.totalAdjusted && parseFloat(inv.totalAdjusted) > 0
+      ? String(parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - parseFloat(inv.totalAdjusted))
+      : inv.balanceDue;
+    line(`Balance:`, formatAmount(balance).padStart(16));
+    if (inv.status === "adjusted")
+      line(`(Settled via credit note / sales return)`);
+
 
     if (inv.notes || inv.termsAndConditions) {
       divider();

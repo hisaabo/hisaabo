@@ -82,7 +82,7 @@ export default function PartiesScreen() {
   };
 
   const renderItem = ({ item }: { item: (typeof allParties)[0] }) => {
-    const balance = parseFloat(item.openingBalance || "0");
+    const balance = parseFloat(item.balance || item.openingBalance || "0");
     const isReceivable = balance >= 0;
 
     return (

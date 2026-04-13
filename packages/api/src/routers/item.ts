@@ -544,14 +544,18 @@ export const itemRouter = router({
             eq(invoiceItems.itemId, input.id),
             eq(invoices.businessId, ctx.businessId),
             sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+            sql`${invoices.documentType} NOT IN ('credit_note', 'quotation', 'proforma', 'debit_note')`,
           )
         )
         .orderBy(desc(invoices.invoiceDate))
         .limit(50);
 
-      // Annotate each row with direction: sale/delivery_challan = out, purchase/return = in
+      // Annotate direction: returns reverse the normal flow
+      // sale → out, purchase → in, but sales_return/purchase_return flip it
       return rows.map((r) => {
-        const isOutflow = r.invoiceType === "sale" || r.documentType === "delivery_challan";
+        const isReturn = ["sales_return", "purchase_return"].includes(r.documentType);
+        const baseSaleOutflow = r.invoiceType === "sale" || r.documentType === "delivery_challan";
+        const isOutflow = isReturn ? !baseSaleOutflow : baseSaleOutflow;
         return {
           ...r,
           direction: isOutflow ? "out" as const : "in" as const,

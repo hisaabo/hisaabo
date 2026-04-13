@@ -1202,7 +1202,7 @@ export interface AuthUser {
 }
 
 export type InvoiceStatus =
-  | "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
+  | "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
 
 export type DocumentType =
   | "invoice" | "quotation" | "credit_note" | "debit_note"
@@ -1221,6 +1221,8 @@ export interface InvoiceSummary {
   totalAmount: string;
   amountPaid: string;
   balanceDue: string;
+  totalAdjusted?: string;
+  relatedDocuments?: Array<{ id: string; documentType: string; invoiceNumber: string; totalAmount: string; status: string }>;
 }
 
 export interface LineItem {

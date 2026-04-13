@@ -6,6 +6,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "rec
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import type { ItemType, ItemMode } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -14,7 +15,8 @@ import { InputField } from "@/components/ui/FormField";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { Listbox } from "@/components/ui/Listbox";
 import { Combobox } from "@/components/ui/Combobox";
 import { Disclosure } from "@/components/ui/Disclosure";
@@ -115,7 +117,7 @@ function ItemsPage() {
   const [showLowStock, setShowLowStock] = useState(false);
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -238,7 +240,7 @@ function ItemsPage() {
   const deleteMutation = trpc.item.delete.useMutation({
     onSuccess: () => {
       utils.item.list.invalidate();
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
       toast.success("Item deleted");
     },
     onError: (err) => {
@@ -342,11 +344,7 @@ function ItemsPage() {
 
       {/* Table */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-12 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={5} height="h-12" />
       ) : !filteredItems.length ? (
         <EmptyState
           title="No items found"
@@ -420,7 +418,7 @@ function ItemsPage() {
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
                       <button
                         className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                        onClick={() => setDeleteId(item.id)}
+                        onClick={() => deleteConfirm.requestDelete(item.id, item.name)}
                         aria-label="Delete item"
                       >
                         <svg
@@ -460,17 +458,14 @@ function ItemsPage() {
       <AddItemModal open={showAddModal} onClose={() => setShowAddModal(false)} />
 
       {/* Delete Confirmation */}
-      <ConfirmDialog
-        open={deleteId !== null}
-        title="Delete item?"
-        description="This action cannot be undone."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Item"
         loading={deleteMutation.isPending}
         onConfirm={() => {
-          if (deleteId) deleteMutation.mutate({ id: deleteId });
+          if (deleteConfirm.deleteTarget) deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id });
         }}
-        onCancel={() => setDeleteId(null)}
+        onCancel={deleteConfirm.cancelDelete}
       />
 
       {/* Item Detail */}
@@ -1597,11 +1592,23 @@ type StockMovementRow = {
   invoiceDate: Date | string;
   invoiceNumber: string;
   invoiceType: string;
+  documentType: string;
   quantity: string;
   partyName: string;
   direction: "in" | "out";
   selectedUnit: string | null;
   conversionFactor: string | null;
+};
+
+const DOC_TYPE_ROUTE: Record<string, string> = {
+  invoice: "/invoices",
+  credit_note: "/credit-notes",
+  sales_return: "/sales-returns",
+  delivery_challan: "/delivery-challans",
+  quotation: "/quotations",
+  proforma: "/proforma-invoices",
+  purchase_return: "/invoices",
+  debit_note: "/invoices",
 };
 
 function PriceHistoryTab({
@@ -1761,7 +1768,7 @@ function StockMovementsTab({
 
     // Starting stock = currentStock - totalChange in this window
     let running = currentStock - totalChange;
-    const rows: { date: string; invoiceId: string; invoiceNumber: string; qtyChange: number; running: number }[] = [];
+    const rows: { date: string; invoiceId: string; invoiceNumber: string; documentType: string; qtyChange: number; running: number }[] = [];
 
     for (const m of chronological) {
       const factor = parseFloat(m.conversionFactor || "1");
@@ -1772,6 +1779,7 @@ function StockMovementsTab({
         date: formatDate(m.invoiceDate),
         invoiceId: m.invoiceId,
         invoiceNumber: m.invoiceNumber,
+        documentType: m.documentType,
         qtyChange: delta,
         running,
       });
@@ -1884,7 +1892,7 @@ function StockMovementsTab({
                 <tr key={i}>
                   <td className="text-text-secondary text-xs">{r.date}</td>
                   <td className="font-mono text-[13px]">
-                    <Link to="/invoices" search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
+                    <Link to={DOC_TYPE_ROUTE[r.documentType] ?? "/invoices"} search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
                       {r.invoiceNumber}
                     </Link>
                   </td>

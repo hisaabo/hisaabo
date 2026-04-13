@@ -72,6 +72,22 @@ export const invoiceRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
+      // Subquery: total CN/SR/PR amount issued against each invoice
+      const adjSq = ctx.db
+        .select({
+          refId: invoices.referenceDocumentId,
+          totalAdj: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)`.as("total_adj"),
+        })
+        .from(invoices)
+        .where(and(
+          eq(invoices.businessId, ctx.businessId),
+          sql`${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')`,
+          sql`${invoices.status} NOT IN ('cancelled')`,
+          isNull(invoices.deletedAt),
+        ))
+        .groupBy(invoices.referenceDocumentId)
+        .as("adj");
+
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select({
           id: invoices.id,
@@ -83,11 +99,13 @@ export const invoiceRouter = router({
           dueDate: invoices.dueDate,
           totalAmount: invoices.totalAmount,
           amountPaid: invoices.amountPaid,
+          totalAdjusted: sql<string>`COALESCE(${adjSq.totalAdj}::text, '0')`.as("total_adjusted"),
           partyName: parties.name,
           partyId: parties.id,
           createdByName: invoices.createdByName,
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
+          .leftJoin(adjSq, eq(adjSq.refId, invoices.id))
           .where(and(...conditions))
           .orderBy(
             input.sortBy === "amount"
@@ -102,7 +120,17 @@ export const invoiceRouter = router({
           .where(and(...conditions)),
       ]);
 
-      return { data, total: count, page: input.page, limit: input.limit };
+      // Compute effective status: if fully adjusted, override to "adjusted"
+      const enrichedData = data.map(inv => {
+        const adj = parseFloat(inv.totalAdjusted || "0");
+        const total = parseFloat(inv.totalAmount);
+        const effectiveStatus = (adj >= total - 0.01 && inv.status !== "cancelled" && inv.status !== "draft")
+          ? "adjusted"
+          : inv.status;
+        return { ...inv, status: effectiveStatus };
+      });
+
+      return { data: enrichedData, total: count, page: input.page, limit: input.limit };
     }),
 
   getById: viewerProcedure
@@ -146,7 +174,35 @@ export const invoiceRouter = router({
         itemUnit: li.itemId ? (itemUnitMap.get(li.itemId) ?? null) : null,
       }));
 
-      return { ...invoice, lineItems: lineItemsWithUnit, party: party ?? null };
+      // Fetch child documents (CN/SR) that reference this invoice
+      const relatedDocs = await ctx.db.select({
+        id: invoices.id,
+        documentType: invoices.documentType,
+        invoiceNumber: invoices.invoiceNumber,
+        totalAmount: invoices.totalAmount,
+        status: invoices.status,
+      }).from(invoices)
+        .where(and(
+          eq(invoices.referenceDocumentId, input.id),
+          eq(invoices.businessId, ctx.businessId),
+          isNull(invoices.deletedAt),
+          sql`${invoices.status} NOT IN ('cancelled')`,
+        ));
+
+      // Compute total adjusted amount (CN + SR + PR) for effective balance
+      const totalAdjusted = relatedDocs
+        .filter(d => ["credit_note", "sales_return", "purchase_return"].includes(d.documentType))
+        .reduce((sum, d) => sum + parseFloat(d.totalAmount), 0)
+        .toFixed(2);
+
+      // Dynamic effective status: if fully adjusted by CN/SR, override to "adjusted"
+      const adjNum = parseFloat(totalAdjusted);
+      const invTotal = parseFloat(invoice.totalAmount);
+      const effectiveStatus = (adjNum >= invTotal - 0.01 && invoice.status !== "cancelled" && invoice.status !== "draft")
+        ? "adjusted"
+        : invoice.status;
+
+      return { ...invoice, status: effectiveStatus, lineItems: lineItemsWithUnit, party: party ?? null, relatedDocuments: relatedDocs, totalAdjusted };
     }),
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {

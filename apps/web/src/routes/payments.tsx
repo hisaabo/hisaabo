@@ -8,11 +8,14 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
+import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
+import { DetailField } from "@/components/ui/DetailField";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
@@ -258,7 +261,7 @@ function PaymentsPage() {
   const [showPanel, setShowPanel] = useState(false);
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteConfirm = useDeleteConfirmation();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -304,7 +307,7 @@ function PaymentsPage() {
     onSuccess: () => {
       utils.payment.list.invalidate();
       utils.dashboard.summary.invalidate();
-      setDeleteId(null);
+      deleteConfirm.cancelDelete();
       toast.success("Payment deleted");
     },
     onError: (err) => {
@@ -398,11 +401,7 @@ function PaymentsPage() {
 
       {/* Table */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-12 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={5} height="h-12" />
       ) : !list.items.length && !isFetching ? (
         <EmptyState
           title="No payments recorded yet"
@@ -460,7 +459,7 @@ function PaymentsPage() {
                         </button>
                         <button
                           className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                          onClick={() => setDeleteId(p.id)}
+                          onClick={() => deleteConfirm.requestDelete(p.id, p.paymentNumber || p.partyName)}
                           aria-label="Delete payment"
                         >
                           <svg
@@ -538,17 +537,14 @@ function PaymentsPage() {
       )}
 
       {/* Delete Confirmation */}
-      <ConfirmDialog
-        open={deleteId !== null}
-        title="Delete payment?"
-        description="This action cannot be undone. The payment record will be permanently removed."
-        confirmLabel="Delete"
-        variant="danger"
+      <DeleteConfirmDialog
+        target={deleteConfirm.deleteTarget}
+        entityName="Payment"
         loading={deleteMutation.isPending}
         onConfirm={() => {
-          if (deleteId) deleteMutation.mutate({ id: deleteId });
+          if (deleteConfirm.deleteTarget) deleteMutation.mutate({ id: deleteConfirm.deleteTarget.id });
         }}
-        onCancel={() => setDeleteId(null)}
+        onCancel={deleteConfirm.cancelDelete}
       />
     </div>
   );
@@ -590,11 +586,7 @@ function PaymentDetailPanel({
       }
     >
       {isLoading ? (
-        <div className="space-y-3 animate-pulse">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="skeleton h-8 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={4} height="h-8" className="space-y-3 animate-pulse" />
       ) : !payment ? (
         <p className="text-text-tertiary text-sm">Payment not found.</p>
       ) : (
@@ -602,44 +594,37 @@ function PaymentDetailPanel({
           {/* Payment details */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-3">
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Party</p>
-                <p className="text-sm font-semibold text-text-primary">{payment.partyName}</p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Amount</p>
+              <DetailField label="Party">
+                <p className="font-semibold text-text-primary">{payment.partyName}</p>
+              </DetailField>
+              <DetailField label="Amount">
                 <p className="text-lg font-bold tabular-nums text-emerald-600">{formatCurrency(payment.amount)}</p>
-              </div>
+              </DetailField>
               {payment.discount && parseFloat(payment.discount) > 0 && (
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Discount</p>
-                  <p className="text-sm tabular-nums text-text-primary">{formatCurrency(payment.discount)}</p>
-                </div>
+                <DetailField label="Discount">
+                  <p className="tabular-nums">{formatCurrency(payment.discount)}</p>
+                </DetailField>
               )}
             </div>
             <div className="space-y-3">
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Date</p>
-                <p className="text-sm text-text-primary">{formatDate(payment.paymentDate)}</p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Mode</p>
-                <p className="text-sm text-text-primary capitalize">{payment.mode}</p>
-              </div>
+              <DetailField label="Date">
+                <p>{formatDate(payment.paymentDate)}</p>
+              </DetailField>
+              <DetailField label="Mode">
+                <p className="capitalize">{payment.mode}</p>
+              </DetailField>
               {payment.referenceNumber && (
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Reference</p>
-                  <p className="text-sm font-mono text-text-secondary">{payment.referenceNumber}</p>
-                </div>
+                <DetailField label="Reference">
+                  <p className="font-mono text-text-secondary">{payment.referenceNumber}</p>
+                </DetailField>
               )}
             </div>
           </div>
 
           {payment.notes && (
-            <div>
-              <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-1">Notes</p>
+            <DetailField label="Notes">
               <p className="text-xs text-text-secondary whitespace-pre-wrap">{payment.notes}</p>
-            </div>
+            </DetailField>
           )}
 
           {/* Linked invoices */}

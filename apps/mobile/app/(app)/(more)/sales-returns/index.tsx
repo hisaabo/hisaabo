@@ -150,7 +150,7 @@ export default function SalesReturnsScreen() {
 
   const renderItem = ({ item }: { item: typeof docs[0] }) => (
     <View style={styles.docCard}>
-      <PressableRow style={styles.docRow} onPress={() => {}}>
+      <PressableRow style={styles.docRow} onPress={() => { haptic.light(); router.push(`/(more)/sales-returns/${item.id}` as never); }}>
         <View style={styles.docLeft}>
           <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
           <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>

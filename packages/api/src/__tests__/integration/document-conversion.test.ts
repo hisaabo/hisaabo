@@ -240,11 +240,11 @@ describe("DOC-03: Delivery Challan → Invoice — skipStockAdjustment prevents 
 });
 
 // =============================================================================
-// DOC-04: Invoice → Credit Note (stock incremented — returned items)
+// DOC-04: Invoice → Credit Note (financial only — no stock change)
 // =============================================================================
 
-describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", () => {
-  it("creates a credit note from an invoice and increments stock (items returned)", async () => {
+describe("DOC-04: Invoice → Credit Note — no stock change on conversion", () => {
+  it("creates a credit note from an invoice without changing stock (financial adjustment only)", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
 
@@ -276,7 +276,7 @@ describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", 
 
     expect(await getStockQty(item.id)).toBe("95.000");
 
-    // Convert invoice → credit note (stockEffect=increment — items returned)
+    // Convert invoice → credit note (stockEffect=none — financial adjustment only)
     const converted = await caller.document.convert({
       sourceDocumentId: invoice.id,
       targetDocumentType: "credit_note",
@@ -284,8 +284,8 @@ describe("DOC-04: Invoice → Credit Note — stock incremented on conversion", 
 
     expect(converted.documentType).toBe("credit_note");
 
-    // Stock should be back to 100 (95 + 5 returned)
-    expect(await getStockQty(item.id)).toBe("100.000");
+    // Stock remains at 95 — credit notes don't affect inventory
+    expect(await getStockQty(item.id)).toBe("95.000");
   });
 });
 
@@ -362,7 +362,7 @@ describe("DOC-06: Convert from non-existent source", () => {
 // =============================================================================
 
 describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document lifecycle)", () => {
-  it("stock follows the complete lifecycle: unchanged → decremented → restored", async () => {
+  it("stock follows the complete lifecycle: unchanged → decremented → unchanged (CN is financial)", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
 
@@ -398,12 +398,12 @@ describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document
     });
     expect(await getStockQty(item.id)).toBe("45.000");
 
-    // 3. Convert invoice → credit note (stock restored: 45 + 5 = 50)
+    // 3. Convert invoice → credit note (stock unchanged — CN is financial only)
     const creditNote = await caller.document.convert({
       sourceDocumentId: invoice.id,
       targetDocumentType: "credit_note",
     });
-    expect(await getStockQty(item.id)).toBe("50.000");
+    expect(await getStockQty(item.id)).toBe("45.000");
 
     // Verify the chain of references
     const [inv] = await db.select({ refId: invoices.referenceDocumentId })
@@ -413,5 +413,177 @@ describe("Full chain: Quotation → Invoice → Credit Note (end-to-end document
     const [cn] = await db.select({ refId: invoices.referenceDocumentId })
       .from(invoices).where(eq(invoices.id, creditNote.id));
     expect(cn!.refId).toBe(invoice.id);
+  });
+});
+
+// =============================================================================
+// Over-credit / over-return server-side guard
+// =============================================================================
+
+describe("Server-side guard: CN/SR total must not exceed invoice total", () => {
+  let guardItem: Awaited<ReturnType<typeof createItem>>;
+  let baseInvoice: { id: string; invoiceNumber: string };
+
+  beforeAll(async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    guardItem = await createItem(db, world.business1.id, {
+      name: "Guard Test Widget",
+      stockQuantity: "500.000",
+      salePrice: "100.00",
+      taxPercent: "0",
+    });
+
+    // Create a sale invoice for ₹1,000 (10 × ₹100)
+    baseInvoice = await caller.invoice.create({
+      partyId: world.party1.id,
+      type: "sale",
+      invoiceDate: isoNow(),
+      lineItems: [{
+        itemId: guardItem.id,
+        itemName: "Guard Test Widget",
+        quantity: "10",
+        unitPrice: "100.00",
+        taxPercent: "0",
+        discountPercent: "0",
+        conversionFactor: null,
+        variantId: null,
+      }],
+    });
+  });
+
+  it("allows a credit note up to the invoice total", async () => {
+    const caller = callerForRamesh();
+    // CN for ₹500 (5 × ₹100) — should succeed, 50% of ₹1,000
+    const cn = await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale",
+      invoiceDate: isoNow(),
+      referenceDocumentId: baseInvoice.id,
+      lineItems: [{
+        itemId: guardItem.id,
+        itemName: "Guard Test Widget",
+        quantity: "5",
+        unitPrice: "100.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+    expect(cn.documentType).toBe("credit_note");
+    expect(cn.totalAmount).toBe("500.00");
+  });
+
+  it("allows a sales return for the remaining amount", async () => {
+    const caller = callerForRamesh();
+    // SR for ₹300 (3 × ₹100) — should succeed (₹500 CN + ₹300 SR = ₹800 < ₹1,000)
+    const sr = await caller.salesReturn.create({
+      partyId: world.party1.id,
+      type: "sale",
+      invoiceDate: isoNow(),
+      referenceDocumentId: baseInvoice.id,
+      lineItems: [{
+        itemId: guardItem.id,
+        itemName: "Guard Test Widget",
+        quantity: "3",
+        unitPrice: "100.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+    expect(sr.documentType).toBe("sales_return");
+    expect(sr.totalAmount).toBe("300.00");
+  });
+
+  it("allows another CN exactly up to the remaining limit", async () => {
+    const caller = callerForRamesh();
+    // Another CN for ₹200 (2 × ₹100) — should succeed (₹500 + ₹300 + ₹200 = ₹1,000)
+    const cn2 = await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale",
+      invoiceDate: isoNow(),
+      referenceDocumentId: baseInvoice.id,
+      lineItems: [{
+        itemId: guardItem.id,
+        itemName: "Guard Test Widget",
+        quantity: "2",
+        unitPrice: "100.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+    expect(cn2.totalAmount).toBe("200.00");
+  });
+
+  it("rejects a credit note that exceeds the remaining amount", async () => {
+    const caller = callerForRamesh();
+    // CN for ₹100 — should FAIL (₹500 + ₹300 + ₹200 = ₹1,000 already, nothing remaining)
+    await expect(
+      caller.creditNote.create({
+        partyId: world.party1.id,
+        type: "sale",
+        invoiceDate: isoNow(),
+        referenceDocumentId: baseInvoice.id,
+        lineItems: [{
+          itemId: guardItem.id,
+          itemName: "Guard Test Widget",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+        }],
+      })
+    ).rejects.toThrow(/exceeds remaining/i);
+  });
+
+  it("rejects a sales return that exceeds the remaining amount", async () => {
+    const caller = callerForRamesh();
+    // SR for ₹100 — should FAIL (fully adjusted)
+    await expect(
+      caller.salesReturn.create({
+        partyId: world.party1.id,
+        type: "sale",
+        invoiceDate: isoNow(),
+        referenceDocumentId: baseInvoice.id,
+        lineItems: [{
+          itemId: guardItem.id,
+          itemName: "Guard Test Widget",
+          quantity: "1",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+        }],
+      })
+    ).rejects.toThrow(/exceeds remaining/i);
+  });
+
+  it("allows CN without referenceDocumentId (standalone, no limit enforced)", async () => {
+    const caller = callerForRamesh();
+    // Standalone CN for any amount — no ref, no guard
+    const cn = await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale",
+      invoiceDate: isoNow(),
+      lineItems: [{
+        itemId: guardItem.id,
+        itemName: "Guard Test Widget",
+        quantity: "999",
+        unitPrice: "100.00",
+        taxPercent: "0",
+        discountPercent: "0",
+      }],
+    });
+    expect(cn.documentType).toBe("credit_note");
+  });
+
+  it("conversion via document.convert also respects the limit", async () => {
+    const caller = callerForRamesh();
+    // baseInvoice is fully adjusted (₹1,000). Converting it to CN should fail.
+    await expect(
+      caller.document.convert({
+        sourceDocumentId: baseInvoice.id,
+        targetDocumentType: "credit_note",
+      })
+    ).rejects.toThrow(/exceeds remaining/i);
   });
 });

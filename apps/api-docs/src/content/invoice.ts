@@ -16,7 +16,7 @@ export const invoiceEndpoints: EndpointGroup = {
       input: [
         { name: "documentType", type: "enum", required: false, description: "Document type to list", default: "invoice", enumValues: ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] },
         { name: "type", type: "enum", required: false, description: "Filter by invoice direction", enumValues: ["sale", "purchase"] },
-        { name: "status", type: "enum | enum[]", required: false, description: "Filter by current status. Pass a single value or an array to match multiple statuses (e.g. `[\"sent\", \"partial\", \"overdue\"]` for all unpaid).", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] },
+        { name: "status", type: "enum | enum[]", required: false, description: "Filter by current status. Pass a single value or an array to match multiple statuses (e.g. `[\"sent\", \"partial\", \"overdue\"]` for all unpaid). Status is computed dynamically — invoices fully covered by credit notes or sales returns are returned as `adjusted`.", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled", "adjusted"] },
         { name: "partyId", type: "string (UUID)", required: false, description: "Filter invoices for a specific party" },
         { name: "fromDate", type: "string (ISO 8601)", required: false, description: "Start of date range (inclusive)" },
         { name: "toDate", type: "string (ISO 8601)", required: false, description: "End of date range (inclusive)" },
@@ -28,7 +28,7 @@ export const invoiceEndpoints: EndpointGroup = {
         { name: "limit", type: "number", required: false, description: "Items per page (1–100)", default: "20" },
       ],
       output: {
-        description: "Paginated invoice list with party name denormalized.",
+        description: "Paginated invoice list with party name denormalized. `status` is computed dynamically — an invoice fully covered by credit notes or sales returns will show `adjusted` instead of the stored status.",
         example: {
           data: [
             {
@@ -42,6 +42,7 @@ export const invoiceEndpoints: EndpointGroup = {
               totalAmount: "26250.00",
               amountPaid: "0.00",
               balanceDue: "26250.00",
+              totalAdjusted: "0.00",
               partyName: "Gupta Enterprises",
               partyId: "party-uuid",
               createdByName: "Rahul Sharma",
@@ -94,7 +95,7 @@ result = resp.json()["result"]["data"]["json"]`,
         { name: "id", type: "string (UUID)", required: true, description: "Invoice ID" },
       ],
       output: {
-        description: "Full invoice object with line items and party.",
+        description: "Full invoice object with line items and party. `status` is computed dynamically — an invoice fully covered by linked credit notes or sales returns will show `adjusted`. `totalAdjusted` reflects the cumulative amount offset by those documents. `relatedDocuments` lists all credit notes and sales returns linked to this invoice.",
         example: {
           id: "inv-uuid",
           invoiceNumber: "BB-14821",
@@ -111,6 +112,8 @@ result = resp.json()["result"]["data"]["json"]`,
           totalAmount: "26250.00",
           amountPaid: "0.00",
           balanceDue: "26250.00",
+          totalAdjusted: "0.00",
+          relatedDocuments: [],
           notes: "Delivery to warehouse on 28th. NEFT payment preferred.",
           termsAndConditions: null,
           lineItems: [
@@ -288,7 +291,7 @@ print("Total:  ", invoice["totalAmount"])    # "26250.00"`,
         "All monetary values (`quantity`, `unitPrice`, `taxPercent`, etc.) must be passed as strings, not numbers. The API enforces `NUMERIC(15,2)` precision.",
         "Invoice number is auto-generated — you cannot set it manually. Use `business.updateSequenceNumber` to adjust the counter.",
         "Stock is updated atomically in the same transaction as invoice creation. If stock update fails, the invoice is not created.",
-        "`status` is always `draft` on creation. Use `invoice.updateStatus` to advance the lifecycle.",
+        "`status` is always `draft` on creation. Use `invoice.updateStatus` to advance the lifecycle. The `adjusted` status is computed automatically when linked credit notes or sales returns fully cover the invoice amount — do not set it manually.",
         "Tax percent is validated to be ≤ 56% (the maximum GST rate including cess).",
       ],
       relatedEndpoints: ["invoice-update-status", "party-list", "item-list"],
@@ -303,7 +306,7 @@ print("Total:  ", invoice["totalAmount"])    # "26250.00"`,
       requiredRole: "member",
       input: [
         { name: "id", type: "string (UUID)", required: true, description: "Invoice ID" },
-        { name: "status", type: "enum", required: true, description: "New status", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] },
+        { name: "status", type: "enum", required: true, description: "New status. Note: `adjusted` is a computed status set automatically when credit notes or sales returns fully cover an invoice — do not set it manually.", enumValues: ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled", "adjusted"] },
       ],
       output: {
         description: "Updated invoice object.",

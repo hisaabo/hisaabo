@@ -289,6 +289,48 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             : (input.additionalCharges || "0");
           const roundOff = input.roundOff || "0";
 
+          // Server-side guard: CN/SR/PR total must not exceed the referenced invoice's total.
+          // This prevents over-crediting or over-returning against a single invoice.
+          if (
+            input.referenceDocumentId &&
+            ["credit_note", "sales_return", "purchase_return"].includes(docType)
+          ) {
+            const [refInvoice] = await tx
+              .select({ totalAmount: invoices.totalAmount })
+              .from(invoices)
+              .where(and(
+                eq(invoices.id, input.referenceDocumentId),
+                eq(invoices.businessId, ctx.businessId),
+              ))
+              .limit(1);
+
+            if (!refInvoice) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "Referenced invoice not found" });
+            }
+
+            // Sum all existing CN/SR/PR already issued against this invoice
+            const [{ alreadyAdjusted }] = await tx
+              .select({
+                alreadyAdjusted: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)`,
+              })
+              .from(invoices)
+              .where(and(
+                eq(invoices.referenceDocumentId, input.referenceDocumentId),
+                eq(invoices.businessId, ctx.businessId),
+                sql`${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')`,
+                sql`${invoices.status} NOT IN ('cancelled')`,
+                isNull(invoices.deletedAt),
+              ));
+
+            const remaining = parseFloat(refInvoice.totalAmount) - parseFloat(alreadyAdjusted);
+            if (parseFloat(totals.total) > remaining + 0.01) { // 0.01 tolerance for rounding
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Amount exceeds remaining adjustable amount. Invoice total: ${refInvoice.totalAmount}, already adjusted: ${alreadyAdjusted}, remaining: ${remaining.toFixed(2)}, attempted: ${totals.total}`,
+              });
+            }
+          }
+
           const [result] = await tx
             .insert(invoices)
             .values({
@@ -353,6 +395,38 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                   })
                   .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
               }
+            }
+          }
+
+          // Auto-update referenced invoice status to "adjusted" when fully covered
+          if (
+            input.referenceDocumentId &&
+            ["credit_note", "sales_return", "purchase_return"].includes(docType)
+          ) {
+            const [{ totalAdj }] = await tx
+              .select({
+                totalAdj: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric), 0)`,
+              })
+              .from(invoices)
+              .where(and(
+                eq(invoices.referenceDocumentId, input.referenceDocumentId),
+                eq(invoices.businessId, ctx.businessId),
+                sql`${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')`,
+                sql`${invoices.status} NOT IN ('cancelled')`,
+                isNull(invoices.deletedAt),
+              ));
+
+            const [{ refTotal }] = await tx
+              .select({ refTotal: invoices.totalAmount })
+              .from(invoices)
+              .where(eq(invoices.id, input.referenceDocumentId))
+              .limit(1);
+
+            if (parseFloat(totalAdj) >= parseFloat(refTotal) - 0.01) {
+              await tx
+                .update(invoices)
+                .set({ status: "adjusted", updatedAt: new Date() })
+                .where(eq(invoices.id, input.referenceDocumentId));
             }
           }
 

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
@@ -153,6 +153,7 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
 
 export default function SalesReturnCreateScreen() {
   const router = useRouter();
+  const { prefillFromInvoiceId } = useLocalSearchParams<{ prefillFromInvoiceId?: string }>();
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
   const [invoiceDate, setInvoiceDate] = useState(todayDate());
   const [notes, setNotes] = useState("");
@@ -160,6 +161,34 @@ export default function SalesReturnCreateScreen() {
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
+  const [referenceDocumentId, setReferenceDocumentId] = useState<string | undefined>(undefined);
+
+  const { data: sourceInvoice } = trpc.invoice.getById.useQuery(
+    { id: prefillFromInvoiceId! },
+    { enabled: !!prefillFromInvoiceId }
+  );
+
+  useEffect(() => {
+    if (!sourceInvoice) return;
+    setReferenceDocumentId(sourceInvoice.id);
+    if (sourceInvoice.party) {
+      setSelectedParty({ id: sourceInvoice.partyId, name: sourceInvoice.party.name });
+    }
+    if (sourceInvoice.lineItems && sourceInvoice.lineItems.length > 0) {
+      setLineItems(
+        sourceInvoice.lineItems.map((li) => ({
+          itemId: li.itemId ?? undefined,
+          itemName: li.itemName,
+          notes: li.description ?? "",
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          taxPercent: li.taxPercent ?? "0",
+          discountPercent: li.discountPercent ?? "0",
+        }))
+      );
+    }
+    setInvoiceDate(todayDate());
+  }, [sourceInvoice]);
 
   const createMutation = trpc.salesReturn.create.useMutation({
     onSuccess: () => { haptic.success(); router.back(); },
@@ -194,6 +223,7 @@ export default function SalesReturnCreateScreen() {
       partyId: selectedParty.id, type: "sale", documentType: "sales_return",
       invoiceDate: invoiceDate.toISOString(), notes: notes.trim() || undefined,
       additionalCharges: "0", invoiceDiscount: "0", invoiceDiscountType: "amount", roundOff: "0",
+      referenceDocumentId: referenceDocumentId,
       // Bug B: itemName is the required name snapshot; description is the
       // optional free-text per-line note (empty → omitted).
       lineItems: validItems.map((li) => ({
@@ -206,7 +236,7 @@ export default function SalesReturnCreateScreen() {
         discountPercent: li.discountPercent || "0",
       })),
     });
-  }, [selectedParty, lineItems, invoiceDate, notes, createMutation]);
+  }, [selectedParty, lineItems, invoiceDate, notes, referenceDocumentId, createMutation]);
 
   return (
     <SafeAreaView style={s.container} edges={["top"]}>

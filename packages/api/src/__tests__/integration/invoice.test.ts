@@ -1029,3 +1029,291 @@ describe("invoice.delete", () => {
     expect(result.success).toBe(true);
   });
 });
+
+// =============================================================================
+// invoice.getById — adjusted status and related documents
+//
+// Verifies that getById computes effectiveStatus="adjusted" when the sum of all
+// non-cancelled CN/SR documents referencing this invoice equals or exceeds the
+// invoice total, and that relatedDocuments and totalAdjusted are populated.
+// =============================================================================
+
+describe("invoice.getById — adjusted status and related documents", () => {
+  // Invoice for ₹1000 — fully covered by CN(₹600) + SR(₹400)
+  let fullyAdjustedInvoiceId: string;
+  // Invoice for ₹1000 — only partially covered by CN(₹300)
+  let partiallyAdjustedInvoiceId: string;
+  // Invoice for ₹500 — cancelled, so it must NOT become "adjusted"
+  let cancelledInvoiceId: string;
+  // Invoice for ₹500 — kept as draft, so it must NOT become "adjusted"
+  let draftInvoiceId: string;
+
+  beforeAll(async () => {
+    const caller = callerForRamesh();
+
+    // --- Fully adjusted: invoice ₹1000, CN ₹600 + SR ₹400 ---
+    const inv1 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "Adj Full Product", quantity: "10", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    // Mark as sent so it qualifies for "adjusted" (not draft/cancelled)
+    await caller.invoice.updateStatus({ id: inv1.id, status: "sent" });
+    fullyAdjustedInvoiceId = inv1.id;
+
+    // Create CN for ₹600 referencing the invoice
+    await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: inv1.id,
+      lineItems: [
+        {
+          itemName: "Credit Note Line",
+          quantity: "6",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Create SR for ₹400 referencing the invoice
+    await caller.salesReturn.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: inv1.id,
+      lineItems: [
+        {
+          itemName: "Sales Return Line",
+          quantity: "4",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // --- Partially adjusted: invoice ₹1000, CN ₹300 only ---
+    const inv2 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "Adj Partial Product", quantity: "10", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    await caller.invoice.updateStatus({ id: inv2.id, status: "sent" });
+    partiallyAdjustedInvoiceId = inv2.id;
+
+    await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: inv2.id,
+      lineItems: [
+        {
+          itemName: "Partial CN Line",
+          quantity: "3",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // --- Cancelled invoice: even if fully adjusted, stays "cancelled" ---
+    const inv3 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "Cancelled Invoice Product", quantity: "5", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    await caller.invoice.updateStatus({ id: inv3.id, status: "cancelled" });
+    cancelledInvoiceId = inv3.id;
+
+    // --- Draft invoice: even if fully adjusted, must not show "adjusted" ---
+    const inv4 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "Draft Invoice Product", quantity: "5", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    // Left as "draft" (default)
+    draftInvoiceId = inv4.id;
+  });
+
+  it("returns status='adjusted' when CN+SR total equals invoice total", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: fullyAdjustedInvoiceId });
+
+    expect(result).not.toBeNull();
+    expect(result!.status).toBe("adjusted");
+  });
+
+  it("returns original status when only partially adjusted", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: partiallyAdjustedInvoiceId });
+
+    expect(result).not.toBeNull();
+    // Partially adjusted — should retain original status ("sent"), not "adjusted"
+    expect(result!.status).toBe("sent");
+  });
+
+  it("returns totalAdjusted field with correct amount for fully adjusted invoice", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: fullyAdjustedInvoiceId });
+
+    expect(result).not.toBeNull();
+    expect(result!.totalAdjusted).toBeDefined();
+    // CN(600) + SR(400) = 1000
+    expect(parseFloat(result!.totalAdjusted)).toBeCloseTo(1000, 1);
+  });
+
+  it("returns relatedDocuments array with CN/SR details", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: fullyAdjustedInvoiceId });
+
+    expect(result).not.toBeNull();
+    expect(result!.relatedDocuments).toBeDefined();
+    expect(Array.isArray(result!.relatedDocuments)).toBe(true);
+    // Should have both the CN and the SR
+    expect(result!.relatedDocuments.length).toBe(2);
+
+    const docTypes = result!.relatedDocuments.map((d) => d.documentType);
+    expect(docTypes).toContain("credit_note");
+    expect(docTypes).toContain("sales_return");
+  });
+
+  it("does not override cancelled invoice status to adjusted", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: cancelledInvoiceId });
+
+    expect(result).not.toBeNull();
+    // Cancelled must stay "cancelled" regardless of adjustment state
+    expect(result!.status).toBe("cancelled");
+    expect(result!.status).not.toBe("adjusted");
+  });
+
+  it("does not override draft invoice status to adjusted", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.getById({ id: draftInvoiceId });
+
+    expect(result).not.toBeNull();
+    // Draft must stay "draft" — it cannot be considered adjusted
+    expect(result!.status).toBe("draft");
+    expect(result!.status).not.toBe("adjusted");
+  });
+});
+
+// =============================================================================
+// invoice.list — totalAdjusted and effective status
+//
+// Verifies that the list procedure returns the totalAdjusted field and computes
+// effectiveStatus="adjusted" for fully-covered invoices.
+// =============================================================================
+
+describe("invoice.list — totalAdjusted and effective status", () => {
+  let listFullInvoiceId: string;
+  let listPartialInvoiceId: string;
+
+  beforeAll(async () => {
+    const caller = callerForRamesh();
+
+    // Fully adjusted invoice for list tests
+    const inv1 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "List Adj Full Item", quantity: "5", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    await caller.invoice.updateStatus({ id: inv1.id, status: "sent" });
+    listFullInvoiceId = inv1.id;
+
+    await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: inv1.id,
+      lineItems: [
+        {
+          itemName: "List Full CN",
+          quantity: "5",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+
+    // Partially adjusted invoice for list tests
+    const inv2 = await caller.invoice.create(
+      baseSaleInput(world.party1.id, [
+        { itemName: "List Adj Partial Item", quantity: "5", unitPrice: "100.00", taxPercent: "0" },
+      ])
+    );
+    await caller.invoice.updateStatus({ id: inv2.id, status: "sent" });
+    listPartialInvoiceId = inv2.id;
+
+    await caller.creditNote.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      referenceDocumentId: inv2.id,
+      lineItems: [
+        {
+          itemName: "List Partial CN",
+          quantity: "2",
+          unitPrice: "100.00",
+          taxPercent: "0",
+          discountPercent: "0",
+          conversionFactor: null,
+          variantId: null,
+        },
+      ],
+    });
+  });
+
+  it("includes totalAdjusted field in list results", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.list({ page: 1, limit: 100 });
+
+    expect(result.data.length).toBeGreaterThan(0);
+    // Every list item must include the totalAdjusted field
+    for (const inv of result.data) {
+      expect(inv).toHaveProperty("totalAdjusted");
+    }
+  });
+
+  it("computes effective status='adjusted' when fully covered in list", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.list({ page: 1, limit: 100 });
+
+    const fullyAdj = result.data.find((inv) => inv.id === listFullInvoiceId);
+    expect(fullyAdj).toBeDefined();
+    expect(fullyAdj!.status).toBe("adjusted");
+  });
+
+  it("keeps original status for partially covered invoices in list", async () => {
+    const caller = callerForRamesh();
+
+    const result = await caller.invoice.list({ page: 1, limit: 100 });
+
+    const partialAdj = result.data.find((inv) => inv.id === listPartialInvoiceId);
+    expect(partialAdj).toBeDefined();
+    // Should remain "sent", not "adjusted"
+    expect(partialAdj!.status).toBe("sent");
+    expect(partialAdj!.status).not.toBe("adjusted");
+  });
+});

@@ -56,12 +56,17 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
-      // Pre-aggregate invoice balances per party in a single scan
-      // instead of a correlated subquery that executes once per row.
+      // Pre-aggregate invoice balances per party in a single scan.
+      // Credit notes, sales returns, and purchase returns REDUCE the balance.
       const invoiceBalanceSq = ctx.db
         .select({
           partyId: invoices.partyId,
-          balance: sql<string>`COALESCE(SUM(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric), 0)`.as("inv_balance"),
+          balance: sql<string>`COALESCE(SUM(
+            CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
+              THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+              ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+            END
+          ), 0)`.as("inv_balance"),
         })
         .from(invoices)
         .where(and(
@@ -130,16 +135,25 @@ export const partyRouter = router({
 
       if (!party) return null;
 
-      // Calculate balance from invoices and payments
+      // Calculate balance: CN/SR/PR reduce the outstanding, invoices/DN add to it
       const [balanceResult] = await ctx.db.select({
-        totalInvoiced: sql<string>`coalesce(sum(${invoices.totalAmount}), '0')`,
-        totalPaid: sql<string>`coalesce(sum(${invoices.amountPaid}), '0')`,
+        netBalance: sql<string>`coalesce(sum(
+          CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
+            THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+            ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+          END
+        ), 0)`,
       }).from(invoices)
-        .where(and(eq(invoices.partyId, input.id), eq(invoices.businessId, ctx.businessId)));
+        .where(and(
+          eq(invoices.partyId, input.id),
+          eq(invoices.businessId, ctx.businessId),
+          sql`${invoices.status} NOT IN ('cancelled')`,
+          isNull(invoices.deletedAt),
+        ));
 
       return {
         ...party,
-        balance: money.sub(money.add(party.openingBalance, balanceResult.totalInvoiced || "0"), balanceResult.totalPaid || "0"),
+        balance: money.add(party.openingBalance, balanceResult.netBalance || "0"),
       };
     }),
 
@@ -361,7 +375,9 @@ export const partyRouter = router({
       const invoiceConditions = [
         eq(invoices.partyId, input.partyId),
         eq(invoices.businessId, ctx.businessId),
-        eq(invoices.documentType, "invoice"),
+        sql`${invoices.documentType} IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')`,
+        sql`${invoices.status} NOT IN ('cancelled')`,
+        isNull(invoices.deletedAt),
       ];
       const paymentConditions = [
         eq(payments.partyId, input.partyId),
@@ -381,6 +397,7 @@ export const partyRouter = router({
         ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
+          documentType: invoices.documentType,
           date: invoices.invoiceDate,
           type: invoices.type,
           totalAmount: invoices.totalAmount,
@@ -396,25 +413,37 @@ export const partyRouter = router({
       ]);
 
       // Build ledger entries interleaved by date.
-      // For a customer (sale): invoice is a debit (money owed to us), payment is a credit.
-      // For a supplier (purchase): invoice is a credit (money we owe), payment is a debit.
+      // CN/SR/PR reverse the normal debit/credit direction.
+      const DOC_LABELS: Record<string, string> = {
+        invoice: "", credit_note: "Credit Note", sales_return: "Sales Return",
+        purchase_return: "Purchase Return", debit_note: "Debit Note",
+      };
+      const isReduction = (dt: string) => ["credit_note", "sales_return", "purchase_return"].includes(dt);
+
       const entries = [
-        ...partyInvoices.map(inv => ({
-          date: inv.date,
-          type: "invoice" as const,
-          number: inv.invoiceNumber,
-          description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
-          debit: inv.type === "sale" ? inv.totalAmount : "0",
-          credit: inv.type === "sale" ? "0" : inv.totalAmount,
-          status: inv.status,
-          documentId: inv.id,
-        })),
+        ...partyInvoices.map(inv => {
+          const label = DOC_LABELS[inv.documentType] || (inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice");
+          const reduce = isReduction(inv.documentType);
+          // Sale invoice = debit; sale credit note = credit (reversal). Mirror for purchase.
+          const isSaleDir = inv.type === "sale";
+          const debit = (isSaleDir && !reduce) || (!isSaleDir && reduce) ? inv.totalAmount : "0";
+          const credit = debit === "0" ? inv.totalAmount : "0";
+          return {
+            date: inv.date,
+            type: inv.documentType as string,
+            number: inv.invoiceNumber,
+            description: label,
+            debit,
+            credit,
+            status: inv.status,
+            documentId: inv.id,
+          };
+        }),
         ...partyPayments.map(pmt => ({
           date: pmt.date,
           type: "payment" as const,
           number: pmt.paymentNumber || "",
           description: `Payment (${pmt.mode})`,
-          // Payment received from customer = credit; payment made to supplier = debit
           debit: party.type === "supplier" ? pmt.amount : "0",
           credit: party.type === "supplier" ? "0" : pmt.amount,
           status: null as string | null,
@@ -473,7 +502,9 @@ export const partyRouter = router({
       const invoiceConditions = [
         eq(invoices.partyId, input.partyId),
         eq(invoices.businessId, ctx.businessId),
-        eq(invoices.documentType, "invoice"),
+        sql`${invoices.documentType} IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')`,
+        sql`${invoices.status} NOT IN ('cancelled')`,
+        isNull(invoices.deletedAt),
       ];
       const paymentConditions = [
         eq(payments.partyId, input.partyId),
@@ -493,6 +524,7 @@ export const partyRouter = router({
         ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
+          documentType: invoices.documentType,
           date: invoices.invoiceDate,
           type: invoices.type,
           totalAmount: invoices.totalAmount,
@@ -507,14 +539,21 @@ export const partyRouter = router({
         }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate).limit(input.limit),
       ]);
 
+      const DOC_LABELS: Record<string, string> = {
+        invoice: "", credit_note: "Credit Note", sales_return: "Sales Return",
+        purchase_return: "Purchase Return", debit_note: "Debit Note",
+      };
+      const isReduction = (dt: string) => ["credit_note", "sales_return", "purchase_return"].includes(dt);
+
       const entries = [
-        ...partyInvoices.map(inv => ({
-          date: inv.date,
-          number: inv.invoiceNumber,
-          description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
-          debit: inv.type === "sale" ? inv.totalAmount : "0",
-          credit: inv.type === "sale" ? "0" : inv.totalAmount,
-        })),
+        ...partyInvoices.map(inv => {
+          const label = DOC_LABELS[inv.documentType] || (inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice");
+          const reduce = isReduction(inv.documentType);
+          const isSaleDir = inv.type === "sale";
+          const debit = (isSaleDir && !reduce) || (!isSaleDir && reduce) ? inv.totalAmount : "0";
+          const credit = debit === "0" ? inv.totalAmount : "0";
+          return { date: inv.date, number: inv.invoiceNumber, description: label, debit, credit };
+        }),
         ...partyPayments.map(pmt => ({
           date: pmt.date,
           number: pmt.paymentNumber || "",
@@ -750,10 +789,11 @@ export const partyRouter = router({
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
       const toDate = input.toDate ? new Date(input.toDate) : null;
 
-      // UNION ALL: invoices (debit for sales, credit for purchases) + payments
-      // Uses raw SQL with parameterised values — column names are safe literals.
+      // UNION ALL: invoices + CN/SR/PR/DN + payments
+      // CN/SR/PR reverse the normal debit/credit direction.
       const ledgerRows = await ctx.db.execute(sql`
         WITH ledger AS (
+          -- Sale invoices: debit (customer owes us)
           SELECT
             invoice_date AS entry_date,
             'invoice'::text AS entry_type,
@@ -767,9 +807,12 @@ export const partyRouter = router({
             AND business_id = ${ctx.businessId}
             AND type = 'sale'
             AND document_type = 'invoice'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
 
           UNION ALL
 
+          -- Purchase invoices: credit (we owe supplier)
           SELECT
             invoice_date AS entry_date,
             'purchase'::text AS entry_type,
@@ -783,9 +826,88 @@ export const partyRouter = router({
             AND business_id = ${ctx.businessId}
             AND type = 'purchase'
             AND document_type = 'invoice'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
 
           UNION ALL
 
+          -- Sale credit notes / sales returns: credit (reduces what customer owes)
+          SELECT
+            invoice_date AS entry_date,
+            document_type::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            total_amount::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type IN ('credit_note', 'sales_return')
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Purchase credit notes / purchase returns: debit (reduces what we owe)
+          SELECT
+            invoice_date AS entry_date,
+            document_type::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            total_amount::numeric AS debit,
+            0::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'purchase'
+            AND document_type IN ('credit_note', 'purchase_return')
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Sale debit notes: debit (customer owes more)
+          SELECT
+            invoice_date AS entry_date,
+            'debit_note'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            total_amount::numeric AS debit,
+            0::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'sale'
+            AND document_type = 'debit_note'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Purchase debit notes: credit (we owe more)
+          SELECT
+            invoice_date AS entry_date,
+            'debit_note'::text AS entry_type,
+            invoice_number AS document_number,
+            id AS document_id,
+            0::numeric AS debit,
+            total_amount::numeric AS credit,
+            status
+          FROM invoices
+          WHERE party_id = ${input.partyId}
+            AND business_id = ${ctx.businessId}
+            AND type = 'purchase'
+            AND document_type = 'debit_note'
+            AND status NOT IN ('cancelled')
+            AND deleted_at IS NULL
+
+          UNION ALL
+
+          -- Payments received from customer: credit
           SELECT
             payment_date AS entry_date,
             'payment'::text AS entry_type,

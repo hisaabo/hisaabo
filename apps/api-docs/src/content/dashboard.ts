@@ -58,7 +58,7 @@ summary = resp.json()["result"]["data"]["json"]
 print("Sales:", summary["totalSales"])`,
       },
       gotchas: [
-        "`receivable` and `payable` are always all-time (not period-scoped) — they represent open balances on non-paid, non-cancelled invoices regardless of the date range.",
+        "`receivable` and `payable` are always all-time (not period-scoped) — they represent open balances on non-paid, non-cancelled invoices regardless of the date range. Amounts offset by credit notes or sales returns (`totalAdjusted`) are deducted from the outstanding balance before computing these figures.",
         "`cashInHand` is an estimate: cash received from sales minus cash paid for purchases minus expenses in the selected period. It is NOT the actual bank balance.",
         "The financial year start month is read from the business record each time — if it changes, the default period window shifts accordingly.",
       ],
@@ -379,7 +379,7 @@ const overdue = aging.rows.filter(r => parseFloat(r.days90Plus) > 0);`,
 )`,
       },
       gotchas: [
-        "Only sale invoices with status NOT IN ('paid', 'cancelled', 'draft') are included.",
+        "Only sale invoices with status NOT IN ('paid', 'cancelled', 'draft', 'adjusted') are included. Invoices fully covered by credit notes or sales returns (`adjusted` status) are excluded from aging.",
         "The aging uses the current server time — results will shift day to day.",
         "For the full outstanding report with payables and filtering, use `reports.outstanding` instead.",
       ],

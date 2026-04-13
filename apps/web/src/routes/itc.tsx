@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
+import { Badge } from "@/components/ui/Badge";
+import { StatCard } from "@/components/ui/StatCard";
 import { toast } from "@/hooks/useToast";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PillTabs } from "@/components/ui/Tabs";
@@ -70,28 +73,28 @@ function returnPeriodString(year: number, month: number): string {
 function statusBadgeColor(status: string): string {
   switch (status) {
     case "available":
-      return "bg-emerald-600/[0.08] text-emerald-700 dark:text-emerald-400";
+      return badgeColor("emerald");
     case "utilized":
-      return "bg-blue-600/[0.08] text-blue-700 dark:text-blue-400";
+      return badgeColor("blue");
     case "reversed":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     case "blocked":
-      return "bg-red-600/[0.08] text-red-700 dark:text-red-400";
+      return badgeColor("red");
     case "reclaimed":
-      return "bg-teal-600/[0.08] text-teal-700 dark:text-teal-400";
+      return badgeColor("teal");
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
 function urgencyBadgeColor(urgency: string): string {
   switch (urgency) {
     case "critical":
-      return "bg-red-600/[0.08] text-red-700 dark:text-red-400";
+      return badgeColor("red");
     case "warning":
-      return "bg-amber-600/[0.08] text-amber-700 dark:text-amber-400";
+      return badgeColor("amber");
     default:
-      return "bg-surface-2 text-text-secondary";
+      return badgeColorFallback;
   }
 }
 
@@ -201,49 +204,50 @@ function DashboardView({
     <div className="space-y-6">
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Available ITC */}
-        <div className="card px-4 py-3 border-l-4 border-emerald-500">
-          <p className="text-xs text-text-tertiary mb-1">Available ITC</p>
-          <p className="text-lg font-bold tabular-nums text-emerald-600">{fmt(data.summary.available.total)}</p>
-          <div className="mt-2 space-y-0.5">
-            <p className="text-[11px] text-text-tertiary">CGST: {fmt(data.summary.available.cgst)}</p>
-            <p className="text-[11px] text-text-tertiary">SGST: {fmt(data.summary.available.sgst)}</p>
-            <p className="text-[11px] text-text-tertiary">IGST: {fmt(data.summary.available.igst)}</p>
-          </div>
-        </div>
-
-        {/* Utilized */}
-        <div className="card px-4 py-3 border-l-4 border-blue-500">
-          <p className="text-xs text-text-tertiary mb-1">Utilized</p>
-          <p className="text-lg font-bold tabular-nums text-blue-600">{fmt(data.summary.utilized.total)}</p>
-          <div className="mt-2 space-y-0.5">
-            <p className="text-[11px] text-text-tertiary">CGST: {fmt(data.summary.utilized.cgst)}</p>
-            <p className="text-[11px] text-text-tertiary">SGST: {fmt(data.summary.utilized.sgst)}</p>
-            <p className="text-[11px] text-text-tertiary">IGST: {fmt(data.summary.utilized.igst)}</p>
-          </div>
-        </div>
-
-        {/* Reversed */}
-        <div className="card px-4 py-3 border-l-4 border-amber-500">
-          <p className="text-xs text-text-tertiary mb-1">Reversed</p>
-          <p className="text-lg font-bold tabular-nums text-amber-600">{fmt(data.summary.reversed.total)}</p>
-          <div className="mt-2 space-y-0.5">
-            <p className="text-[11px] text-text-tertiary">CGST: {fmt(data.summary.reversed.cgst)}</p>
-            <p className="text-[11px] text-text-tertiary">SGST: {fmt(data.summary.reversed.sgst)}</p>
-            <p className="text-[11px] text-text-tertiary">IGST: {fmt(data.summary.reversed.igst)}</p>
-          </div>
-        </div>
-
-        {/* Blocked */}
-        <div className="card px-4 py-3 border-l-4 border-red-500">
-          <p className="text-xs text-text-tertiary mb-1">Blocked (Sec 17(5))</p>
-          <p className="text-lg font-bold tabular-nums text-red-600">{fmt(data.summary.blocked.total)}</p>
-          <div className="mt-2 space-y-0.5">
-            <p className="text-[11px] text-text-tertiary">CGST: {fmt(data.summary.blocked.cgst)}</p>
-            <p className="text-[11px] text-text-tertiary">SGST: {fmt(data.summary.blocked.sgst)}</p>
-            <p className="text-[11px] text-text-tertiary">IGST: {fmt(data.summary.blocked.igst)}</p>
-          </div>
-        </div>
+        <StatCard
+          label="Available ITC"
+          value={fmt(data.summary.available.total)}
+          valueColor="text-emerald-600"
+          accentColor="border-emerald-500"
+          subItems={[
+            { label: "CGST", value: fmt(data.summary.available.cgst) },
+            { label: "SGST", value: fmt(data.summary.available.sgst) },
+            { label: "IGST", value: fmt(data.summary.available.igst) },
+          ]}
+        />
+        <StatCard
+          label="Utilized"
+          value={fmt(data.summary.utilized.total)}
+          valueColor="text-blue-600"
+          accentColor="border-blue-500"
+          subItems={[
+            { label: "CGST", value: fmt(data.summary.utilized.cgst) },
+            { label: "SGST", value: fmt(data.summary.utilized.sgst) },
+            { label: "IGST", value: fmt(data.summary.utilized.igst) },
+          ]}
+        />
+        <StatCard
+          label="Reversed"
+          value={fmt(data.summary.reversed.total)}
+          valueColor="text-amber-600"
+          accentColor="border-amber-500"
+          subItems={[
+            { label: "CGST", value: fmt(data.summary.reversed.cgst) },
+            { label: "SGST", value: fmt(data.summary.reversed.sgst) },
+            { label: "IGST", value: fmt(data.summary.reversed.igst) },
+          ]}
+        />
+        <StatCard
+          label="Blocked (Sec 17(5))"
+          value={fmt(data.summary.blocked.total)}
+          valueColor="text-red-600"
+          accentColor="border-red-500"
+          subItems={[
+            { label: "CGST", value: fmt(data.summary.blocked.cgst) },
+            { label: "SGST", value: fmt(data.summary.blocked.sgst) },
+            { label: "IGST", value: fmt(data.summary.blocked.igst) },
+          ]}
+        />
       </div>
 
       {/* Aging alerts preview */}
@@ -275,12 +279,9 @@ function DashboardView({
                 <p className="text-sm font-semibold tabular-nums text-red-600 whitespace-nowrap">
                   {fmt(alert.itcAmount)}
                 </p>
-                <span className={cn(
-                  "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium uppercase",
-                  urgencyBadgeColor(alert.urgency),
-                )}>
+                <Badge size="md" color={urgencyBadgeColor(alert.urgency)} className="uppercase rounded">
                   {alert.urgency}
-                </span>
+                </Badge>
               </div>
             ))}
           </div>
@@ -463,12 +464,9 @@ function LedgerView({ returnPeriod }: { returnPeriod: string }) {
                         {entry.returnPeriod}
                       </td>
                       <td>
-                        <span className={cn(
-                          "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium uppercase",
-                          statusBadgeColor(entry.status),
-                        )}>
+                        <Badge size="md" color={statusBadgeColor(entry.status)} className="uppercase rounded">
                           {entry.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="text-right tabular-nums text-text-secondary">{fmt(entry.cgst)}</td>
                       <td className="text-right tabular-nums text-text-secondary">{fmt(entry.sgst)}</td>
@@ -478,9 +476,9 @@ function LedgerView({ returnPeriod }: { returnPeriod: string }) {
                       </td>
                       <td>
                         {entry.isReverseCharge && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-purple-600/[0.08] text-purple-700 dark:text-purple-400">
+                          <Badge size="sm" color="bg-purple-600/[0.08] text-purple-700 dark:text-purple-400" className="uppercase">
                             RCM
-                          </span>
+                          </Badge>
                         )}
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -734,12 +732,9 @@ function AgingAlertsView() {
                     {fmt(alert.itcAmount)}
                   </td>
                   <td>
-                    <span className={cn(
-                      "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium uppercase",
-                      urgencyBadgeColor(alert.urgency),
-                    )}>
+                    <Badge size="md" color={urgencyBadgeColor(alert.urgency)} className="uppercase rounded">
                       {alert.urgency}
-                    </span>
+                    </Badge>
                   </td>
                 </tr>
               ))}

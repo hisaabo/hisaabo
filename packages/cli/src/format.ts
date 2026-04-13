@@ -82,6 +82,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: (s: string) => strin
   partial:     { label: "PARTIAL", color: (s) => chalk.yellow(s) },
   overdue:     { label: "OVERDUE", color: (s) => chalk.red(s) },
   cancelled:   { label: "CANCEL",  color: (s) => chalk.dim(chalk.strikethrough(s)) },
+  adjusted:    { label: "ADJUST",  color: (s) => chalk.magenta(s) },
   unfulfilled: { label: "UNFUL",   color: (s) => chalk.blue(s) },
   pending:     { label: "PEND",    color: (s) => chalk.yellow(s) },
   confirmed:   { label: "CONF",    color: (s) => chalk.blue(s) },

@@ -27,7 +27,7 @@ import { colors } from "../../../src/lib/theme";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
 
-type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
+type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
 
 async function sharePDF(
   invoiceId: string,
@@ -480,6 +480,24 @@ export default function InvoiceDetailScreen() {
     onError: (err) => Alert.alert("Error", err.message),
   });
 
+  const handleIssueCreditNote = () => {
+    if (!invoice) return;
+    haptic.light();
+    router.push({
+      pathname: "/(app)/(more)/credit-notes/create",
+      params: { prefillFromInvoiceId: invoice.id },
+    } as never);
+  };
+
+  const handleCreateSalesReturn = () => {
+    if (!invoice) return;
+    haptic.light();
+    router.push({
+      pathname: "/(app)/(more)/sales-returns/create",
+      params: { prefillFromInvoiceId: invoice.id },
+    } as never);
+  };
+
   const handleStatusChange = (status: StatusKey) => {
     if (!invoice) return;
     haptic.medium();
@@ -572,8 +590,10 @@ export default function InvoiceDetailScreen() {
   const isGST = taxTotal > 0;
   const defaultFormat = isGST ? "a4" : "a5";
   const amountPaid = parseFloat(invoice.amountPaid ?? "0");
+  const totalAdjusted = parseFloat((invoice as { totalAdjusted?: string }).totalAdjusted ?? "0");
   const total = parseFloat(invoice.totalAmount ?? "0");
-  const balance = total - amountPaid;
+  const balance = total - amountPaid - totalAdjusted;
+  const isAdjusted = invoice.status === "adjusted";
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -712,20 +732,35 @@ export default function InvoiceDetailScreen() {
             <Text style={styles.totalValueBold}>{formatCurrency(total)}</Text>
           </View>
           {amountPaid > 0 && (
-            <>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Paid</Text>
-                <Text style={[styles.totalValue, { color: colors.success }]}>
-                  {formatCurrency(amountPaid)}
-                </Text>
-              </View>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Balance</Text>
-                <Text style={[styles.totalValue, { color: balance > 0 ? colors.warning : colors.success }]}>
-                  {formatCurrency(balance)}
-                </Text>
-              </View>
-            </>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Paid</Text>
+              <Text style={[styles.totalValue, { color: colors.success }]}>
+                {formatCurrency(amountPaid)}
+              </Text>
+            </View>
+          )}
+          {totalAdjusted > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Adjusted (CN/SR)</Text>
+              <Text style={[styles.totalValue, { color: "#a78bfa" }]}>
+                -{formatCurrency(totalAdjusted)}
+              </Text>
+            </View>
+          )}
+          {(amountPaid > 0 || totalAdjusted > 0) && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Balance Due</Text>
+              <Text style={[styles.totalValue, { color: balance > 0 ? colors.warning : colors.success }]}>
+                {formatCurrency(Math.max(0, balance))}
+              </Text>
+            </View>
+          )}
+          {isAdjusted && amountPaid <= 0 && (
+            <View style={styles.totalRow}>
+              <Text style={[styles.totalLabel, { color: "#a78bfa" }]}>
+                Settled via credit note / sales return
+              </Text>
+            </View>
           )}
         </View>
 
@@ -739,8 +774,8 @@ export default function InvoiceDetailScreen() {
           </>
         ) : null}
 
-        {/* Shipment tracking — sale invoices only */}
-        {invoice.type === "sale" && <ShipmentSection invoiceId={invoice.id} invoiceStatus={invoice.status} />}
+        {/* Shipment tracking — sale invoices only, hidden for adjusted */}
+        {invoice.type === "sale" && !isAdjusted && <ShipmentSection invoiceId={invoice.id} invoiceStatus={invoice.status} />}
 
         {/* Actions */}
         <Text style={styles.sectionTitle}>Actions</Text>
@@ -768,8 +803,8 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
-        {/* Record Payment (for unpaid invoices) */}
-        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && (
+        {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered) */}
+        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={[styles.actionBtn, { borderColor: colors.success + "60" }]}
@@ -781,6 +816,28 @@ export default function InvoiceDetailScreen() {
             >
               <Ionicons name="card-outline" size={18} color={colors.success} style={styles.actionIcon} />
               <Text style={[styles.actionBtnText, { color: colors.success }]}>Record Payment</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Credit Note / Sales Return conversions — hidden when fully adjusted */}
+        {invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={handleIssueCreditNote}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="document-text-outline" size={18} color={colors.warning} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.warning }]}>Issue Credit Note</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={handleCreateSalesReturn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="return-down-back-outline" size={18} color={colors.warning} style={styles.actionIcon} />
+              <Text style={[styles.actionBtnText, { color: colors.warning }]}>Create Sales Return</Text>
             </TouchableOpacity>
           </View>
         )}

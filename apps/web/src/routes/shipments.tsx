@@ -9,6 +9,9 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DetailField } from "@/components/ui/DetailField";
+import { LinkButton } from "@/components/ui/LinkButton";
+import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { PillTabs } from "@/components/ui/Tabs";
 
 export const Route = createFileRoute("/shipments")({
@@ -261,11 +264,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
         }
       >
         {isLoading ? (
-          <div className="space-y-3 animate-pulse">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="skeleton h-8 rounded-lg" />
-            ))}
-          </div>
+          <SkeletonRows count={6} height="h-8" className="space-y-3 animate-pulse" />
         ) : !s ? (
           <p className="text-text-tertiary text-sm">Shipment not found.</p>
         ) : (
@@ -273,36 +272,32 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
             {/* Status + Invoice link */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-3">
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Status</p>
+                <DetailField label="Status">
                   <ShipmentStatusBadge status={s.status} />
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Party</p>
-                  <p className="text-sm font-semibold text-text-primary">{s.partyName ?? "—"}</p>
-                </div>
+                </DetailField>
+                <DetailField label="Party">
+                  <p className="font-semibold text-text-primary">{s.partyName ?? "—"}</p>
+                </DetailField>
               </div>
               <div className="space-y-3">
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Invoice</p>
+                <DetailField label="Invoice">
                   {s.invoiceNumber ? (
-                    <button
+                    <LinkButton
+                      className="font-mono"
                       onClick={() => {
                         onClose();
                         navigate({ to: "/invoices", search: { selected: s.invoiceId! } } as any);
                       }}
-                      className="text-sm font-mono text-brand-600 hover:underline"
                     >
                       {s.invoiceNumber}
-                    </button>
+                    </LinkButton>
                   ) : (
-                    <p className="text-sm text-text-tertiary">—</p>
+                    <p className="text-text-tertiary">—</p>
                   )}
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-text-tertiary uppercase tracking-wide mb-0.5">Date</p>
-                  <p className="text-sm text-text-primary">{formatDate(s.shipmentDate ?? s.createdAt)}</p>
-                </div>
+                </DetailField>
+                <DetailField label="Date">
+                  <p>{formatDate(s.shipmentDate ?? s.createdAt)}</p>
+                </DetailField>
               </div>
             </div>
 
@@ -548,11 +543,7 @@ function ShipmentsPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="skeleton h-14 rounded-lg" />
-          ))}
-        </div>
+        <SkeletonRows count={6} height="h-14" />
       ) : !list.items.length && !isFetching ? (
         <EmptyState
           icon={

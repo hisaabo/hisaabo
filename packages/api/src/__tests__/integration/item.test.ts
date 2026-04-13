@@ -623,6 +623,109 @@ describe("item.delete not-found guard", () => {
   });
 });
 
+// ── Stock movement direction ─────────────────────────────────────────────────
+
+describe("item.stockMovements — direction correctness", () => {
+  let stockItem: TestItem;
+  let party: Awaited<ReturnType<typeof createParty>>;
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+    party = await createParty(tenantDb, business1.id, { name: "Stock Dir Party" });
+    stockItem = await createItem(tenantDb, business1.id, {
+      name: "Stock Direction Widget",
+      itemType: "product",
+      stockQuantity: "100",
+    });
+
+    // Sale invoice → should be OUT
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "5", unitPrice: "100" }],
+      { type: "sale", documentType: "invoice", status: "sent" },
+    );
+
+    // Purchase invoice → should be IN
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "3", unitPrice: "80" }],
+      { type: "purchase", documentType: "invoice", status: "sent" },
+    );
+
+    // Credit note (sale) → customer returns goods → should be IN
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "2", unitPrice: "100" }],
+      { type: "sale", documentType: "credit_note", status: "sent" },
+    );
+
+    // Sales return → customer returns goods → should be IN
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "1", unitPrice: "100" }],
+      { type: "sale", documentType: "sales_return", status: "sent" },
+    );
+
+    // Credit note (purchase) → we return goods to supplier → should be OUT
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "4", unitPrice: "80" }],
+      { type: "purchase", documentType: "credit_note", status: "sent" },
+    );
+
+    // Delivery challan → should be OUT
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "6", unitPrice: "100" }],
+      { type: "sale", documentType: "delivery_challan", status: "sent" },
+    );
+  });
+
+  it("sale invoice is marked as outflow", async () => {
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    const saleInvoice = movements.find(m => m.documentType === "invoice" && m.invoiceType === "sale");
+    expect(saleInvoice?.direction).toBe("out");
+  });
+
+  it("purchase invoice is marked as inflow", async () => {
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    const purchaseInvoice = movements.find(m => m.documentType === "invoice" && m.invoiceType === "purchase");
+    expect(purchaseInvoice?.direction).toBe("in");
+  });
+
+  it("credit notes are excluded from stock movements (financial only)", async () => {
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    const creditNotes = movements.filter(m => m.documentType === "credit_note");
+    expect(creditNotes).toHaveLength(0);
+  });
+
+  it("sales return is marked as inflow (customer returns goods)", async () => {
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    const sr = movements.find(m => m.documentType === "sales_return");
+    expect(sr?.direction).toBe("in");
+  });
+
+  it("delivery challan is marked as outflow", async () => {
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    const challan = movements.find(m => m.documentType === "delivery_challan");
+    expect(challan?.direction).toBe("out");
+  });
+
+  it("draft and cancelled documents are excluded", async () => {
+    const tenantDb = getTenantTestDb();
+    // Create a draft — should NOT appear
+    await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: stockItem.id, itemName: "Stock Direction Widget", quantity: "99", unitPrice: "100" }],
+      { type: "sale", documentType: "invoice", status: "draft" },
+    );
+    const movements = await callerRamesh.item.stockMovements({ id: stockItem.id });
+    expect(movements.every(m => m.invoiceType !== undefined)).toBe(true);
+    // No movement should show qty 99
+    expect(movements.find(m => m.quantity === "99")).toBeUndefined();
+  });
+});
+
 // ── N+1 detection ─────────────────────────────────────────────────────────────
 
 describe("item.list N+1 detection", () => {

@@ -114,7 +114,7 @@ export default function CreditNotesScreen() {
 
       <View style={styles.infoBox}>
         <Ionicons name="information-circle-outline" size={16} color={colors.info} />
-        <Text style={styles.infoText}>Stock is incremented on creation (returns)</Text>
+        <Text style={styles.infoText}>Financial adjustment only — does not affect stock</Text>
       </View>
 
       <View style={styles.searchWrap}>
@@ -154,7 +154,7 @@ export default function CreditNotesScreen() {
 
   const renderItem = ({ item }: { item: typeof docs[0] }) => (
     <View style={styles.docCard}>
-      <PressableRow style={styles.docRow} onPress={() => {}}>
+      <PressableRow style={styles.docRow} onPress={() => { haptic.light(); router.push(`/(more)/credit-notes/${item.id}` as never); }}>
         <View style={styles.docLeft}>
           <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
           <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>

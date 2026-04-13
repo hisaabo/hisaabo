@@ -42,6 +42,11 @@ const statusConfig: Record<string, StatusConfig> = {
     text: "text-text-tertiary",
     dot: "bg-text-tertiary",
   },
+  adjusted: {
+    bg: "bg-purple-50 dark:bg-purple-950",
+    text: "text-purple-700 dark:text-purple-400",
+    dot: "bg-purple-500",
+  },
 };
 
 const defaultConfig: StatusConfig = {

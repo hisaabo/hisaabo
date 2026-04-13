@@ -27,6 +27,8 @@ export interface DocumentCreatorProps {
   onSuccess?: (partyId?: string) => void;
   // Edit mode: pass existing invoice ID to pre-fill
   editInvoiceId?: string;
+  // Pre-fill from an existing invoice without entering edit mode (for CN/SR creation)
+  prefillFromInvoiceId?: string;
   // Pre-select a party on mount (e.g. "Create another" for same customer)
   initialPartyId?: string;
 }
@@ -117,6 +119,7 @@ export function DocumentCreator({
   onClose,
   onSuccess,
   editInvoiceId,
+  prefillFromInvoiceId,
   initialPartyId,
 }: DocumentCreatorProps) {
   const [partyId, setPartyId] = useState(initialPartyId ?? "");
@@ -136,6 +139,7 @@ export function DocumentCreator({
   const [invoiceDiscount, setInvoiceDiscount] = useState("0");
   const [invoiceDiscountType, setInvoiceDiscountType] = useState<"amount" | "percent">("amount");
   const [roundOff, setRoundOff] = useState("0");
+  const [referenceDocumentId, _setReferenceDocumentId] = useState<string | undefined>(prefillFromInvoiceId || undefined);
 
   // Server-side search for party picker
   const [partySearch, setPartySearch] = useState("");
@@ -159,6 +163,7 @@ export function DocumentCreator({
   });
 
   const isEditing = !!editInvoiceId;
+  const prefillId = editInvoiceId || prefillFromInvoiceId;
 
   // Auto-calculate due date: party's credit period or default 7 days
   useEffect(() => {
@@ -173,15 +178,19 @@ export function DocumentCreator({
   const utils = trpc.useUtils();
 
   const { data: editData } = trpc.invoice.getById.useQuery(
-    { id: editInvoiceId! },
-    { enabled: !!editInvoiceId }
+    { id: prefillId! },
+    { enabled: !!prefillId }
   );
 
   useEffect(() => {
     if (!editData) return;
     setPartyId(editData.partyId);
-    setInvoiceDate(new Date(editData.invoiceDate).toISOString().split("T")[0]);
-    if (editData.dueDate) setDueDate(new Date(editData.dueDate).toISOString().split("T")[0]);
+    if (isEditing) {
+      // Editing: use the document's own date
+      setInvoiceDate(new Date(editData.invoiceDate).toISOString().split("T")[0]);
+      if (editData.dueDate) setDueDate(new Date(editData.dueDate).toISOString().split("T")[0]);
+    }
+    // Prefill from source: keep today's date (already the default)
     setNotes(editData.notes || "");
     setTerms(editData.termsAndConditions || "");
     setRoundOff(editData.roundOff || "0");
@@ -475,6 +484,7 @@ export function DocumentCreator({
         invoiceDiscount: invoiceDiscount || "0",
         invoiceDiscountType,
         roundOff: roundOff || undefined,
+        referenceDocumentId: referenceDocumentId || undefined,
         lineItems: lineItemsPayload,
       });
     }
@@ -547,15 +557,17 @@ export function DocumentCreator({
               className="input"
             />
           </div>
-          <div>
-            <label className="label">Due date</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => { setDueDate(e.target.value); setDueDateManuallySet(true); }}
-              className="input"
-            />
-          </div>
+          {!["credit_note", "sales_return", "purchase_return"].includes(documentType) && (
+            <div>
+              <label className="label">Due date</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => { setDueDate(e.target.value); setDueDateManuallySet(true); }}
+                className="input"
+              />
+            </div>
+          )}
         </div>
 
         {/* Line items */}
