@@ -69,9 +69,8 @@ test.describe("Payments — Interaction", () => {
 
   test("clicking a payment row opens detail panel", async () => {
     const rows = await payments.rowCount();
-    if (rows > 0) {
-      await payments.clickRow(0);
-      await payments.expectDetailPanelOpen();
-    }
+    test.skip(rows === 0, "No data available");
+    await payments.clickRow(0);
+    await payments.expectDetailPanelOpen();
   });
 });

@@ -6,7 +6,7 @@
  *   - GST-registered  → title "GST Returns", first tab "GSTR-1"
  *   - Unregistered    → title "Tax Reports",  first tab "Sales Report"
  *
- * The global setup seeds a business with gstin "27AABCE2E00R1ZM" so the
+ * The global setup seeds a business with gstin "27AABCU9603R1ZM" so the
  * GST-registered variant is expected.
  *
  * Tabs always present regardless of GST status:
@@ -16,7 +16,7 @@
  * Period selector (month + year dropdowns) is visible when the GSTR-1 or
  * GSTR-3B tab is active (which is the default).
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE
@@ -25,11 +25,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("GST / Tax Reports — Presence", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/gst");
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("renders page header", async ({ page }) => {

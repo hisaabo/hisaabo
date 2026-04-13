@@ -7,7 +7,7 @@
  *   - Adjust stock (add and remove, verify quantity updates)
  *   - Detail panel tabs and content
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForSearchResults } from "../helpers/fixtures";
 
 test.describe("Items — Create", () => {
   test("create a simple product via Add Item modal", async ({ page }) => {
@@ -38,6 +38,7 @@ test.describe("Items — Create", () => {
 
     // Verify item appears in the list
     await page.getByPlaceholder(/search items/i).fill(uniqueName);
+    await waitForSearchResults(page);
     const row = page.locator("tbody tr").first();
     await expect(row).toContainText(uniqueName);
   });
@@ -110,6 +111,7 @@ test.describe("Items — Stock Adjustment", () => {
 
     // Search for it and open detail
     await page.getByPlaceholder(/search items/i).fill(stockItemName);
+    await waitForSearchResults(page);
     await page.locator("tbody tr").first().click();
 
     const panel = page.locator('[role="dialog"]').first();

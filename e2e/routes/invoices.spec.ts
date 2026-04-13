@@ -154,28 +154,26 @@ test.describe("Invoices — Mutation", () => {
   test("clicking a table row opens the detail panel", async ({ page }) => {
     // Only works if there are rows. Check if any exist first.
     const rows = await invoices.rowCount();
-    if (rows > 0) {
-      await invoices.clickInvoiceRow(0);
-      await invoices.expectDetailPanelOpen();
+    test.skip(rows === 0, "No data available");
+    await invoices.clickInvoiceRow(0);
+    await invoices.expectDetailPanelOpen();
 
-      // Detail panel should show invoice number and total
-      const panel = page.locator('[role="dialog"]').first();
-      await expect(panel.getByText(/total/i).first()).toBeVisible();
-    }
+    // Detail panel should show invoice number and total
+    const panel = page.locator('[role="dialog"]').first();
+    await expect(panel.getByText(/total/i).first()).toBeVisible();
   });
 
   test("detail panel shows invoice number, date, party, status, amounts", async ({ page }) => {
     const rows = await invoices.rowCount();
-    if (rows > 0) {
-      await invoices.clickInvoiceRow(0);
-      await invoices.expectDetailPanelOpen();
+    test.skip(rows === 0, "No data available");
+    await invoices.clickInvoiceRow(0);
+    await invoices.expectDetailPanelOpen();
 
-      const panel = page.locator('[role="dialog"]').first();
+    const panel = page.locator('[role="dialog"]').first();
 
-      // These are the key fields that must always be present in the detail panel
-      await expect(panel.getByText(/invoice/i).first()).toBeVisible();
-      await expect(panel.getByText(/status/i).first()).toBeVisible();
-    }
+    // These are the key fields that must always be present in the detail panel
+    await expect(panel.getByText(/invoice/i).first()).toBeVisible();
+    await expect(panel.getByText(/status/i).first()).toBeVisible();
   });
 });
 

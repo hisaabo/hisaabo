@@ -9,7 +9,7 @@
  * Because the global setup seeds a business, the full settings layout
  * (not the first-run "Almost there!" form) is expected to render.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE
@@ -18,12 +18,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Settings — Presence", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/settings");
-    // Dismiss skeleton loaders before asserting
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("renders settings page header", async ({ page }) => {

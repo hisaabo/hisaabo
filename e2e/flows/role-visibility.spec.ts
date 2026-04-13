@@ -102,7 +102,10 @@ async function createRoleUser(
   // The invite page should auto-accept and show "You've joined [org]!"
   // or the user may already be redirected
   const joinedText = page.getByText(/you've joined/i);
-  const isJoined = await joinedText.isVisible({ timeout: 5_000 }).catch(() => false);
+  const isJoined = await joinedText
+    .waitFor({ state: "visible", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
 
   if (isJoined) {
     // Click "Continue with [org]"

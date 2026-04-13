@@ -63,6 +63,7 @@ export class PaymentsPage extends BasePage {
 
   async searchPayments(query: string) {
     await this.searchInput.fill(query);
+    await this.waitForTrpcResponse();
   }
 
   async clickRow(index = 0) {

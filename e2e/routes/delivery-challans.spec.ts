@@ -8,7 +8,7 @@
  * Layer 1: PRESENCE   — All expected UI elements exist and are visible
  * Layer 2: INTERACTION — Interactive elements respond correctly
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE
@@ -17,11 +17,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Delivery Challans — Presence", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/delivery-challans");
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("renders page header and description", async ({ page }) => {
@@ -71,11 +67,7 @@ test.describe("Delivery Challans — Presence", () => {
 test.describe("Delivery Challans — Interaction", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/delivery-challans");
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("create button opens DocumentCreator", async ({ page }) => {
@@ -105,9 +97,8 @@ test.describe("Delivery Challans — Interaction", () => {
   test("clicking a row opens detail panel", async ({ page }) => {
     const rows = page.locator("tbody tr");
     const rowCount = await rows.count();
-    if (rowCount > 0) {
-      await rows.first().click();
-      await expect(page.locator('[role="dialog"]').first()).toBeVisible();
-    }
+    test.skip(rowCount === 0, "No data available");
+    await rows.first().click();
+    await expect(page.locator('[role="dialog"]').first()).toBeVisible();
   });
 });

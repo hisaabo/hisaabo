@@ -12,7 +12,7 @@
  *   - Submit button text: "Merge & Delete" — disabled until target selected + checkbox confirmed.
  *   - Confirmation checkbox appears after target is selected.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createParty } from "../helpers/seed";
 
 let businessId: string;
@@ -34,22 +34,22 @@ test.beforeAll(async () => {
 test.describe("Party Merge Flow", () => {
   test("source party row is visible in the parties list", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Search for the source party to confirm it was seeded
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     await expect(page.getByText(sourcePartyName).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test("clicking a party row opens the detail panel with a Merge button", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Search for source party and click its row
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await expect(row).toBeVisible({ timeout: 5_000 });
@@ -65,10 +65,10 @@ test.describe("Party Merge Flow", () => {
 
   test("Merge button opens Merge Parties modal", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -84,10 +84,10 @@ test.describe("Party Merge Flow", () => {
 
   test("merge modal shows FROM and INTO sections with source pre-filled", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -115,10 +115,10 @@ test.describe("Party Merge Flow", () => {
 
   test("selecting a target party enables the confirmation step", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     await row.click();
@@ -149,10 +149,10 @@ test.describe("Party Merge Flow", () => {
 
   test("full merge flow: select target, confirm, submit", async ({ page }) => {
     await page.goto("/parties");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").filter({ hasText: sourcePartyName }).first();
     const rowCount = await row.count();
@@ -191,6 +191,7 @@ test.describe("Party Merge Flow", () => {
 
     // Search for the now-deleted source party — it should be gone
     await page.getByPlaceholder(/search by name/i).fill(sourcePartyName);
+    await waitForSearchResults(page);
     await expect(page.getByText(sourcePartyName)).toHaveCount(0, { timeout: 5_000 });
   });
 });

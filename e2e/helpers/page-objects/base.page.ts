@@ -27,7 +27,10 @@ export class BasePage {
 
   /** Wait for loading indicators to disappear */
   async waitForReady() {
-    // Wait for skeleton rows to disappear (used across list pages)
+    // Wait for positive signal: h1 from PageHeader means the route rendered
+    await this.page.locator("h1").first().waitFor({ state: "visible", timeout: 15_000 });
+
+    // Now wait for skeleton rows to disappear (used across list pages)
     await this.page
       .locator(".animate-pulse")
       .first()
@@ -46,6 +49,14 @@ export class BasePage {
       });
   }
 
+  /** Wait for a tRPC network response after a debounced action (e.g. search) */
+  protected async waitForTrpcResponse(timeout = 5_000) {
+    await this.page.waitForResponse(
+      (resp) => resp.url().includes("/api/trpc/") && resp.status() === 200,
+      { timeout },
+    ).catch(() => {});
+  }
+
   /** Assert the page title matches expected text */
   async expectTitle(text: string | RegExp) {
     await expect(this.pageHeader).toContainText(text);
@@ -58,10 +69,11 @@ export class BasePage {
     ).toBeVisible();
   }
 
-  /** Type into the search input */
+  /** Type into the search input and wait for results */
   async search(query: string) {
     const input = this.page.getByPlaceholder(/search/i).first();
     await input.fill(query);
+    await this.waitForTrpcResponse();
   }
 
   /** Click a status/filter tab by label text */
@@ -86,7 +98,9 @@ export class BasePage {
   /** Assert table has at least N rows (body rows, not header) */
   async expectMinRows(count: number) {
     const rows = this.page.locator("tbody tr, [role=row]");
-    await expect(rows).toHaveCount(count, { timeout: 5_000 });
+    await expect(rows.first()).toBeVisible({ timeout: 5_000 });
+    const actual = await rows.count();
+    expect(actual).toBeGreaterThanOrEqual(count);
   }
 
   /** Get count of visible table body rows */

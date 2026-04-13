@@ -8,7 +8,7 @@
  *   - Delete button opens confirmation dialog
  *   - Confirming delete removes expense from list
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForSearchResults } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createExpense } from "../helpers/seed";
 
@@ -57,6 +57,7 @@ test.describe("Expenses — Create", () => {
 
     // Search for the newly created category and confirm it appears in the list
     await page.getByPlaceholder(/search category or description/i).fill(uniqueCategory);
+    await waitForSearchResults(page);
     const row = page.locator("tbody tr").first();
     await expect(row).toContainText(uniqueCategory);
   });
@@ -145,6 +146,7 @@ test.describe("Expenses — Delete", () => {
 
     // Search for the seeded expense to isolate it
     await page.getByPlaceholder(/search category or description/i).fill("DeleteMe Category");
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

@@ -82,10 +82,9 @@ test.describe("Parties — Interaction", () => {
 
   test("clicking a party row opens detail panel", async () => {
     const rows = await parties.rowCount();
-    if (rows > 0) {
-      await parties.clickPartyRow(0);
-      await parties.expectDetailPanelOpen();
-    }
+    test.skip(rows === 0, "No data available");
+    await parties.clickPartyRow(0);
+    await parties.expectDetailPanelOpen();
   });
 });
 
@@ -112,13 +111,12 @@ test.describe("Parties — Mutation", () => {
 
   test("detail panel shows party info and ledger", async () => {
     const rows = await parties.rowCount();
-    if (rows > 0) {
-      await parties.clickPartyRow(0);
-      await parties.expectDetailPanelOpen();
+    test.skip(rows === 0, "No data available");
+    await parties.clickPartyRow(0);
+    await parties.expectDetailPanelOpen();
 
-      const panel = parties.page.locator('[role="dialog"]').first();
-      // Party detail should show the party name and balance info
-      await expect(panel.getByText(/balance|outstanding/i).first()).toBeVisible();
-    }
+    const panel = parties.page.locator('[role="dialog"]').first();
+    // Party detail should show the party name and balance info
+    await expect(panel.getByText(/balance|outstanding/i).first()).toBeVisible();
   });
 });

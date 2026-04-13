@@ -97,6 +97,9 @@ export { expect };
  * Useful after navigation to ensure the page is ready for assertions.
  */
 export async function waitForAppReady(page: Page) {
+  // Wait for positive signal: h1 from PageHeader means the route rendered
+  await page.locator("h1").first().waitFor({ state: "visible", timeout: 15_000 });
+
   // Wait for any loading skeletons to disappear
   await page
     .locator('[data-testid="skeleton"], .animate-pulse')
@@ -105,6 +108,30 @@ export async function waitForAppReady(page: Page) {
     .catch(() => {
       /* no skeleton present — that's fine */
     });
+}
+
+/**
+ * Wait for h1 + skeleton clear. Use in inline beforeEach blocks
+ * that don't use a PageObject.
+ */
+export async function waitForPageReady(page: Page) {
+  await page.locator("h1").first().waitFor({ state: "visible", timeout: 15_000 });
+  await page
+    .locator('[data-testid="skeleton"], .animate-pulse')
+    .first()
+    .waitFor({ state: "hidden", timeout: 10_000 })
+    .catch(() => {});
+}
+
+/**
+ * Wait for a tRPC response after a debounced search fill.
+ * Use after page.fill() on search inputs in inline tests.
+ */
+export async function waitForSearchResults(page: Page) {
+  await page.waitForResponse(
+    (resp) => resp.url().includes("/api/trpc/") && resp.status() === 200,
+    { timeout: 5_000 },
+  ).catch(() => {});
 }
 
 /**

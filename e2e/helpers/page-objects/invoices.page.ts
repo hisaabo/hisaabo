@@ -47,9 +47,12 @@ export class InvoicesPage extends BasePage {
     this.tableBody = page.locator("tbody").first();
     this.tableRows = page.locator("tbody tr");
 
-    this.detailPanel = page.locator('[role="dialog"]').first();
-    this.creatorPanel = page.locator('[role="dialog"]').first();
-    this.paymentPanel = page.locator('[role="dialog"]').first();
+    // Only one dialog is open at a time (SlideOver or Modal).
+    // All three are aliases for the same locator.
+    const dialog = page.locator('[role="dialog"]').first();
+    this.detailPanel = dialog;
+    this.creatorPanel = dialog;
+    this.paymentPanel = dialog;
   }
 
   async goto() {
@@ -127,6 +130,7 @@ export class InvoicesPage extends BasePage {
 
   async searchInvoices(query: string) {
     await this.searchInput.fill(query);
+    await this.waitForTrpcResponse();
   }
 
   async clickInvoiceRow(index = 0) {

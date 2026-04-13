@@ -68,10 +68,10 @@ test.describe("Login Negative Paths", () => {
     // Click Sign in
     await page.getByRole("button", { name: /sign in/i }).first().click();
 
-    // Should show error message (e.g., "Invalid credentials", "Invalid email or password", etc.)
-    const hasError = await page.getByText(/invalid|error|incorrect|wrong|not found|failed/i).first().isVisible().catch(() => false);
     // Either an error toast or inline error should appear
-    expect(hasError).toBe(true);
+    await expect(
+      page.getByText(/invalid|error|incorrect|wrong|not found|failed/i).first(),
+    ).toBeVisible({ timeout: 5_000 });
 
     await page.close();
     await ctx.close();
@@ -102,8 +102,9 @@ test.describe("Login Negative Paths", () => {
     await page.getByRole("button", { name: /create account/i }).first().click();
 
     // Should show error about password mismatch
-    const hasError = await page.getByText(/match|mismatch|same|don't match|do not match/i).first().isVisible().catch(() => false);
-    expect(hasError).toBe(true);
+    await expect(
+      page.getByText(/match|mismatch|same|don't match|do not match/i).first(),
+    ).toBeVisible({ timeout: 5_000 });
 
     await page.close();
     await ctx.close();

@@ -58,7 +58,7 @@ setup("authenticate", async ({ page, request }) => {
       json: {
         name: "E2E Test Business",
         gstRegistrationType: "regular",
-        gstin: "27AABCE2E00R1ZM",
+        gstin: "27AABCU9603R1ZM",
         pan: "AAACE0000A",
         phone: "9876500000",
         email: email,

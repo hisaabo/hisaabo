@@ -90,10 +90,9 @@ test.describe("Items — Interaction", () => {
 
   test("clicking an item row opens detail panel", async () => {
     const rows = await items.rowCount();
-    if (rows > 0) {
-      await items.clickItemRow(0);
-      await items.expectDetailPanelOpen();
-    }
+    test.skip(rows === 0, "No data available");
+    await items.clickItemRow(0);
+    await items.expectDetailPanelOpen();
   });
 });
 
@@ -122,13 +121,12 @@ test.describe("Items — Mutation", () => {
 
   test("detail panel shows Price History and Stock Movements tabs", async () => {
     const rows = await items.rowCount();
-    if (rows > 0) {
-      await items.clickItemRow(0);
-      await items.expectDetailPanelOpen();
+    test.skip(rows === 0, "No data available");
+    await items.clickItemRow(0);
+    await items.expectDetailPanelOpen();
 
-      const panel = items.page.locator('[role="dialog"]').first();
-      await expect(panel.getByText(/price.*history/i).first()).toBeVisible();
-      await expect(panel.getByText(/stock.*movement/i).first()).toBeVisible();
-    }
+    const panel = items.page.locator('[role="dialog"]').first();
+    await expect(panel.getByText(/price.*history/i).first()).toBeVisible();
+    await expect(panel.getByText(/stock.*movement/i).first()).toBeVisible();
   });
 });

@@ -82,10 +82,9 @@ test.describe("Credit Notes — Interaction", () => {
 
   test("clicking a row opens detail panel", async () => {
     const rows = await cn.rowCount();
-    if (rows > 0) {
-      await cn.clickRow(0);
-      await cn.expectDetailPanelOpen();
-    }
+    test.skip(rows === 0, "No data available");
+    await cn.clickRow(0);
+    await cn.expectDetailPanelOpen();
   });
 });
 

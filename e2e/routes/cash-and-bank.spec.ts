@@ -7,7 +7,7 @@
  *   - Stat cards for Cash in Hand and Bank Balance
  *   - An account list section (may be empty for a fresh test business)
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE
@@ -16,11 +16,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Cash & Bank — Presence", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/cash-and-bank");
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("renders page header", async ({ page }) => {

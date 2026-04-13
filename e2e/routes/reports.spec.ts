@@ -9,7 +9,7 @@
  * Default active report is "Daybook" (persisted in localStorage; the global
  * setup uses a fresh context so localStorage is empty → falls back to daybook).
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE
@@ -18,11 +18,7 @@ import { test, expect } from "../helpers/fixtures";
 test.describe("Reports — Presence", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/reports");
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
   });
 
   test("renders sidebar with Daybook entry visible", async ({ page }) => {

@@ -11,19 +11,12 @@
  * Seller redirect from "/" → "/invoices" is already covered in
  * flows/role-visibility.spec.ts and is not repeated here.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
 test.describe("Dashboard Flow", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    // Wait for any loading skeletons to disappear before asserting
-    await page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {
-        /* no skeleton present — that's fine */
-      });
+    await waitForPageReady(page);
   });
 
   test("admin sees Dashboard page heading", async ({ page }) => {

@@ -4,7 +4,7 @@
  * Tests that delete operations show confirmation dialogs and
  * that cancelling preserves the entity.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 import {
   loadSeed,
   createParty,
@@ -29,8 +29,7 @@ test.describe("Delete Confirmation Flows", () => {
     });
 
     await page.goto("/expenses");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Find expense row and hover to reveal actions
     const rows = page.locator("tbody tr");
@@ -58,8 +57,7 @@ test.describe("Delete Confirmation Flows", () => {
     });
 
     await page.goto("/expenses");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const initialCount = await rows.count();
@@ -92,8 +90,7 @@ test.describe("Delete Confirmation Flows", () => {
     });
 
     await page.goto("/expenses");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const initialCount = await rows.count();
@@ -125,11 +122,11 @@ test.describe("Delete Confirmation Flows", () => {
     const invoice = await createInvoice(api, businessId, party.id, item.id);
 
     await page.goto("/invoices");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     // Search for the invoice
     await page.getByPlaceholder(/search invoices/i).fill(invoice.invoiceNumber);
+    await waitForSearchResults(page);
 
     const row = page.locator("tbody tr").first();
     const count = await row.count();

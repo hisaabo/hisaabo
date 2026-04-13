@@ -16,16 +16,11 @@
  * rather than a false failure.
  */
 import { test, expect } from "../helpers/fixtures";
+import { waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 
 // Shared helper: wait for skeletons to disappear after navigation
 async function waitForLoad(page: import("@playwright/test").Page) {
-  await page
-    .locator(".animate-pulse")
-    .first()
-    .waitFor({ state: "hidden", timeout: 10_000 })
-    .catch(() => {
-      /* no skeleton — page loaded immediately */
-    });
+  await waitForPageReady(page);
 }
 
 // Sentinel string unlikely to match any real data
@@ -39,13 +34,13 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search invoices/i).fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
-    if (rows === 0) {
-      await expect(
-        page.getByText(/no.*invoices/i).first()
-      ).toBeVisible({ timeout: 5_000 });
-    }
+    expect(rows).toBe(0);
+    await expect(
+      page.getByText(/no.*invoices/i).first()
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   // ── Parties ───────────────────────────────────────────────────────
@@ -55,13 +50,13 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search/i).first().fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
-    if (rows === 0) {
-      await expect(
-        page.getByText(/no.*parties|no.*results/i).first()
-      ).toBeVisible({ timeout: 5_000 });
-    }
+    expect(rows).toBe(0);
+    await expect(
+      page.getByText(/no.*parties|no.*results/i).first()
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   // ── Items ─────────────────────────────────────────────────────────
@@ -71,13 +66,13 @@ test.describe("Empty States", () => {
     await waitForLoad(page);
 
     await page.getByPlaceholder(/search items/i).fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
-    if (rows === 0) {
-      await expect(
-        page.getByText(/no.*items/i).first()
-      ).toBeVisible({ timeout: 5_000 });
-    }
+    expect(rows).toBe(0);
+    await expect(
+      page.getByText(/no.*items/i).first()
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   // ── Expenses ──────────────────────────────────────────────────────
@@ -89,13 +84,13 @@ test.describe("Empty States", () => {
     await page
       .getByPlaceholder(/search category or description/i)
       .fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
-    if (rows === 0) {
-      await expect(
-        page.getByText(/no expenses/i).first()
-      ).toBeVisible({ timeout: 5_000 });
-    }
+    expect(rows).toBe(0);
+    await expect(
+      page.getByText(/no expenses/i).first()
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   // ── Credit Notes ──────────────────────────────────────────────────
@@ -128,6 +123,7 @@ test.describe("Empty States", () => {
     // Quotations uses the shared DocumentListPage search input
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -135,7 +131,8 @@ test.describe("Empty States", () => {
       const emptyVisible = await page
         .getByText(/no.*quotations|no.*found|no results/i)
         .first()
-        .isVisible({ timeout: 5_000 })
+        .waitFor({ state: "visible", timeout: 5_000 })
+        .then(() => true)
         .catch(() => false);
       // If no explicit message, just verify zero rows (already confirmed above)
       expect(rows === 0 || emptyVisible).toBe(true);
@@ -150,13 +147,15 @@ test.describe("Empty States", () => {
 
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
       const emptyVisible = await page
         .getByText(/no.*proforma|no.*invoices|no.*found|no results/i)
         .first()
-        .isVisible({ timeout: 5_000 })
+        .waitFor({ state: "visible", timeout: 5_000 })
+        .then(() => true)
         .catch(() => false);
       expect(rows === 0 || emptyVisible).toBe(true);
     }
@@ -170,13 +169,15 @@ test.describe("Empty States", () => {
 
     const searchInput = page.getByPlaceholder(/search/i).first();
     await searchInput.fill(NONSENSE);
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
       const emptyVisible = await page
         .getByText(/no.*payments|no.*found|no results/i)
         .first()
-        .isVisible({ timeout: 5_000 })
+        .waitFor({ state: "visible", timeout: 5_000 })
+        .then(() => true)
         .catch(() => false);
       expect(rows === 0 || emptyVisible).toBe(true);
     }

@@ -12,7 +12,7 @@
  *   - The item.create API derives itemMode from variantAttributes: if variantAttributes.length > 0
  *     the server stores itemMode = "variants". No need to pass itemMode explicitly.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 import { loadSeed, SeedApi } from "../helpers/seed";
 
 let businessId: string;
@@ -76,10 +76,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping list test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     // At least one row should appear and the item name should be visible
     const rows = page.locator("tbody tr");
@@ -91,10 +91,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping detail panel test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -114,10 +114,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping tabs test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -138,10 +138,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping Price History tab test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -163,10 +163,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping Stock Movements tab test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -188,10 +188,10 @@ test.describe("Item Variants Flow", () => {
     test.skip(!variantItemCreated, "Item seeding failed — skipping Variants section test");
 
     await page.goto("/items");
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    await waitForPageReady(page);
 
     await page.getByPlaceholder("Search items...").fill(variantItemName);
+    await waitForSearchResults(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

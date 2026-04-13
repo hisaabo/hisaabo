@@ -6,7 +6,7 @@
  * panel renders all line items and a total. Also verifies the UI
  * creator opens with the expected fields.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, waitForPageReady } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createParty, createItem } from "../helpers/seed";
 
 let businessId: string;
@@ -194,10 +194,7 @@ test.describe("Multi-line Invoice Creation", () => {
 
   test("invoice creator UI opens and shows party and line item fields", async ({ page }) => {
     await page.goto("/invoices");
-    // Wait for any loading skeletons to resolve
-    await page.locator(".animate-pulse").first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {});
+    await waitForPageReady(page);
 
     // Open the creator via the New Invoice button
     await page.getByRole("button", { name: /new invoice/i }).first().click();
