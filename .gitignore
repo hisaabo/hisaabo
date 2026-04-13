@@ -23,6 +23,11 @@ apps/mobile/build/
 # Test coverage
 coverage/
 
+# Playwright
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/
+
 # Build artifacts
 *.tsbuildinfo
 .astro/
@@ -51,3 +56,4 @@ screens/
 backups/
 
 feature-parity.yaml
+test-results
