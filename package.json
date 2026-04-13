@@ -17,10 +17,13 @@
     "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
     "test:web": "pnpm --filter @hisaabo/web test",
     "test:mobile": "pnpm --filter @hisaabo/mobile test",
+    "test:e2e": "pnpm exec playwright test --config e2e/playwright.config.ts",
+    "test:e2e:ui": "pnpm exec playwright test --config e2e/playwright.config.ts --ui",
     "release": "bash scripts/release.sh",
     "release:tag": "bash scripts/release-tag.sh"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "oxlint": "^1.56.0",
     "turbo": "^2.3.0",
     "typescript": "^5.7.0"
