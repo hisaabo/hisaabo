@@ -68,11 +68,16 @@ interface TenantMigrationReport {
   failures: Array<{ tenantId: string; slug: string; error: string }>;
 }
 
-// ── Baseline detection ───────────────────────────────────────
+// ── Lenient migration for db:push databases ─────────────────
 //
-// Databases set up with `db:push` have the schema but no migration
-// tracking. Before running migrations, we detect this state and seed
-// the tracking table so drizzle-orm skips already-applied migrations.
+// Databases set up with `db:push` have tables but no migration tracking.
+// drizzle-orm's migrate() runs all pending migrations in one transaction,
+// so if migration 0000 (CREATE TYPE) fails because it exists, later
+// migrations (ALTER TABLE ADD COLUMN) never run.
+//
+// This function detects that case and runs each migration individually,
+// tolerating "already exists" errors (PG codes 42710, 42P07, 42701)
+// while actually applying ALTER statements that are genuinely missing.
 
 interface JournalEntry {
   idx: number;
@@ -82,72 +87,95 @@ interface JournalEntry {
   breakpoints: boolean;
 }
 
-async function baselineIfNeeded(
-  db: ReturnType<typeof drizzle>,
-  migrationsFolder: string,
-  migrationsTable: string,
-  label: string,
-): Promise<void> {
-  const migrationsSchema = "drizzle";
+// PostgreSQL error codes for "object already exists" — safe to skip
+const ALREADY_EXISTS_CODES = new Set([
+  "42710", // duplicate_object (types, enums)
+  "42P07", // duplicate_table
+  "42701", // duplicate_column
+]);
 
-  // Ensure schema and tracking table exist
-  await db.execute(sql`CREATE SCHEMA IF NOT EXISTS "drizzle"`);
-  await db.execute(
-    sql.raw(`CREATE TABLE IF NOT EXISTS "${migrationsSchema}"."${migrationsTable}" (
+/**
+ * Checks whether this database needs lenient migration mode.
+ * Returns true if tables exist but no migrations are tracked.
+ */
+async function needsLenientMode(
+  client: ReturnType<typeof postgres>,
+  migrationsTable: string,
+): Promise<boolean> {
+  // Ensure tracking infrastructure exists
+  await client`CREATE SCHEMA IF NOT EXISTS "drizzle"`;
+  await client.unsafe(
+    `CREATE TABLE IF NOT EXISTS "drizzle"."${migrationsTable}" (
       id SERIAL PRIMARY KEY,
       hash text NOT NULL,
       created_at bigint
-    )`),
+    )`,
   );
 
-  // Check if any migrations are already tracked
-  const existing = await db.execute(
-    sql.raw(`SELECT COUNT(*)::int AS count FROM "${migrationsSchema}"."${migrationsTable}"`),
-  );
-  const trackedCount = (existing[0] as { count: number }).count;
-  if (trackedCount > 0) {
-    return; // Already has migration history — nothing to baseline
-  }
+  const [{ count: trackedCount }] = await client<[{ count: number }]>`
+    SELECT COUNT(*)::int AS count FROM "drizzle".${client.unsafe(`"${migrationsTable}"`)}
+  `;
+  if (trackedCount > 0) return false;
 
-  // Check if any application tables exist (sign of a db:push setup)
-  const tableCheck = await db.execute(sql`
+  const [{ count: tableCount }] = await client<[{ count: number }]>`
     SELECT COUNT(*)::int AS count
     FROM information_schema.tables
     WHERE table_schema = 'public'
       AND table_type = 'BASE TABLE'
-      AND table_name != '__drizzle_migrations'
-  `);
-  const tableCount = (tableCheck[0] as { count: number }).count;
-  if (tableCount === 0) {
-    return; // Fresh database — no baselining needed, migrations will run normally
-  }
+  `;
+  return tableCount > 0;
+}
 
-  // Schema exists but no migrations tracked — seed the tracking table
+/**
+ * Runs each migration individually, tolerating "already exists" errors.
+ * Each statement within a migration is executed separately. Statements
+ * that fail with already-exists codes are skipped; any other error aborts.
+ * Successfully processed migrations are recorded in the tracking table.
+ */
+async function runLenientMigrations(
+  client: ReturnType<typeof postgres>,
+  migrationsFolder: string,
+  migrationsTable: string,
+  label: string,
+): Promise<{ applied: number; skippedStatements: number }> {
   const journalPath = resolve(migrationsFolder, "meta", "_journal.json");
   const journal = JSON.parse(readFileSync(journalPath, "utf-8")) as { entries: JournalEntry[] };
 
-  log("warn", `${label}: detected existing schema with no migration history — baselining`, {
-    tables: tableCount,
-    migrations: journal.entries.length,
-  });
+  let applied = 0;
+  let skippedStatements = 0;
 
   for (const entry of journal.entries) {
     const sqlFile = resolve(migrationsFolder, `${entry.tag}.sql`);
-    if (!existsSync(sqlFile)) {
-      log("warn", `${label}: skipping missing migration file during baseline: ${entry.tag}`);
-      continue;
-    }
+    if (!existsSync(sqlFile)) continue;
+
     const content = readFileSync(sqlFile, "utf-8");
     const hash = createHash("sha256").update(content).digest("hex");
+    const statements = content.split("--> statement-breakpoint").map((s) => s.trim()).filter(Boolean);
 
-    await db.execute(
-      sql.raw(
-        `INSERT INTO "${migrationsSchema}"."${migrationsTable}" (hash, created_at) VALUES ('${hash}', ${entry.when})`,
-      ),
+    for (const stmt of statements) {
+      try {
+        await client.unsafe(stmt);
+      } catch (err: unknown) {
+        const pgCode = (err as { code?: string }).code;
+        if (pgCode && ALREADY_EXISTS_CODES.has(pgCode)) {
+          skippedStatements++;
+        } else {
+          // Real error — abort
+          throw new Error(
+            `${label}: migration ${entry.tag} failed on statement: ${(err as Error).message}\nSQL: ${stmt.slice(0, 200)}`,
+          );
+        }
+      }
+    }
+
+    // Track this migration as applied
+    await client.unsafe(
+      `INSERT INTO "drizzle"."${migrationsTable}" (hash, created_at) VALUES ('${hash}', ${entry.when})`,
     );
+    applied++;
   }
 
-  log("info", `${label}: baselined ${journal.entries.length} migration(s)`);
+  return { applied, skippedStatements };
 }
 
 // ── Core migration function ──────────────────────────────────
@@ -169,20 +197,29 @@ async function runMigrations(
 
   try {
     // Acquire advisory lock to prevent concurrent migration runs
-    await db.execute(sql`SELECT pg_advisory_lock(${sql.raw(String(ADVISORY_LOCK_ID))})`);
+    await client.unsafe(`SELECT pg_advisory_lock(${ADVISORY_LOCK_ID})`);
 
     try {
-      // Detect databases set up via db:push (schema exists, no tracking)
-      // and seed the tracking table so migrate() skips existing migrations
       const table = opts?.migrationsTable ?? "__drizzle_migrations";
-      await baselineIfNeeded(db, migrationsFolder, table, label);
+      const lenient = await needsLenientMode(client, table);
 
-      await migrate(db, {
-        migrationsFolder,
-        ...(opts?.migrationsTable ? { migrationsTable: opts.migrationsTable } : {}),
-      });
+      if (lenient) {
+        // Database was set up with db:push — run each migration individually,
+        // tolerating "already exists" errors while applying genuinely missing changes.
+        log("warn", `${label}: existing schema with no migration tracking — running in lenient mode`);
+        const { applied, skippedStatements } = await runLenientMigrations(
+          client, migrationsFolder, table, label,
+        );
+        log("info", `${label}: lenient mode complete`, { applied, skippedStatements });
+      } else {
+        // Normal path: drizzle-orm handles tracking and only applies pending migrations
+        await migrate(db, {
+          migrationsFolder,
+          ...(opts?.migrationsTable ? { migrationsTable: opts.migrationsTable } : {}),
+        });
+      }
     } finally {
-      await db.execute(sql`SELECT pg_advisory_unlock(${sql.raw(String(ADVISORY_LOCK_ID))})`);
+      await client.unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`);
     }
 
     const durationMs = Date.now() - start;

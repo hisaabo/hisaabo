@@ -12,7 +12,7 @@ fi
 
 # ── Run database migrations ────────────────────────────────────
 echo "[entrypoint] Running database migrations..."
-if ! /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts; then
+if ! node /app/packages/db/dist/migrate.mjs; then
   echo "[entrypoint] FATAL: Migration failed! Refusing to start with potentially inconsistent DB."
   echo "[entrypoint] Check DATABASE_URL and migration files."
   exit 1
