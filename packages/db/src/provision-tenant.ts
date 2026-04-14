@@ -7,12 +7,7 @@ if (process.env.NODE_ENV !== "production") {
 
 import postgres from "postgres";
 import { randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
-
-const execFileAsync = promisify(execFile);
+import { migrateSingleTenantDb } from "./migrate.js";
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -67,7 +62,7 @@ export interface TenantDbConfig {
  *   1. Creates the database
  *   2. Creates a dedicated PG user with a random password
  *   3. Grants the user full access
- *   4. Runs the tenant schema via `drizzle-kit push`
+ *   4. Applies the tenant schema via programmatic migrations
  *
  * Only call this when MULTI_TENANT=true.
  */
@@ -146,32 +141,15 @@ export async function provisionTenantDatabase(
       await newDbAdminClient.end();
     }
 
-    // ── Step 4: Push the tenant schema using drizzle-kit push ─────
-    // drizzle-tenant.config.ts uses DATABASE_URL as its connection target.
-    // We override it for this subprocess so it targets the new tenant DB.
-    // The superuser connection is used so drizzle-kit can create extensions/types.
+    // ── Step 4: Apply tenant schema via programmatic migrations ────
+    // Uses drizzle-orm's migrate() directly — no npx subprocess needed.
+    // The superuser connection is used so migrations can create extensions/types.
     const tenantUrl = `${baseUrl}/${dbName}`;
 
-    // Resolve the db package root via package resolution.
-    // When tsup bundles this into the API dist, import.meta.url points to the
-    // wrong directory. createRequire + resolve works regardless of bundling.
-    const _require = createRequire(import.meta.url);
-    const dbPackageRoot = dirname(_require.resolve("@hisaabo/db/package.json"));
-
-    const configPath = resolve(dbPackageRoot, "drizzle-tenant.config.ts");
-
-    await execFileAsync(
-      "npx",
-      ["drizzle-kit", "push", "--config", configPath, "--force"],
-      {
-        env: {
-          ...process.env,
-          DATABASE_URL: tenantUrl,
-        },
-        cwd: dbPackageRoot,
-        timeout: 60_000,
-      },
-    );
+    const result = await migrateSingleTenantDb(tenantUrl, dbName);
+    if (!result.success) {
+      throw new Error(`Tenant schema migration failed: ${result.error}`);
+    }
   } catch (err) {
     // ── Rollback: drop the orphaned DB and user ──────────────────
     const cleanupClient = postgres(`${baseUrl}/postgres`, {

@@ -24,6 +24,15 @@ COPY packages/api/ packages/api/
 # Build the API (tsup bundles server.ts + pdf-worker via tsup.config.ts)
 RUN pnpm --filter @hisaabo/api build
 
+# Bundle the migration runner into a standalone JS file (no tsx needed at runtime).
+# External: node_modules (resolved at runtime), built-ins handled by node.
+# Output goes to packages/db/dist/migrate.mjs alongside the migration SQL dirs.
+RUN pnpm exec esbuild packages/db/src/migrate.ts \
+      --bundle --platform=node --format=esm \
+      --target=node22 \
+      --outfile=packages/db/dist/migrate.mjs \
+      --external:postgres --external:drizzle-orm --external:dotenv
+
 # ── Stage 2: Production runtime ────────────────────────────────
 FROM node:22-alpine AS runtime
 WORKDIR /app
@@ -38,14 +47,12 @@ COPY --from=builder /app/packages/api/package.json packages/api/
 COPY --from=builder /app/packages/api/dist/ packages/api/dist/
 COPY packages/api/fonts/ packages/api/fonts/
 
-# -- DB package: schema source (for drizzle-kit config), migrations, config
-# Note: DB code is inlined into the API bundle by tsup; these files are only
-# needed so that drizzle-kit can resolve its config's `schema` paths.
+# -- DB package: compiled migration runner + migration SQL files
 COPY packages/db/package.json packages/db/
-COPY packages/db/src/ packages/db/src/
+COPY --from=builder /app/packages/db/dist/migrate.mjs packages/db/dist/
 COPY packages/db/drizzle/ packages/db/drizzle/
-COPY packages/db/drizzle.config.ts packages/db/drizzle-tenant.config.ts packages/db/drizzle-control.config.ts packages/db/
-COPY packages/db/tsconfig.json packages/db/
+COPY packages/db/drizzle-control/ packages/db/drizzle-control/
+COPY packages/db/drizzle-tenant/ packages/db/drizzle-tenant/
 
 # -- Shared package: package.json only (code is inlined by tsup)
 COPY packages/shared/package.json packages/shared/
