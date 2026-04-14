@@ -4,6 +4,7 @@ import type { Context } from "./context.js";
 import { getTenantDb, type TenantDatabase, controlDb, businesses, tenantMembers } from "@hisaabo/db";
 import { eq, and } from "drizzle-orm";
 import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.js";
+import { getMaintenanceStatus } from "./lib/maintenance-cache.js";
 
 // ── Middleware context shape interfaces ────────────────────────
 // These represent the enriched context after each middleware runs.
@@ -110,6 +111,15 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
   if (!ctx.tenantId) throw new TRPCError({ code: "BAD_REQUEST", message: "No organization selected" });
 
   const db = await getTenantDb(ctx.tenantId);
+
+  // Check system maintenance mode — blocks ALL users during maintenance
+  const maintenance = await getMaintenanceStatus();
+  if (maintenance.enabled) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: maintenance.message || "System is under maintenance. Please try again later.",
+    });
+  }
 
   return next({
     ctx: {

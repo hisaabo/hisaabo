@@ -12,6 +12,7 @@ import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
+import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -572,7 +573,9 @@ function RootLayout() {
     activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface-0">
+    <div className="flex flex-col h-screen overflow-hidden bg-surface-0">
+      <MaintenanceBanner />
+      <div className="flex flex-1 overflow-hidden">
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div
@@ -789,6 +792,7 @@ function RootLayout() {
           onClose={() => setShowTenantPicker(false)}
         />
       )}
+      </div>
     </div>
   );
 }

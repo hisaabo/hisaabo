@@ -35,6 +35,7 @@ import { eInvoiceRouter } from "./routers/eInvoice.js";
 import { ewayBillRouter } from "./routers/ewayBill.js";
 import { bankReconRouter } from "./routers/bankRecon.js";
 import { gstr2bRouter } from "./routers/gstr2b.js";
+import { systemRouter } from "./routers/system.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -71,6 +72,7 @@ export const appRouter = router({
   ewayBill: ewayBillRouter,
   bankRecon: bankReconRouter,
   gstr2b: gstr2bRouter,
+  system: systemRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -8,6 +8,13 @@
       "when": 1776146655306,
       "tag": "0000_typical_gorgon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776159343255,
+      "tag": "0001_giant_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }
