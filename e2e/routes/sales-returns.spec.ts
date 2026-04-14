@@ -28,8 +28,10 @@ test.describe("Sales Returns — Presence", () => {
   });
 
   test("renders New Sales Return button", async ({ page }) => {
+    // DocumentListPage renders the CTA twice (PageHeader + EmptyState); narrow
+    // to one to satisfy Playwright strict mode — see delivery-challans.spec.ts.
     await expect(
-      page.getByRole("button", { name: /new.*sales.*return/i }),
+      page.getByRole("button", { name: /new.*sales.*return/i }).first(),
     ).toBeVisible();
   });
 
@@ -68,13 +70,13 @@ test.describe("Sales Returns — Interaction", () => {
 
   // TODO: Flaky — DocumentCreator intermittently fails to open in full-suite runs (timing)
   test.skip("create button opens DocumentCreator", async ({ page }) => {
-    await page.getByRole("button", { name: /new.*sales.*return/i }).click();
+    await page.getByRole("button", { name: /new.*sales.*return/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
   });
 
   // TODO: Flaky — depends on the above test's creator opening reliably
   test.skip("creator closes on Escape", async ({ page }) => {
-    await page.getByRole("button", { name: /new.*sales.*return/i }).click();
+    await page.getByRole("button", { name: /new.*sales.*return/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(
