@@ -54,8 +54,9 @@ RUN apk add --no-cache \
       postgresql16-client \
       flock \
       curl \
-    && mkdir -p /storage/pgdata /storage/run /storage/backups \
-    && chown -R postgres:postgres /storage/pgdata /storage/run
+      age \
+    && mkdir -p /storage/pgdata /storage/run /storage/backups /storage/wal_archive \
+    && chown -R postgres:postgres /storage/pgdata /storage/run /storage/wal_archive
 
 # s6-overlay
 RUN case "${TARGETARCH}" in \
@@ -83,6 +84,10 @@ COPY packages/shared/package.json packages/shared/
 # Install production deps only — keeps the image lean (no tsup, vitest, etc.)
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
+
+# ── PostgreSQL config ────────────────────────────────────────
+COPY scripts/postgresql-wal.conf /etc/postgresql/wal.conf
+COPY scripts/postgresql-tuning.conf /etc/postgresql/tuning.conf
 
 # ── Smoke test: catch module resolution errors at build time ──
 RUN node --check packages/api/dist/server.js && \
@@ -146,7 +151,9 @@ exec flock "$LOCKFILE" /bin/sh -c '
     -c port=5432 \
     -c max_connections=20 \
     -c shared_buffers=128MB \
-    -c unix_socket_directories="$SOCKETDIR"
+    -c unix_socket_directories="$SOCKETDIR" \
+    -c include=/etc/postgresql/wal.conf \
+    -c include=/etc/postgresql/tuning.conf
 '
 PGRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/postgres/run
@@ -177,6 +184,7 @@ for i in $(seq 1 60); do
       "SELECT 1 FROM pg_database WHERE datname = 'hisaabo'" \
       | grep -q 1 \
       || createdb -h "$SOCKETDIR" -U postgres hisaabo
+    psql -h "$SOCKETDIR" -U postgres -d hisaabo -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
     exit 0
   fi
   sleep 1
@@ -219,43 +227,125 @@ RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
 
 RUN mkdir -p /hooks
 
-# pre-backup: pg_dump to consistent snapshot before ONCE tars /storage
+# pre-backup: pg_dump ALL databases to consistent snapshots before ONCE tars /storage
 COPY <<'PREBACKUP' /hooks/pre-backup
 #!/bin/sh
 set -e
 SOCKETDIR="/storage/run"
-echo "[backup] Creating PostgreSQL dump..."
-pg_dump -h "$SOCKETDIR" -U postgres hisaabo \
-  --format=custom \
-  --compress=6 \
-  --file=/storage/backups/hisaabo.dump
-echo "[backup] Dump complete: /storage/backups/hisaabo.dump ($(du -h /storage/backups/hisaabo.dump | cut -f1))"
+
+echo "[backup] Discovering databases..."
+DATABASES=$(psql -h "$SOCKETDIR" -U postgres -Atc \
+  "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres'")
+
+for db in $DATABASES; do
+  DUMP_FILE="/storage/backups/${db}.dump"
+  echo "[backup] Dumping ${db}..."
+  pg_dump -h "$SOCKETDIR" -U postgres "$db" \
+    --format=custom \
+    --compress=6 \
+    --file="$DUMP_FILE"
+
+  SIZE=$(du -h "$DUMP_FILE" | cut -f1)
+
+  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
+    echo "[backup] Encrypting ${db}.dump..."
+    echo "$BACKUP_ENCRYPTION_KEY" | age -e -p -o "${DUMP_FILE}.age" "$DUMP_FILE"
+    rm -f "$DUMP_FILE"
+    ENC_SIZE=$(du -h "${DUMP_FILE}.age" | cut -f1)
+    echo "[backup] ${db}: dumped ${SIZE} -> encrypted ${ENC_SIZE}"
+  else
+    echo "[backup] ${db}: dumped ${SIZE}"
+  fi
+done
+
+echo "[backup] All database dumps complete"
 PREBACKUP
 RUN chmod +x /hooks/pre-backup
 
-# post-restore: restore from dump after ONCE unpacks /storage
+# post-restore: restore databases from dumps after ONCE unpacks /storage
+# Set RESTORE_DB=<dbname> to restore a single tenant database without touching others.
+# Leave unset (default) to restore ALL databases.
 COPY <<'POSTRESTORE' /hooks/post-restore
 #!/bin/sh
 set -e
 SOCKETDIR="/storage/run"
-DUMP_FILE="/storage/backups/hisaabo.dump"
+BACKUP_DIR="/storage/backups"
 
-if [ ! -f "$DUMP_FILE" ]; then
-  echo "[restore] No dump file found at $DUMP_FILE, skipping"
+# If RESTORE_DB is set, only restore that specific database
+TARGET_DB="${RESTORE_DB:-}"
+
+# Check if any dumps exist
+DUMP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' -o -name '*.dump.age' 2>/dev/null | wc -l)
+if [ "$DUMP_COUNT" -eq 0 ]; then
+  echo "[restore] No dump files found in $BACKUP_DIR, skipping"
   exit 0
 fi
 
 echo "[restore] Waiting for PostgreSQL..."
 for i in $(seq 1 30); do
-  pg_isready -h "$SOCKETDIR" -U postgres -q && break
+  if pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
+    echo "[restore] PostgreSQL is ready"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "[restore] ERROR: PostgreSQL not ready after 30s"
+    exit 1
+  fi
   sleep 1
 done
 
-echo "[restore] Restoring from dump..."
-dropdb -h "$SOCKETDIR" -U postgres --if-exists hisaabo
-createdb -h "$SOCKETDIR" -U postgres hisaabo
-pg_restore -h "$SOCKETDIR" -U postgres -d hisaabo --no-owner --no-privileges "$DUMP_FILE"
-echo "[restore] Restore complete"
+# Decrypt encrypted dumps (.dump.age)
+for age_file in "$BACKUP_DIR"/*.dump.age; do
+  [ -f "$age_file" ] || continue
+  BASENAME=$(basename "$age_file" .dump.age)
+
+  # If targeting a specific DB, skip others
+  if [ -n "$TARGET_DB" ] && [ "$BASENAME" != "$TARGET_DB" ]; then
+    continue
+  fi
+
+  DUMP_FILE="$BACKUP_DIR/${BASENAME}.dump"
+
+  if [ -z "$BACKUP_ENCRYPTION_KEY" ]; then
+    echo "[restore] ERROR: ${BASENAME}.dump.age found but BACKUP_ENCRYPTION_KEY is not set"
+    exit 1
+  fi
+
+  echo "[restore] Decrypting ${BASENAME}.dump.age..."
+  echo "$BACKUP_ENCRYPTION_KEY" | age -d -o "$DUMP_FILE" "$age_file"
+  rm -f "$age_file"
+done
+
+# Restore .dump files
+RESTORED=0
+for dump_file in "$BACKUP_DIR"/*.dump; do
+  [ -f "$dump_file" ] || continue
+  DBNAME=$(basename "$dump_file" .dump)
+
+  # If targeting a specific DB, skip others
+  if [ -n "$TARGET_DB" ] && [ "$DBNAME" != "$TARGET_DB" ]; then
+    continue
+  fi
+
+  echo "[restore] Restoring ${DBNAME}..."
+  dropdb -h "$SOCKETDIR" -U postgres --if-exists "$DBNAME"
+  createdb -h "$SOCKETDIR" -U postgres "$DBNAME"
+  pg_restore -h "$SOCKETDIR" -U postgres -d "$DBNAME" --no-owner --no-privileges "$dump_file"
+  SIZE=$(du -h "$dump_file" | cut -f1)
+  echo "[restore] ${DBNAME}: restored (${SIZE})"
+  RESTORED=$((RESTORED + 1))
+done
+
+if [ -n "$TARGET_DB" ] && [ "$RESTORED" -eq 0 ]; then
+  echo "[restore] ERROR: No dump found for database '$TARGET_DB'" >&2
+  exit 1
+fi
+
+if [ -n "$TARGET_DB" ]; then
+  echo "[restore] Single database restore complete: $TARGET_DB"
+else
+  echo "[restore] All database restores complete ($RESTORED databases)"
+fi
 POSTRESTORE
 RUN chmod +x /hooks/post-restore
 
