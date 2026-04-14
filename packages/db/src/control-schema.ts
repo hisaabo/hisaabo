@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
@@ -133,6 +133,13 @@ export const apiKeys = pgTable("api_keys", {
   index("api_keys_user_idx").on(t.userId),
   index("api_keys_hash_idx").on(t.keyHash),
 ]);
+
+// ── System Config ─────────────────────────────────────────────
+export const systemConfig = pgTable("system_config", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 // ── Relations ──────────────────────────────────────────────────
 

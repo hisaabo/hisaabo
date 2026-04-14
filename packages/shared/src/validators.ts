@@ -724,3 +724,14 @@ export type DashboardSummary = {
     invoiceDate: string;
   }>;
 };
+
+// ── System ────────────────────────────────────────────────────
+
+export const maintenanceStatusSchema = z.object({
+  enabled: z.boolean(),
+  message: z.string(),
+  startsAt: z.string().datetime().nullable(),
+  endsAt: z.string().datetime().nullable(),
+});
+
+export type MaintenanceStatus = z.infer<typeof maintenanceStatusSchema>;

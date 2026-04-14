@@ -8,6 +8,7 @@ import { useBusinessStore } from "../../src/stores/business";
 import { colors } from "../../src/lib/theme";
 import { queryClient } from "../../src/lib/query-client";
 import { BusinessSwitcherProvider } from "../../src/contexts/BusinessSwitcherContext";
+import { MaintenanceBanner } from "../../src/components/MaintenanceBanner";
 
 export default function AppLayout() {
   const token = useAuthStore((s) => s.token);
@@ -146,70 +147,73 @@ export default function AppLayout() {
   }
 
   return (
-    <BusinessSwitcherProvider
-      businesses={businesses ?? []}
-      activeBusinessId={businessId ?? ""}
-      onSwitch={handleSwitchBusiness}
-      onCreateNew={canCreateBiz ? handleCreateNewBusiness : undefined}
-    >
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarStyle: { backgroundColor: colors.bg, borderTopColor: colors.surface },
-          tabBarActiveTintColor: colors.brand,
-          tabBarInactiveTintColor: colors.textMuted,
-          tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        }}
+    <View style={{ flex: 1 }}>
+      <MaintenanceBanner />
+      <BusinessSwitcherProvider
+        businesses={businesses ?? []}
+        activeBusinessId={businessId ?? ""}
+        onSwitch={handleSwitchBusiness}
+        onCreateNew={canCreateBiz ? handleCreateNewBusiness : undefined}
       >
-        <Tabs.Screen
-          name="(home)"
-          options={{
-            title: "Home",
-            tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
+        <Tabs
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: { backgroundColor: colors.bg, borderTopColor: colors.surface },
+            tabBarActiveTintColor: colors.brand,
+            tabBarInactiveTintColor: colors.textMuted,
+            tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
           }}
-        />
-        <Tabs.Screen
-          name="(invoices)"
-          options={{
-            title: "Invoices",
-            tabBarIcon: ({ color, size }) => <Ionicons name="receipt-outline" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="(parties)"
-          options={{
-            title: "Parties",
-            tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="(payments)"
-          options={{
-            title: "Payments",
-            tabBarIcon: ({ color, size }) => <Ionicons name="card-outline" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="(items)"
-          options={{
-            href: null, // Hidden from tab bar — accessible via More
-          }}
-        />
-        <Tabs.Screen
-          name="create-business"
-          options={{
-            href: null, // Hidden from tab bar — navigated to programmatically
-          }}
-        />
-        <Tabs.Screen
-          name="(more)"
-          options={{
-            title: "More",
-            tabBarIcon: ({ color, size }) => <Ionicons name="menu-outline" size={size} color={color} />,
-          }}
-        />
-      </Tabs>
-    </BusinessSwitcherProvider>
+        >
+          <Tabs.Screen
+            name="(home)"
+            options={{
+              title: "Home",
+              tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="(invoices)"
+            options={{
+              title: "Invoices",
+              tabBarIcon: ({ color, size }) => <Ionicons name="receipt-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="(parties)"
+            options={{
+              title: "Parties",
+              tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="(payments)"
+            options={{
+              title: "Payments",
+              tabBarIcon: ({ color, size }) => <Ionicons name="card-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="(items)"
+            options={{
+              href: null, // Hidden from tab bar — accessible via More
+            }}
+          />
+          <Tabs.Screen
+            name="create-business"
+            options={{
+              href: null, // Hidden from tab bar — navigated to programmatically
+            }}
+          />
+          <Tabs.Screen
+            name="(more)"
+            options={{
+              title: "More",
+              tabBarIcon: ({ color, size }) => <Ionicons name="menu-outline" size={size} color={color} />,
+            }}
+          />
+        </Tabs>
+      </BusinessSwitcherProvider>
+    </View>
   );
 }
 

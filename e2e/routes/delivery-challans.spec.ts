@@ -28,8 +28,12 @@ test.describe("Delivery Challans — Presence", () => {
   });
 
   test("renders New Challan button", async ({ page }) => {
+    // DocumentListPage renders the CTA twice: once in the PageHeader (always visible)
+    // and once in the EmptyState (only when list is empty). Both have the same
+    // accessible name, so Playwright's strict mode flags the assertion unless we
+    // narrow to one — we pick .first() to match the invoices page-object pattern.
     await expect(
-      page.getByRole("button", { name: /new.*challan/i }),
+      page.getByRole("button", { name: /new.*challan/i }).first(),
     ).toBeVisible();
   });
 
@@ -74,12 +78,12 @@ test.describe("Delivery Challans — Interaction", () => {
   });
 
   test("create button opens DocumentCreator", async ({ page }) => {
-    await page.getByRole("button", { name: /new.*challan/i }).click();
+    await page.getByRole("button", { name: /new.*challan/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
   });
 
   test("creator closes on Escape", async ({ page }) => {
-    await page.getByRole("button", { name: /new.*challan/i }).click();
+    await page.getByRole("button", { name: /new.*challan/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(

@@ -32,6 +32,7 @@ import { registerBankReconTools } from "./tools/bankRecon.js";
 import { registerEInvoiceTools } from "./tools/eInvoice.js";
 import { registerEwayBillTools } from "./tools/ewayBill.js";
 import { registerGstr2bTools } from "./tools/gstr2b.js";
+import { registerSystemTools } from "./tools/system.js";
 import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 
@@ -92,6 +93,9 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
   registerEInvoiceTools(server, client);
   registerEwayBillTools(server, client);
   registerGstr2bTools(server, client);
+
+  // System status
+  registerSystemTools(server, client);
 
   // Read-only context resources
   registerResources(server, client);

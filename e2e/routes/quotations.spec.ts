@@ -25,8 +25,10 @@ test.describe("Quotations — Presence", () => {
   });
 
   test("renders New Quotation button", async ({ page }) => {
+    // DocumentListPage renders the CTA twice (PageHeader + EmptyState); narrow
+    // to one to satisfy Playwright strict mode — see delivery-challans.spec.ts.
     await expect(
-      page.getByRole("button", { name: /new quotation/i }),
+      page.getByRole("button", { name: /new quotation/i }).first(),
     ).toBeVisible();
   });
 
@@ -63,12 +65,12 @@ test.describe("Quotations — Interaction", () => {
   });
 
   test("create button opens DocumentCreator", async ({ page }) => {
-    await page.getByRole("button", { name: /new quotation/i }).click();
+    await page.getByRole("button", { name: /new quotation/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
   });
 
   test("creator closes on Escape", async ({ page }) => {
-    await page.getByRole("button", { name: /new quotation/i }).click();
+    await page.getByRole("button", { name: /new quotation/i }).first().click();
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(

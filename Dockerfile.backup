@@ -1,0 +1,10 @@
+FROM postgres:16-alpine
+
+RUN apk add --no-cache bash rclone age
+
+COPY scripts/backup.sh /usr/local/bin/backup.sh
+COPY scripts/restore-db.sh /usr/local/bin/restore-db.sh
+COPY scripts/backup-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/backup.sh /usr/local/bin/restore-db.sh /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

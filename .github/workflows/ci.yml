@@ -132,6 +132,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://test:test@localhost:5433/hisaabo_test
       PORT: 3000
+      CORS_ORIGINS: http://localhost:5173
 
     steps:
       - uses: actions/checkout@v4
