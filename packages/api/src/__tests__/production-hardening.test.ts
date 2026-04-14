@@ -345,20 +345,15 @@ describe("P2: Docker entrypoint hardening", () => {
 // =============================================================================
 describe("P1: Tenant provisioning path resolution and rollback", () => {
   /**
-   * AUDIT FINDING: provision-tenant.ts used import.meta.url to resolve the
-   * @hisaabo/db package root. When tsup bundles the code into packages/api/dist/,
-   * import.meta.url points to the bundle location, so dbPackageRoot resolved to
-   * /app/packages/api/ instead of /app/packages/db/. This caused:
-   *   - configPath pointed to a non-existent file
-   *   - cwd was wrong so npx couldn't find drizzle-kit
-   *   - Result: 500 error on first user signup in Docker
+   * AUDIT FINDING: provision-tenant.ts used to resolve migration paths directly
+   * via import.meta.url, which broke when tsup bundled into packages/api/dist/.
    *
-   * FIX: Use createRequire(import.meta.url).resolve('@hisaabo/db/package.json')
-   * which works regardless of bundling because Node's module resolution follows
-   * workspace links.
+   * FIX: provision-tenant.ts delegates to migrateSingleTenantDb() from migrate.ts
+   * instead of doing its own path resolution. It must NOT contain any path
+   * resolution patterns (no import.meta.url, no __dirname, no createRequire).
    */
 
-  it("provision-tenant.ts uses createRequire instead of import.meta.url for path resolution", async () => {
+  it("provision-tenant.ts delegates migration to migrate.ts without its own path resolution", async () => {
     const fs = await import("node:fs");
     const nodePath = await import("node:path");
     const { fileURLToPath } = await import("node:url");
@@ -366,12 +361,12 @@ describe("P1: Tenant provisioning path resolution and rollback", () => {
     const provisionPath = nodePath.resolve(thisDir, "../../../../packages/db/src/provision-tenant.ts");
     const content = fs.readFileSync(provisionPath, "utf-8");
 
-    // Must use createRequire for bundle-safe package resolution
-    expect(content).toContain("createRequire");
-    expect(content).toContain('@hisaabo/db/package.json');
+    // Must delegate to migrateSingleTenantDb (from migrate.ts) for migrations
+    expect(content).toContain("migrateSingleTenantDb");
 
-    // Must NOT use the old fragile pattern: dirname(fileURLToPath(import.meta.url))
+    // Must NOT do its own path resolution — that's migrate.ts's job
     expect(content).not.toContain("fileURLToPath(import.meta.url)");
+    expect(content).not.toContain("__dirname");
   });
 
   it("provision-tenant.ts guards dotenv in production", async () => {

@@ -2,6 +2,7 @@ import Conf from "conf";
 import { hostname, userInfo } from "os";
 import { createHash } from "crypto";
 import { fatalError, warn } from "./output.js";
+import type { HisaaboClient } from "./client.js";
 
 interface ConfigSchema {
   apiUrl: string;
@@ -93,4 +94,27 @@ export function requireAuth(): ConfigSchema {
 
 export function getConfigPath(): string {
   return conf.path;
+}
+
+/**
+ * Check if the system is under maintenance and warn the user.
+ * Called after requireAuth() in command handlers.
+ * Non-fatal — prints warning and continues (the API will block tenant ops anyway).
+ */
+export async function checkMaintenance(client: HisaaboClient): Promise<void> {
+  try {
+    const status = await client.system.maintenanceStatus();
+    if (status.enabled) {
+      warn(`System is under maintenance: ${status.message || "Please try again later."}`);
+      if (status.endsAt) {
+        const end = new Date(status.endsAt).toLocaleString();
+        warn(`Estimated end: ${end}`);
+      }
+    } else if (status.startsAt && new Date(status.startsAt) > new Date()) {
+      const start = new Date(status.startsAt).toLocaleString();
+      warn(`Scheduled maintenance: ${start}${status.message ? ` — ${status.message}` : ""}`);
+    }
+  } catch {
+    // Silently ignore — don't block CLI startup if status check fails
+  }
 }

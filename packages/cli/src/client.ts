@@ -1183,6 +1183,17 @@ export class HisaaboClient {
       },
     };
   }
+
+  // ── System ──────────────────────────────────────────────────────
+
+  get system() {
+    const c = this;
+    return {
+      maintenanceStatus() {
+        return c.query<MaintenanceStatus>("system.maintenanceStatus");
+      },
+    };
+  }
 }
 
 // ── Type definitions ───────────────────────────────────────────────────────
@@ -1199,6 +1210,13 @@ export interface AuthUser {
   email: string;
   name: string;
   role: string;
+}
+
+export interface MaintenanceStatus {
+  enabled: boolean;
+  message: string;
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 export type InvoiceStatus =

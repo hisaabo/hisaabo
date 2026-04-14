@@ -1006,6 +1006,17 @@ export class HisaaboClient {
       },
     };
   }
+
+  // ── System ──────────────────────────────────────────────────────
+
+  get system() {
+    const c = this;
+    return {
+      maintenanceStatus() {
+        return c.query<MaintenanceStatus>("system.maintenanceStatus");
+      },
+    };
+  }
 }
 
 // ── Shared types ───────────────────────────────────────────────────────────
@@ -1025,6 +1036,13 @@ export type InvoiceStatus =
 export type DocumentType =
   | "invoice" | "quotation" | "credit_note" | "debit_note"
   | "delivery_challan" | "proforma" | "sales_return" | "purchase_return";
+
+export interface MaintenanceStatus {
+  enabled: boolean;
+  message: string;
+  startsAt: string | null;
+  endsAt: string | null;
+}
 
 export interface InvoiceSummary {
   id: string;
