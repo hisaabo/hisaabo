@@ -69,6 +69,8 @@ COPY packages/api/fonts/ packages/api/fonts/
 COPY packages/db/package.json packages/db/
 COPY packages/db/src/ packages/db/src/
 COPY packages/db/drizzle/ packages/db/drizzle/
+COPY packages/db/drizzle-control/ packages/db/drizzle-control/
+COPY packages/db/drizzle-tenant/ packages/db/drizzle-tenant/
 COPY packages/db/drizzle.config.ts packages/db/
 COPY packages/db/drizzle-control.config.ts packages/db/
 COPY packages/db/drizzle-tenant.config.ts packages/db/
@@ -195,12 +197,13 @@ set -e
 SOCKETDIR="/storage/run"
 
 # Run migrations (idempotent — safe even if old container is still serving)
+# Advisory lock inside migrate.ts prevents conflicts during rolling deploys.
 echo "[api] Running database migrations..."
-cd /app/packages/db
-DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  npx drizzle-kit migrate 2>&1 || \
-  echo "[api] WARNING: Migration failed, starting server anyway"
-cd /app
+if ! DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
+  /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts; then
+  echo "[api] FATAL: Migration failed — refusing to start with inconsistent DB"
+  exit 1
+fi
 
 # Start API — connects to PG via Unix socket
 echo "[api] Starting Hisaabo API on port ${PORT:-80}..."

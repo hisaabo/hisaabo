@@ -44,6 +44,8 @@ COPY packages/api/fonts/ packages/api/fonts/
 COPY packages/db/package.json packages/db/
 COPY packages/db/src/ packages/db/src/
 COPY packages/db/drizzle/ packages/db/drizzle/
+COPY packages/db/drizzle-control/ packages/db/drizzle-control/
+COPY packages/db/drizzle-tenant/ packages/db/drizzle-tenant/
 COPY packages/db/drizzle.config.ts packages/db/drizzle-tenant.config.ts packages/db/drizzle-control.config.ts packages/db/
 COPY packages/db/tsconfig.json packages/db/
 

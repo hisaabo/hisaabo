@@ -12,13 +12,11 @@ fi
 
 # ── Run database migrations ────────────────────────────────────
 echo "[entrypoint] Running database migrations..."
-cd /app/packages/db
-if ! npx drizzle-kit migrate 2>&1; then
+if ! /app/packages/db/node_modules/.bin/tsx /app/packages/db/src/migrate.ts; then
   echo "[entrypoint] FATAL: Migration failed! Refusing to start with potentially inconsistent DB."
   echo "[entrypoint] Check DATABASE_URL and migration files."
   exit 1
 fi
-cd /app
 
 # ── Start the API server ───────────────────────────────────────
 echo "[entrypoint] Starting Hisaabo API server on port ${PORT:-3000}..."
