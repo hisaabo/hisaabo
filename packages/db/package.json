@@ -33,6 +33,7 @@
     "tsx": "^4.19.0"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "typescript": "^5.7.0"
   }
 }

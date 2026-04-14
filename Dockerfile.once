@@ -34,10 +34,10 @@ COPY packages/api/ packages/api/
 RUN pnpm --filter @hisaabo/api build
 
 # Bundle the migration runner into a standalone JS file (no tsx needed at runtime)
-RUN pnpm exec esbuild packages/db/src/migrate.ts \
+RUN pnpm --filter @hisaabo/db exec esbuild src/migrate.ts \
       --bundle --platform=node --format=esm \
       --target=node22 \
-      --outfile=packages/db/dist/migrate.mjs \
+      --outfile=dist/migrate.mjs \
       --external:postgres --external:drizzle-orm --external:dotenv
 
 # ── Stage 2: Production runtime ──────────────────────────────
