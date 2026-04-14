@@ -21,9 +21,12 @@ function cspPlugin(): Plugin {
       order: "pre",
       handler(html, ctx) {
         const isDev = ctx.server !== undefined;
+        const apiOrigin = process.env.VITE_API_URL; // e.g. "https://api.hisaabo.in"
         const connectSrc = isDev
           ? "connect-src 'self' ws:"
-          : "connect-src 'self'";
+          : apiOrigin
+            ? `connect-src 'self' ${apiOrigin}`
+            : "connect-src 'self'";
 
         const directives = [
           "default-src 'self'",
