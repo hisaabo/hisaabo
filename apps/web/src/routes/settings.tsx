@@ -10,6 +10,7 @@ import { SalesTargetsTab } from "@/components/settings/SalesTargetsTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { DataTab } from "@/components/settings/DataTab";
 import { AccountTab } from "@/components/settings/AccountTab";
+import { BackupTab } from "@/components/settings/BackupTab";
 import { StoreTab } from "@/components/settings/StoreTab";
 import { ShippingTab } from "@/components/settings/ShippingTab";
 import { WhatsNextModal } from "@/components/settings/WhatsNextModal";
@@ -152,7 +153,7 @@ function SettingsPage() {
     <div>
       <PageHeader title="Settings" description="Manage your business and preferences" />
       <div className="flex gap-8 mt-2">
-        <SettingsNav value={tab} onChange={handleTabChange} />
+        <SettingsNav value={tab} onChange={handleTabChange} role={session?.role} />
         <div className="flex-1 min-w-0">
           {tab === "business" && <BusinessTab biz={biz} />}
           {tab === "documents" && <DocumentsTab biz={biz} />}
@@ -163,6 +164,7 @@ function SettingsPage() {
           {tab === "data" && <DataTab />}
           {tab === "account" && <AccountTab />}
           {tab === "store" && <StoreTab />}
+          {tab === "backup" && <BackupTab />}
         </div>
       </div>
     </div>

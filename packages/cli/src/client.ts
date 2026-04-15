@@ -1194,6 +1194,28 @@ export class HisaaboClient {
       },
     };
   }
+
+  // ── Self Export ──────────────────────────────────────────────────
+
+  get selfExport() {
+    const c = this;
+    return {
+      request(input: { tenantId: string }) {
+        return c.mutate<{ token: string; url: string; expiresAt: string }>("selfExport.request", input);
+      },
+    };
+  }
+
+  // ── Self Import ──────────────────────────────────────────────────
+
+  get selfImport() {
+    const c = this;
+    return {
+      request(input: { tenantId: string }) {
+        return c.mutate<{ token: string; url: string; expiresAt: string }>("selfImport.request", input);
+      },
+    };
+  }
 }
 
 // ── Type definitions ───────────────────────────────────────────────────────

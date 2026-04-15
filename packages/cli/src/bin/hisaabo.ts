@@ -26,6 +26,7 @@ import { registerItcCommands } from "./registrars/itc.js";
 import { registerBankReconCommands } from "./registrars/bank-recon.js";
 import { registerEInvoiceCommands } from "./registrars/einvoice.js";
 import { registerEwbCommands } from "./registrars/ewb.js";
+import { registerBackupCommands } from "./registrars/backup.js";
 
 // ── Program ───────────────────────────────────────────────────────────────
 
@@ -66,6 +67,7 @@ registerItcCommands(program);
 registerBankReconCommands(program);
 registerEInvoiceCommands(program);
 registerEwbCommands(program);
+registerBackupCommands(program);
 
 // ── Run ────────────────────────────────────────────────────────────────────
 
