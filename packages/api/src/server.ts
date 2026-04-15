@@ -17,7 +17,7 @@ import { appRouter } from "./router.js";
 import { createContext, getSessionIdFromRequest } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -1594,6 +1594,21 @@ app.notFound((c) => {
     404,
   ), 404);
 });
+
+// ── Startup sanity check ─────────────────────────────────────
+// Refuse to boot if the migration SQL directories aren't where the bundled
+// runtime expects them. Without this, a broken Dockerfile / bundle layout
+// would boot "successfully" and only fail on the first user signup (which is
+// how we learned the hard way that @hisaabo/db's __dirname shifts when tsup
+// inlines it into apps/api/dist).
+{
+  const missing = assertMigrationsPresent();
+  if (missing.length > 0) {
+    for (const m of missing) logger.fatal({ reason: m }, "Migration directory missing at boot");
+    logger.fatal("Refusing to start — fix the bundle/deploy layout and retry");
+    process.exit(1);
+  }
+}
 
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);

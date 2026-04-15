@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { controlDb, tenants, tenantMembers, invitations, users, sessions, provisionTenantDatabase } from "@hisaabo/db";
+import { controlDb, tenants, tenantMembers, invitations, users, sessions, provisionTenantDatabase, cleanupTenantDatabase } from "@hisaabo/db";
 import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
@@ -43,45 +43,50 @@ export const tenantRouter = router({
       const tenantName = `${displayName}'s Organization`;
       const slug = generateSlug(tenantName);
 
-      // 1. Create the tenant row
-      const [tenant] = await controlDb.insert(tenants).values({
-        name: tenantName,
-        slug,
-      }).returning({ id: tenants.id });
+      // Phase 1 (outside any tx): provision the physical DB + role + schema.
+      // CREATE DATABASE is non-transactional, so it MUST happen outside the
+      // control-DB transaction. If it throws, provisionTenantDatabase's own
+      // internal catch already cleaned up.
+      const dbConfig = await provisionTenantDatabase(nanoid(), slug);
 
-      // 2. Provision the tenant database (CREATE DATABASE, user, schema push)
-      let dbConfig: Awaited<ReturnType<typeof provisionTenantDatabase>>;
+      // Phase 2 (inside tx): insert tenants row + owner membership atomically.
+      // If this tx fails (constraint violation, connection drop, COMMIT
+      // failure), we compensate by dropping the physical DB + role — without
+      // this, CREATE DATABASE would orphan resources forever.
+      let tenantId: string;
       try {
-        dbConfig = await provisionTenantDatabase(tenant.id, slug);
+        tenantId = await controlDb.transaction(async (tx) => {
+          const [tenant] = await tx.insert(tenants).values({
+            name: tenantName,
+            slug,
+            dbName: dbConfig.dbName,
+            dbHost: dbConfig.dbHost,
+            dbPort: dbConfig.dbPort,
+            dbUser: dbConfig.dbUser,
+            dbPassword: dbConfig.dbPassword,
+          }).returning({ id: tenants.id });
+
+          await tx.insert(tenantMembers).values({
+            tenantId: tenant.id,
+            userId: ctx.user.id,
+            role: "owner",
+            acceptedAt: new Date(),
+          });
+
+          return tenant.id;
+        });
       } catch (err) {
-        // Roll back orphaned tenant row so a retry can succeed
-        await controlDb.delete(tenants).where(eq(tenants.id, tenant.id));
+        // Drop the orphan physical DB + role since the control-DB writes
+        // rolled back. Best-effort — never throws.
+        await cleanupTenantDatabase(dbConfig.dbName, dbConfig.dbUser);
         throw err;
       }
 
-      // 3. Persist DB connection details
-      await controlDb.update(tenants)
-        .set({
-          dbName: dbConfig.dbName,
-          dbHost: dbConfig.dbHost,
-          dbPort: dbConfig.dbPort,
-          dbUser: dbConfig.dbUser,
-          dbPassword: dbConfig.dbPassword,
-          updatedAt: new Date(),
-        })
-        .where(eq(tenants.id, tenant.id));
-
-      // 4. Create owner membership
-      await controlDb.insert(tenantMembers).values({
-        tenantId: tenant.id,
-        userId: ctx.user.id,
-        role: "owner",
-        acceptedAt: new Date(),
-      });
-
-      // Auto-select the new tenant in session
-      const tenantNameResult = await autoSelectTenantInSession(ctx.req, tenant.id);
-      return { tenantId: tenant.id, tenantName: tenantNameResult };
+      // Auto-select the new tenant in session (outside tx, not part of the
+      // orphan-compensation contract — failure here only affects UX, not
+      // cluster state)
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, tenantId);
+      return { tenantId, tenantName: tenantNameResult };
     } else {
       // Self-hosted: join/create default tenant
       let [defaultTenant] = await controlDb.select({ id: tenants.id })

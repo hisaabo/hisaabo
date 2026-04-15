@@ -58,6 +58,56 @@ export interface TenantDbConfig {
 }
 
 /**
+ * Best-effort cleanup for a tenant's physical database and role.
+ *
+ * Used as a compensator when the outer control-DB transaction fails AFTER
+ * `provisionTenantDatabase` has already created the physical DB/USER. Since
+ * CREATE DATABASE / CREATE USER are non-transactional, we must drop them
+ * manually on outer-tx failure — otherwise the cluster accumulates orphan
+ * `tenant_*` databases + roles forever.
+ *
+ * Idempotent: uses IF EXISTS, terminates live connections before DROP, and
+ * swallows any individual failure (we do not want to mask the caller's
+ * original error with a cleanup error). Callers should log any thrown error
+ * separately; this function itself never throws.
+ *
+ * Both identifiers MUST have already been sanitized by the caller (i.e. they
+ * came from a round-trip through this module's own provisioning). We still
+ * re-validate with a character-class check as defence-in-depth against a
+ * future caller passing attacker-controlled input.
+ */
+export async function cleanupTenantDatabase(dbName: string, dbUser: string): Promise<void> {
+  if (!/^[a-z0-9_]+$/.test(dbName) || !/^[a-z0-9_]+$/.test(dbUser)) {
+    // Refuse to run DROP statements with an unsanitized identifier — no-op.
+    return;
+  }
+  const controlUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  if (!controlUrl) return;
+
+  const { baseUrl } = parseConnectionUrl(controlUrl);
+  const cleanupClient = postgres(`${baseUrl}/postgres`, {
+    max: 1,
+    idle_timeout: 0,
+    connect_timeout: 15,
+    onnotice: () => {},
+  });
+
+  try {
+    // Terminate lingering sessions so DROP DATABASE doesn't block.
+    // The datname literal is quoted here because pg_terminate_backend takes
+    // datname as text (not an identifier); sanitization above guarantees
+    // no quote injection is possible.
+    await cleanupClient.unsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
+    ).catch(() => {});
+    await cleanupClient.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => {});
+    await cleanupClient.unsafe(`DROP USER IF EXISTS "${dbUser}"`).catch(() => {});
+  } finally {
+    await cleanupClient.end().catch(() => {});
+  }
+}
+
+/**
  * Provisions a new PostgreSQL database for a tenant:
  *   1. Creates the database
  *   2. Creates a dedicated PG user with a random password
@@ -84,48 +134,45 @@ export async function provisionTenantDatabase(
   const dbUser = sanitizeIdentifier(`tenant_${safeSuffix}_user`);
   const dbPassword = randomBytes(32).toString("base64url");
 
-  // ── Step 1 & 2: Create DB and user via the control (superuser) connection ──
-  // Connect to `postgres` maintenance database to run CREATE DATABASE.
-  // postgres.js does not support `CREATE DATABASE` inside transactions, so we
-  // use max:1 and no idle_timeout to get a clean single-use connection.
-  const adminClient = postgres(`${baseUrl}/postgres`, {
-    max: 1,
-    idle_timeout: 0,
-    connect_timeout: 15,
-    onnotice: () => {}, // suppress notices
-  });
-
+  // Single try/catch wraps ALL side-effecting steps (CREATE DATABASE, CREATE
+  // USER, GRANT, schema grants, migrations). Any failure triggers
+  // cleanupTenantDatabase() so we never leave a half-provisioned pair behind.
+  //
+  // Previously there were two try blocks and only the second had cleanup — a
+  // failure between CREATE DATABASE and CREATE USER (or during the cluster
+  // GRANT) would orphan resources. This unified form closes that gap.
   try {
-    // CREATE DATABASE cannot run inside a transaction block — postgres.js sends
-    // each query in its own implicit transaction by default when using tagged
-    // template literals directly (not inside a tx() callback), so this is safe.
+    // ── Step 1: Create DB and user via the control (superuser) connection ──
+    // Connect to `postgres` maintenance database to run CREATE DATABASE.
+    // postgres.js does not support `CREATE DATABASE` inside transactions, so we
+    // use max:1 and no idle_timeout to get a clean single-use connection.
+    const adminClient = postgres(`${baseUrl}/postgres`, {
+      max: 1,
+      idle_timeout: 0,
+      connect_timeout: 15,
+      onnotice: () => {}, // suppress notices
+    });
 
-    // Create the database (identifier is sanitized above — safe to interpolate)
-    await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
+    try {
+      // Create the database (identifier is sanitized above — safe to interpolate)
+      await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
 
-    // Create the dedicated user with a securely-generated password.
-    // base64url output is [A-Za-z0-9_-] only — assert this before interpolating.
-    if (!/^[A-Za-z0-9_-]+$/.test(dbPassword)) {
-      throw new Error("Generated password contains unexpected characters — refusing to interpolate into SQL");
+      // Create the dedicated user with a securely-generated password.
+      // base64url output is [A-Za-z0-9_-] only — assert this before interpolating.
+      if (!/^[A-Za-z0-9_-]+$/.test(dbPassword)) {
+        throw new Error("Generated password contains unexpected characters — refusing to interpolate into SQL");
+      }
+      await adminClient.unsafe(
+        `CREATE USER "${dbUser}" WITH PASSWORD '${dbPassword}'`,
+      );
+
+      // Grant all privileges on the database to the dedicated user
+      await adminClient.unsafe(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`);
+    } finally {
+      await adminClient.end();
     }
-    await adminClient.unsafe(
-      `CREATE USER "${dbUser}" WITH PASSWORD '${dbPassword}'`,
-    );
 
-    // Grant all privileges on the database to the dedicated user
-    await adminClient.unsafe(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`);
-
-    // Also grant schema usage so the user can create/access tables
-    // This must be done after connecting to the new database (step 3), but we
-    // pre-grant here so drizzle-kit push (which connects as superuser) can run.
-  } finally {
-    await adminClient.end();
-  }
-
-  // Steps 3 & 4 are wrapped in a try/catch so we can clean up the DB and user
-  // created in steps 1 & 2 if anything goes wrong (prevents orphaned resources).
-  try {
-    // ── Step 3: Connect to the new DB as superuser and grant schema privileges ──
+    // ── Step 2: Connect to the new DB as superuser and grant schema privileges ──
     const newDbAdminClient = postgres(`${baseUrl}/${dbName}`, {
       max: 1,
       idle_timeout: 0,
@@ -141,7 +188,7 @@ export async function provisionTenantDatabase(
       await newDbAdminClient.end();
     }
 
-    // ── Step 4: Apply tenant schema via programmatic migrations ────
+    // ── Step 3: Apply tenant schema via programmatic migrations ────
     // Uses drizzle-orm's migrate() directly — no npx subprocess needed.
     // The superuser connection is used so migrations can create extensions/types.
     const tenantUrl = `${baseUrl}/${dbName}`;
@@ -151,25 +198,8 @@ export async function provisionTenantDatabase(
       throw new Error(`Tenant schema migration failed: ${result.error}`);
     }
   } catch (err) {
-    // ── Rollback: drop the orphaned DB and user ──────────────────
-    const cleanupClient = postgres(`${baseUrl}/postgres`, {
-      max: 1,
-      idle_timeout: 0,
-      connect_timeout: 15,
-      onnotice: () => {},
-    });
-    try {
-      // Terminate any lingering connections to the tenant DB before dropping
-      await cleanupClient.unsafe(
-        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
-      );
-      await cleanupClient.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
-      await cleanupClient.unsafe(`DROP USER IF EXISTS "${dbUser}"`);
-    } catch {
-      // Best-effort cleanup — log but don't mask the original error
-    } finally {
-      await cleanupClient.end();
-    }
+    // Compensate: drop whatever was created (idempotent, best-effort).
+    await cleanupTenantDatabase(dbName, dbUser);
     throw err;
   }
 
