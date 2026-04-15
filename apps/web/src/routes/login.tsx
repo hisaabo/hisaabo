@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { TurnstileModal } from "@/components/ui/TurnstileModal";
+import { isDesktop } from "@/lib/isDesktop";
 
 /* ─── Turnstile type (declared in TurnstileModal) ──────────────────────── */
 declare global {
@@ -545,7 +546,7 @@ function LoginPage() {
   // Form handlers save a pending action and open the modal.
   // On Turnstile success, the pending action fires with the token.
   const [showTurnstile, setShowTurnstile] = useState(false);
-  const pendingActionRef = useRef<((token: string) => void) | null>(null);
+  const pendingActionRef = useRef<((token: string | undefined) => void) | null>(null);
 
   const handleTurnstileVerified = useCallback((token: string) => {
     setShowTurnstile(false);
@@ -555,8 +556,16 @@ function LoginPage() {
     }
   }, []);
 
-  /** Wraps a form submission: opens the Turnstile modal, then fires the action with the token. */
-  function withTurnstile(action: (token: string) => void) {
+  /**
+   * Wraps a form submission: opens the Turnstile modal, then fires the action with the token.
+   * On desktop (Tauri), skips the modal and fires immediately with no token — the API has
+   * a matching carve-out that trusts the `x-hisaabo-client: desktop` header.
+   */
+  function withTurnstile(action: (token: string | undefined) => void) {
+    if (isDesktop()) {
+      action(undefined);
+      return;
+    }
     pendingActionRef.current = action;
     setShowTurnstile(true);
   }

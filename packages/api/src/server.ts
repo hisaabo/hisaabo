@@ -77,7 +77,7 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").spl
 app.use("*", cors({
   origin: allowedOrigins,
   credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With"],
+  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
 }));
