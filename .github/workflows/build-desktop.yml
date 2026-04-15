@@ -80,6 +80,9 @@ jobs:
 
       - name: Build web app
         run: pnpm --filter @hisaabo/web build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked --force
@@ -88,6 +91,8 @@ jobs:
         run: cargo tauri build
         working-directory: apps/desktop
         env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           # Disable code signing for CI builds — sign in release workflow
           TAURI_SIGNING_PRIVATE_KEY: ""
 
