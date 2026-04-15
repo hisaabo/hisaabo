@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/db",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -11,10 +11,10 @@
     "./*": "./*"
   },
   "scripts": {
-    "migrate": "tsx src/migrate.ts",
+    "migrate": "tsx src/migrate-cli.ts",
     "db:generate": "drizzle-kit generate",
     "db:generate:all": "drizzle-kit generate && drizzle-kit generate --config drizzle-control.config.ts && drizzle-kit generate --config drizzle-tenant.config.ts",
-    "db:migrate": "tsx src/migrate.ts",
+    "db:migrate": "tsx src/migrate-cli.ts",
     "db:push": "drizzle-kit push",
     "db:push:control": "drizzle-kit push --config drizzle-control.config.ts",
     "db:push:tenant": "drizzle-kit push --config drizzle-tenant.config.ts",

@@ -43,7 +43,7 @@ const ADVISORY_LOCK_ID = 72919283;
 const TENANT_CONCURRENCY = 5;
 
 // ── Logging ──────────────────────────────────────────────────
-function log(level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) {
+export function log(level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) {
   const entry = { level, msg, ts: new Date().toISOString(), ...data };
   if (level === "error") {
     console.error(JSON.stringify(entry));
@@ -426,8 +426,15 @@ export async function migrateSingleTenantDb(
 }
 
 // ── Main ─────────────────────────────────────────────────────
+//
+// NOTE: main() is exported for use by the CLI entry point (migrate-cli.ts).
+// It is intentionally NOT invoked at module load. Importing this file for its
+// function exports (e.g. migrateSingleTenantDb from provision-tenant.ts) must
+// not trigger migrations — previously a top-level main() call here caused the
+// API server to attempt migrations and crash on startup when tsup bundled
+// @hisaabo/db into packages/api/dist/ (wrong path resolution + process.exit).
 
-async function main() {
+export async function main() {
   const isMultiTenant = process.env.MULTI_TENANT === "true";
   const mode = isMultiTenant ? "multi-tenant" : "self-hosted";
 
@@ -442,11 +449,3 @@ async function main() {
 
   log("info", "All migrations completed successfully");
 }
-
-main().catch((err) => {
-  log("error", "Unhandled migration error", {
-    error: err instanceof Error ? err.message : String(err),
-    stack: err instanceof Error ? err.stack : undefined,
-  });
-  process.exit(1);
-});
