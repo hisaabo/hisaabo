@@ -396,4 +396,46 @@ describe("P1: Tenant provisioning path resolution and rollback", () => {
     // Must terminate lingering connections before dropping
     expect(content).toContain("pg_terminate_backend");
   });
+
+  /**
+   * REGRESSION GUARD: migrate.ts must have NO top-level side effects.
+   *
+   * Before the fix, migrate.ts ended with `main().catch(...)` which fired as
+   * soon as the module was imported. Since provision-tenant.ts imports
+   * migrateSingleTenantDb from migrate.ts, tsup pulled all of migrate.ts into
+   * packages/api/dist/ — and main() ran on every API server boot, hitting a
+   * wrong path (bundle __dirname ≠ db package root) and calling process.exit(1).
+   *
+   * Invariant: the CLI entry lives in migrate-cli.ts. migrate.ts is pure exports.
+   */
+  it("migrate.ts has no top-level main() invocation (prevents server-boot crash)", async () => {
+    const fs = await import("node:fs");
+    const nodePath = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
+    const migratePath = nodePath.resolve(thisDir, "../../../../packages/db/src/migrate.ts");
+    const content = fs.readFileSync(migratePath, "utf-8");
+
+    // Must NOT have a top-level main() call — only an exported function.
+    // (Catches `main()`, `main().catch(...)`, `await main()` at module scope.)
+    const lines = content.split("\n");
+    const topLevelInvocation = lines.find((line) => /^\s*(await\s+)?main\s*\(/.test(line));
+    expect(topLevelInvocation, "migrate.ts must not invoke main() at module load").toBeUndefined();
+
+    // Must still export main so the CLI entry can call it.
+    expect(content).toMatch(/export\s+async\s+function\s+main/);
+  });
+
+  it("migrate-cli.ts exists and is the sole invoker of main()", async () => {
+    const fs = await import("node:fs");
+    const nodePath = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const thisDir = nodePath.dirname(fileURLToPath(import.meta.url));
+    const cliPath = nodePath.resolve(thisDir, "../../../../packages/db/src/migrate-cli.ts");
+    expect(fs.existsSync(cliPath), "packages/db/src/migrate-cli.ts must exist").toBe(true);
+
+    const content = fs.readFileSync(cliPath, "utf-8");
+    expect(content).toMatch(/import\s+\{[^}]*\bmain\b/);
+    expect(content).toMatch(/main\s*\(\s*\)\s*\.catch/);
+  });
 });
