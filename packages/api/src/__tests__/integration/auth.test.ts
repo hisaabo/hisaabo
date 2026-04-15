@@ -22,7 +22,9 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { users, sessions, tenantMembers, magicLinkTokens } from "@hisaabo/db";
+import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations } from "@hisaabo/db";
+import { isNull } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import {
   createUser,
   createTenant,
@@ -604,6 +606,104 @@ describe("auth.verifyMagicLink", () => {
     await expect(caller.auth.verifyMagicLink({ token: rawToken })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
+  });
+
+  // ── Protective: token is single-use on success (P0-2) ───────────────────
+  //
+  // Regression guard: after a successful verify, the same raw token must NOT
+  // be reusable. Protects against the claim UPDATE moving back outside the
+  // tx in a way that doesn't preserve single-use semantics.
+  it("burns the token on a successful verify — same raw token fails on replay", async () => {
+    const caller = unauthCaller();
+    const email = "magic-single-use@vyapar.in";
+    const rawToken = "test-magic-single-use-" + Date.now();
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    // First use succeeds
+    const first = await caller.auth.verifyMagicLink({ token: rawToken });
+    expect(first.user.email).toBe(email);
+
+    // Replay returns BAD_REQUEST — not INTERNAL_SERVER_ERROR, not success.
+    // The atomic UPDATE ... WHERE usedAt IS NULL ... RETURNING is the sole
+    // gate; on replay it returns 0 rows and the handler throws BAD_REQUEST.
+    await expect(caller.auth.verifyMagicLink({ token: rawToken }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  // ── Protective: pending invitation skips tenant auto-creation (P1-9) ────
+  //
+  // When an email has a pending invitation, verify must NOT auto-create an
+  // organization. The user will join the invited org after completing their
+  // profile. Protects the invitation branch at auth.ts inside verifyMagicLink
+  // — if someone removes the invitation peek or the in-tx re-check, new
+  // invited users would get an unwanted free org auto-created and the
+  // onboarding flow would bifurcate silently.
+  it("skips auto-tenant creation when the user has a pending invitation", async () => {
+    const caller = unauthCaller();
+    const email = "invited-new-user@vyapar.in";
+
+    // Seed: an inviting tenant + a pending invitation for our email
+    const [invitingTenant] = await db.insert(tenants).values({
+      name: "Inviting Org",
+      slug: "inviting-org-" + nanoid(6),
+    }).returning({ id: tenants.id });
+
+    // Need a user to be the inviter (FK on invitations.invitedBy)
+    const inviter = await createUser({ email: "inviter@vyapar.in", name: "Inviter" });
+    await addMember(invitingTenant!.id, inviter.id, "owner");
+
+    const inviteToken = "invite-" + nanoid(32);
+    await db.insert(invitations).values({
+      tenantId: invitingTenant!.id,
+      email: email.toLowerCase(),
+      role: "member",
+      token: inviteToken,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      invitedBy: inviter.id,
+    });
+
+    // Now verify a magic link for the SAME email — should NOT create a new tenant
+    const rawToken = "magic-invited-" + Date.now();
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    const result = await caller.auth.verifyMagicLink({ token: rawToken });
+
+    expect(result.user.email).toBe(email);
+    expect(result.isNewUser).toBe(true);
+    expect(result.needsProfile).toBe(true);
+
+    // The user has ZERO memberships because no tenant was auto-created and
+    // the invitation hasn't been accepted yet. The invitation is accepted via
+    // a separate call (tenant.acceptById / acceptInvitation).
+    const [dbUser] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    expect(dbUser).toBeDefined();
+    const memberships = await db.select().from(tenantMembers)
+      .where(eq(tenantMembers.userId, dbUser!.id));
+    expect(memberships).toHaveLength(0);
+
+    // The session row has tenantId=null — user must accept the invite / pick
+    // an org before any business operations.
+    const [sess] = await db.select().from(sessions)
+      .where(eq(sessions.userId, dbUser!.id)).limit(1);
+    expect(sess).toBeDefined();
+    expect(sess!.tenantId).toBeNull();
+
+    // And the invitation is still pending (not auto-accepted by the magic
+    // link flow — that's the responsibility of tenant.acceptById).
+    const pending = await db.select().from(invitations)
+      .where(isNull(invitations.acceptedAt));
+    expect(pending.length).toBeGreaterThanOrEqual(1);
   });
 });
 

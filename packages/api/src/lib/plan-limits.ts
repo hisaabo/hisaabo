@@ -217,13 +217,22 @@ export async function enforceApiKeyLimit(tenantId: string): Promise<void> {
  * Enforce concurrent session limit.
  * Called when creating a new session. If at the limit, the oldest session
  * is automatically revoked (FIFO) rather than blocking login.
+ *
+ * Accepts an optional `parentTx` so the eviction DELETE participates in the
+ * surrounding sign-in transaction. Without this, a rollback of the parent tx
+ * would leave the user with FEWER sessions than they started with (the old
+ * session was evicted via the non-transactional controlDb, the new session
+ * insert inside the tx was rolled back).
  */
-export async function enforceSessionLimit(userId: string): Promise<void> {
+type ControlTxLike = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
+
+export async function enforceSessionLimit(userId: string, parentTx?: ControlTxLike): Promise<void> {
   const { sessions } = await import("@hisaabo/db");
   const { asc } = await import("drizzle-orm");
+  const db = parentTx ?? controlDb;
 
   // Get the user's tenant to determine plan
-  const [membership] = await controlDb
+  const [membership] = await db
     .select({ tenantId: tenantMembers.tenantId })
     .from(tenantMembers)
     .where(eq(tenantMembers.userId, userId))
@@ -233,7 +242,7 @@ export async function enforceSessionLimit(userId: string): Promise<void> {
   const limits = getLimits(plan);
   if (limits.maxConcurrentSessions === Infinity) return;
 
-  const activeSessions = await controlDb
+  const activeSessions = await db
     .select({ id: sessions.id, createdAt: sessions.createdAt })
     .from(sessions)
     .where(and(
@@ -247,7 +256,7 @@ export async function enforceSessionLimit(userId: string): Promise<void> {
   if (toEvict > 0) {
     const evictIds = activeSessions.slice(0, toEvict).map((s) => s.id);
     const { inArray } = await import("drizzle-orm");
-    await controlDb.delete(sessions).where(inArray(sessions.id, evictIds));
+    await db.delete(sessions).where(inArray(sessions.id, evictIds));
   }
 }
 

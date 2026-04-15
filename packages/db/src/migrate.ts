@@ -28,13 +28,74 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 // ── Path resolution ──────────────────────────────────────────
+//
+// migrate.ts is consumed in several layouts — we must find the migration SQL
+// folders in each one:
+//   1. Dev (tsx): __dirname = packages/db/src            → ../drizzle-*
+//   2. migrate-cli bundle: __dirname = packages/db/dist  → ../drizzle-*
+//   3. API bundle (tsup noExternal inlines @hisaabo/db): __dirname =
+//      packages/api/dist → must hop over to packages/db/drizzle-*
+//
+// Case 3 is the one that broke tenant provisioning at runtime: the control-DB
+// migration at startup uses case 2 (standalone migrate.mjs) and worked, but
+// provisionTenantDatabase() calls migrateSingleTenantDb() from the inlined API
+// bundle, which resolved drizzle-tenant/ under packages/api/ (nonexistent).
+//
+// Resolution order: HISAABO_MIGRATIONS_DIR override → sibling of __dirname →
+// monorepo cwd layout → error at call time with a clear message.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DB_PKG_ROOT = resolve(__dirname, "..");
 
-const MIGRATIONS_UNIFIED = resolve(DB_PKG_ROOT, "drizzle");
-const MIGRATIONS_CONTROL = resolve(DB_PKG_ROOT, "drizzle-control");
-const MIGRATIONS_TENANT = resolve(DB_PKG_ROOT, "drizzle-tenant");
+/**
+ * Build the ordered candidate list for a migration subdir. Pure + injectable
+ * so unit tests can verify ordering + fallback behavior without mutating
+ * process state.
+ */
+export function buildMigrationsDirCandidates(
+  subdir: string,
+  opts: { dbPkgRoot: string; currentDir: string; cwd: string; override?: string | null },
+): string[] {
+  return [
+    ...(opts.override ? [resolve(opts.override, subdir)] : []),
+    resolve(opts.dbPkgRoot, subdir),                              // cases 1 & 2 (dev, migrate-cli bundle)
+    resolve(opts.currentDir, "..", "..", "db", subdir),           // case 3: api/dist → db/
+    resolve(opts.cwd, "packages/db", subdir),                     // monorepo cwd fallback
+  ];
+}
+
+/**
+ * Given an ordered candidate list, return the first one whose
+ * meta/_journal.json exists (via the injected probe). If none exist, return
+ * the first candidate so the eventual drizzle error message points at the
+ * expected location.
+ *
+ * The `probe` parameter lets unit tests substitute a fake filesystem without
+ * having to mkdir a real fixture tree for every layout.
+ */
+export function pickExistingMigrationsDir(
+  candidates: string[],
+  probe: (path: string) => boolean = existsSync,
+): string {
+  for (const p of candidates) {
+    if (probe(resolve(p, "meta", "_journal.json"))) return p;
+  }
+  return candidates[0];
+}
+
+function resolveMigrationsDir(subdir: string): string {
+  const candidates = buildMigrationsDirCandidates(subdir, {
+    dbPkgRoot: DB_PKG_ROOT,
+    currentDir: __dirname,
+    cwd: process.cwd(),
+    override: process.env.HISAABO_MIGRATIONS_DIR,
+  });
+  return pickExistingMigrationsDir(candidates);
+}
+
+const MIGRATIONS_UNIFIED = resolveMigrationsDir("drizzle");
+const MIGRATIONS_CONTROL = resolveMigrationsDir("drizzle-control");
+const MIGRATIONS_TENANT = resolveMigrationsDir("drizzle-tenant");
 
 // Advisory lock ID — prevents concurrent migration runs during rolling deploys
 const ADVISORY_LOCK_ID = 72919283;
@@ -423,6 +484,36 @@ export async function migrateSingleTenantDb(
   return runMigrations(connectionString, MIGRATIONS_TENANT, `tenant:${label}`, {
     migrationsTable: "__drizzle_tenant_migrations",
   });
+}
+
+/**
+ * Startup sanity check: verify that the migration SQL directories this
+ * process will need at runtime are actually present on disk.
+ *
+ * Called from `packages/api/src/server.ts` before the HTTP listener starts,
+ * so deployments with a broken bundle layout (e.g. missing copy in
+ * Dockerfile) fail fast at boot instead of at the first user signup.
+ *
+ * Returns an array of missing-dir descriptions; empty means all good.
+ */
+export function assertMigrationsPresent(): string[] {
+  const missing: string[] = [];
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+
+  if (isMultiTenant) {
+    if (!existsSync(resolve(MIGRATIONS_CONTROL, "meta", "_journal.json"))) {
+      missing.push(`control migrations not found at ${MIGRATIONS_CONTROL}`);
+    }
+    if (!existsSync(resolve(MIGRATIONS_TENANT, "meta", "_journal.json"))) {
+      missing.push(`tenant migrations not found at ${MIGRATIONS_TENANT}`);
+    }
+  } else {
+    if (!existsSync(resolve(MIGRATIONS_UNIFIED, "meta", "_journal.json"))) {
+      missing.push(`unified migrations not found at ${MIGRATIONS_UNIFIED}`);
+    }
+  }
+
+  return missing;
 }
 
 // ── Main ─────────────────────────────────────────────────────
