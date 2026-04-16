@@ -182,6 +182,15 @@ hisaabo whoami
 | `import parties <file>` | Bulk import parties from JSON or CSV |
 | `import items <file>` | Bulk import items from JSON or CSV |
 
+### Backup & Restore
+
+| Command | Description |
+|---|---|
+| `export --tenant <slug> -o <file>` | Download full tenant backup as `.tar.gz` |
+| `restore --tenant <slug> -i <file>` | Restore backup into an empty tenant |
+
+These are tenant-level commands -- they don't require a business to be selected. Only tenant owners can use them. See [full docs](https://docs.hisaabo.in/ai/cli/#hisaabo-export) for details.
+
 ---
 
 ## Terminal Examples

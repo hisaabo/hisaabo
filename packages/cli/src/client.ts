@@ -88,12 +88,17 @@ export class HisaaboClient {
   }
 
   private buildHeaders(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       "Authorization": `Bearer ${this.config.token}`,
-      "x-business-id": this.config.businessId,
       "x-tenant-id": this.config.tenantId,
       "x-client-type": "cli",
     };
+    // Only include x-business-id when a business is selected — tenant-level
+    // operations (backup export/restore) work without one.
+    if (this.config.businessId) {
+      headers["x-business-id"] = this.config.businessId;
+    }
+    return headers;
   }
 
   private async unwrap<T>(res: Response): Promise<T> {

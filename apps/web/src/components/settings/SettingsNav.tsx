@@ -111,7 +111,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
   { value: "store", label: "Online Store", icon: <StoreIcon /> },
-  { value: "backup", label: "Backup & Restore", icon: <BackupIcon />, ownerOnly: true },
+  { value: "backup", label: "Backup", icon: <BackupIcon />, ownerOnly: true },
 ];
 
 interface SettingsNavProps {

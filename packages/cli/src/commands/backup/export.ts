@@ -12,7 +12,7 @@ import { createWriteStream } from "node:fs";
 import { stat, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
-import { requireAuth } from "../../config.js";
+import { requireTenantAuth } from "../../config.js";
 import { fatalError, success, hasColor, isInteractive, EXIT } from "../../output.js";
 import chalk from "chalk";
 
@@ -91,7 +91,7 @@ export interface ExportOpts {
 }
 
 export async function exportCommand(opts: ExportOpts): Promise<void> {
-  const cfg = requireAuth();
+  const cfg = requireTenantAuth();
   const client = new HisaaboClient(cfg);
 
   // 1. Resolve tenant

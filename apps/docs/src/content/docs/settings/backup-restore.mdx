@@ -1,0 +1,102 @@
+---
+title: Backup & Restore
+description: Export a full backup of your Hisaabo data and restore it into a new organization.
+---
+
+import ForDesktop from '../../../components/ForDesktop.astro';
+
+<ForDesktop>
+
+Hisaabo lets you export a complete snapshot of your organization's data and restore it into a new, empty organization. This is useful for migrating between instances (e.g. cloud to self-hosted), creating a test copy of your data, or disaster recovery.
+
+## Exporting a backup
+
+Go to **Settings > Backup** to download a full backup.
+
+1. Navigate to **Settings** in the sidebar
+2. Click the **Backup** tab (owner-only)
+3. Click **Export Data**
+4. A `.tar.gz` archive downloads to your browser
+
+The archive contains all businesses, parties, items, invoices, payments, expenses, bank accounts, and other records in your organization. It uses NDJSON (newline-delimited JSON) format internally.
+
+**Limits:** You can export up to 2 times per day per organization.
+
+**Who can export:** Only organization owners can request an export.
+
+## Restoring a backup
+
+Restore happens during the initial setup of a new organization — before any business is created.
+
+1. Create a new account (or log in to an existing account with no organization)
+2. On the **Get started** screen, choose **Restore from a backup**
+3. Select your `.tar.gz` backup file
+4. Confirm the restore
+5. All data is imported preserving original IDs
+6. Click **Reload** to see your restored data
+
+:::caution[Empty organization required]
+Restore only works on an organization with zero businesses. If you've already created a business, you cannot restore into that organization. Create a new empty organization instead.
+:::
+
+:::caution[One-way operation]
+Restore cannot be undone. Make sure you're importing the correct backup file before confirming.
+:::
+
+## Using the CLI
+
+The CLI supports both export and restore without needing a browser:
+
+```bash
+# Export
+hisaabo export --tenant my-company -o backup.tar.gz
+
+# Restore into an empty tenant
+hisaabo restore --tenant new-company -i backup.tar.gz --yes
+```
+
+The CLI commands only require authentication and a tenant — no business selection needed. See the [CLI reference](/ai/cli#hisaabo-export) for full details.
+
+## Using the API
+
+For programmatic access, the backup system uses a two-step token flow:
+
+1. **Export:** Call `selfExport.request` with a `tenantId` to get a signed download URL, then `GET` that URL to stream the archive.
+2. **Import:** Call `selfImport.request` with a `tenantId` to get a signed upload URL, then `POST` the gzipped archive to that URL.
+
+Both endpoints use `protectedProcedure` (session auth only) — no `x-business-id` header is needed.
+
+See the [API documentation](https://api-docs.hisaabo.in) for request/response schemas and code examples.
+
+## What's included in a backup
+
+The backup archive contains every table in your organization's database:
+
+- Businesses (all businesses in the organization)
+- Parties (customers and suppliers)
+- Items (products, services, variants)
+- Invoices (sales, purchases, and all document types)
+- Payments and payment allocations
+- Expenses and expense categories
+- Bank accounts and transactions
+- Recurring invoice templates
+- Document numbering sequences
+- All other configuration and transactional data
+
+User accounts and organization membership are **not** included — the backup contains business data only.
+
+## Frequently asked questions
+
+**Can I restore into an organization that already has data?**
+No. Restore requires a completely empty organization (zero businesses). This prevents ID conflicts and ensures data integrity.
+
+**Can I export from cloud and restore to self-hosted (or vice versa)?**
+Yes, as long as the Hisaabo versions are compatible. The archive includes a schema checksum that the import engine validates.
+
+**How large are backup files?**
+It depends on your data volume. The archive is gzip-compressed, so a business with a few thousand invoices typically produces a file under 10 MB.
+
+**Is the backup encrypted?**
+The archive itself is not encrypted — it's a standard gzipped tar file. If you need encryption at rest, encrypt the file after downloading (e.g. with `gpg` or your storage provider's encryption).
+
+</ForDesktop>

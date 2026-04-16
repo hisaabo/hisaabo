@@ -73,6 +73,7 @@ export default defineConfig({
           label: "Settings & Team",
           items: [
             { label: "Settings", slug: "settings" },
+            { label: "Backup & Restore", slug: "settings/backup-restore" },
             { label: "Team & Roles", slug: "team" },
             { label: "Invitations", slug: "team/invitations" },
             { label: "Online Store", slug: "online-store" },
