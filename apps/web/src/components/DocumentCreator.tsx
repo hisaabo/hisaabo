@@ -6,6 +6,8 @@ import { Combobox } from "@/components/ui/Combobox";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { QuickPartyCreate } from "@/components/QuickPartyCreate";
+import { QuickItemCreate, type QuickItemCreateResult } from "@/components/QuickItemCreate";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -161,6 +163,13 @@ export function DocumentCreator({
     page: 1,
     limit: 50,
   });
+
+  // Quick-create dialog state
+  const [quickPartyOpen, setQuickPartyOpen] = useState(false);
+  const [quickPartyName, setQuickPartyName] = useState("");
+  const [quickItemOpen, setQuickItemOpen] = useState(false);
+  const [quickItemName, setQuickItemName] = useState("");
+  const [quickItemLineId, setQuickItemLineId] = useState<string | null>(null);
 
   const isEditing = !!editInvoiceId;
   const prefillId = editInvoiceId || prefillFromInvoiceId;
@@ -417,6 +426,33 @@ export function DocumentCreator({
     );
   }
 
+  function handleQuickPartyCreated(party: { id: string; name: string }) {
+    setPartyId(party.id);
+  }
+
+  function handleQuickItemCreated(item: QuickItemCreateResult) {
+    if (!quickItemLineId) return;
+    const price = invoiceType === "sale" ? item.salePrice : item.purchasePrice;
+    setItems((prev) =>
+      prev.map((li) =>
+        li.id === quickItemLineId
+          ? {
+              ...li,
+              itemId: item.id,
+              itemName: item.name,
+              notes: "",
+              unitPrice: price || "",
+              taxPercent: item.taxPercent || "0",
+              selectedUnit: undefined,
+              conversionFactor: undefined,
+              availableUnits: undefined,
+            }
+          : li
+      )
+    );
+    setQuickItemLineId(null);
+  }
+
   function handleSubmit() {
     const validItems = items.filter((li) => li.itemName.trim() && li.unitPrice);
     if (validItems.length === 0) {
@@ -511,6 +547,7 @@ export function DocumentCreator({
   const lineItemIdPrefix = useId();
 
   return (
+    <>
     <SlideOver
       open={true}
       onClose={onClose}
@@ -547,6 +584,11 @@ export function DocumentCreator({
             emptyMessage={`No ${partyLabel.toLowerCase()}s found`}
             onQueryChange={setPartySearch}
             isLoading={partiesFetching && !!debouncedPartySearch}
+            onCreateNew={(q) => {
+              setQuickPartyName(q);
+              setQuickPartyOpen(true);
+            }}
+            createNewLabel={`Create ${partyLabel.toLowerCase()}`}
           />
           <div>
             <label className="label">Date</label>
@@ -589,6 +631,12 @@ export function DocumentCreator({
                       emptyMessage="No products found"
                       onQueryChange={setItemSearch}
                       isLoading={itemsFetching && !!debouncedItemSearch}
+                      onCreateNew={(q) => {
+                        setQuickItemName(q);
+                        setQuickItemLineId(li.id);
+                        setQuickItemOpen(true);
+                      }}
+                      createNewLabel="Create item"
                     />
                   </div>
                   <button
@@ -965,5 +1013,22 @@ export function DocumentCreator({
         </div>
       </div>
     </SlideOver>
+
+    <QuickPartyCreate
+      open={quickPartyOpen}
+      onClose={() => setQuickPartyOpen(false)}
+      onCreated={handleQuickPartyCreated}
+      initialName={quickPartyName}
+      defaultType={invoiceType === "sale" ? "customer" : "supplier"}
+    />
+
+    <QuickItemCreate
+      open={quickItemOpen}
+      onClose={() => { setQuickItemOpen(false); setQuickItemLineId(null); }}
+      onCreated={handleQuickItemCreated}
+      initialName={quickItemName}
+      invoiceType={invoiceType}
+    />
+    </>
   );
 }
