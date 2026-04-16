@@ -57,3 +57,6 @@ backups/
 
 feature-parity.yaml
 test-results
+
+# Debug dumps
+*-dump.json

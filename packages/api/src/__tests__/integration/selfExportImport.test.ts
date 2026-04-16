@@ -84,11 +84,12 @@ function buildCaller(opts: {
   email: string;
   name: string | null;
   tenantId: string;
+  businessId?: string;
 }) {
   return callerFactory({
     user: { id: opts.userId, email: opts.email, name: opts.name },
     tenantId: opts.tenantId,
-    businessId: null,
+    businessId: opts.businessId ?? null,
     req: new Request("http://localhost:3000/api/trpc/test", {
       method: "POST",
       headers: new Headers({ "content-type": "application/json" }),
@@ -836,6 +837,16 @@ describe("Test 1: round-trip happy path", () => {
         .from(businesses);
       expect(bizCountRow!.c).toBe(2);
 
+      // ── Verify createdByUserId was rewritten to the importing user ─────────
+      // The businessProcedure middleware checks this to gate access, so all
+      // imported businesses must point to the target owner, not the source.
+      const importedBizzes = await db
+        .select({ id: businesses.id, createdByUserId: businesses.createdByUserId })
+        .from(businesses);
+      for (const biz of importedBizzes) {
+        expect(biz.createdByUserId).toBe(tgtOwner.id);
+      }
+
       // auditLog count on target === 0 (import skips audit_log)
       const [auditCount] = await db
         .select({ c: sqlCount(auditLog.id) })
@@ -1354,4 +1365,82 @@ describe("Test 8: redacted carrierCredentials survives round-trip as null", () =
     // manifest.redacted correctly lists "businesses"
     expect(manifest.redacted).toContain("businesses");
   });
+});
+
+// =============================================================================
+// TEST 9 — Imported businesses are accessible via businessProcedure
+// =============================================================================
+
+describe("Test 9: imported businesses are accessible via businessProcedure", () => {
+  beforeEach(async () => {
+    await truncateAllTables();
+  });
+
+  it(
+    "the importing user can call a businessProcedure endpoint on an imported business",
+    async () => {
+      const db = getTenantTestDb();
+
+      // ── Source tenant: seed a business with a party ──────────────────────
+      const srcOwner = await createOwner("t9-src");
+      const srcTenant = await createTestTenant("Source Corp T9");
+      await enrollMember(srcTenant.id, srcOwner.id);
+
+      const biz = await seedBusiness(srcOwner.id, "T9A");
+      await seedParty(biz.id, "customer");
+
+      // ── Export from source ──────────────────────────────────────────────
+      const exportCaller = buildCaller({
+        userId: srcOwner.id,
+        email: srcOwner.email,
+        name: "T9 Source Owner",
+        tenantId: srcTenant.id,
+      });
+      const { token: exportToken } = await exportCaller.selfExport.request({
+        tenantId: srcTenant.id,
+      });
+      const exportRes = await httpExport(srcTenant.id, exportToken);
+      expect(exportRes.status).toBe(200);
+      const tarGzBytes = Buffer.from(await exportRes.arrayBuffer());
+
+      // ── Wipe tenant data so target is empty ─────────────────────────────
+      const { getTestClient } = await import("../helpers/test-db.js");
+      const rawClient = getTestClient();
+      await rawClient`TRUNCATE TABLE businesses CASCADE`;
+
+      // ── Target tenant: different user ───────────────────────────────────
+      const tgtOwner = await createOwner("t9-tgt");
+      const tgtTenant = await createTestTenant("Target Corp T9");
+      await enrollMember(tgtTenant.id, tgtOwner.id);
+
+      // ── Import into target ──────────────────────────────────────────────
+      const importToken = await signImportTokenDirect(tgtTenant.id, tgtOwner.id);
+      const importRes = await httpImport(tgtTenant.id, importToken, tarGzBytes);
+      expect(importRes.status).toBe(200);
+
+      // ── Verify the business's createdByUserId was rewritten ─────────────
+      const [importedBiz] = await db
+        .select({ id: businesses.id, createdByUserId: businesses.createdByUserId })
+        .from(businesses);
+      expect(importedBiz).toBeDefined();
+      expect(importedBiz!.createdByUserId).toBe(tgtOwner.id);
+      // Sanity: it should NOT be the source owner
+      expect(importedBiz!.createdByUserId).not.toBe(srcOwner.id);
+
+      // ── Call a businessProcedure-protected endpoint (party.list) ────────
+      // This would fail with FORBIDDEN before the createdByUserId fix.
+      const bizCaller = buildCaller({
+        userId: tgtOwner.id,
+        email: tgtOwner.email,
+        name: "T9 Target Owner",
+        tenantId: tgtTenant.id,
+        businessId: importedBiz!.id,
+      });
+
+      const partyResult = await bizCaller.party.list({});
+      expect(partyResult.data).toHaveLength(1);
+      expect(partyResult.data[0]!.type).toBe("customer");
+    },
+    60_000,
+  );
 });
