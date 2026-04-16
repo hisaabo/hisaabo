@@ -116,7 +116,7 @@ export function registerImportRoute(app: Hono): void {
     // ── Run the import engine ─────────────────────────────────────────────
     let result;
     try {
-      result = await importTenantBackup(tenantDb as any, tarReadable, log);
+      result = await importTenantBackup(tenantDb as any, tarReadable, log, userId);
     } catch (err) {
       log.error({ err }, "importStream: unhandled error in importTenantBackup");
       return c.json({ error: "Import pipeline failed unexpectedly" }, 500);

@@ -1,0 +1,7 @@
+{
+  "constructor": "DrizzleQueryError",
+  "causeConstructor": "Error",
+  "causeCode": "MAX_PARAMETERS_EXCEEDED",
+  "causeMessage": "MAX_PARAMETERS_EXCEEDED: Max number of parameters (65534) exceeded",
+  "outerMessageLength": 1268856
+}

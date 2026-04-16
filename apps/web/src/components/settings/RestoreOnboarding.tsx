@@ -86,6 +86,7 @@ export function RestoreOnboarding({ tenantId, onBack }: RestoreOnboardingProps) 
         const xhr = new XMLHttpRequest();
         xhr.open("POST", uploadUrl);
         xhr.setRequestHeader("Content-Type", "application/gzip");
+        xhr.setRequestHeader("X-Requested-With", "hisaabo");
         xhr.withCredentials = true;
 
         xhr.upload.addEventListener("progress", (e) => {

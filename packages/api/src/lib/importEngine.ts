@@ -13,8 +13,9 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import tarStream from "tar-stream";
-import { eq } from "drizzle-orm";
+import { eq, getTableColumns } from "drizzle-orm";
 import type { TenantDatabase } from "@hisaabo/db";
+import { businesses } from "@hisaabo/db";
 import { TABLE_REGISTRY } from "./tableRegistry.js";
 import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
@@ -94,6 +95,23 @@ function parseNdjson(
 }
 
 /**
+ * PostgreSQL's max bind parameters per query.
+ * A single INSERT with C columns and N rows uses C*N parameters.
+ * node-postgres enforces a limit of 65534 (not 65535).
+ */
+const PG_MAX_PARAMS = 65534;
+
+/**
+ * Compute the safe chunk size for a batch INSERT so we don't exceed
+ * PostgreSQL's 65535 bind-parameter limit.
+ */
+function safeChunkSize(requestedChunkSize: number, columnCount: number): number {
+  const maxRows = Math.max(1, Math.floor(PG_MAX_PARAMS / Math.max(1, columnCount)));
+  if (requestedChunkSize <= 0) return maxRows; // 0 means "all rows" — cap it
+  return Math.min(requestedChunkSize, maxRows);
+}
+
+/**
  * Chunk an array into groups of at most `size`.
  */
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -113,11 +131,15 @@ function chunk<T>(arr: T[], size: number): T[][] {
  * @param tenantDb  Drizzle connection for the target tenant database.
  * @param tarReadable  Node Readable carrying the raw tar archive bytes.
  * @param log  Pino logger instance with import context already bound.
+ * @param callerUserId  The user performing the import — imported businesses will
+ *                      have their `createdByUserId` rewritten to this value so
+ *                      the business-access middleware can resolve them.
  */
 export async function importTenantBackup(
   tenantDb: TenantDatabase,
   tarReadable: Readable,
   log: Logger,
+  callerUserId: string,
 ): Promise<ImportResult> {
   const startMs = Date.now();
 
@@ -286,94 +308,135 @@ export async function importTenantBackup(
   // Phase 3: Commit
   // ────────────────────────────────────────────────────────────────────────────
 
-  log.info("import.phase3: committing rows");
+  log.info("import.phase3: committing rows (single transaction)");
 
   try {
-    for (const entry of TABLE_REGISTRY) {
-      const rows = parsedRows.get(entry.tableName) ?? [];
+    await tenantDb.transaction(async (tx) => {
+      for (const entry of TABLE_REGISTRY) {
+        const rows = parsedRows.get(entry.tableName) ?? [];
 
-      if (!entry.importable) {
-        rowsSkipped[entry.tableName] = rows.length;
-        log.debug({ table: entry.tableName, rows: rows.length }, "import.phase3: skipped (not importable)");
-        continue;
-      }
+        if (!entry.importable) {
+          rowsSkipped[entry.tableName] = rows.length;
+          log.debug({ table: entry.tableName, rows: rows.length }, "import.phase3: skipped (not importable)");
+          continue;
+        }
 
-      if (rows.length === 0) {
-        rowsInserted[entry.tableName] = 0;
-        continue;
-      }
+        if (rows.length === 0) {
+          rowsInserted[entry.tableName] = 0;
+          continue;
+        }
 
-      const tableObj = entry.drizzleTable as any;
-
-      if (entry.selfFkFields.length > 0) {
-        // ── Two-pass insert for self-referencing tables ──────────────────────
-        //
-        // Tables: chart_of_accounts (parentId), invoices (referenceDocumentId),
-        //         journal_entries (voidedByEntryId, reversesEntryId).
-        //
-        // Pass 1: insert all rows with self-FK columns nulled out.
-        // Pass 2: UPDATE each row to restore the real FK value.
-        //
-        // This avoids FK constraint violations when the referenced row may not
-        // have been inserted yet (self-referential order is arbitrary).
+        const tableObj = entry.drizzleTable as any;
+        const tableCols = Object.keys(getTableColumns(tableObj));
+        const columnCount = tableCols.length;
+        const rowKeyCount = Object.keys(rows[0] as Record<string, unknown>).length;
+        const batchLimit = safeChunkSize(entry.chunkSize, columnCount);
 
         log.debug(
-          { table: entry.tableName, rows: rows.length, selfFkFields: entry.selfFkFields },
-          "import.phase3: two-pass self-FK insert",
+          { table: entry.tableName, rows: rows.length, columnCount, rowKeyCount, batchLimit, totalParams: batchLimit * columnCount },
+          "import.phase3: batch plan",
         );
 
-        // Pass 1 — null the self-FK columns
-        const pass1Rows = rows.map((r) => {
-          const row = { ...(r as Record<string, unknown>) };
-          for (const field of entry.selfFkFields) {
-            row[field] = null;
+        if (entry.selfFkFields.length > 0) {
+          // ── Two-pass insert for self-referencing tables ──────────────────────
+          //
+          // Tables: chart_of_accounts (parentId), invoices (referenceDocumentId),
+          //         journal_entries (voidedByEntryId, reversesEntryId).
+          //
+          // Pass 1: insert all rows with self-FK columns nulled out.
+          // Pass 2: UPDATE each row to restore the real FK value.
+          //
+          // This avoids FK constraint violations when the referenced row may not
+          // have been inserted yet (self-referential order is arbitrary).
+
+          log.debug(
+            { table: entry.tableName, rows: rows.length, selfFkFields: entry.selfFkFields, batchLimit },
+            "import.phase3: two-pass self-FK insert",
+          );
+
+          // Pass 1 — null the self-FK columns
+          const pass1Rows = rows.map((r) => {
+            const row = { ...(r as Record<string, unknown>) };
+            for (const field of entry.selfFkFields) {
+              row[field] = null;
+            }
+            return row;
+          });
+
+          const chunks1 = chunk(pass1Rows, batchLimit);
+          for (const c of chunks1) {
+            await tx.insert(tableObj).values(c as any[]);
           }
-          return row;
-        });
 
-        const chunks1 = chunk(pass1Rows, entry.chunkSize || pass1Rows.length);
-        for (const c of chunks1) {
-          await tenantDb.insert(tableObj).values(c as any[]);
-        }
-
-        // Pass 2 — update self-FK columns row-by-row where non-null in original data
-        for (const r of rows) {
-          const row = r as Record<string, unknown>;
-          const updates: Record<string, unknown> = {};
-          for (const field of entry.selfFkFields) {
-            if (row[field] != null) {
-              updates[field] = row[field];
+          // Pass 2 — update self-FK columns row-by-row where non-null in original data
+          for (const r of rows) {
+            const row = r as Record<string, unknown>;
+            const updates: Record<string, unknown> = {};
+            for (const field of entry.selfFkFields) {
+              if (row[field] != null) {
+                updates[field] = row[field];
+              }
+            }
+            if (Object.keys(updates).length > 0) {
+              await tx
+                .update(tableObj)
+                .set(updates)
+                .where(eq(tableObj.id, row.id as string));
             }
           }
-          if (Object.keys(updates).length > 0) {
-            await tenantDb
-              .update(tableObj)
-              .set(updates)
-              .where(eq(tableObj.id, row.id as string));
+
+          rowsInserted[entry.tableName] = rows.length;
+          log.debug({ table: entry.tableName, rows: rows.length }, "import.phase3: two-pass complete");
+        } else {
+          // ── Standard chunked insert ──────────────────────────────────────────
+
+          const chunks = chunk(rows, batchLimit);
+          let inserted = 0;
+
+          for (const c of chunks) {
+            await tx.insert(tableObj).values(c as any[]);
+            inserted += c.length;
           }
+
+          rowsInserted[entry.tableName] = inserted;
+          log.debug({ table: entry.tableName, rows: inserted, batchLimit }, "import.phase3: inserted");
         }
-
-        rowsInserted[entry.tableName] = rows.length;
-        log.debug({ table: entry.tableName, rows: rows.length }, "import.phase3: two-pass complete");
-      } else {
-        // ── Standard chunked insert ──────────────────────────────────────────
-
-        const batchSize = entry.chunkSize > 0 ? entry.chunkSize : rows.length;
-        const chunks = chunk(rows, batchSize);
-        let inserted = 0;
-
-        for (const c of chunks) {
-          await tenantDb.insert(tableObj).values(c as any[]);
-          inserted += c.length;
-        }
-
-        rowsInserted[entry.tableName] = inserted;
-        log.debug({ table: entry.tableName, rows: inserted }, "import.phase3: inserted");
       }
-    }
+
+      // ── Rewrite business ownership to the importing user ──────────────
+      // The exported businesses carry the original creator's userId, which
+      // won't be a tenant member in the destination tenant.  The
+      // businessProcedure middleware checks this to gate access, so we must
+      // point all imported businesses at the caller.
+      const importedBusinessCount = rowsInserted["businesses"] ?? 0;
+      if (importedBusinessCount > 0) {
+        await tx
+          .update(businesses)
+          .set({ createdByUserId: callerUserId });
+        log.info(
+          { callerUserId, businessCount: importedBusinessCount },
+          "import.phase3: rewrote businesses.createdByUserId to importing user",
+        );
+      }
+    });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err }, "import.phase3: commit failed");
+    // DrizzleQueryError wraps the real pg error in `cause`.
+    const cause = (err as { cause?: Record<string, unknown> })?.cause;
+    log.error(
+      { causeCode: cause?.code, causeMessage: cause?.message, causeDetail: cause?.detail },
+      "import.phase3: commit failed",
+    );
+
+    let msg: string;
+    if (cause?.message) {
+      const parts = [String(cause.message)];
+      if (cause.detail) parts.push(String(cause.detail));
+      if (cause.constraint) parts.push(`constraint: ${cause.constraint}`);
+      msg = parts.join(" — ");
+    } else {
+      const raw = err instanceof Error ? err.message : String(err);
+      msg = raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
+    }
     return fail(`Commit failed: ${msg}`);
   }
 

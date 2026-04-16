@@ -572,12 +572,16 @@ function RootLayout() {
   const isGstRegistered =
     activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
 
+  // No businesses yet — user is in the onboarding flow. Hide the sidebar
+  // since nav items are meaningless without a business context.
+  const isOnboarding = Array.isArray(businesses) && businesses.length === 0;
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-surface-0">
       <MaintenanceBanner />
       <div className="flex flex-1 overflow-hidden">
       {/* Mobile sidebar backdrop */}
-      {sidebarOpen && (
+      {!isOnboarding && sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/40 md:hidden"
           onClick={() => setSidebarOpen(false)}
@@ -585,7 +589,8 @@ function RootLayout() {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar — hidden during onboarding (no business context yet) */}
+      {!isOnboarding && (
       <aside
         className={cn(
           "w-56 shrink-0 border-r border-border-light flex flex-col bg-surface-0 overflow-hidden",
@@ -675,12 +680,14 @@ function RootLayout() {
           )}
         </div>
       </aside>
+      )}
 
       {/* Main content */}
       <main className="flex-1 flex flex-col bg-surface-1 md:ml-0">
         {/* Top bar */}
         <div className="h-14 border-b border-border-light flex items-center gap-2 px-4 md:px-6 shrink-0 bg-surface-0">
-          {/* Hamburger — mobile only */}
+          {/* Hamburger — mobile only, hidden during onboarding */}
+          {!isOnboarding && (
           <button
             type="button"
             className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:bg-surface-1 transition-colors shrink-0"
@@ -691,6 +698,15 @@ function RootLayout() {
               <path d="M2 4.5h14M2 9h14M2 13.5h14" />
             </svg>
           </button>
+          )}
+
+          {/* Logo in top bar during onboarding (sidebar is hidden) */}
+          {isOnboarding && (
+            <div className="flex items-center gap-2.5 mr-2">
+              <Logo className="w-7 h-7" />
+              <span className="font-semibold text-[15px] tracking-tight text-text-primary">Hisaabo</span>
+            </div>
+          )}
 
           {/* Theme + shortcuts */}
           <ThemeToggle />
