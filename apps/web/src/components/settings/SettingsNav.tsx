@@ -4,6 +4,7 @@ interface SettingsTab {
   value: string;
   label: string;
   icon: React.ReactNode;
+  ownerOnly?: boolean;
 }
 
 function BuildingIcon() {
@@ -82,6 +83,16 @@ function TargetIcon() {
   );
 }
 
+function BackupIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
 function TruckIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
@@ -100,20 +111,25 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
   { value: "store", label: "Online Store", icon: <StoreIcon /> },
+  { value: "backup", label: "Backup", icon: <BackupIcon />, ownerOnly: true },
 ];
 
 interface SettingsNavProps {
   value: string;
   onChange: (value: string) => void;
+  role?: string | null;
 }
 
-export function SettingsNav({ value, onChange }: SettingsNavProps) {
+export function SettingsNav({ value, onChange, role }: SettingsNavProps) {
+  const isOwner = role === "owner" || role === "superadmin";
+  const visibleTabs = SETTINGS_TABS.filter((tab) => !tab.ownerOnly || isOwner);
+
   return (
     <>
       {/* Desktop: vertical sidebar — sticky */}
       <nav className="hidden md:block w-[220px] shrink-0 sticky top-0 self-start">
         <div className="space-y-0.5">
-          {SETTINGS_TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.value}
               onClick={() => onChange(tab.value)}
@@ -133,7 +149,7 @@ export function SettingsNav({ value, onChange }: SettingsNavProps) {
 
       {/* Mobile: horizontal scrollable tabs — sticky */}
       <div className="md:hidden flex gap-1 overflow-x-auto pb-4 -mx-1 px-1 sticky top-0 z-10 bg-surface-1">
-        {SETTINGS_TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.value}
             onClick={() => onChange(tab.value)}

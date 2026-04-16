@@ -92,6 +92,51 @@ export function requireAuth(): ConfigSchema {
   return cfg as ConfigSchema;
 }
 
+/**
+ * Like requireAuth but only requires token + apiUrl + tenantId.
+ * Used by tenant-level operations (backup export/restore) that don't need
+ * a business to be selected.
+ */
+export interface TenantAuthConfig {
+  apiUrl: string;
+  token: string;
+  tenantId: string;
+  businessId: string;
+  businessName: string;
+  tokenCreatedAt: number;
+}
+
+export function requireTenantAuth(): TenantAuthConfig {
+  const envToken = process.env["HISAABO_TOKEN"];
+  const envUrl = process.env["HISAABO_API_URL"];
+  if (envToken && envUrl) {
+    return {
+      apiUrl: envUrl,
+      token: envToken,
+      tenantId: process.env["HISAABO_TENANT_ID"] ?? "",
+      businessId: process.env["HISAABO_BUSINESS_ID"] ?? "",
+      businessName: process.env["HISAABO_BUSINESS_NAME"] ?? "",
+      tokenCreatedAt: Date.now(),
+    };
+  }
+
+  const cfg = getConfig();
+  if (!cfg.token || !cfg.apiUrl || !cfg.tenantId) {
+    fatalError("Not authenticated. Run: hisaabo login", 3);
+  }
+
+  const isApiKey = cfg.token.startsWith("hisaabo_key_");
+  if (!isApiKey && cfg.tokenCreatedAt) {
+    const ageMs = Date.now() - cfg.tokenCreatedAt;
+    const TWENTY_FIVE_DAYS = 25 * 24 * 60 * 60 * 1000;
+    if (ageMs > TWENTY_FIVE_DAYS) {
+      warn("Session expires soon. Run: hisaabo login");
+    }
+  }
+
+  return cfg as TenantAuthConfig;
+}
+
 export function getConfigPath(): string {
   return conf.path;
 }

@@ -27,6 +27,11 @@ exceptions:
       # Bulk data export requires file system access; not available on mobile.
       - business.exportData
 
+      # --- Backup & Restore ---
+      # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
+      - selfExport.request
+      - selfImport.request
+
       # --- Parties ---
       # Tally integration is an accounting desktop workflow.
       - party.tallyExport
@@ -332,6 +337,11 @@ exceptions:
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
+
+      # --- Backup & Restore ---
+      # Tenant-level backup/restore requires file I/O; not an MCP workflow.
+      - selfExport.request
+      - selfImport.request
 
       # --- Business ---
       # Plan limit check — MCP agents don't create businesses.

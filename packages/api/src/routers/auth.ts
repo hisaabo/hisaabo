@@ -54,6 +54,23 @@ function getClientIpFromRequest(req: Request): string | null {
   return null;
 }
 
+/**
+ * Tauri desktop clients can't solve Cloudflare Turnstile challenges — the
+ * widget rejects the `tauri.localhost` / `tauri://localhost` host. The web
+ * bundle running inside Tauri sets `X-Hisaabo-Client: desktop` and we skip
+ * the Turnstile gate here.
+ *
+ * Trade-off: the header is client-supplied and therefore spoofable. A
+ * scripted attacker who sends this header bypasses Turnstile. We accept
+ * that because (a) the desktop build is distributed as a signed binary,
+ * (b) magic-link already has per-email rate limiting, and (c) register
+ * abuse is still bounded by email validation + session creation costs.
+ * If abuse materialises, add per-IP rate limiting on these endpoints.
+ */
+function isDesktopClient(req: Request): boolean {
+  return req.headers.get("x-hisaabo-client") === "desktop";
+}
+
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
@@ -233,7 +250,9 @@ export const authRouter = router({
   register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
     // Require Turnstile when secret key is configured (production).
     // Self-hosted / dev without the key can skip verification.
-    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
+    // Desktop (Tauri) clients also skip — see isDesktopClient() doc comment.
+    const desktop = isDesktopClient(ctx.req);
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken && !desktop) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
     }
     if (input.turnstileToken) {

@@ -878,6 +878,75 @@ hisaabo import items --file catalog.json --dry-run
 
 ---
 
+### `hisaabo export`
+
+Download a full tenant backup as a `.tar.gz` archive. This is a tenant-level operation — it does not require a business to be selected.
+
+```bash
+# Export by tenant slug
+hisaabo export --tenant my-company -o backup.tar.gz
+
+# Export by tenant UUID
+hisaabo export --tenant 550e8400-e29b-41d4-a716-446655440000 -o /tmp/backup.tar.gz
+```
+
+| Flag | Description |
+|---|---|
+| `--tenant` | Tenant slug or UUID to export (required) |
+| `-o, --output` | Output file path (required) |
+
+On success, prints the file size, SHA256 hash, and download time.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Not authenticated or insufficient permissions |
+| 2 | Rate limit reached (max 2 exports per day) |
+| 5 | Server or network error |
+
+:::note
+Only tenant owners can export. The CLI does not need a `--business` flag or `HISAABO_BUSINESS_ID` for this command — just authentication and a tenant.
+:::
+
+---
+
+### `hisaabo restore`
+
+Upload a `.tar.gz` backup archive into an empty tenant. The target tenant must have zero businesses.
+
+```bash
+# Restore by tenant slug (interactive confirmation)
+hisaabo restore --tenant my-company -i backup.tar.gz
+
+# Skip confirmation prompt
+hisaabo restore --tenant my-company -i backup.tar.gz --yes
+
+# Restore by tenant UUID
+hisaabo restore --tenant 550e8400-e29b-41d4-a716-446655440000 -i backup.tar.gz -y
+```
+
+| Flag | Description |
+|---|---|
+| `--tenant` | Target tenant slug or UUID — must be empty (required) |
+| `-i, --input` | Input backup file path (required) |
+| `-y, --yes` | Skip confirmation prompt |
+
+On success, prints rows inserted per table, skipped rows, warnings, and upload time.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Not authenticated or insufficient permissions |
+| 3 | Target tenant is not empty |
+| 4 | Input file missing, unreadable, or empty |
+| 5 | Server or network error |
+
+:::note
+Restore only works on a completely empty tenant (no businesses created). To restore into an existing organization, create a new empty tenant first, restore there, then delete the old one if desired.
+:::
+
+---
+
 ### `hisaabo store`
 
 #### `hisaabo store settings`

@@ -24,6 +24,7 @@ import { storeEndpoints } from "./store";
 import { recurringInvoiceEndpoints } from "./recurringInvoice";
 import { apiKeyEndpoints } from "./apiKey";
 import { importEndpoints } from "./import";
+import { backupEndpoints } from "./backup";
 import type { EndpointGroup, EndpointSection } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ export const allSections: EndpointSection[] = [
   {
     id: "data",
     title: "Data",
-    groups: [importEndpoints],
+    groups: [importEndpoints, backupEndpoints],
   },
 ];
 
@@ -118,6 +119,7 @@ export {
   recurringInvoiceEndpoints,
   apiKeyEndpoints,
   importEndpoints,
+  backupEndpoints,
 };
 
 // Flat map of all endpoints by ID for quick lookup

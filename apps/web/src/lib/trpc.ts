@@ -3,6 +3,7 @@ import { httpBatchLink, splitLink, httpLink } from "@trpc/client";
 import { QueryClient, QueryCache } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
+import { isDesktop } from "./isDesktop";
 
 // The explicit `as any` cast avoids TS2742 "inferred type cannot be named" error caused
 // by tRPC's internal .d.mts paths resolving through hoisted node_modules.
@@ -27,6 +28,11 @@ function commonOptions() {
       };
       if (currentBusinessId) {
         headers["x-business-id"] = currentBusinessId;
+      }
+      if (isDesktop()) {
+        // Signals the server to skip Turnstile. Spoofable by design — see
+        // auth router for the trade-off documentation.
+        headers["x-hisaabo-client"] = "desktop";
       }
       return headers;
     },

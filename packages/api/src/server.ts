@@ -24,6 +24,8 @@ import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring
 import { logger } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
+import { registerExportRoute } from "./http/exportStream.js";
+import { registerImportRoute } from "./http/importStream.js";
 
 // ── Process crash handlers ────────────────────────────────────
 process.on("unhandledRejection", (reason) => {
@@ -77,7 +79,7 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").spl
 app.use("*", cors({
   origin: allowedOrigins,
   credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With"],
+  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
 }));
@@ -1405,6 +1407,12 @@ app.post("/store/:slug/order", async (c) => {
     return c.json({ error: "Failed to place order. Please try again." }, 500);
   }
 });
+
+// ── Self-export download endpoint ─────────────────────────────
+registerExportRoute(app);
+
+// ── Self-import upload endpoint ────────────────────────────────
+registerImportRoute(app);
 
 // ── tRPC handler ───────────────────────────────────────────────
 app.use("/api/trpc/*", async (c) => {
