@@ -15,7 +15,8 @@ import { Readable } from "node:stream";
 import tarStream from "tar-stream";
 import { eq } from "drizzle-orm";
 import type { TenantDatabase } from "@hisaabo/db";
-import { TABLE_REGISTRY, ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
+import { TABLE_REGISTRY } from "./tableRegistry.js";
+import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import type { Logger } from "./logger.js";
 import {

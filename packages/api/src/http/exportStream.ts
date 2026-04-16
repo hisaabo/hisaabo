@@ -22,7 +22,7 @@ import type { Hono } from "hono";
 import tarStream from "tar-stream";
 import { sql, getTableColumns } from "drizzle-orm";
 import { controlDb, getTenantDb, tenants, businesses } from "@hisaabo/db";
-import { TABLE_REGISTRY } from "@hisaabo/shared/selfExport";
+import { TABLE_REGISTRY } from "../lib/tableRegistry.js";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import { verifyExportToken } from "../lib/exportToken.js";
 import { logger } from "../lib/logger.js";
