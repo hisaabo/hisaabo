@@ -56,6 +56,10 @@ vi.mock("@/lib/trpc", () => ({
           },
           isFetching: false,
         }),
+        invalidate: invalidateStub,
+      },
+      create: {
+        useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
     },
     item: {
@@ -99,6 +103,10 @@ vi.mock("@/lib/trpc", () => ({
           },
           isFetching: false,
         }),
+        invalidate: invalidateStub,
+      },
+      create: {
+        useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
     },
     invoice: {

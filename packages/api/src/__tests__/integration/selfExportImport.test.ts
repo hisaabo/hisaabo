@@ -1065,6 +1065,125 @@ describe("Test 4: wrong formatVersion rejected", () => {
 });
 
 // =============================================================================
+// TEST 4.5 — appVersion / schemaChecksum mismatches are best-effort warnings
+// =============================================================================
+describe("Test 4.5: compatibility — appVersion / schemaChecksum mismatches", () => {
+  beforeEach(async () => {
+    await truncateAllTables();
+  });
+
+  async function mutateManifestAndImport(
+    mutate: (manifest: Record<string, unknown>) => void,
+  ): Promise<{
+    status: number;
+    body: {
+      ok: boolean;
+      compatibility?: {
+        appVersionMatch: boolean;
+        schemaChecksumMatch: boolean;
+        sourceAppVersion: string;
+        targetAppVersion: string;
+        sourceSchemaChecksum: string;
+        targetSchemaChecksum: string;
+      };
+      warnings?: Array<{ table: string; message: string }>;
+    };
+  }> {
+    const owner = await createOwner("t45-src");
+    const srcTenant = await createTestTenant("Source Corp T4.5");
+    await enrollMember(srcTenant.id, owner.id);
+    await seedBusiness(owner.id, "T45A");
+
+    const exportCaller = buildCaller({
+      userId: owner.id,
+      email: owner.email,
+      name: "T4.5 Owner",
+      tenantId: srcTenant.id,
+    });
+    const { token: exportToken } = await exportCaller.selfExport.request({
+      tenantId: srcTenant.id,
+    });
+    const exportRes = await httpExport(srcTenant.id, exportToken);
+    const tarGzBytes = Buffer.from(await exportRes.arrayBuffer());
+
+    const entries = await unpackTarGz(tarGzBytes);
+    const manifestObj = JSON.parse(entries.get("manifest.json")!.toString("utf8"));
+    mutate(manifestObj);
+    entries.set(
+      "manifest.json",
+      Buffer.from(JSON.stringify(manifestObj, null, 2) + "\n", "utf8"),
+    );
+
+    const modifiedTarGz = await gzipBuffer(await repackTar(entries));
+
+    const tgtOwner = await createOwner("t45-tgt");
+    const tgtTenant = await createTestTenant("Target Corp T4.5");
+    await enrollMember(tgtTenant.id, tgtOwner.id);
+
+    const { getTestClient } = await import("../helpers/test-db.js");
+    await getTestClient()`TRUNCATE TABLE businesses CASCADE`;
+
+    const importToken = await signImportTokenDirect(tgtTenant.id, tgtOwner.id);
+    const importRes = await httpImport(tgtTenant.id, importToken, modifiedTarGz);
+
+    return {
+      status: importRes.status,
+      body: (await importRes.json()) as Awaited<
+        ReturnType<typeof mutateManifestAndImport>
+      >["body"],
+    };
+  }
+
+  it("appVersion mismatch imports successfully with a best-effort warning", async () => {
+    const { status, body } = await mutateManifestAndImport((m) => {
+      m["appVersion"] = "0.0.1-from-the-stone-age";
+    });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.compatibility).toBeDefined();
+    expect(body.compatibility!.appVersionMatch).toBe(false);
+    expect(body.compatibility!.schemaChecksumMatch).toBe(true);
+    expect(body.compatibility!.sourceAppVersion).toBe("0.0.1-from-the-stone-age");
+    expect(body.warnings?.some((w) =>
+      /app version mismatch/i.test(w.message),
+    )).toBe(true);
+  });
+
+  it("schemaChecksum mismatch imports successfully with a best-effort warning", async () => {
+    const { status, body } = await mutateManifestAndImport((m) => {
+      // Any valid-shape sha256 string that won't match the server's registry.
+      m["schemaChecksum"] =
+        "sha256:" + "f".repeat(64);
+    });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.compatibility).toBeDefined();
+    expect(body.compatibility!.schemaChecksumMatch).toBe(false);
+    expect(body.compatibility!.appVersionMatch).toBe(true);
+    expect(body.warnings?.some((w) =>
+      /schema checksum mismatch/i.test(w.message),
+    )).toBe(true);
+  });
+
+  it("matching appVersion and schemaChecksum produce no compatibility warnings", async () => {
+    const { status, body } = await mutateManifestAndImport(() => {
+      // no-op: leave manifest untouched
+    });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.compatibility).toBeDefined();
+    expect(body.compatibility!.appVersionMatch).toBe(true);
+    expect(body.compatibility!.schemaChecksumMatch).toBe(true);
+    expect(body.warnings?.some((w) =>
+      /mismatch/i.test(w.message),
+    )).toBe(false);
+  });
+});
+
+// =============================================================================
 // TEST 5 — Non-owner forbidden
 // =============================================================================
 

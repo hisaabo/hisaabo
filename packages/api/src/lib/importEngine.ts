@@ -21,6 +21,11 @@ import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import type { Logger } from "./logger.js";
 import {
+  APP_VERSION,
+  SCHEMA_CHECKSUM,
+  type Compatibility,
+} from "./exportManifest.js";
+import {
   recomputeBankBalances,
   recomputeStock,
   recomputeAmountPaid,
@@ -36,6 +41,12 @@ export interface ImportResult {
   warnings: Array<{ table: string; message: string; context?: unknown }>;
   errors: Array<{ table: string; row: number; message: string }>;
   durationMs: number;
+  /**
+   * Present once Phase 1 has parsed the manifest successfully. Undefined if
+   * the archive failed earlier (missing/corrupt manifest). Import is
+   * attempted best-effort when either field is `false`.
+   */
+  compatibility?: Compatibility;
 }
 
 type RowMap = Map<string, unknown[]>; // tableName → parsed rows
@@ -147,6 +158,7 @@ export async function importTenantBackup(
   const rowsSkipped: Record<string, number> = {};
   const warnings: Array<{ table: string; message: string; context?: unknown }> = [];
   const errors: Array<{ table: string; row: number; message: string }> = [];
+  let compatibility: Compatibility | undefined;
 
   function fail(message: string): ImportResult {
     return {
@@ -156,6 +168,7 @@ export async function importTenantBackup(
       warnings,
       errors: [...errors, { table: "_pipeline", row: 0, message }],
       durationMs: Date.now() - startMs,
+      compatibility,
     };
   }
 
@@ -226,6 +239,54 @@ export async function importTenantBackup(
 
   if (manifest.formatVersion !== 1) {
     return fail(`Unsupported formatVersion: ${manifest.formatVersion} (expected 1)`);
+  }
+
+  // ── Compatibility check (best-effort, non-fatal) ──────────────────────────
+  // We compare the archive's declared app version and schema checksum against
+  // the values computed at module load for the running server. A mismatch on
+  // either field is a WARNING, not an error — the import proceeds and the
+  // caller (HTTP layer) surfaces the compatibility block to the user so they
+  // know the restore was attempted on a best-effort basis.
+  compatibility = {
+    appVersionMatch: manifest.appVersion === APP_VERSION,
+    schemaChecksumMatch: manifest.schemaChecksum === SCHEMA_CHECKSUM,
+    sourceAppVersion: manifest.appVersion,
+    targetAppVersion: APP_VERSION,
+    sourceSchemaChecksum: manifest.schemaChecksum,
+    targetSchemaChecksum: SCHEMA_CHECKSUM,
+  };
+
+  if (!compatibility.appVersionMatch) {
+    warnings.push({
+      table: "_manifest",
+      message: `App version mismatch: backup produced by ${manifest.appVersion}, server is ${APP_VERSION}. Attempting best-effort import.`,
+      context: {
+        sourceAppVersion: manifest.appVersion,
+        targetAppVersion: APP_VERSION,
+      },
+    });
+    log.warn(
+      { sourceAppVersion: manifest.appVersion, targetAppVersion: APP_VERSION },
+      "import.phase1: appVersion mismatch — best-effort",
+    );
+  }
+
+  if (!compatibility.schemaChecksumMatch) {
+    warnings.push({
+      table: "_manifest",
+      message: `Schema checksum mismatch: backup shape does not match the current schema. Attempting best-effort import; some rows may fail to commit if columns were removed or constraints tightened.`,
+      context: {
+        sourceSchemaChecksum: manifest.schemaChecksum,
+        targetSchemaChecksum: SCHEMA_CHECKSUM,
+      },
+    });
+    log.warn(
+      {
+        sourceSchemaChecksum: manifest.schemaChecksum,
+        targetSchemaChecksum: SCHEMA_CHECKSUM,
+      },
+      "import.phase1: schemaChecksum mismatch — best-effort",
+    );
   }
 
   // Verify checksums and row counts for all files listed in the manifest
@@ -299,6 +360,7 @@ export async function importTenantBackup(
       warnings,
       errors,
       durationMs: Date.now() - startMs,
+      compatibility,
     };
   }
 
@@ -488,5 +550,6 @@ export async function importTenantBackup(
     warnings,
     errors,
     durationMs,
+    compatibility,
   };
 }

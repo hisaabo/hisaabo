@@ -178,9 +178,10 @@ test.describe("Quick Item Create", () => {
     const uniqueItemName = `QC Item ${Date.now()}`;
     const creator = getCreatorPanel(page);
 
-    // The item combobox is the second combobox in the creator (first is party)
-    // Use placeholder text to identify it
-    const itemInput = creator.getByPlaceholder(/select product|search/i).first();
+    // The item combobox is the second combobox in the creator (first is party).
+    // Match the exact item-picker placeholder so we don't collide with the
+    // party combobox's "Search customer..." placeholder.
+    const itemInput = creator.getByPlaceholder(/select product or custom item/i).first();
     await itemInput.click();
     await itemInput.fill(uniqueItemName);
     await page.waitForTimeout(500);
@@ -244,7 +245,7 @@ test.describe("Quick Item Create", () => {
     // Trigger quick item create
     const uniqueItemName = `QC ItemVal ${Date.now()}`;
     const creator = getCreatorPanel(page);
-    const itemInput = creator.getByPlaceholder(/select product|search/i).first();
+    const itemInput = creator.getByPlaceholder(/select product or custom item/i).first();
     await itemInput.click();
     await itemInput.fill(uniqueItemName);
     await page.waitForTimeout(500);
