@@ -177,6 +177,24 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the main window to call clear_session_token, which removes\nthe Hisaabo session token from the OS keyring.\nIdempotent: succeeds even when no token is currently stored.\n",
+          "type": "string",
+          "const": "allow-clear-session-token",
+          "markdownDescription": "Allows the main window to call clear_session_token, which removes\nthe Hisaabo session token from the OS keyring.\nIdempotent: succeeds even when no token is currently stored.\n"
+        },
+        {
+          "description": "Allows the main window to call get_session_token, which reads\nthe Hisaabo session token from the OS keyring.\nReturns null (not an error) when no token is stored.\n",
+          "type": "string",
+          "const": "allow-get-session-token",
+          "markdownDescription": "Allows the main window to call get_session_token, which reads\nthe Hisaabo session token from the OS keyring.\nReturns null (not an error) when no token is stored.\n"
+        },
+        {
+          "description": "Allows the main window to call save_session_token, which writes\nthe Hisaabo session token to the OS keyring (keychain on macOS,\nCredential Manager on Windows, libsecret on Linux).\nNo scope constraints are needed because this command operates only\non a fixed service-name key derived from the app identifier.\n",
+          "type": "string",
+          "const": "allow-save-session-token",
+          "markdownDescription": "Allows the main window to call save_session_token, which writes\nthe Hisaabo session token to the OS keyring (keychain on macOS,\nCredential Manager on Windows, libsecret on Linux).\nNo scope constraints are needed because this command operates only\non a fixed service-name key derived from the app identifier.\n"
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
