@@ -39,17 +39,22 @@ describe("POSStore — initial state", () => {
   });
 });
 
+const simpleLine = (overrides: Partial<POSLineItem> = {}): Omit<POSLineItem, "lineId"> => ({
+  itemId: "item-1",
+  itemName: "Widget",
+  quantity: "1",
+  unit: "pcs",
+  unitPrice: "100",
+  taxPercent: "18",
+  discountPercent: "0",
+  conversionFactor: "1",
+  ...overrides,
+});
+
 describe("POSStore — line items", () => {
   it("addLine appends a line with a generated id", () => {
     const s = makeStore();
-    s.addLine({
-      itemId: "item-1",
-      itemName: "Widget",
-      quantity: "2",
-      unitPrice: "100",
-      taxPercent: "18",
-      discountPercent: "0",
-    });
+    s.addLine(simpleLine({ quantity: "2" }));
     const cart = s.getSnapshot().carts[0]!;
     expect(cart.lineItems).toHaveLength(1);
     expect(cart.lineItems[0]!.lineId).toBeTruthy();
@@ -58,17 +63,9 @@ describe("POSStore — line items", () => {
 
   it("addOrBumpLine increments an existing matching itemId rather than duplicating", () => {
     const s = makeStore();
-    const base = {
-      itemId: "item-1",
-      itemName: "Widget",
-      quantity: "1",
-      unitPrice: "100",
-      taxPercent: "18",
-      discountPercent: "0",
-    };
-    s.addOrBumpLine({ itemId: "item-1" }, base);
-    s.addOrBumpLine({ itemId: "item-1" }, base);
-    s.addOrBumpLine({ itemId: "item-1" }, base);
+    s.addOrBumpLine({ itemId: "item-1", unit: "pcs" }, simpleLine());
+    s.addOrBumpLine({ itemId: "item-1", unit: "pcs" }, simpleLine());
+    s.addOrBumpLine({ itemId: "item-1", unit: "pcs" }, simpleLine());
     const cart = s.getSnapshot().carts[0]!;
     expect(cart.lineItems).toHaveLength(1);
     expect(cart.lineItems[0]!.quantity).toBe("3");
@@ -76,28 +73,38 @@ describe("POSStore — line items", () => {
 
   it("addOrBumpLine treats different variantIds as separate rows", () => {
     const s = makeStore();
-    const mk = (v: string | null) => ({
-      itemId: "item-1",
-      variantId: v,
-      itemName: v ? `Widget-${v}` : "Widget",
-      quantity: "1",
-      unitPrice: "100",
-      taxPercent: "18",
-      discountPercent: "0",
-    });
-    s.addOrBumpLine({ itemId: "item-1", variantId: "red" }, mk("red"));
-    s.addOrBumpLine({ itemId: "item-1", variantId: "blue" }, mk("blue"));
-    s.addOrBumpLine({ itemId: "item-1", variantId: "red" }, mk("red"));
+    const mk = (v: string) =>
+      simpleLine({ variantId: v, itemName: `Widget-${v}` });
+    s.addOrBumpLine({ itemId: "item-1", variantId: "red", unit: "pcs" }, mk("red"));
+    s.addOrBumpLine({ itemId: "item-1", variantId: "blue", unit: "pcs" }, mk("blue"));
+    s.addOrBumpLine({ itemId: "item-1", variantId: "red", unit: "pcs" }, mk("red"));
     const cart = s.getSnapshot().carts[0]!;
     expect(cart.lineItems).toHaveLength(2);
     const red = cart.lineItems.find((li) => li.variantId === "red");
     expect(red?.quantity).toBe("2");
   });
 
+  it("addOrBumpLine treats different alt-units of the same item as separate rows", () => {
+    // Rice sold by kg and by g — both are itemId=rice but have different
+    // conversion factors and different cart-line identities.
+    const s = makeStore();
+    s.addOrBumpLine(
+      { itemId: "rice", unit: "kg" },
+      simpleLine({ itemId: "rice", itemName: "Rice (kg)", unit: "kg", unitPrice: "80", conversionFactor: "1" }),
+    );
+    s.addOrBumpLine(
+      { itemId: "rice", unit: "g" },
+      simpleLine({ itemId: "rice", itemName: "Rice (g)", unit: "g", unitPrice: "0.08", conversionFactor: "0.001" }),
+    );
+    const cart = s.getSnapshot().carts[0]!;
+    expect(cart.lineItems).toHaveLength(2);
+    expect(cart.lineItems.map((li) => li.unit).sort()).toEqual(["g", "kg"]);
+  });
+
   it("removeLine drops the matching lineId only", () => {
     const s = makeStore();
-    s.addLine({ itemId: "a", itemName: "A", quantity: "1", unitPrice: "10", taxPercent: "0", discountPercent: "0" });
-    s.addLine({ itemId: "b", itemName: "B", quantity: "1", unitPrice: "10", taxPercent: "0", discountPercent: "0" });
+    s.addLine(simpleLine({ itemId: "a", itemName: "A", unitPrice: "10", taxPercent: "0" }));
+    s.addLine(simpleLine({ itemId: "b", itemName: "B", unitPrice: "10", taxPercent: "0" }));
     const toRemove = s.getSnapshot().carts[0]!.lineItems[0]!.lineId;
     s.removeLine(toRemove);
     const cart = s.getSnapshot().carts[0]!;
@@ -107,7 +114,7 @@ describe("POSStore — line items", () => {
 
   it("updateLine patches only the named fields", () => {
     const s = makeStore();
-    s.addLine({ itemId: "a", itemName: "A", quantity: "1", unitPrice: "10", taxPercent: "0", discountPercent: "0" });
+    s.addLine(simpleLine({ itemId: "a", itemName: "A", unitPrice: "10", taxPercent: "0" }));
     const id = s.getSnapshot().carts[0]!.lineItems[0]!.lineId;
     s.updateLine(id, { quantity: "5" });
     const li = s.getSnapshot().carts[0]!.lineItems[0]!;
@@ -120,7 +127,7 @@ describe("POSStore — park and resume", () => {
   it("parkActive creates a fresh cart and keeps the old one", () => {
     const s = makeStore();
     const oldId = s.getSnapshot().activeCartId;
-    s.addLine({ itemId: "a", itemName: "A", quantity: "1", unitPrice: "10", taxPercent: "0", discountPercent: "0" });
+    s.addLine(simpleLine({ itemId: "a", itemName: "A", unitPrice: "10", taxPercent: "0" }));
     s.parkActive(WALK_IN, "Walk-in Customer");
 
     const state = s.getSnapshot();
@@ -136,7 +143,7 @@ describe("POSStore — park and resume", () => {
     const s = makeStore();
     // Park 5 times → we end with 6 carts, should be capped at 5.
     for (let i = 0; i < 6; i++) {
-      s.addLine({ itemId: `a${i}`, itemName: `A${i}`, quantity: "1", unitPrice: "10", taxPercent: "0", discountPercent: "0" });
+      s.addLine(simpleLine({ itemId: `a${i}`, itemName: `A${i}`, unitPrice: "10", taxPercent: "0" }));
       s.parkActive(WALK_IN, "Walk-in Customer");
     }
     expect(s.getSnapshot().carts.length).toBeLessThanOrEqual(5);
@@ -154,7 +161,7 @@ describe("POSStore — park and resume", () => {
 describe("POSStore — persistence", () => {
   it("round-trips via localStorage across store instances", () => {
     const s = makeStore();
-    s.addLine({ itemId: "x", itemName: "X", quantity: "2", unitPrice: "50", taxPercent: "0", discountPercent: "0" });
+    s.addLine(simpleLine({ itemId: "x", itemName: "X", quantity: "2", unitPrice: "50", taxPercent: "0" }));
     // Instantiate a second store (simulating page reload) — same tabId from sessionStorage
     const s2 = new POSStore(BIZ_ID, WALK_IN);
     const cart = s2.getSnapshot().carts[0]!;
@@ -170,8 +177,8 @@ describe("computeCartTotals", () => {
 
   it("computes subtotal, discount, and tax per line then sums", () => {
     const lines: POSLineItem[] = [
-      { lineId: "1", itemId: null, itemName: "A", quantity: "2", unitPrice: "100", taxPercent: "18", discountPercent: "0" },
-      { lineId: "2", itemId: null, itemName: "B", quantity: "1", unitPrice: "200", taxPercent: "5",  discountPercent: "10" },
+      { lineId: "1", itemId: null, itemName: "A", quantity: "2", unit: "pcs", unitPrice: "100", taxPercent: "18", discountPercent: "0", conversionFactor: "1" },
+      { lineId: "2", itemId: null, itemName: "B", quantity: "1", unit: "pcs", unitPrice: "200", taxPercent: "5",  discountPercent: "10", conversionFactor: "1" },
     ];
     const t = computeCartTotals(lines);
     // Line 1: gross=200, disc=0, tax=200*0.18=36, net+tax=236
@@ -184,7 +191,7 @@ describe("computeCartTotals", () => {
 
   it("treats bad numeric strings as zero (won't NaN)", () => {
     const lines: POSLineItem[] = [
-      { lineId: "1", itemId: null, itemName: "A", quantity: "", unitPrice: "abc", taxPercent: "?", discountPercent: "" },
+      { lineId: "1", itemId: null, itemName: "A", quantity: "", unit: "pcs", unitPrice: "abc", taxPercent: "?", discountPercent: "", conversionFactor: "1" },
     ];
     const t = computeCartTotals(lines);
     expect(t.total).toBe(0);

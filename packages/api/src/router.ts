@@ -38,6 +38,7 @@ import { gstr2bRouter } from "./routers/gstr2b.js";
 import { systemRouter } from "./routers/system.js";
 import { selfExportRouter } from "./routers/selfExport.js";
 import { selfImportRouter } from "./routers/selfImport.js";
+import { posRouter } from "./routers/pos.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -77,6 +78,7 @@ export const appRouter = router({
   system: systemRouter,
   selfExport: selfExportRouter,
   selfImport: selfImportRouter,
+  pos: posRouter,
 });
 
 export type AppRouter = typeof appRouter;

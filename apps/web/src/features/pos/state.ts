@@ -24,14 +24,24 @@ export interface POSLineItem {
   lineId: string;
   /** Null = custom ad-hoc line (no catalog row). */
   itemId: string | null;
-  /** Optional when variant is used. */
+  /** Set when billing a specific variant row — server decrements variant stock. */
   variantId?: string | null;
   itemName: string;
   quantity: string; // decimal string, server-compatible
-  unit?: string;
+  /**
+   * The unit the cashier picked on the tile. Carried to the invoice as
+   * `selectedUnit` so the server-side stock math uses the right factor.
+   */
+  unit: string;
   unitPrice: string;
   taxPercent: string;      // "0", "5", "12", "18", "28"
   discountPercent: string; // "0" default
+  /**
+   * Conversion factor to the item's base unit. "1" for simple items and for
+   * variants (variants have their own stock, no conversion needed); may be
+   * a decimal for alt_units entries.
+   */
+  conversionFactor: string;
 }
 
 export interface POSCart {
@@ -172,11 +182,23 @@ export class POSStore {
     this.updateActive((c) => ({ ...c, lineItems: [...c.lineItems, { ...line, lineId: randomId() }] }));
   }
 
-  /** Increment an existing matching line rather than pushing a duplicate row. */
-  addOrBumpLine(match: { itemId: string | null; variantId?: string | null }, line: Omit<POSLineItem, "lineId">): void {
+  /**
+   * Increment an existing matching line rather than pushing a duplicate row.
+   * Identity is (itemId, variantId, unit) — two alt-unit tiles of the same
+   * item (e.g. Rice kg vs Rice g) must stay on separate cart lines because
+   * the server needs each one's own conversion factor to decrement stock
+   * correctly.
+   */
+  addOrBumpLine(
+    match: { itemId: string | null; variantId?: string | null; unit?: string },
+    line: Omit<POSLineItem, "lineId">,
+  ): void {
     this.updateActive((c) => {
       const idx = c.lineItems.findIndex(
-        (li) => li.itemId === match.itemId && (li.variantId ?? null) === (match.variantId ?? null),
+        (li) =>
+          li.itemId === match.itemId &&
+          (li.variantId ?? null) === (match.variantId ?? null) &&
+          (match.unit === undefined || li.unit === match.unit),
       );
       if (idx === -1) {
         return { ...c, lineItems: [...c.lineItems, { ...line, lineId: randomId() }] };

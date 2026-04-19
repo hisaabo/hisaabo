@@ -51,6 +51,33 @@ const typeOptions = [
   { value: "purchase", label: "Purchases" },
 ];
 
+// ── Source chip ──────────────────────────────────────────────────
+// Renders a small colored badge for the invoice's origin channel.
+// null/undefined source → subtle "Manual" chip so the column never looks
+// empty. Values map 1:1 to the invoices.source column values set by
+// invoice.create (pos, online_store, webhook) and legacy NULL.
+
+function SourceChip({ source }: { source: string | null | undefined }) {
+  const cfg: Record<string, { label: string; cls: string }> = {
+    pos: { label: "POS", cls: "bg-brand-600/10 text-brand-700 dark:text-brand-400" },
+    online_store: { label: "Store", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
+    webhook: { label: "API", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-400" },
+  };
+  const entry = source ? cfg[source] : null;
+  if (!entry) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-surface-2 text-text-tertiary">
+        Manual
+      </span>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${entry.cls}`}>
+      {entry.label}
+    </span>
+  );
+}
+
 // ── PDF download button ──────────────────────────────────────────
 
 function DownloadPDFButton({
@@ -1091,6 +1118,8 @@ function InvoicesPage() {
                     Invoice # {sortBy === "number" && <span className="text-brand-600">{sortDir === "asc" ? "↑" : "↓"}</span>}
                   </th>
                   <th className="whitespace-nowrap">Date</th>
+                  <th className="whitespace-nowrap">Source</th>
+                  <th className="whitespace-nowrap">Seller</th>
                   <th
                     className="text-right whitespace-nowrap cursor-pointer select-none hover:text-text-primary transition-colors"
                     onClick={() => {
@@ -1118,6 +1147,14 @@ function InvoicesPage() {
                       </td>
                       <td className="text-text-secondary whitespace-nowrap">
                         {formatDate(inv.invoiceDate)}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <SourceChip source={(inv as { source?: string | null }).source ?? null} />
+                      </td>
+                      <td className="text-text-secondary whitespace-nowrap">
+                        <span className="block truncate max-w-[140px]" title={inv.createdByName ?? ""}>
+                          {inv.createdByName ?? "—"}
+                        </span>
                       </td>
                       <td className="text-right tabular-nums font-medium whitespace-nowrap">
                         {formatCurrency(inv.totalAmount)}

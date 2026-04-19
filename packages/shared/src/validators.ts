@@ -251,6 +251,14 @@ export const createInvoiceSchema = z.object({
   skipStockAdjustment: z.boolean().optional(),
   isReverseCharge: z.boolean().default(false),
   deliveryMethod: z.enum(deliveryMethods).default("self_pickup"),
+  /**
+   * Origin channel for this invoice. "pos" for the fullscreen register,
+   * "online_store" for storefront orders, "webhook" for public-API /
+   * carrier-webhook triggered invoices. Null/undefined = manually created
+   * from the invoice form. Used by reporting and the invoice list to
+   * attribute a sale to its channel.
+   */
+  source: z.enum(["pos", "online_store", "webhook"]).optional(),
 });
 
 export const updateInvoiceStatusSchema = z.object({

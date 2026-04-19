@@ -34,6 +34,9 @@ exceptions:
       # Mobile doesn't have a POS terminal surface.
       - business.setPosEnabled
       - business.ensureWalkInParty
+      # POS catalog (tile grid with alt-unit / variant expansion) is a
+      # register-UI concern, not a mobile flow.
+      - pos.catalog
 
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
@@ -280,6 +283,7 @@ exceptions:
       # Point-of-Sale is a browser-only UI feature — no CLI command surface.
       - business.setPosEnabled
       - business.ensureWalkInParty
+      - pos.catalog
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow. CLI uses transfer
@@ -366,6 +370,7 @@ exceptions:
       # POS mode is a web/desktop-only cashier surface; not an MCP workflow.
       - business.setPosEnabled
       - business.ensureWalkInParty
+      - pos.catalog
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow.

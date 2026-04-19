@@ -103,6 +103,11 @@ export const invoiceRouter = router({
           partyName: parties.name,
           partyId: parties.id,
           createdByName: invoices.createdByName,
+          // `source` carries the origin channel: "pos", "online_store",
+          // "webhook", or null for manually-typed invoices. Surfaced in the
+          // list UI as a small chip so managers can tell at a glance where
+          // an invoice came from.
+          source: invoices.source,
         }).from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .leftJoin(adjSq, eq(adjSq.refId, invoices.id))
@@ -336,6 +341,7 @@ export const invoiceRouter = router({
         referenceDocumentId: input.referenceDocumentId || null,
         deliveryMethod: input.deliveryMethod || "self_pickup",
         isReverseCharge: input.isReverseCharge ?? false,
+        source: input.source ?? null,
         createdByUserId: ctx.user!.id,
         createdByName: ctx.user!.name,
       }).returning();

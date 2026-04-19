@@ -48,11 +48,21 @@ export function PaymentSheet({ open, cart, onClose, onFinalized }: Props) {
         partyId: cart.partyId,
         type: "sale",
         documentType: "invoice",
+        // Tag this invoice as originating from the POS register so reports
+        // and the invoice list can attribute revenue by channel.
+        source: "pos",
+        // Every POS sale is "just another invoice" — the server is the
+        // single source of truth for numbering, stock, GST, and audit.
+        // selectedUnit + conversionFactor + variantId are what let the
+        // existing stock-decrement path work correctly for alt_units and
+        // variants without any POS-specific server logic.
         lineItems: cart.lineItems.map((li) => ({
           itemId: li.itemId ?? undefined,
+          variantId: li.variantId ?? undefined,
           itemName: li.itemName,
           quantity: li.quantity,
-          unit: li.unit,
+          selectedUnit: li.unit,
+          conversionFactor: li.conversionFactor,
           unitPrice: li.unitPrice,
           taxPercent: li.taxPercent,
           discountPercent: li.discountPercent,

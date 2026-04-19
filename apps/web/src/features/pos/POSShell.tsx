@@ -5,7 +5,7 @@ import { toast } from "@/hooks/useToast";
 import { POSStore, usePOSSelector } from "./state";
 import { useScanner } from "./useScanner";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
-import { ItemGrid, type POSItemRow } from "./ItemGrid";
+import { ItemGrid, type POSTile } from "./ItemGrid";
 import { Cart } from "./Cart";
 import { CustomerPicker } from "./CustomerPicker";
 import { PaymentSheet } from "./PaymentSheet";
@@ -67,31 +67,17 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
 
   // ── Scanner ────────────────────────────────────────────────────
   const handleScan = async (code: string) => {
-    // Resolve barcode → item via item.list search on the scanned code. No
-    // dedicated barcode column in v1 — we match against name/SKU.
+    // Resolve barcode → first matching catalog tile. pos.catalog already
+    // handles variant/alt-unit expansion and filters by SKU, so a scanned
+    // SKU lands on exactly one tile (or the first of several).
     try {
-      const data = await utils.item.list.fetch({
-        search: code,
-        page: 1,
-        limit: 1,
-      });
-      const first = data?.data?.[0];
+      const data = await utils.pos.catalog.fetch({ search: code, page: 1, limit: 1 });
+      const first = data?.tiles?.[0];
       if (!first) {
         toast.error("No item found", `Scan: ${code}`);
         return;
       }
-      store.addOrBumpLine(
-        { itemId: first.id, variantId: null },
-        {
-          itemId: first.id,
-          itemName: first.name,
-          quantity: "1",
-          unit: first.unit,
-          unitPrice: first.salePrice ?? "0",
-          taxPercent: first.taxPercent ?? "0",
-          discountPercent: "0",
-        },
-      );
+      handlePickItem(first);
     } catch (err) {
       toast.error("Scanner lookup failed", err instanceof Error ? err.message : String(err));
     }
@@ -121,18 +107,22 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
   );
   useKeyboardShortcuts(shellRef, shortcuts);
 
-  // ── Item pick handler ──────────────────────────────────────────
-  const handlePickItem = (item: POSItemRow) => {
+  // ── Tile → cart handler ────────────────────────────────────────
+  // Matches the tile's composite identity (item + variant OR item + unit)
+  // so two different alt-units of the same item don't merge into one line.
+  const handlePickItem = (tile: POSTile) => {
     store.addOrBumpLine(
-      { itemId: item.id, variantId: null },
+      { itemId: tile.itemId, variantId: tile.variantId, unit: tile.unit },
       {
-        itemId: item.id,
-        itemName: item.name,
+        itemId: tile.itemId,
+        variantId: tile.variantId,
+        itemName: tile.displayName,
         quantity: "1",
-        unit: item.unit,
-        unitPrice: item.salePrice ?? "0",
-        taxPercent: item.taxPercent ?? "0",
+        unit: tile.unit,
+        unitPrice: tile.unitPrice,
+        taxPercent: tile.taxPercent,
         discountPercent: "0",
+        conversionFactor: tile.conversionFactor,
       },
     );
   };
@@ -200,26 +190,39 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
         </button>
       </header>
 
-      {/* Parked tabs strip */}
-      {carts.length > 1 && (
-        <div className="flex gap-1 px-4 py-2 border-b border-border bg-surface-1 overflow-x-auto">
-          {carts.map((c, idx) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => store.resumeCart(c.id)}
-              className={`px-3 py-1 rounded text-xs whitespace-nowrap transition-colors ${
-                c.id === activeCartId
-                  ? "bg-brand-600 text-white"
-                  : "bg-surface-2 hover:bg-surface-3 text-text-secondary"
-              }`}
-            >
-              <span className="opacity-60 mr-1">Alt+{idx + 1}</span>
-              {c.partyName} · {c.lineItems.length}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Parked tabs strip — always rendered so the layout doesn't shift
+          when a cashier parks their first sale. The active cart is shown
+          as a selected tab; a "+ Hold" affordance sits alongside so the
+          park concept is discoverable without having used it first. */}
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface-1 overflow-x-auto min-h-[48px]">
+        {carts.map((c, idx) => (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => store.resumeCart(c.id)}
+            className={`h-9 px-3 rounded-md text-xs whitespace-nowrap transition-colors flex items-center gap-2 ${
+              c.id === activeCartId
+                ? "bg-brand-600 text-white"
+                : "bg-surface-2 hover:bg-surface-3 text-text-secondary"
+            }`}
+          >
+            <span className={c.id === activeCartId ? "opacity-80" : "opacity-60"}>
+              Alt+{idx + 1}
+            </span>
+            <span className="font-medium">{c.partyName}</span>
+            <span className="opacity-70">· {c.lineItems.length}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => store.parkActive(walkInPartyId, "Walk-in Customer")}
+          className="h-9 px-3 rounded-md text-xs whitespace-nowrap border border-dashed border-border text-text-tertiary hover:text-text-secondary hover:border-text-tertiary flex items-center gap-1"
+          title="Hold current sale and start a new one (F6)"
+          disabled={carts.length >= 5}
+        >
+          + Hold <span className="opacity-60">F6</span>
+        </button>
+      </div>
 
       {/* Main two-pane */}
       <main className="flex-1 flex min-h-0">
