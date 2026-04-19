@@ -3,6 +3,7 @@ import { z } from "zod";
 import { items, itemVariants } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { escapeLike } from "../lib/escape-like.js";
 
 /**
  * Point-of-Sale tRPC router.
@@ -87,7 +88,7 @@ export const posRouter = router({
         eq(items.itemType, "product"),
       ];
       if (input.search) {
-        const pat = `%${input.search.replace(/[%_\\]/g, "\\$&")}%`;
+        const pat = `%${escapeLike(input.search)}%`;
         // Match on name or SKU — SKU doubles as a barcode fallback in v1.
         conditions.push(or(ilike(items.name, pat), ilike(items.sku, pat))!);
       }
