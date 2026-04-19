@@ -96,12 +96,22 @@ async function confirm(question: string): Promise<boolean> {
 
 // ── Import response types ─────────────────────────────────────────────────────
 
+interface Compatibility {
+  appVersionMatch: boolean;
+  schemaChecksumMatch: boolean;
+  sourceAppVersion: string;
+  targetAppVersion: string;
+  sourceSchemaChecksum: string;
+  targetSchemaChecksum: string;
+}
+
 interface ImportSuccessResponse {
   ok: true;
   rowsInserted: Record<string, number>;
   rowsSkipped: Record<string, number>;
   warnings: string[];
   durationMs: number;
+  compatibility?: Compatibility;
 }
 
 interface ImportFailedResponse {
@@ -109,6 +119,25 @@ interface ImportFailedResponse {
   errors: string[];
   warnings: string[];
   durationMs: number;
+  compatibility?: Compatibility;
+}
+
+function printCompatibility(compat: Compatibility | undefined): void {
+  if (!compat) return;
+  if (compat.appVersionMatch && compat.schemaChecksumMatch) return;
+  const label = hasColor() ? chalk.yellow("Best-effort restore") : "Best-effort restore";
+  console.log(`  ${label}: backup was produced against a different build.`);
+  if (!compat.appVersionMatch) {
+    console.log(
+      `    App version: backup ${compat.sourceAppVersion} → server ${compat.targetAppVersion}`,
+    );
+  }
+  if (!compat.schemaChecksumMatch) {
+    console.log(
+      `    Schema fingerprint differs — table shape has changed since this backup was taken.`,
+    );
+  }
+  console.log(`    Spot-check a few invoices and reports before relying on the data.`);
 }
 
 // ── Restore command ───────────────────────────────────────────────────────────
@@ -296,12 +325,14 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
     for (const err of failed.errors) {
       process.stderr.write(`  - ${err}\n`);
     }
+    printCompatibility(failed.compatibility);
     process.exit(EXIT_SERVER_ERROR);
   }
 
   const done = responseBody as ImportSuccessResponse;
 
   success(`Import completed in ${(done.durationMs / 1000).toFixed(1)}s`);
+  printCompatibility(done.compatibility);
 
   // Print rows inserted per table
   const tables = Object.entries(done.rowsInserted).filter(([, n]) => n > 0);

@@ -237,6 +237,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
   const isEmpty = !isLoading && sections.length === 0;
 
   // OPT-03: submit inline party creation
+  const partyFormReady = !!inlineForm.name.trim() && !!inlineForm.phone.trim();
   const handleInlineCreate = useCallback(async () => {
     if (!inlineForm.name.trim()) {
       Alert.alert("Validation", "Name is required.");
@@ -382,9 +383,9 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
                   <Text style={inlineCreateStyles.cancelBtnText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[inlineCreateStyles.createBtn, creatingFromContact && inlineCreateStyles.createBtnDisabled]}
+                  style={[inlineCreateStyles.createBtn, (!partyFormReady || creatingFromContact) && inlineCreateStyles.createBtnDisabled]}
                   onPress={handleInlineCreate}
-                  disabled={creatingFromContact}
+                  disabled={!partyFormReady || creatingFromContact}
                 >
                   {creatingFromContact ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -740,16 +741,93 @@ interface ItemPickerProps {
   onClose: () => void;
 }
 
+// Inline item create form state
+interface InlineItemFormState {
+  name: string;
+  price: string;
+  taxPercent: string;
+  unit: string;
+}
+
+const TAX_PRESETS = ["0", "5", "12", "18", "28"];
+const UNIT_OPTIONS = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"];
+
 function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPickerProps) {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
+
+  // Inline item create state
+  const [showInlineCreate, setShowInlineCreate] = useState(false);
+  const [inlineForm, setInlineForm] = useState<InlineItemFormState>({ name: "", price: "", taxPercent: "0", unit: "pcs" });
+  const [creatingItem, setCreatingItem] = useState(false);
+  const [showUnitPicker, setShowUnitPicker] = useState(false);
 
   const { data, isLoading } = trpc.item.list.useQuery(
     { search: debouncedSearch || undefined, page: 1, limit: 50 },
     { enabled: visible }
   );
 
+  const createItemMutation = trpc.item.create.useMutation();
+
   const items = data?.data ?? [];
+  const isEmpty = !isLoading && items.length === 0;
+
+  const itemFormReady = !!inlineForm.name.trim() && !!inlineForm.unit;
+  const handleInlineItemCreate = useCallback(async () => {
+    if (!inlineForm.name.trim()) {
+      Alert.alert("Validation", "Name is required.");
+      return;
+    }
+    if (!inlineForm.unit) {
+      Alert.alert("Validation", "Please select a unit.");
+      return;
+    }
+    setCreatingItem(true);
+    try {
+      const priceField = invoiceType === "sale" ? "salePrice" : "purchasePrice";
+      const newItem = await createItemMutation.mutateAsync({
+        name: inlineForm.name.trim(),
+        unit: inlineForm.unit as any,
+        taxPercent: inlineForm.taxPercent || "0",
+        [priceField]: inlineForm.price || undefined,
+      });
+      haptic.success();
+      onSelect({
+        id: newItem.id,
+        name: newItem.name,
+        salePrice: invoiceType === "sale" ? inlineForm.price || null : null,
+        purchasePrice: invoiceType === "purchase" ? inlineForm.price || null : null,
+        taxPercent: inlineForm.taxPercent || "0",
+        itemMode: "simple",
+        unitVariants: null,
+      });
+      setShowInlineCreate(false);
+      onClose();
+    } catch (err: any) {
+      haptic.error();
+      Alert.alert("Error", err?.message ?? "Failed to create item");
+    } finally {
+      setCreatingItem(false);
+    }
+  }, [inlineForm, createItemMutation, invoiceType, onSelect, onClose]);
+
+  const openInlineCreate = useCallback((prefillName: string) => {
+    setInlineForm({ name: prefillName, price: "", taxPercent: "0", unit: "" });
+    setShowInlineCreate(true);
+  }, []);
+
+  const createButton = debouncedSearch && !showInlineCreate ? (
+    <TouchableOpacity
+      style={inlineCreateStyles.createFromSearchBtn}
+      onPress={() => openInlineCreate(debouncedSearch)}
+      activeOpacity={0.7}
+    >
+      <Ionicons name="add-circle-outline" size={16} color={colors.brand} />
+      <Text style={inlineCreateStyles.createFromSearchBtnText}>
+        Create "{debouncedSearch}" as new item
+      </Text>
+    </TouchableOpacity>
+  ) : null;
 
   return (
     <Modal visible={visible} animationType="slide" transparent presentationStyle="overFullScreen">
@@ -769,24 +847,171 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
               placeholder="Search items..."
               placeholderTextColor={colors.textMuted}
               value={search}
-              onChangeText={setSearch}
+              onChangeText={(v) => {
+                setSearch(v);
+                if (showInlineCreate) setShowInlineCreate(false);
+              }}
               autoFocus
               returnKeyType="search"
             />
             {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")}>
+              <TouchableOpacity onPress={() => { setSearch(""); setShowInlineCreate(false); }}>
                 <Ionicons name="close-circle" size={16} color={colors.textMuted} />
               </TouchableOpacity>
             )}
           </View>
 
+          {/* Loading overlay for item creation */}
+          {creatingItem && (
+            <View style={pickerStyles.creatingOverlay}>
+              <ActivityIndicator color={colors.brand} size="small" />
+              <Text style={pickerStyles.creatingText}>Creating item...</Text>
+            </View>
+          )}
+
+          {/* Inline item create form */}
+          {showInlineCreate && (
+            <View style={inlineCreateStyles.container}>
+              <View style={inlineCreateStyles.header}>
+                <Ionicons name="add-circle-outline" size={16} color={colors.brand} />
+                <Text style={inlineCreateStyles.title}>New Item</Text>
+              </View>
+              <TextInput
+                style={inlineCreateStyles.input}
+                value={inlineForm.name}
+                onChangeText={(v) => setInlineForm((f) => ({ ...f, name: v }))}
+                placeholder="Name *"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="words"
+              />
+              <TextInput
+                style={inlineCreateStyles.input}
+                value={inlineForm.price}
+                onChangeText={(v) => setInlineForm((f) => ({ ...f, price: v }))}
+                placeholder={invoiceType === "sale" ? "Sale Price" : "Purchase Price"}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+              />
+              {/* Tax % pills */}
+              <View style={inlineItemCreateStyles.sectionLabel}>
+                <Text style={inlineItemCreateStyles.sectionLabelText}>Tax %</Text>
+              </View>
+              <View style={inlineCreateStyles.typeRow}>
+                {TAX_PRESETS.map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[inlineCreateStyles.typePill, inlineForm.taxPercent === t && inlineCreateStyles.typePillActive]}
+                    onPress={() => setInlineForm((f) => ({ ...f, taxPercent: t }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[inlineCreateStyles.typePillText, inlineForm.taxPercent === t && inlineCreateStyles.typePillTextActive]}>
+                      {t}%
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {/* Unit selector */}
+              <TouchableOpacity
+                style={inlineItemCreateStyles.unitBtn}
+                onPress={() => setShowUnitPicker(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="resize-outline" size={14} color={colors.textSecondary} />
+                <Text style={[inlineItemCreateStyles.unitBtnText, !inlineForm.unit && { color: colors.textMuted }]}>
+                  {inlineForm.unit ? `Unit: ${inlineForm.unit.toUpperCase()}` : "Select unit... *"}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+              </TouchableOpacity>
+              {/* Unit picker modal */}
+              <Modal visible={showUnitPicker} animationType="slide" transparent>
+                <View style={inlineItemCreateStyles.unitPickerOverlay}>
+                  <View style={inlineItemCreateStyles.unitPickerSheet}>
+                    <View style={inlineItemCreateStyles.unitPickerHeader}>
+                      <Text style={inlineItemCreateStyles.unitPickerTitle}>Select Unit</Text>
+                      <TouchableOpacity onPress={() => setShowUnitPicker(false)}>
+                        <Ionicons name="close" size={22} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+                    <FlatList
+                      data={UNIT_OPTIONS}
+                      keyExtractor={(u) => u}
+                      renderItem={({ item: u }) => (
+                        <TouchableOpacity
+                          style={[
+                            inlineItemCreateStyles.unitPickerRow,
+                            inlineForm.unit === u && inlineItemCreateStyles.unitPickerRowActive,
+                          ]}
+                          onPress={() => {
+                            setInlineForm((f) => ({ ...f, unit: u }));
+                            setShowUnitPicker(false);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              inlineItemCreateStyles.unitPickerRowText,
+                              inlineForm.unit === u && inlineItemCreateStyles.unitPickerRowTextActive,
+                            ]}
+                          >
+                            {u.toUpperCase()}
+                          </Text>
+                          {inlineForm.unit === u && (
+                            <Ionicons name="checkmark" size={18} color={colors.brand} />
+                          )}
+                        </TouchableOpacity>
+                      )}
+                    />
+                  </View>
+                </View>
+              </Modal>
+              <View style={inlineCreateStyles.actions}>
+                <TouchableOpacity
+                  style={inlineCreateStyles.cancelBtn}
+                  onPress={() => setShowInlineCreate(false)}
+                >
+                  <Text style={inlineCreateStyles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[inlineCreateStyles.createBtn, (!itemFormReady || creatingItem) && inlineCreateStyles.createBtnDisabled]}
+                  onPress={handleInlineItemCreate}
+                  disabled={!itemFormReady || creatingItem}
+                >
+                  {creatingItem ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={inlineCreateStyles.createBtnText}>Create & Select</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           {isLoading ? (
             <ActivityIndicator style={{ marginTop: 32 }} color={colors.brand} />
+          ) : isEmpty ? (
+            <View>
+              <Text style={modalStyles.emptyText}>
+                {debouncedSearch ? `No items found for "${debouncedSearch}"` : "No items yet"}
+              </Text>
+              {!showInlineCreate && (
+                <TouchableOpacity
+                  style={inlineCreateStyles.createFromSearchBtn}
+                  onPress={() => openInlineCreate(debouncedSearch || "")}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="add-circle-outline" size={16} color={colors.brand} />
+                  <Text style={inlineCreateStyles.createFromSearchBtnText}>
+                    {debouncedSearch ? `Create "${debouncedSearch}" as new item` : "Create new item"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ) : (
             <FlatList
               data={items}
               keyExtractor={(item) => item.id}
               contentContainerStyle={modalStyles.listContent}
+              ListFooterComponent={createButton}
               renderItem={({ item }) => {
                 const price =
                   invoiceType === "purchase"
@@ -869,6 +1094,84 @@ const itemPickerStyles = StyleSheet.create({
     fontWeight: "700",
     color: colors.brand,
     letterSpacing: 0.3,
+  },
+});
+
+// ── Inline item create styles ────────────────────────────────
+
+const inlineItemCreateStyles = StyleSheet.create({
+  sectionLabel: {
+    marginBottom: 4,
+  },
+  sectionLabelText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  unitBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  unitBtnText: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  unitPickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  unitPickerSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "60%",
+    paddingBottom: 32,
+  },
+  unitPickerHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  unitPickerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  unitPickerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  unitPickerRowActive: {
+    backgroundColor: colors.brand + "10",
+  },
+  unitPickerRowText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  unitPickerRowTextActive: {
+    fontWeight: "700",
+    color: colors.brand,
   },
 });
 

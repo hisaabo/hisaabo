@@ -133,6 +133,7 @@ export function registerImportRoute(app: Hono): void {
           errors: result.errors,
           warnings: result.warnings,
           durationMs: result.durationMs,
+          compatibility: result.compatibility,
         },
         422,
       );
@@ -144,6 +145,7 @@ export function registerImportRoute(app: Hono): void {
         rowsSkipped: result.rowsSkipped,
         warningCount: result.warnings.length,
         durationMs: result.durationMs,
+        compatibility: result.compatibility,
       },
       "importStream: import succeeded",
     );
@@ -154,6 +156,7 @@ export function registerImportRoute(app: Hono): void {
       rowsSkipped: result.rowsSkipped,
       warnings: result.warnings,
       durationMs: result.durationMs,
+      compatibility: result.compatibility,
     });
   });
 }

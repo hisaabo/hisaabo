@@ -16,9 +16,10 @@ You're seeing instructions for the platform you're browsing on. Use the **Deskto
 
 ## Before you start
 
-Make sure you have:
-- At least one party (customer for sale, supplier for purchase) in your [Parties](/parties) list
-- At least one item in your [Items](/items) catalogue (on mobile, items must be selected from the catalogue; on desktop, you can also type a custom description directly)
+You don't need to pre-create parties or items before creating an invoice. Both the web and mobile apps let you **quick-create** parties and items inline while building your invoice — no need to leave the form. If you prefer to set them up in advance:
+
+- Add parties in your [Parties](/parties) list
+- Add items to your [Items](/items) catalogue
 
 ## Step 1: Open the new invoice form
 
@@ -39,6 +40,7 @@ This opens a full-screen invoice form.
 <ForDesktop>
 1. Use the **Sales / Purchases** segmented control at the top of the invoice list to set the type before opening the form. The creator inherits the active type.
 2. In the slide-over, the **Customer** (or **Supplier**) field is a searchable combobox at the top-left. Start typing to filter your parties, then select one from the dropdown.
+3. **Quick create:** If the party doesn't exist yet, click the **+ Create customer** (or supplier) row at the bottom of the dropdown. A compact dialog opens where you enter the party name and phone number, then click **Create & Select**. The new party is auto-selected in the combobox.
 </ForDesktop>
 
 <ForMobile>
@@ -47,7 +49,7 @@ This opens a full-screen invoice form.
    - **Your Parties** — existing customers or suppliers, with a search bar at the top
    - **Phone Contacts** — contacts from your phone that don't already match a party (requires contacts permission)
 
-   Select a party by tapping their name, or create one inline by tapping **Create "name" as new customer/supplier** at the bottom of the list.
+   Select a party by tapping their name, or quick-create one by tapping **Create "name" as new customer/supplier** at the bottom of the list. An inline form expands where you enter the name and phone number, then tap **Create & Select**.
 </ForMobile>
 
 <ForMobile>
@@ -77,6 +79,8 @@ If the selected party has a **credit period** configured, the due date adjusts a
 <ForDesktop>
 Each line item is displayed as a card inside the slide-over. Click the **Product** combobox to search your items catalogue, or type a custom description.
 
+**Quick create:** If the item doesn't exist yet, click the **+ Create item** row at the bottom of the product dropdown. A compact dialog opens where you enter the item name, price, tax rate (GST preset pills), and unit, then click **Create & Select**. The new item is auto-selected in the line item and its price and tax rate are populated.
+
 For each line item, fill in:
 
 | Field | Notes |
@@ -94,6 +98,8 @@ To add more items, click **+ Add line item** below the existing items. Remove a 
 
 <ForMobile>
 Each line item appears as a stacked card. Tap **"Tap to select item..."** to open the item picker modal, which shows your items catalogue with search. Selecting an item auto-fills the price, tax rate, and description.
+
+**Quick create:** If the item doesn't exist yet, tap the **Create "name" as new item** row at the bottom of the item picker. An inline form expands where you enter the item name, price, tax rate (GST preset pills), and unit, then tap **Create & Select**. The new item is created and auto-selected in the line item.
 
 For each line item card:
 

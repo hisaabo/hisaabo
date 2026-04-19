@@ -19,10 +19,15 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        // Stop propagation so that parent dialogs (SlideOver) don't also close
+        e.stopImmediatePropagation();
+        onClose();
+      }
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    // Use capture phase so we intercept before the SlideOver's bubble-phase listener
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
   }, [open, onClose]);
 
   if (!open) return null;

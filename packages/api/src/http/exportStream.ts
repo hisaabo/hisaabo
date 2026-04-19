@@ -26,23 +26,7 @@ import { TABLE_REGISTRY } from "../lib/tableRegistry.js";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import { verifyExportToken } from "../lib/exportToken.js";
 import { logger } from "../lib/logger.js";
-
-// App version — keep in sync with root package.json
-const APP_VERSION = "0.7.5";
-
-// ── Schema checksum ───────────────────────────────────────────────────────────
-// Stable hash of table registry used by the importer to detect schema drift.
-// Computed once at module load.
-function computeSchemaChecksum(): string {
-  const h = createHash("sha256");
-  for (const entry of TABLE_REGISTRY) {
-    h.update(entry.tableName);
-    h.update([...entry.redactedFields].sort().join(","));
-  }
-  return `sha256:${h.digest("hex")}`;
-}
-
-const SCHEMA_CHECKSUM = computeSchemaChecksum();
+import { APP_VERSION, SCHEMA_CHECKSUM } from "../lib/exportManifest.js";
 
 // ── Snake → camel column map ──────────────────────────────────────────────────
 /**

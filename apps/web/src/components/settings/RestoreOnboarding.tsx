@@ -38,12 +38,22 @@ function ShieldIcon() {
   );
 }
 
+interface Compatibility {
+  appVersionMatch: boolean;
+  schemaChecksumMatch: boolean;
+  sourceAppVersion: string;
+  targetAppVersion: string;
+  sourceSchemaChecksum: string;
+  targetSchemaChecksum: string;
+}
+
 interface ImportResult {
   status: string;
   rowsInserted: number;
   warnings: string[];
   errors: string[];
   durationMs: number;
+  compatibility?: Compatibility;
 }
 
 interface RestoreOnboardingProps {
@@ -139,6 +149,10 @@ export function RestoreOnboarding({ tenantId, onBack }: RestoreOnboardingProps) 
 
   // After successful restore, show a success card with a reload button
   if (importResult) {
+    const compat = importResult.compatibility;
+    const bestEffort =
+      compat && (!compat.appVersionMatch || !compat.schemaChecksumMatch);
+
     return (
       <div className="max-w-lg">
         <div className="card px-6 py-5">
@@ -154,6 +168,34 @@ export function RestoreOnboarding({ tenantId, onBack }: RestoreOnboardingProps) 
               </div>
             </div>
           </div>
+
+          {bestEffort && compat && (
+            <div
+              className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 mb-4"
+              role="alert"
+            >
+              <div className="flex items-start gap-2 text-amber-700 dark:text-amber-400">
+                <WarningIcon />
+                <div className="text-xs leading-relaxed">
+                  <p className="font-semibold mb-1">Best-effort restore</p>
+                  <p className="mb-2">
+                    The backup was produced against a different build of Hisaabo. Your data was restored, but spot-check a few invoices and reports before relying on it.
+                  </p>
+                  {!compat.appVersionMatch && (
+                    <p className="tabular-nums">
+                      App version: backup <span className="font-mono">{compat.sourceAppVersion}</span> → server <span className="font-mono">{compat.targetAppVersion}</span>
+                    </p>
+                  )}
+                  {!compat.schemaChecksumMatch && (
+                    <p>
+                      Schema fingerprint differs — table shape has changed since this backup was taken.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <button
             className="btn-primary w-full"
             onClick={() => window.location.reload()}

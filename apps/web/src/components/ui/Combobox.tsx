@@ -29,6 +29,11 @@ export interface ComboboxProps {
   onQueryChange?: (query: string) => void;
   /** Show a loading indicator while server-side results are fetching */
   isLoading?: boolean;
+  /** When provided, renders a sticky "Create new" action at the bottom of the listbox.
+   *  Called with the current search query text. */
+  onCreateNew?: (query: string) => void;
+  /** Label for the create-new action. Defaults to "Create new". */
+  createNewLabel?: string;
 }
 
 export function Combobox({
@@ -43,6 +48,8 @@ export function Combobox({
   emptyMessage = "No results found",
   onQueryChange,
   isLoading,
+  onCreateNew,
+  createNewLabel = "Create new",
 }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -145,6 +152,11 @@ export function Combobox({
     }
   };
 
+  // The "create new" action counts as one extra navigable slot after the options
+  const hasCreateNew = !!onCreateNew;
+  const totalNavigableItems = filteredOptions.length + (hasCreateNew ? 1 : 0);
+  const createNewIndex = filteredOptions.length; // virtual index for the "create" row
+
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     switch (e.key) {
       case "ArrowDown":
@@ -152,7 +164,7 @@ export function Combobox({
         if (!open) {
           openDropdown();
         } else {
-          setActiveIndex((i) => Math.min(i + 1, filteredOptions.length - 1));
+          setActiveIndex((i) => Math.min(i + 1, totalNavigableItems - 1));
         }
         break;
       case "ArrowUp":
@@ -165,12 +177,17 @@ export function Combobox({
         break;
       case "End":
         e.preventDefault();
-        setActiveIndex(filteredOptions.length - 1);
+        setActiveIndex(totalNavigableItems - 1);
         break;
       case "Enter":
         e.preventDefault();
-        if (open && filteredOptions.length > 0) {
-          selectOption(activeIndex);
+        if (open) {
+          if (hasCreateNew && activeIndex === createNewIndex) {
+            onCreateNew(query);
+            setOpen(false);
+          } else if (filteredOptions.length > 0) {
+            selectOption(activeIndex);
+          }
         }
         break;
       case "Escape":
@@ -285,50 +302,86 @@ export function Combobox({
               <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
               Searching...
             </li>
-          ) : filteredOptions.length === 0 ? (
-            <li
-              className="px-3 py-2 text-sm text-text-tertiary"
-              role="option"
-              aria-selected={false}
-            >
-              {emptyMessage}
-            </li>
           ) : (
-            filteredOptions.map((option, index) => {
-              const isSelected = option.value === value;
-              const isActive = index === activeIndex;
-              return (
+            <>
+              {filteredOptions.length === 0 && !hasCreateNew && (
                 <li
-                  key={option.value}
-                  id={`${uid}-cb-option-${index}`}
+                  className="px-3 py-2 text-sm text-text-tertiary"
                   role="option"
-                  aria-selected={isSelected}
+                  aria-selected={false}
+                >
+                  {emptyMessage}
+                </li>
+              )}
+              {filteredOptions.length === 0 && hasCreateNew && (
+                <li
+                  className="px-3 py-1.5 text-xs text-text-tertiary"
+                  role="presentation"
+                >
+                  No matches found
+                </li>
+              )}
+              {filteredOptions.map((option, index) => {
+                const isSelected = option.value === value;
+                const isActive = index === activeIndex;
+                return (
+                  <li
+                    key={option.value}
+                    id={`${uid}-cb-option-${index}`}
+                    role="option"
+                    aria-selected={isSelected}
+                    className={cn(
+                      "px-3 py-2 text-sm cursor-pointer flex items-center justify-between gap-2",
+                      isActive && "bg-surface-2",
+                      !isActive && "hover:bg-surface-1",
+                      isSelected && "font-medium text-brand-700"
+                    )}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectOption(index);
+                    }}
+                  >
+                    <span className="flex-1 min-w-0">
+                      <span className="block truncate">{option.label}</span>
+                      {option.description && (
+                        <span className="block text-xs truncate text-text-tertiary">
+                          {option.description}
+                        </span>
+                      )}
+                    </span>
+                    {isSelected && (
+                      <CheckIcon className="w-4 h-4 shrink-0 text-brand-600" />
+                    )}
+                  </li>
+                );
+              })}
+              {hasCreateNew && (
+                <li
+                  id={`${uid}-cb-option-${createNewIndex}`}
+                  role="option"
+                  aria-selected={false}
                   className={cn(
-                    "px-3 py-2 text-sm cursor-pointer flex items-center justify-between gap-2",
-                    isActive && "bg-surface-2",
-                    !isActive && "hover:bg-surface-1",
-                    isSelected && "font-medium text-brand-700"
+                    "px-3 py-2 text-sm cursor-pointer flex items-center gap-2 font-medium text-brand-600 border-t border-border-light",
+                    activeIndex === createNewIndex && "bg-surface-2",
+                    activeIndex !== createNewIndex && "hover:bg-surface-1"
                   )}
-                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseEnter={() => setActiveIndex(createNewIndex)}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    selectOption(index);
+                    onCreateNew(query);
+                    setOpen(false);
                   }}
                 >
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate">{option.label}</span>
-                    {option.description && (
-                      <span className="block text-xs truncate text-text-tertiary">
-                        {option.description}
-                      </span>
-                    )}
+                  <PlusIcon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    {query.trim()
+                      ? `${createNewLabel} "${query.trim()}"`
+                      : createNewLabel}
                   </span>
-                  {isSelected && (
-                    <CheckIcon className="w-4 h-4 shrink-0 text-brand-600" />
-                  )}
                 </li>
-              );
-            })
+              )}
+            </>
           )}
         </ul>
       )}
@@ -381,6 +434,21 @@ function XIcon({ className }: { className?: string }) {
       strokeWidth={2.5}
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+}
+
+function PlusIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2.5}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
     </svg>
   );
 }
