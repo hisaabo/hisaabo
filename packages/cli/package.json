@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/cli",
-  "version": "0.8.2",
+  "version": "0.8.4",
   "description": "Hisaabo command-line interface — manage invoices, parties, items, payments, and reports from your terminal.",
   "keywords": [
     "hisaabo",
