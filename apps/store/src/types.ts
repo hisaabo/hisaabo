@@ -12,6 +12,10 @@ export interface StoreConfig {
     city?: string;
     state?: string;
     address?: string;
+    // Versioned path to the storefront logo, or null when the business has
+    // no logo uploaded. Carries a `?v=<timestamp>` cache-buster so the
+    // browser refreshes automatically when the owner changes the logo.
+    logoUrl?: string | null;
   };
   items: StoreItem[];
   categories: string[];

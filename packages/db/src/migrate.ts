@@ -442,11 +442,29 @@ async function migrateAllTenants(controlUrl: string): Promise<TenantMigrationRep
   return report;
 }
 
+/**
+ * Build the connection string the migrator should use to talk to a tenant DB.
+ *
+ * IMPORTANT: tenant schema migrations run as the **superuser** (the admin
+ * credentials embedded in CONTROL_DATABASE_URL / DATABASE_URL), not as the
+ * per-tenant application user.
+ *
+ * Why: drizzle auto-creates its metadata in a dedicated `drizzle` schema on
+ * first migrate. That schema is owned by whoever ran the initial migration —
+ * which is the superuser (see provisionTenantDatabase Step 3). The per-tenant
+ * user was never granted USAGE on `drizzle`, so if migrations ran as that
+ * user they would fail with "permission denied for schema drizzle" on every
+ * subsequent schema change.
+ *
+ * The runtime tenant connection (tenant-pool.ts) continues to use the
+ * per-tenant user so application queries stay least-privileged. This
+ * function is migration-specific.
+ */
 async function buildTenantConnectionString(tenant: {
   db_host: string | null;
   db_port: string | null;
-  db_user: string | null;
-  db_password: string | null;
+  db_user: string | null;       // retained in signature for logging/compat
+  db_password: string | null;   // (not used for migration connections — see above)
   db_name: string | null;
 }): Promise<string> {
   if (!tenant.db_name) {
@@ -465,14 +483,20 @@ async function buildTenantConnectionString(tenant: {
     throw new Error(`Invalid tenant DB name: ${tenant.db_name}`);
   }
 
-  const user = encodeURIComponent(tenant.db_user || "hisaabo");
+  // Pull admin creds from the control URL. CONTROL_DATABASE_URL takes
+  // precedence; otherwise fall back to DATABASE_URL (self-hosted) so
+  // self-provisioned dev clusters also work without extra env vars.
+  const adminUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  if (!adminUrl) {
+    throw new Error("CONTROL_DATABASE_URL / DATABASE_URL required for tenant migrations");
+  }
+  const parsed = new URL(adminUrl);
+  // Re-emit username/password in already-URL-encoded form (URL.username keeps
+  // them encoded on read). Re-validating the tenant host/port against the
+  // control host is not required because operators may host tenants on
+  // different nodes than the control DB.
 
-  // Decrypt password — lazy import to avoid loading crypto module if not needed
-  const { decryptDbPassword } = await import("./crypto.js");
-  const rawPassword = decryptDbPassword(tenant.db_password || "");
-  const password = encodeURIComponent(rawPassword);
-
-  return `postgresql://${user}:${password}@${host}:${portNum}/${tenant.db_name}`;
+  return `postgresql://${parsed.username}:${parsed.password}@${host}:${portNum}/${tenant.db_name}`;
 }
 
 // ── Exported for use by provision-tenant.ts ──────────────────

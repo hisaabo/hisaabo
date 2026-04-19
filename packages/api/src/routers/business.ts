@@ -1,8 +1,8 @@
-import { eq, and, sql, desc, gte, lte, inArray, count } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, count, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { businesses, bankAccounts, controlDb, tenants, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
-import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
+import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema, uploadBusinessLogoSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
@@ -30,7 +30,12 @@ export const businessRouter = router({
     // returns only businesses within the caller's tenant — no cross-tenant
     // access is possible. All businesses within a tenant are visible to every
     // tenant member so that they can switch between businesses.
-    const rows = await ctx.db.select().from(businesses);
+    //
+    // `logoData` is intentionally excluded — sending logo bytes over tRPC on
+    // every list call is wasteful. Consumers fetch the logo via the dedicated
+    // HTTP endpoint using logoUpdatedAt as a cache-bust key.
+    const { logoData: _logoData, ...cols } = getTableColumns(businesses);
+    const rows = await ctx.db.select(cols).from(businesses);
     return rows.map((biz) => ({
       ...biz,
       carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
@@ -51,8 +56,11 @@ export const businessRouter = router({
     .query(async ({ input, ctx }) => {
       // Security: ctx.db is scoped to the caller's tenant. The WHERE on
       // businesses.id is sufficient because the DB itself is tenant-isolated.
+      //
+      // logoData excluded — fetched via dedicated /api/businesses/:id/logo.
+      const { logoData: _logoData, ...cols } = getTableColumns(businesses);
       const [biz] = await ctx.db
-        .select()
+        .select(cols)
         .from(businesses)
         .where(eq(businesses.id, input.id))
         .limit(1);
@@ -135,6 +143,109 @@ export const businessRouter = router({
       });
 
       return biz;
+    }),
+
+  // Upload a business logo. Stored as bytea on the businesses row so it
+  // round-trips through pg_dump, pg_basebackup, and the self-export NDJSON
+  // without any extra plumbing.
+  //
+  // Security notes:
+  // - We NEVER trust the declared MIME — magic bytes are re-checked here.
+  // - Decoded size is re-asserted against the 1MB cap after base64 decode.
+  // - SVG is not stored (no SVG parser surface on the server). Clients that
+  //   want to upload SVG must rasterize to PNG in-browser first.
+  uploadLogo: tenantProcedure
+    .input(z.object({ id: z.string().uuid(), data: uploadBusinessLogoSchema }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const match = /^data:(image\/png|image\/jpeg);base64,(.+)$/.exec(input.data.dataUrl);
+      if (!match) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid image data URL" });
+      }
+      const declaredMime = match[1]!;
+      const base64 = match[2]!;
+      const bytes = Buffer.from(base64, "base64");
+
+      if (bytes.length > 1_048_576) {
+        throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Logo must be ≤ 1MB after decoding" });
+      }
+
+      // Magic-byte check — authoritative. PNG: 89 50 4E 47 0D 0A 1A 0A.
+      // JPEG: FF D8 FF.
+      const isPng = bytes.length >= 8 &&
+        bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+        bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+      const isJpeg = bytes.length >= 3 &&
+        bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
+      let actualMime: string;
+      if (isPng) actualMime = "image/png";
+      else if (isJpeg) actualMime = "image/jpeg";
+      else throw new TRPCError({ code: "BAD_REQUEST", message: "File is not a valid PNG or JPEG" });
+
+      if (actualMime !== declaredMime) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Declared MIME does not match file contents" });
+      }
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({
+          logoData: bytes,
+          logoMimeType: actualMime,
+          logoWidth: input.data.width,
+          logoHeight: input.data.height,
+          logoUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id, logoUpdatedAt: businesses.logoUpdatedAt });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.uploadLogo",
+        entityType: "business",
+        entityId: biz.id,
+        metadata: { bytes: bytes.length, mime: actualMime, width: input.data.width, height: input.data.height },
+        ipAddress: ctx.ipAddress,
+      });
+
+      return { logoUpdatedAt: biz.logoUpdatedAt };
+    }),
+
+  deleteLogo: tenantProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({
+          logoData: null,
+          logoMimeType: null,
+          logoWidth: null,
+          logoHeight: null,
+          logoUpdatedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.deleteLogo",
+        entityType: "business",
+        entityId: biz.id,
+        ipAddress: ctx.ipAddress,
+      });
+
+      return { ok: true };
     }),
 
   updateSequenceNumber: adminProcedure

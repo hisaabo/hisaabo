@@ -89,6 +89,13 @@ export interface InvoicePDFData {
 
   // Payment status for diagonal stamp badge
   status?: string; // invoice status for stamp badge (paid, partial, overdue, cancelled, draft)
+
+  // Business logo — raw PNG or JPEG bytes. Rendered with preserved aspect
+  // inside a fixed per-template bounding box. Missing/corrupt bytes are
+  // silently skipped — a broken logo must never break the invoice.
+  // Uint8Array is accepted too because worker_threads structured-clone
+  // may strip the Buffer subclass on transfer.
+  logoBuffer?: Buffer | Uint8Array;
 }
 
 export type PDFFormat = "a5" | "a4" | "thermal";
@@ -242,6 +249,40 @@ function borderedRect(
   doc.restore();
 }
 
+/**
+ * Draw a logo inside a fixed bounding box, preserving the original aspect
+ * ratio. PDFKit's `fit` option scales proportionally so a tall image keeps
+ * its height-dominant silhouette and a wide image keeps its width-dominant
+ * one — nothing gets stretched or cropped.
+ *
+ * Returns true when a logo was actually drawn, so callers can decide whether
+ * to allocate visual space (e.g. shift the business name down by `h`).
+ * Corrupt bytes are swallowed silently — a broken logo must never break the
+ * invoice.
+ */
+function drawLogo(
+  doc: InstanceType<typeof PDFDocument>,
+  buf: Buffer | Uint8Array | undefined,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  align?: "center" | "right",
+): boolean {
+  if (!buf || buf.length === 0) return false;
+  try {
+    // Cross-worker-thread transfer may deliver a plain Uint8Array. PDFKit's
+    // image path expects a Buffer, so normalize.
+    const asBuffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    // PDFKit's `fit` scales proportionally into [w, h]; align defaults to
+    // upper-left, which is what we want for left-aligned placements.
+    doc.image(asBuffer, x, y, align ? { fit: [w, h], align } : { fit: [w, h] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── A4 GST Invoice ─────────────────────────────────────────────
 // Full GST-compliant Tax Invoice layout for registered businesses
 
@@ -296,18 +337,37 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
 
   // Left: Seller details
   let ly = y + 8;
+
+  // Logo goes top-left of the seller block inside a fixed 80×56 box.
+  // Text shifts right and narrows when a logo is present so nothing overlaps;
+  // PDFKit preserves the original aspect ratio via the `fit` option so tall
+  // and wide logos both render correctly.
+  const A4_LOGO_W = 80;
+  const A4_LOGO_H = 56;
+  const A4_LOGO_GAP = 8;
+  const hasLogo = drawLogo(doc, data.logoBuffer, margin, ly, A4_LOGO_W, A4_LOGO_H);
+  const sellerTextX = hasLogo ? margin + A4_LOGO_W + A4_LOGO_GAP : margin;
+  const sellerTextW = leftW - 10 - (hasLogo ? A4_LOGO_W + A4_LOGO_GAP : 0);
+
   doc.fontSize(6.5).fillColor(cMuted).font("NotoSans-Bold")
-    .text("SELLER DETAILS", margin, ly);
+    .text("SELLER DETAILS", sellerTextX, ly);
   ly += 12;
 
   doc.fontSize(11).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.businessName, margin, ly, { width: leftW - 10 });
+    .text(data.businessName, sellerTextX, ly, { width: sellerTextW });
   ly += 16;
 
   if (data.businessLegalName && data.businessLegalName !== data.businessName) {
     doc.fontSize(8).fillColor(cSecondary).font("NotoSans")
-      .text(data.businessLegalName, margin, ly, { width: leftW - 10 });
+      .text(data.businessLegalName, sellerTextX, ly, { width: sellerTextW });
     ly += 11;
+  }
+
+  // Once we've moved past the logo box vertically, text can snap back to the
+  // left margin so the rest of the seller details use the full column width.
+  const logoBottom = y + 8 + A4_LOGO_H;
+  if (hasLogo && ly >= logoBottom) {
+    // fall through — sellerTextX/W kept below but will be reset per-line
   }
 
   const bizAddrParts: string[] = [];
@@ -315,39 +375,54 @@ function generateA4Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const bizCityLine = [data.businessCity, data.businessState, data.businessPincode].filter(Boolean).join(", ");
   if (bizCityLine) bizAddrParts.push(bizCityLine);
 
+  // Helper: returns [x, w] for a seller-text line at the current `ly`,
+  // narrowing and right-shifting while inside the logo's vertical span.
+  const sellerPos = (): [number, number] => {
+    const insideLogo = hasLogo && ly < logoBottom;
+    return insideLogo
+      ? [sellerTextX, sellerTextW]
+      : [margin, leftW - 10];
+  };
+
   doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans");
   for (const line of bizAddrParts) {
-    doc.text(line, margin, ly, { width: leftW - 10 });
+    const [lx, lw] = sellerPos();
+    doc.text(line, lx, ly, { width: lw });
     ly += 10;
   }
 
   if (gstMode && data.businessGstin) {
+    const [lx, lw] = sellerPos();
     doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans-Bold")
-      .text(`GSTIN: ${data.businessGstin}`, margin, ly, { width: leftW - 10 });
+      .text(`GSTIN: ${data.businessGstin}`, lx, ly, { width: lw });
     ly += 10;
   }
 
   const stateDisplay = [data.businessState, data.businessStateCode ? `(${data.businessStateCode})` : ""].filter(Boolean).join(" ");
   if (stateDisplay) {
+    const [lx, lw] = sellerPos();
     doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
-      .text(`State: ${stateDisplay}`, margin, ly, { width: leftW - 10 });
+      .text(`State: ${stateDisplay}`, lx, ly, { width: lw });
     ly += 10;
   }
 
   if (data.businessPan) {
+    const [lx, lw] = sellerPos();
     doc.fontSize(7.5).fillColor(cSecondary).font("NotoSans")
-      .text(`PAN: ${data.businessPan}`, margin, ly, { width: leftW - 10 });
+      .text(`PAN: ${data.businessPan}`, lx, ly, { width: lw });
     ly += 10;
   }
 
   if (data.businessPhone) {
+    const [lx, lw] = sellerPos();
     doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-      .text(`Ph: ${data.businessPhone}`, margin, ly);
+      .text(`Ph: ${data.businessPhone}`, lx, ly, { width: lw });
     ly += 10;
   }
   if (data.businessEmail) {
+    const [lx, lw] = sellerPos();
     doc.fontSize(7.5).fillColor(cMuted).font("NotoSans")
-      .text(data.businessEmail, margin, ly, { width: leftW - 10 });
+      .text(data.businessEmail, lx, ly, { width: lw });
   }
 
   // Right: Invoice metadata
@@ -792,18 +867,29 @@ function generateA5Invoice(doc: InstanceType<typeof PDFDocument>, data: InvoiceP
   const rightColW = contentW - leftColW - 12;
   const rightColX = margin + leftColW + 12;
 
+  // Logo in the A5 header: 72×32 slot in the top-left with the business name
+  // and legal name shifted right. PDFKit preserves aspect via `fit`.
+  const A5_LOGO_W = 72;
+  const A5_LOGO_H = 32;
+  const A5_LOGO_GAP = 8;
+  const a5HasLogo = drawLogo(doc, data.logoBuffer, margin, y, A5_LOGO_W, A5_LOGO_H);
+  const a5TextX = a5HasLogo ? margin + A5_LOGO_W + A5_LOGO_GAP : margin;
+  const a5TextW = leftColW - (a5HasLogo ? A5_LOGO_W + A5_LOGO_GAP : 0);
+
   // Left: Business name
   doc.fontSize(13).fillColor(cPrimary).font("NotoSans-Bold")
-    .text(data.businessName, margin, y, { width: leftColW });
+    .text(data.businessName, a5TextX, y, { width: a5TextW });
 
   if (data.businessLegalName && data.businessLegalName !== data.businessName) {
     // 13pt font renders at ~16pt line height; offset beneath the business name
     doc.fontSize(7).fillColor(cMuted).font("NotoSans")
-      .text(data.businessLegalName, margin, y + 16, { width: leftColW });
+      .text(data.businessLegalName, a5TextX, y + 16, { width: a5TextW });
   }
 
-  // Address lines
-  let leftY = y + 16;
+  // Address lines — start below the logo when present so nothing overlaps.
+  let leftY = a5HasLogo
+    ? Math.max(y + 16, y + A5_LOGO_H + 4)
+    : y + 16;
   const addrLine = [data.businessAddress].filter(Boolean).join("");
   const cityLine = [data.businessCity, data.businessState, data.businessPincode].filter(Boolean).join(", ");
   if (addrLine) {
@@ -1187,6 +1273,16 @@ function generateThermalReceipt(doc: InstanceType<typeof PDFDocument>, data: Inv
   }
 
   // ── Header ───────────────────────────────────────────────────
+  // Optional logo centered above the business name. Thermal receipts are
+  // narrow (80mm ≈ 226pt), so the slot is wide-but-short; wide logos render
+  // well, tall logos are gently scaled down. Skipped entirely when absent.
+  const THERMAL_LOGO_W = 120;
+  const THERMAL_LOGO_H = 40;
+  const thermalLogoX = margin + (contentW - THERMAL_LOGO_W) / 2;
+  if (drawLogo(doc, data.logoBuffer, thermalLogoX, y, THERMAL_LOGO_W, THERMAL_LOGO_H, "center")) {
+    y += THERMAL_LOGO_H + 4;
+  }
+
   doc.fontSize(10).fillColor(colorBlack).font("NotoSans-Bold")
     .text(data.businessName.toUpperCase(), margin, y, { width: contentW, align: "center" });
   y += 14;
@@ -1457,7 +1553,9 @@ export function generateInvoicePDF(data: InvoicePDFData, format: PDFFormat = "a5
       taxBreakdownLines * 9 +
       (parseFloat(data.discountAmount) > 0 ? 9 : 0) +
       (parseFloat(data.amountPaid) > 0 ? 18 : 0) +
-      (data.notes ? 20 : 0);
+      (data.notes ? 20 : 0) +
+      // Logo slot: fixed 40pt box + 4pt bottom gap, only when a logo is set
+      (data.logoBuffer && data.logoBuffer.length > 0 ? 44 : 0);
     docSize = [226, Math.max(300, estimatedHeight)];
     docMargin = 8;
   }

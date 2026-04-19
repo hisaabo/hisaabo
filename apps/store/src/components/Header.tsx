@@ -35,6 +35,27 @@ export function Header({
       >
         {/* Business name + Cart row */}
         <div className="flex items-start justify-between gap-4 mb-4">
+          {business.logoUrl && (
+            <img
+              src={business.logoUrl}
+              alt={`${business.name} logo`}
+              className="flex-shrink-0 rounded"
+              style={{
+                // Fixed max height; width scales proportionally via
+                // object-contain so tall and wide logos both render cleanly.
+                maxHeight: 56,
+                maxWidth: 160,
+                objectFit: "contain",
+              }}
+              onError={(e) => {
+                // Defense-in-depth: if the logo endpoint returns the 1x1
+                // placeholder (e.g. race condition right after delete) the
+                // <img> will still decode; but if something fails outright
+                // we hide the element rather than showing a broken icon.
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
+          )}
           <div className="min-w-0 flex-1">
             <h1
               className="text-[22px] sm:text-[26px] font-bold leading-tight truncate"

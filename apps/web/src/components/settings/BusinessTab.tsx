@@ -9,6 +9,7 @@ import { PanInput } from "./PanInput";
 import { PhoneInput } from "./PhoneInput";
 import { PincodeInput } from "./PincodeInput";
 import { INDIAN_STATES } from "@/lib/indian-states";
+import { LogoUploader } from "./LogoUploader";
 
 const GST_REG_OPTIONS = [
   { value: "unregistered", label: "Not GST Registered" },
@@ -23,11 +24,22 @@ interface BusinessTabProps {
 export function BusinessTab({ biz }: BusinessTabProps) {
   const [editing, setEditing] = useState(false);
 
-  if (!editing) {
-    return <BusinessCard biz={biz} onEdit={() => setEditing(true)} />;
-  }
-
-  return <BusinessForm existing={biz} onDone={() => setEditing(false)} />;
+  // Logo management sits alongside the business card/form in both states:
+  // uploads don't need the business in edit mode, and having it always
+  // visible makes the feature discoverable.
+  return (
+    <div className="space-y-6">
+      {editing
+        ? <BusinessForm existing={biz} onDone={() => setEditing(false)} />
+        : <BusinessCard biz={biz} onEdit={() => setEditing(true)} />
+      }
+      <LogoUploader
+        businessId={biz.id}
+        logoUpdatedAt={biz.logoUpdatedAt}
+        hasLogo={!!biz.logoMimeType}
+      />
+    </div>
+  );
 }
 
 function BusinessCard({ biz, onEdit }: { biz: any; onEdit: () => void }) {

@@ -116,6 +116,12 @@ function serializeRow(
     } else if (typeof value === "string" && PG_TIMESTAMP_RE.test(value)) {
       // Postgres native timestamp format — convert to ISO-8601
       out[camelKey] = normalizeTimestamp(value);
+    } else if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+      // bytea columns (e.g. businesses.logo_data) arrive as Buffer from
+      // node-postgres. Encode with a typed envelope so the import side can
+      // unambiguously round-trip the bytes back into a Buffer.
+      const asBuf = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      out[camelKey] = { __type: "bytes", base64: asBuf.toString("base64") };
     } else {
       out[camelKey] = value;
     }

@@ -77,6 +77,17 @@ export const createBusinessSchema = z.object({
 
 export const updateBusinessSchema = createBusinessSchema.partial();
 
+// Logo upload: data URL ≤ ~1.4MB base64 (≈ 1MB decoded), PNG or JPEG only.
+// Server performs a second magic-byte check on decoded bytes — do NOT
+// rely on the declared MIME for anything sensitive.
+export const uploadBusinessLogoSchema = z.object({
+  dataUrl: z.string()
+    .regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/, "must be a base64 data URL for PNG or JPEG")
+    .max(1_500_000, "logo too large (max ~1MB)"),
+  width: z.number().int().positive().max(4000),
+  height: z.number().int().positive().max(4000),
+});
+
 export const updateSequenceNumberSchema = z.object({
   documentType: z.enum(["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"]),
   newNumber: z.number().int().min(1),

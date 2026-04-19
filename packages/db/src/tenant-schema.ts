@@ -1,5 +1,14 @@
-import { pgTable, text, timestamp, numeric, integer, boolean, uuid, pgEnum, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, integer, boolean, uuid, pgEnum, index, uniqueIndex, jsonb, customType } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+
+// bytea for binary blobs (e.g., business logo image bytes). Drizzle doesn't
+// ship a first-class bytea helper, so we declare one. Postgres returns bytea
+// as Buffer via node-postgres, and Drizzle passes it through unchanged.
+const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 // ── Enums ──────────────────────────────────────────────────────
 
@@ -38,6 +47,14 @@ export const businesses = pgTable("businesses", {
   stateCode: text("state_code"), // 2-digit GST state code (01-38) for inter/intra-state detection
   pincode: text("pincode"),
   logoUrl: text("logo_url"),
+  // Business logo stored as raw image bytes. PNG or JPEG only (magic-byte
+  // validated on upload). Lives in the tenant DB so it rides along with
+  // pg_dump, pg_basebackup, and the NDJSON self-export.
+  logoData: bytea("logo_data"),
+  logoMimeType: text("logo_mime_type"),
+  logoWidth: integer("logo_width"),
+  logoHeight: integer("logo_height"),
+  logoUpdatedAt: timestamp("logo_updated_at", { withTimezone: true }),
   invoicePrefix: text("invoice_prefix").default("INV").notNull(),
   nextInvoiceNumber: integer("next_invoice_number").default(1).notNull(),
   paymentPrefix: text("payment_prefix").default("PAY").notNull(),
