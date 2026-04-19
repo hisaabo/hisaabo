@@ -1,6 +1,20 @@
 {
   "name": "@hisaabo/mcp",
   "version": "0.8.2",
+  "description": "Hisaabo MCP server — expose Hisaabo tools (invoices, parties, items, reports) to LLMs via the Model Context Protocol.",
+  "keywords": [
+    "hisaabo",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "llm",
+    "invoicing"
+  ],
+  "homepage": "https://github.com/hisaabo/hisaabo/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/hisaabo/hisaabo/issues"
+  },
+  "license": "SEE LICENSE IN LICENSE",
   "private": false,
   "type": "module",
   "repository": {
@@ -11,23 +25,36 @@
   "bin": {
     "hisaabo-mcp": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@hisaabo/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.10.2",
     "superjson": "^2.2.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@hisaabo/shared": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
