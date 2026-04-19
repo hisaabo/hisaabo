@@ -38,6 +38,9 @@ export default function DeliveryChallanDetailScreen() {
     onSuccess: (result) => {
       utils.deliveryChallan.list.invalidate();
       utils.deliveryChallan.getById.invalidate({ id: id! });
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
       Alert.alert("Converted", `Invoice created: ${result.invoiceNumber}`, [{ text: "OK" }]);
     },
     onError: (err) => Alert.alert("Error", err.message),

@@ -220,8 +220,20 @@ export default function CreditNoteCreateScreen() {
     setInvoiceDate(todayDate());
   }, [sourceInvoice]);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.creditNote.create.useMutation({
-    onSuccess: () => { haptic.success(); router.back(); },
+    onSuccess: () => {
+      // Invalidate related caches so the list behind reflects the new
+      // credit note when the user navigates back (matches web UX).
+      utils.creditNote.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
+      haptic.success();
+      router.back();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
 

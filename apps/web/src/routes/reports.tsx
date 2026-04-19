@@ -264,9 +264,10 @@ function DaybookReport({
 
       {/* Table grouped by day */}
       <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+        <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
         <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-surface-2/50">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
               <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary w-7" />
               <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Description</th>
               <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Ref #</th>
@@ -355,6 +356,7 @@ function DaybookReport({
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -407,9 +409,10 @@ function AgingTable({
     <div className="mb-6">
       <h3 className="text-[12px] font-semibold uppercase tracking-wider text-text-tertiary mb-2 px-1">{label}</h3>
       <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+        <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
         <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-surface-2/50">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
               <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Party</th>
               <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Current</th>
               <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden lg:table-cell">31-60 days</th>
@@ -477,6 +480,7 @@ function AgingTable({
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -848,11 +852,11 @@ function RegisterReport({
 
       {/* Table */}
       <div className="bg-surface rounded-2xl border border-border overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="max-h-[calc(100vh-280px)] overflow-auto">
           {isSale ? (
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-surface-2/50">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                   <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary whitespace-nowrap">
                     Date
                   </th>
@@ -956,8 +960,8 @@ function RegisterReport({
             </table>
           ) : (
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-surface-2/50">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                   <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary whitespace-nowrap">
                     Date
                   </th>
@@ -1240,9 +1244,10 @@ function PartyStatementReport({
         <EmptyState title="No transactions in this period" description="Try selecting a wider date range." />
       ) : (
         <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+          <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-surface-2/50">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Date</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Type</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden lg:table-cell">Ref #</th>
@@ -1310,6 +1315,7 @@ function PartyStatementReport({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -1516,9 +1522,10 @@ function StockSummaryReport() {
         <EmptyState title="No items in stock" description="Add items with stock tracking enabled to see them here." />
       ) : (
         <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+          <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-surface-2/50">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Item</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Category</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden lg:table-cell">HSN / Unit</th>
@@ -1703,6 +1710,7 @@ function StockSummaryReport() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -1917,9 +1925,10 @@ function PaymentSummaryReport({
             By Payment Mode
           </h3>
           <div className="bg-surface rounded-xl border border-border overflow-hidden">
+            <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-surface-2/50">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                   <th className="text-left px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Mode</th>
                   <th className="text-left px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Account</th>
                   <th className="text-right px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Count</th>
@@ -1945,6 +1954,7 @@ function PaymentSummaryReport({
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}
@@ -1968,9 +1978,10 @@ function PaymentSummaryReport({
         <EmptyState title="No payments in this period" description="Try selecting a wider date range." />
       ) : (
         <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+          <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-surface-2/50">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Date</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Payment #</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Party</th>
@@ -2022,6 +2033,7 @@ function PaymentSummaryReport({
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -2079,9 +2091,10 @@ function TaxSummaryReport({
       <div className="mb-5">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-2">{title}</h3>
         <div className="bg-surface rounded-xl border border-border overflow-hidden">
+          <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-surface-2/50">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                 <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Tax %</th>
                 <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Invoices</th>
                 <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Taxable Amt</th>
@@ -2111,6 +2124,7 @@ function TaxSummaryReport({
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     );
@@ -2258,10 +2272,11 @@ function ItemSalesReport({
       {data.rows.length === 0 ? (
         <EmptyState title="No sales data in this period" description="Try selecting a wider date range." />
       ) : (
-        <div className="bg-surface rounded-2xl border border-border overflow-x-auto">
+        <div className="bg-surface rounded-2xl border border-border overflow-hidden">
+          <div className="max-h-[calc(100vh-280px)] overflow-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-surface-2/50">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-border bg-surface-2 backdrop-blur-sm">
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Item</th>
                 <th className="text-left px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary hidden md:table-cell">Category</th>
                 <th className="text-right px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">Qty Sold</th>
@@ -2354,6 +2369,7 @@ function ItemSalesReport({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

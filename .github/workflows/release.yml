@@ -6,8 +6,8 @@ on:
       - "v*"
 
 permissions:
-  id-token: write  # Required for OIDC
   contents: read
+  id-token: write  # npm Trusted Publishing (OIDC) for CLI/MCP jobs — no NPM_TOKEN secret needed
 
 concurrency:
   group: release-${{ github.ref }}
@@ -254,9 +254,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      # Node 24 ships with npm 11.x, which satisfies Trusted Publishing's
+      # npm >= 11.5.1 requirement without a separate upgrade step.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -266,8 +268,25 @@ jobs:
         run: node -e "const fs=require('fs'),f='packages/cli/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
 
       - run: pnpm --filter @hisaabo/cli build
-      - run: pnpm -C packages/cli pack --pack-destination /tmp/cli
-      - run: npm publish /tmp/cli/*.tgz
+
+      # Publishes via npm Trusted Publishing (OIDC). Requires a Trusted
+      # Publisher config on npmjs.org for @hisaabo/cli pointing at this
+      # repo and workflow filename "release.yml". No NPM_TOKEN secret is
+      # used. Provenance is auto-attached when OIDC publishing is
+      # detected — do NOT pass --provenance explicitly.
+      #
+      # We pack with pnpm (resolves workspace: protocol into real
+      # versions in the tarball's package.json) and then publish the
+      # tarball with `npm publish` per npm's Trusted Publisher docs.
+      - name: Publish @hisaabo/cli
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "@hisaabo/cli@${VERSION}" version >/dev/null 2>&1; then
+            echo "⏭️  @hisaabo/cli@${VERSION} already published — skipping"
+            exit 0
+          fi
+          pnpm -C packages/cli pack --pack-destination /tmp/cli
+          npm publish /tmp/cli/*.tgz --access public
 
   # ── MCP (npm publish) ──────────────────────────────────────────
   mcp:
@@ -281,9 +300,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      # Node 24 ships with npm 11.x, which satisfies Trusted Publishing's
+      # npm >= 11.5.1 requirement without a separate upgrade step.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -293,8 +314,21 @@ jobs:
         run: node -e "const fs=require('fs'),f='packages/mcp/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
 
       - run: pnpm --filter @hisaabo/mcp build
-      - run: pnpm -C packages/mcp pack --pack-destination /tmp/mcp
-      - run: npm publish /tmp/mcp/*.tgz
+
+      # Publishes via npm Trusted Publishing (OIDC). Requires a Trusted
+      # Publisher config on npmjs.org for @hisaabo/mcp pointing at this
+      # repo and workflow filename "release.yml". No NPM_TOKEN secret is
+      # used. Provenance is auto-attached when OIDC publishing is
+      # detected — do NOT pass --provenance explicitly.
+      - name: Publish @hisaabo/mcp
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "@hisaabo/mcp@${VERSION}" version >/dev/null 2>&1; then
+            echo "⏭️  @hisaabo/mcp@${VERSION} already published — skipping"
+            exit 0
+          fi
+          pnpm -C packages/mcp pack --pack-destination /tmp/mcp
+          npm publish /tmp/mcp/*.tgz --access public
 
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:

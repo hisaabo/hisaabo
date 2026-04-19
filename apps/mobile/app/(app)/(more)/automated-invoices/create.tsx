@@ -212,8 +212,11 @@ export default function CreateRecurringInvoiceScreen() {
   const [notes, setNotes] = useState("");
   const [showPartyPicker, setShowPartyPicker] = useState(false);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.recurringInvoice.create.useMutation({
     onSuccess: () => {
+      utils.recurringInvoice.list.invalidate();
       haptic.success();
       Alert.alert("Success", "Recurring invoice template created", [
         { text: "OK", onPress: () => router.back() },

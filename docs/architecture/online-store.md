@@ -1259,6 +1259,8 @@ Since the store uses plain `fetch` (not cookie-based auth), CSRF is not a concer
 2. Phone number validation (must be a valid Indian mobile number).
 3. No sensitive actions (placing an order is not destructive -- the business must confirm).
 
+**Security model invariant (store POSTs):** the global CSRF middleware at `packages/api/src/server.ts` intentionally skips every `/store/*` path (`skipPathPrefixes: ["/api/trpc/", "/store/"]`). The exemption is correct only while the two layers below remain the protection model: (a) server-side Turnstile verification on `POST /store/:slug/identify` and `POST /store/:slug/order`, (b) per-IP rate limit (20/min per path) plus the existing per-phone 5/min cap on `order`, and (c) the Origin/Referer allow-list in `packages/api/src/lib/store-origin.ts`. The store SPA calls both endpoints with `credentials: "omit"` so the admin `session_id` cookie never rides along on a same-origin self-hosted deploy. If an authenticated `/store/*` endpoint is ever added (for example `POST /store/:slug/fulfill` reading the admin session), the `/store/` entry in the CSRF skip list must be narrowed to an explicit allow-list of public paths before that change merges.
+
 ### 11.5 Bot / Spam Protection
 
 Phase 1: Rate limiting + phone validation is sufficient for launch.

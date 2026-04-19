@@ -24,6 +24,7 @@ import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring
 import { logger } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
+import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
 
@@ -192,7 +193,17 @@ setInterval(() => {
 //      successful magic-link verification.
 //
 // GET/HEAD/OPTIONS are exempt by HTTP convention (side-effect-free).
-app.use("*", createCsrfMiddleware());
+//
+// WARNING — `/store/*` exemption:
+// Every route under `/store/*` must remain fully public (no cookie-based
+// auth). The CSRF exemption here presumes Turnstile + per-IP rate limit
+// + Origin allow-list check are the protection layer for store POSTs.
+// If you ever add an authenticated endpoint under `/store/*` (e.g.,
+// `POST /store/:slug/fulfill` that reads the admin session cookie),
+// narrow this exemption to an explicit allow-list of paths BEFORE
+// merging — leaving the blanket `/store/` skip in place would expose
+// that new endpoint to CSRF.
+app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
 
 // ── Health check ───────────────────────────────────────────────
 // ── UPI payment redirect ──────────────────────────────────────
@@ -708,11 +719,34 @@ const slugCache = new Map<string, { tenantId: string; businessId: string; expire
 // Rate limit for order placement: phone → { count, reset }
 const orderRateMap = new Map<string, { count: number; reset: number }>();
 
+// Per-IP rate limit for public store POSTs (order + identify).
+// Key: `${ip}:${path}`. Limit: 20 requests per minute per IP per path.
+// This is in addition to the per-phone 5/min limit on `order` — an
+// attacker who cycles fake phone numbers hits the IP ceiling first.
+const storeIpRateMap = new Map<string, { count: number; reset: number }>();
+const STORE_IP_LIMIT_PER_MIN = 20;
+
+function checkStoreIpRateLimit(ip: string, path: string): boolean {
+  const now = Date.now();
+  const key = `${ip}:${path}`;
+  const entry = storeIpRateMap.get(key);
+  if (!entry || now > entry.reset) {
+    storeIpRateMap.set(key, { count: 1, reset: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= STORE_IP_LIMIT_PER_MIN) return false;
+  entry.count++;
+  return true;
+}
+
 // Clean stale order rate limit entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of orderRateMap) {
     if (now > entry.reset) orderRateMap.delete(key);
+  }
+  for (const [key, entry] of storeIpRateMap) {
+    if (now > entry.reset) storeIpRateMap.delete(key);
   }
 }, 5 * 60_000).unref();
 
@@ -972,6 +1006,20 @@ app.get("/store/:slug/catalog.json", async (c) => {
 app.post("/store/:slug/identify", async (c) => {
   const slug = c.req.param("slug");
 
+  // Per-IP rate limit (20/min per path) — runs BEFORE body parse / DB
+  // lookup so abusive traffic can't exhaust those resources.
+  const ip = getClientIp(c);
+  if (!checkStoreIpRateLimit(ip, "/store/identify")) {
+    return c.json({ error: "Too many requests. Please wait a moment." }, 429);
+  }
+
+  // Origin/Referer allow-list — backstop for the `/store/*` CSRF
+  // exemption. See `lib/store-origin.ts` for the residual-risk notes.
+  const originCheck = assertAllowedStoreOrigin(c, ip);
+  if (!originCheck.ok) {
+    return c.json({ error: "Origin not allowed" }, 403);
+  }
+
   let body: unknown;
   try {
     body = await c.req.json();
@@ -989,9 +1037,8 @@ app.post("/store/:slug/identify", async (c) => {
     return c.json({ error: "phone and turnstileToken are required" }, 400);
   }
 
-  // Validate Turnstile
-  const ip = getClientIp(c) || null;
-  const valid = await verifyTurnstile(turnstileToken, ip);
+  // Validate Turnstile — reuse the IP captured at rate-limit time above.
+  const valid = await verifyTurnstile(turnstileToken, ip || null);
   if (!valid) return c.json({ error: "Verification failed" }, 403);
 
   // Resolve slug → business
@@ -1023,6 +1070,21 @@ app.post("/store/:slug/identify", async (c) => {
 // POST /store/:slug/order — place an order (public, no auth)
 app.post("/store/:slug/order", async (c) => {
   const slug = c.req.param("slug");
+
+  // Per-IP rate limit (20/min per path) — runs BEFORE body parse /
+  // Turnstile / DB lookup so abusive traffic can't exhaust those
+  // resources. This is orthogonal to the per-phone 5/min cap below.
+  const clientIp = getClientIp(c);
+  if (!checkStoreIpRateLimit(clientIp, "/store/order")) {
+    return c.json({ error: "Too many requests. Please wait a moment." }, 429);
+  }
+
+  // Origin/Referer allow-list — backstop for the `/store/*` CSRF
+  // exemption. See `lib/store-origin.ts` for the residual-risk notes.
+  const originCheck = assertAllowedStoreOrigin(c, clientIp);
+  if (!originCheck.ok) {
+    return c.json({ error: "Origin not allowed" }, 403);
+  }
 
   // Parse and validate body
   let body: unknown;

@@ -53,12 +53,22 @@ export default function SalesReturnsScreen() {
     trpc.salesReturn.list.useQuery(queryInput);
 
   const deleteMutation = trpc.salesReturn.delete.useMutation({
-    onSuccess: () => { utils.salesReturn.list.invalidate(); haptic.success(); },
+    onSuccess: () => {
+      utils.salesReturn.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      haptic.success();
+    },
     onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
   });
 
   const updateStatusMutation = trpc.salesReturn.updateStatus.useMutation({
-    onSuccess: () => { utils.salesReturn.list.invalidate(); haptic.success(); },
+    onSuccess: () => {
+      utils.salesReturn.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      haptic.success();
+    },
     onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
   });
 

@@ -465,16 +465,23 @@ export default function InvoiceDetailScreen() {
     { enabled: !!id }
   );
 
+  const utils = trpc.useUtils();
+
   const updateStatus = trpc.invoice.updateStatus.useMutation({
-    onSuccess: () => refetch(),
+    onSuccess: () => {
+      refetch();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
-
-  const utils = trpc.useUtils();
 
   const deleteInvoice = trpc.invoice.delete.useMutation({
     onSuccess: () => {
       utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
       router.back();
     },
     onError: (err) => Alert.alert("Error", err.message),

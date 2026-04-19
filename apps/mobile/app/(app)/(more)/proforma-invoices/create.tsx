@@ -163,8 +163,16 @@ export default function ProformaCreateScreen() {
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.proforma.create.useMutation({
-    onSuccess: () => { haptic.success(); router.back(); },
+    onSuccess: () => {
+      utils.proforma.list.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
+      haptic.success();
+      router.back();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
 

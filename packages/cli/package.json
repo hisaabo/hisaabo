@@ -1,6 +1,20 @@
 {
   "name": "@hisaabo/cli",
-  "version": "0.8.2",
+  "version": "0.8.4",
+  "description": "Hisaabo command-line interface — manage invoices, parties, items, payments, and reports from your terminal.",
+  "keywords": [
+    "hisaabo",
+    "cli",
+    "invoicing",
+    "gst",
+    "khatabook",
+    "vyaapaar"
+  ],
+  "homepage": "https://github.com/hisaabo/hisaabo/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/hisaabo/hisaabo/issues"
+  },
+  "license": "SEE LICENSE IN LICENSE",
   "private": false,
   "type": "module",
   "repository": {
@@ -11,13 +25,22 @@
   "bin": {
     "hisaabo": "./dist/bin/hisaabo.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/bin/hisaabo.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@hisaabo/shared": "workspace:*",
     "chalk": "^5.4.0",
     "commander": "^13.0.0",
     "conf": "^13.0.0",
@@ -27,9 +50,13 @@
   },
   "devDependencies": {
     "@hisaabo/api": "workspace:*",
+    "@hisaabo/shared": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -69,6 +69,8 @@ export default function ExpenseDetailScreen() {
   const updateExpense = trpc.expense.update.useMutation({
     onSuccess: () => {
       utils.expense.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.bankAccount.list.invalidate();
       setIsEditing(false);
       refetchExpense();
     },
@@ -80,6 +82,8 @@ export default function ExpenseDetailScreen() {
   const deleteExpense = trpc.expense.delete.useMutation({
     onSuccess: () => {
       utils.expense.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.bankAccount.list.invalidate();
       router.back();
     },
     onError: (err) => {

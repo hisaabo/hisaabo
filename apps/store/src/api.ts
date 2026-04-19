@@ -7,7 +7,13 @@ const API_URL = import.meta.env.VITE_API_URL || "";
 const STORE_PREFIX = API_URL ? `${API_URL}/store` : "";
 
 export async function fetchCatalog(slug: string): Promise<StoreConfig> {
-  const res = await fetch(`${STORE_PREFIX}/${slug}/catalog.json`);
+  // `credentials: "omit"` — the store is fully public. Never attach the
+  // admin session_id cookie from a same-origin self-hosted deploy. If we
+  // ever did, the (now removed) global CSRF gate would trip and the
+  // storefront would break on checkout.
+  const res = await fetch(`${STORE_PREFIX}/${slug}/catalog.json`, {
+    credentials: "omit",
+  });
   if (!res.ok) throw new Error("Store not found");
   return res.json();
 }
@@ -32,9 +38,16 @@ export async function placeOrder(
     turnstileToken?: string;
   }
 ): Promise<OrderResult> {
+  // `credentials: "omit"` — never attach cookies. `X-Requested-With` is
+  // defence in depth so the client keeps working if someone later
+  // narrows the server's `/store/*` CSRF exemption.
   const res = await fetch(`${STORE_PREFIX}/${slug}/order`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: "omit",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "hisaabo",
+    },
     body: JSON.stringify(order),
   });
   if (!res.ok) {

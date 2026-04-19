@@ -65,6 +65,9 @@ export default function QuotationsScreen() {
   const convertMutation = trpc.document.convert.useMutation({
     onSuccess: (result) => {
       utils.quotation.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
       Alert.alert("Converted", `Invoice created: ${result.invoiceNumber}`, [
         { text: "OK" },
       ]);

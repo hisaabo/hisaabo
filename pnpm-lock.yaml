@@ -442,9 +442,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@hisaabo/shared':
-        specifier: workspace:*
-        version: link:../shared
       chalk:
         specifier: ^5.4.0
         version: 5.6.2
@@ -467,6 +464,9 @@ importers:
       '@hisaabo/api':
         specifier: workspace:*
         version: link:../api
+      '@hisaabo/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -507,9 +507,6 @@ importers:
 
   packages/mcp:
     dependencies:
-      '@hisaabo/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.10.2
         version: 1.28.0(zod@3.25.76)
@@ -520,6 +517,9 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
+      '@hisaabo/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -12032,9 +12032,7 @@ snapshots:
       metro-runtime: 0.83.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
     optional: true
 
   '@react-native/normalize-colors@0.83.4': {}

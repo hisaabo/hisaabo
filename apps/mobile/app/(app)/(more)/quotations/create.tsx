@@ -270,8 +270,13 @@ export default function QuotationCreateScreen() {
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.quotation.create.useMutation({
     onSuccess: () => {
+      utils.quotation.list.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
       haptic.success();
       router.back();
     },
