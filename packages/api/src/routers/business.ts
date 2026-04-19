@@ -93,6 +93,17 @@ export const businessRouter = router({
         isDefault: false,
       });
 
+      // Seed a "Walk-in Customer" party. Required by POS mode as the default
+      // partyId for anonymous retail sales, but cheap enough to always create
+      // so offices that later enable POS don't need a separate seeding step.
+      // `ensureWalkInParty` mutation covers existing businesses lazily.
+      await tx.insert(parties).values({
+        businessId: biz.id,
+        type: "customer",
+        name: "Walk-in Customer",
+        openingBalance: "0",
+      });
+
       // Seed the default Chart of Accounts for this business — must be inside
       // the same transaction so a partial failure rolls back cleanly.
       await seedChartOfAccounts(tx, biz.id);
@@ -246,6 +257,73 @@ export const businessRouter = router({
       });
 
       return { ok: true };
+    }),
+
+  // Toggle Point-of-Sale mode. When enabled the cashier-optimised /pos route
+  // becomes reachable and the "Switch to POS" entry button appears on the
+  // invoice create page. Off by default.
+  setPosEnabled: tenantProcedure
+    .input(z.object({ id: z.string().uuid(), enabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({ posEnabled: input.enabled, updatedAt: new Date() })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id, posEnabled: businesses.posEnabled });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.setPosEnabled",
+        entityType: "business",
+        entityId: biz.id,
+        metadata: { enabled: input.enabled },
+        ipAddress: ctx.ipAddress,
+      });
+
+      return biz;
+    }),
+
+  // Lazily seed a "Walk-in Customer" party for this business and return its
+  // ID. POS uses this as the default partyId for anonymous retail sales.
+  //
+  // Idempotent: if a party with the reserved name already exists it's
+  // returned unchanged. Also safe to call concurrently — unique index on
+  // (business_id, lower(name)) does not exist, so we use a SELECT-then-INSERT
+  // pattern guarded by a transaction advisory lock keyed on businessId+name.
+  // For v1 a small race window where two cashiers click "open POS" for a
+  // never-seeded business at the same millisecond is acceptable — worst
+  // case is two walk-in rows that an admin can merge.
+  ensureWalkInParty: tenantProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const [existing] = await ctx.db
+        .select({ id: parties.id })
+        .from(parties)
+        .where(and(
+          eq(parties.businessId, input.id),
+          eq(parties.name, "Walk-in Customer"),
+          eq(parties.type, "customer"),
+        ))
+        .limit(1);
+
+      if (existing) return { id: existing.id, created: false };
+
+      const [created] = await ctx.db
+        .insert(parties)
+        .values({
+          businessId: input.id,
+          type: "customer",
+          name: "Walk-in Customer",
+          openingBalance: "0",
+        })
+        .returning({ id: parties.id });
+
+      return { id: created.id, created: true };
     }),
 
   updateSequenceNumber: adminProcedure

@@ -576,6 +576,20 @@ function RootLayout() {
   // since nav items are meaningless without a business context.
   const isOnboarding = Array.isArray(businesses) && businesses.length === 0;
 
+  // POS runs in a dedicated fullscreen register surface — no sidebar, no
+  // topbar, no chrome of any kind. Every pixel goes to the cashier.
+  // Matches the approach taken by Square / Lightspeed / Vyapaar POS where
+  // the register is a station, not a page.
+  const isPosMode = pathname === "/pos" || pathname.startsWith("/pos/");
+  if (isPosMode) {
+    return (
+      <>
+        <MaintenanceBanner />
+        <Outlet />
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-surface-0">
       <MaintenanceBanner />

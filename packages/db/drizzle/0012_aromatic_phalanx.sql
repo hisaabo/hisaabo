@@ -1,0 +1,1 @@
+ALTER TABLE "businesses" ADD COLUMN "pos_enabled" boolean DEFAULT false NOT NULL;

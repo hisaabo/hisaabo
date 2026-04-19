@@ -91,6 +91,10 @@ export const businesses = pgTable("businesses", {
   carrierCredentials: jsonb("carrier_credentials").$type<Record<string, { apiKey?: string; apiSecret?: string; accountId?: string; enabled: boolean }>>(),
   nextStoreOrderNumber: integer("next_store_order_number").default(1).notNull(),
   storeOrderPrefix: text("store_order_prefix").default("ORD").notNull(),
+  // Point-of-Sale mode. When enabled: a /pos fullscreen register route is
+  // reachable and the "Switch to POS" entry button appears on invoice
+  // create. Off by default; toggle lives on Settings → POS.
+  posEnabled: boolean("pos_enabled").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [

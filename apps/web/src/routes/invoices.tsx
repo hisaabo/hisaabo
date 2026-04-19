@@ -841,6 +841,11 @@ function InvoicesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
+  // Show the "Switch to POS" entry button when the active business has POS
+  // mode enabled. Sourced via the existing business.list query that powers
+  // the PDF-download button — no extra network hit.
+  const { data: bizRows } = trpc.business.list.useQuery();
+  const posEnabled = !!bizRows?.find((b) => b.id === getBusinessId())?.posEnabled;
   // Tracks the partyId of the last-created invoice so "Create another" can pre-fill it
   const [lastCreatedPartyId, setLastCreatedPartyId] = useState<string | undefined>(undefined);
   const deleteConfirm = useDeleteConfirmation();
@@ -977,13 +982,25 @@ function InvoicesPage() {
         title="Invoices"
         description="Manage sales and purchase invoices"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowCreate(true)}
-          >
-            + New Invoice
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          <div className="flex items-center gap-2">
+            {posEnabled && (
+              <a
+                href="/pos"
+                className="btn-secondary inline-flex items-center gap-2"
+                title="Open the fullscreen cashier register in this tab"
+              >
+                <span aria-hidden="true">⚡</span>
+                Switch to POS
+              </a>
+            )}
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowCreate(true)}
+            >
+              + New Invoice
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          </div>
         }
       />
 
