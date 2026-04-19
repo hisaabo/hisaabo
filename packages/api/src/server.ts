@@ -75,7 +75,22 @@ app.use("*", async (c: Context, next: Next) => {
 });
 
 // ── CORS ───────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").split(",");
+// Tauri desktop webviews serve the bundled app from `tauri.localhost` and
+// authenticate via Bearer tokens (not cookies). These origins are our own
+// shipped app, not third parties, so we accept them unconditionally — the
+// CSRF middleware's Bearer bypass is what actually gatekeeps desktop
+// requests, not CORS. Listed per-scheme so the `origin` callback comparison
+// matches exactly what the webview sends.
+const TAURI_DESKTOP_ORIGINS = [
+  "http://tauri.localhost",   // Linux / WSL (and the user-reported share URL)
+  "https://tauri.localhost",  // Windows / macOS default asset scheme
+  "tauri://localhost",        // Legacy custom protocol (kept for compat)
+];
+
+const allowedOrigins = [
+  ...(process.env.CORS_ORIGINS || "http://localhost:5173").split(","),
+  ...TAURI_DESKTOP_ORIGINS,
+];
 
 app.use("*", cors({
   origin: allowedOrigins,
@@ -121,6 +136,8 @@ function isSameOrigin(c: Context): boolean {
   if (CORS_ORIGINS.some((allowed) => origin === allowed)) return true;
   // Match *.hisaabo.in subdomains
   if (/^https?:\/\/([a-z0-9-]+\.)?hisaabo\.in$/i.test(origin)) return true;
+  // Our own Tauri desktop app — different scheme/host but first-party.
+  if (TAURI_DESKTOP_ORIGINS.includes(origin)) return true;
   return false;
 }
 

@@ -59,6 +59,125 @@ interface UnitVariantEntry {
   salePrice?: string | null;
 }
 
+/**
+ * Minimal item shape required by expandItemsToTiles — a loose interface
+ * rather than `typeof items.$inferSelect` so the pure fan-out logic can be
+ * tested without pulling in the Drizzle schema. The live router passes DB
+ * rows which are structurally compatible.
+ */
+export interface POSItemRow {
+  id: string;
+  name: string;
+  unit: string;
+  itemMode: "simple" | "alt_units" | "variants";
+  salePrice: string | null;
+  stockQuantity: string | null;
+  taxPercent: string | null;
+  sku: string | null;
+  unitVariants: unknown;
+}
+
+/**
+ * Minimal variant row shape. `attributeValues` is stored as JSONB on the
+ * DB but semantically it is a record of attribute → value (e.g.
+ * {color: "Red", size: "L"}).
+ */
+export interface POSVariantRow {
+  id: string;
+  itemId: string;
+  sku: string | null;
+  salePrice: string | null;
+  stockQuantity: string | null;
+  attributeValues: Record<string, string | null | undefined> | null;
+}
+
+/**
+ * Pure fan-out: one item row → one or more tiles, depending on itemMode.
+ * Extracted from the router procedure so the expansion logic — with its
+ * variant-attribute joining, alt-unit stock conversion, and defensive
+ * fallbacks — can be unit-tested without a DB.
+ *
+ * Caller is responsible for fetching the items and the relevant variants
+ * and grouping the variants by itemId (the router does this in batched
+ * queries to avoid N+1).
+ */
+export function expandItemsToTiles(
+  rows: POSItemRow[],
+  variantsByItem: Map<string, POSVariantRow[]>,
+): POSCatalogTile[] {
+  const tiles: POSCatalogTile[] = [];
+  for (const item of rows) {
+    if (item.itemMode === "variants") {
+      const list = variantsByItem.get(item.id) ?? [];
+      for (const v of list) {
+        const attrs = Object.values(v.attributeValues ?? {}).filter(Boolean).join(" / ");
+        tiles.push({
+          tileKey: `v:${v.id}`,
+          itemId: item.id,
+          variantId: v.id,
+          displayName: attrs ? `${item.name} — ${attrs}` : item.name,
+          unit: item.unit,
+          unitPrice: v.salePrice ?? item.salePrice ?? "0",
+          stockQuantity: v.stockQuantity ?? "0",
+          taxPercent: item.taxPercent ?? "0",
+          conversionFactor: "1",
+          itemMode: "variants",
+          sku: v.sku ?? item.sku,
+        });
+      }
+    } else if (item.itemMode === "alt_units") {
+      const altList = (item.unitVariants ?? []) as UnitVariantEntry[];
+      if (altList.length === 0) {
+        // Defensive: alt_units item with no configured units still gets
+        // one tile with the base unit, otherwise the cashier sees nothing.
+        tiles.push(buildSimpleTile(item));
+      } else {
+        for (const alt of altList) {
+          const factor = Number(alt.conversionFactor);
+          const stockInUnit =
+            factor > 0
+              ? (Number(item.stockQuantity ?? 0) / factor).toFixed(3)
+              : "0";
+          tiles.push({
+            tileKey: `u:${item.id}:${alt.unit}`,
+            itemId: item.id,
+            variantId: null,
+            displayName: `${item.name} (${alt.unit})`,
+            unit: alt.unit,
+            unitPrice: alt.salePrice ?? item.salePrice ?? "0",
+            stockQuantity: stockInUnit,
+            taxPercent: item.taxPercent ?? "0",
+            // Stringify explicitly — the DB column is numeric(10,4); the
+            // server uses this string in UPDATE items SET stock = stock - qty*factor.
+            conversionFactor: String(alt.conversionFactor),
+            itemMode: "alt_units",
+            sku: item.sku,
+          });
+        }
+      }
+    } else {
+      tiles.push(buildSimpleTile(item));
+    }
+  }
+  return tiles;
+}
+
+function buildSimpleTile(item: POSItemRow): POSCatalogTile {
+  return {
+    tileKey: `i:${item.id}`,
+    itemId: item.id,
+    variantId: null,
+    displayName: item.name,
+    unit: item.unit,
+    unitPrice: item.salePrice ?? "0",
+    stockQuantity: item.stockQuantity ?? "0",
+    taxPercent: item.taxPercent ?? "0",
+    conversionFactor: "1",
+    itemMode: item.itemMode,
+    sku: item.sku,
+  };
+}
+
 // ── Router ────────────────────────────────────────────────────────
 
 export const posRouter = router({
@@ -120,85 +239,14 @@ export const posRouter = router({
                 ),
               )
           : [];
-      const variantsByItem = new Map<string, typeof variantRows>();
+      const variantsByItem = new Map<string, POSVariantRow[]>();
       for (const v of variantRows) {
         const bucket = variantsByItem.get(v.itemId) ?? [];
         bucket.push(v);
         variantsByItem.set(v.itemId, bucket);
       }
 
-      // 3. Fan out into tiles.
-      const tiles: POSCatalogTile[] = [];
-      for (const item of rows) {
-        if (item.itemMode === "variants") {
-          const list = variantsByItem.get(item.id) ?? [];
-          for (const v of list) {
-            const attrs = Object.values(v.attributeValues ?? {}).filter(Boolean).join(" / ");
-            tiles.push({
-              tileKey: `v:${v.id}`,
-              itemId: item.id,
-              variantId: v.id,
-              displayName: attrs ? `${item.name} — ${attrs}` : item.name,
-              unit: item.unit,
-              unitPrice: v.salePrice ?? item.salePrice ?? "0",
-              stockQuantity: v.stockQuantity ?? "0",
-              taxPercent: item.taxPercent ?? "0",
-              conversionFactor: "1",
-              itemMode: "variants",
-              sku: v.sku ?? item.sku,
-            });
-          }
-        } else if (item.itemMode === "alt_units") {
-          const altList = (item.unitVariants ?? []) as UnitVariantEntry[];
-          if (altList.length === 0) {
-            // Defensive: alt_units item with no configured units still gets
-            // one tile with the base unit, otherwise the cashier sees nothing.
-            tiles.push(simpleTile(item));
-          } else {
-            for (const alt of altList) {
-              const factor = Number(alt.conversionFactor);
-              const stockInUnit =
-                factor > 0
-                  ? (Number(item.stockQuantity ?? 0) / factor).toFixed(3)
-                  : "0";
-              tiles.push({
-                tileKey: `u:${item.id}:${alt.unit}`,
-                itemId: item.id,
-                variantId: null,
-                displayName: `${item.name} (${alt.unit})`,
-                unit: alt.unit,
-                unitPrice: alt.salePrice ?? item.salePrice ?? "0",
-                stockQuantity: stockInUnit,
-                taxPercent: item.taxPercent ?? "0",
-                // Stringify explicitly — the DB column is numeric(10,4); the
-                // server uses this string in UPDATE items SET stock = stock - qty*factor.
-                conversionFactor: String(alt.conversionFactor),
-                itemMode: "alt_units",
-                sku: item.sku,
-              });
-            }
-          }
-        } else {
-          tiles.push(simpleTile(item));
-        }
-      }
-
+      const tiles = expandItemsToTiles(rows as POSItemRow[], variantsByItem);
       return { tiles, page: input.page, limit: input.limit };
     }),
 });
-
-function simpleTile(item: typeof items.$inferSelect): POSCatalogTile {
-  return {
-    tileKey: `i:${item.id}`,
-    itemId: item.id,
-    variantId: null,
-    displayName: item.name,
-    unit: item.unit,
-    unitPrice: item.salePrice ?? "0",
-    stockQuantity: item.stockQuantity ?? "0",
-    taxPercent: item.taxPercent ?? "0",
-    conversionFactor: "1",
-    itemMode: item.itemMode,
-    sku: item.sku,
-  };
-}

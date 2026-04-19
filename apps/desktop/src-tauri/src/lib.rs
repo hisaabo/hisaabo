@@ -1,10 +1,17 @@
 use tauri::Listener;
 use tauri::Manager;
 
+mod session;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            session::save_session_token,
+            session::get_session_token,
+            session::clear_session_token,
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

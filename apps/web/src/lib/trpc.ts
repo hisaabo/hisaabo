@@ -4,6 +4,7 @@ import { QueryClient, QueryCache } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 import { isDesktop } from "./isDesktop";
+import { getTokenSync as getDesktopTokenSync } from "./desktop-session";
 
 // The explicit `as any` cast avoids TS2742 "inferred type cannot be named" error caused
 // by tRPC's internal .d.mts paths resolving through hoisted node_modules.
@@ -20,6 +21,10 @@ export function getBusinessId() {
 }
 
 function commonOptions() {
+  // Desktop uses Bearer-token auth (see apps/web/src/lib/desktop-session.ts
+  // for the rationale — SameSite=Lax cookies can't span `tauri.localhost`
+  // and `api.hisaabo.in`). Web keeps the HttpOnly cookie for XSS resistance.
+  const desktop = isDesktop();
   return {
     transformer: superjson,
     headers() {
@@ -29,15 +34,24 @@ function commonOptions() {
       if (currentBusinessId) {
         headers["x-business-id"] = currentBusinessId;
       }
-      if (isDesktop()) {
+      if (desktop) {
         // Signals the server to skip Turnstile. Spoofable by design — see
         // auth router for the trade-off documentation.
         headers["x-hisaabo-client"] = "desktop";
+        const token = getDesktopTokenSync();
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
       }
       return headers;
     },
     fetch(url: URL | RequestInfo, options?: RequestInit) {
-      return fetch(url, { ...options, credentials: "include" as RequestCredentials });
+      // Only include cookies on web. Desktop is cross-origin to the API and
+      // sends Bearer instead; including credentials would make the browser
+      // demand CORS `Access-Control-Allow-Credentials: true` on every
+      // response to `tauri.localhost` without any auth benefit.
+      const credentials: RequestCredentials = desktop ? "omit" : "include";
+      return fetch(url, { ...options, credentials });
     },
   };
 }

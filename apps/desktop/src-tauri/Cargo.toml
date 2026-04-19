@@ -24,3 +24,9 @@ log = "0.4"
 tauri = { version = "2.9.5", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-deep-link = "2"
+# OS-native credential storage for the desktop session token.
+# Linux: uses libsecret (requires gnome-keyring / ksecretservice at runtime).
+# macOS: Keychain. Windows: Credential Manager.
+# We deliberately do NOT fall back to plaintext storage if init fails —
+# see save_session_token() for the rationale.
+keyring = "3"

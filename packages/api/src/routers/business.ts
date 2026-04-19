@@ -6,6 +6,7 @@ import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema,
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
@@ -170,34 +171,7 @@ export const businessRouter = router({
     .mutation(async ({ input, ctx }) => {
       await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
 
-      const match = /^data:(image\/png|image\/jpeg);base64,(.+)$/.exec(input.data.dataUrl);
-      if (!match) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid image data URL" });
-      }
-      const declaredMime = match[1]!;
-      const base64 = match[2]!;
-      const bytes = Buffer.from(base64, "base64");
-
-      if (bytes.length > 1_048_576) {
-        throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Logo must be ≤ 1MB after decoding" });
-      }
-
-      // Magic-byte check — authoritative. PNG: 89 50 4E 47 0D 0A 1A 0A.
-      // JPEG: FF D8 FF.
-      const isPng = bytes.length >= 8 &&
-        bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
-        bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
-      const isJpeg = bytes.length >= 3 &&
-        bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-
-      let actualMime: string;
-      if (isPng) actualMime = "image/png";
-      else if (isJpeg) actualMime = "image/jpeg";
-      else throw new TRPCError({ code: "BAD_REQUEST", message: "File is not a valid PNG or JPEG" });
-
-      if (actualMime !== declaredMime) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Declared MIME does not match file contents" });
-      }
+      const { bytes, mime: actualMime } = validateLogoDataUrl(input.data.dataUrl);
 
       const [biz] = await ctx.db
         .update(businesses)

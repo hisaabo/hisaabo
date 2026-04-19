@@ -236,14 +236,22 @@ export class POSStore {
   }
 
   parkActive(walkInPartyId: string, walkInName: string): void {
-    // Simply stamp the current cart as parked (already persisted) and swap
-    // to a fresh blank cart. Enforce the ≤5 cap — oldest gets pushed out.
+    // Stamp the current cart as parked (already persisted) and swap to a
+    // fresh blank cart. Cap ≤5 — the just-parked fresh cart must survive
+    // eviction (it becomes the new active), so we pin it to the FRONT of
+    // the sort; the oldest non-fresh cart gets dropped instead.
     const fresh = blankCart(walkInPartyId, walkInName);
     let carts = [...this.state.carts, fresh];
     if (carts.length > 5) {
-      // Keep the active (just parked) plus the 4 most recently touched others.
       carts = carts
-        .sort((a, b) => (a.id === fresh.id ? 1 : b.id === fresh.id ? -1 : b.updatedAt - a.updatedAt))
+        .sort((a, b) => {
+          // Fresh cart always wins — it's the active one the cashier is
+          // about to use. `-1` = a sorts before b, `+1` = a after b.
+          if (a.id === fresh.id) return -1;
+          if (b.id === fresh.id) return 1;
+          // Otherwise: most-recently-touched first.
+          return b.updatedAt - a.updatedAt;
+        })
         .slice(0, 5);
     }
     this.state = { ...this.state, carts, activeCartId: fresh.id };

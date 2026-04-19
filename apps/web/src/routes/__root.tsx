@@ -13,6 +13,7 @@ import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
+import { clearDesktopToken } from "@/lib/desktop-session";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -373,7 +374,11 @@ function RootLayout() {
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Clear the Bearer token from the OS keychain on desktop so a fresh
+      // launch doesn't silently re-authenticate. No-op on web (the server
+      // already cleared the cookie via Set-Cookie on the response).
+      await clearDesktopToken();
       setBusinessId(null);
       queryClient.clear();
       navigate({ to: "/login" });

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { TurnstileModal } from "@/components/ui/TurnstileModal";
 import { isDesktop } from "@/lib/isDesktop";
+import { saveDesktopToken } from "@/lib/desktop-session";
 
 /* ─── Turnstile type (declared in TurnstileModal) ──────────────────────── */
 declare global {
@@ -571,7 +572,15 @@ function LoginPage() {
   }
 
   const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: () => {
+    onSuccess: async (data) => {
+      // Desktop uses Bearer auth (cookies can't span tauri.localhost ↔ api.hisaabo.in).
+      // The server returns sessionToken in the response body in addition to
+      // setting the cookie; we persist it into the OS keychain for reuse.
+      // saveDesktopToken is a no-op on web, where the HttpOnly cookie is
+      // already in the browser's jar.
+      if (isDesktop() && data?.sessionToken) {
+        await saveDesktopToken(data.sessionToken);
+      }
       utils.auth.me.invalidate();
       navigate({ to: "/" });
     },
@@ -579,7 +588,10 @@ function LoginPage() {
   });
 
   const registerMutation = trpc.auth.register.useMutation({
-    onSuccess: () => {
+    onSuccess: async (data) => {
+      if (isDesktop() && data?.sessionToken) {
+        await saveDesktopToken(data.sessionToken);
+      }
       utils.auth.me.invalidate();
       navigate({ to: "/" });
     },
