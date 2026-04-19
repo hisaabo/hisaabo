@@ -48,6 +48,10 @@ export const users = pgTable("users", {
   uniqueIndex("users_email_idx").on(t.email),
 ]);
 
+// ── Session auth method enum ───────────────────────────────────
+
+export const sessionAuthMethodEnum = pgEnum("session_auth_method", ["cookie", "bearer"]);
+
 // ── Sessions (modified — added tenantId) ───────────────────────
 
 export const sessions = pgTable("sessions", {
@@ -60,9 +64,37 @@ export const sessions = pgTable("sessions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   // tenantId can be null for users who haven't selected a tenant yet
   tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+  // authMethod distinguishes cookie-based sessions (web) from Bearer-token sessions
+  // (mobile + desktop). Default 'cookie' keeps all existing rows valid.
+  authMethod: sessionAuthMethodEnum("auth_method").notNull().default("cookie"),
+  // maxExpiresAt is the absolute hard cap for Bearer sessions (createdAt + 30 days).
+  // Null for cookie sessions — they use the existing 30-day expiresAt semantics.
+  maxExpiresAt: timestamp("max_expires_at", { withTimezone: true }),
 }, (t) => [
   index("sessions_user_idx").on(t.userId),
   index("sessions_tenant_idx").on(t.tenantId),
+]);
+
+// ── Access Tokens (short-lived, 15-min, desktop only) ─────────
+//
+// Each row represents a single issued access token for a Bearer session.
+// Clients send these as `Authorization: Bearer at_<token>` for normal API
+// calls; the long-lived session_id (refresh token) is held in the OS
+// keychain and is only sent to `auth.issueAccessToken`.
+//
+// Cascade-delete on session delete is load-bearing: when a refresh token
+// is revoked (logout, privilege rotation, admin action), all access tokens
+// it spawned die immediately — stolen access tokens cannot outlive the
+// revocation window of their parent session.
+
+export const accessTokens = pgTable("access_tokens", {
+  id: text("id").primaryKey(), // "at_" + base64url(randomBytes(48))
+  sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("access_tokens_session_idx").on(t.sessionId),
+  index("access_tokens_expires_idx").on(t.expiresAt),
 ]);
 
 // ── Tenant Members ─────────────────────────────────────────────
@@ -155,9 +187,14 @@ export const usersRelations = relations(users, ({ many }) => ({
   apiKeys: many(apiKeys),
 }));
 
-export const sessionsRelations = relations(sessions, ({ one }) => ({
+export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   user: one(users, { fields: [sessions.userId], references: [users.id] }),
   tenant: one(tenants, { fields: [sessions.tenantId], references: [tenants.id] }),
+  accessTokens: many(accessTokens),
+}));
+
+export const accessTokensRelations = relations(accessTokens, ({ one }) => ({
+  session: one(sessions, { fields: [accessTokens.sessionId], references: [sessions.id] }),
 }));
 
 export const tenantMembersRelations = relations(tenantMembers, ({ one }) => ({

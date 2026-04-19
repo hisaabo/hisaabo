@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-save-session-token"
+description = """
+Allows the main window to call save_session_token, which writes
+the Hisaabo session token to the OS keyring (keychain on macOS,
+Credential Manager on Windows, libsecret on Linux).
+No scope constraints are needed because this command operates only
+on a fixed service-name key derived from the app identifier.
+"""
+commands.allow = ["save_session_token"]

@@ -68,6 +68,7 @@ function callerWithSession(sessionId: string, userId: string, email: string, ten
     req,
     resHeaders,
     ipAddress: null,
+    authTokenKind: "cookie" as const,
   };
   return _callerFactory(ctx);
 }

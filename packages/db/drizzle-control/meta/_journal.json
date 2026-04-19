@@ -22,6 +22,13 @@
       "when": 1776624316860,
       "tag": "0002_exotic_owl",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776626585685,
+      "tag": "0003_woozy_psylocke",
+      "breakpoints": true
     }
   ]
 }

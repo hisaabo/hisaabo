@@ -38,6 +38,8 @@ import {
   hydrateDesktopSession,
   saveDesktopToken,
   clearDesktopToken,
+  ensureAccessToken,
+  _resetForTests,
 } from "../desktop-session";
 
 const invokeMock = vi.mocked(invoke);
@@ -54,6 +56,8 @@ beforeEach(async () => {
   invokeMock.mockResolvedValueOnce(undefined);
   await clearDesktopToken();
   invokeMock.mockReset(); // drop the queued resolutions used during cleanup
+  // Also reset the access-token cache between tests
+  _resetForTests();
 });
 
 // ─────────────────────────────────────────────────────────────────────────
