@@ -58,6 +58,10 @@ export default function PaymentDetailScreen() {
     onSuccess: () => {
       utils.payment.list.invalidate();
       utils.payment.getById.invalidate({ id: id ?? "" });
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.bankAccount.list.invalidate();
+      utils.party.list.invalidate();
       setIsEditing(false);
       refetch();
     },
@@ -69,6 +73,10 @@ export default function PaymentDetailScreen() {
   const deletePayment = trpc.payment.delete.useMutation({
     onSuccess: () => {
       utils.payment.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.bankAccount.list.invalidate();
+      utils.party.list.invalidate();
       router.back();
     },
     onError: (err) => {

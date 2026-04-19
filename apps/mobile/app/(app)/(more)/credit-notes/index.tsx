@@ -43,12 +43,22 @@ export default function CreditNotesScreen() {
   const utils = trpc.useUtils();
 
   const deleteMutation = trpc.creditNote.delete.useMutation({
-    onSuccess: () => { utils.creditNote.list.invalidate(); haptic.success(); },
+    onSuccess: () => {
+      utils.creditNote.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      haptic.success();
+    },
     onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
   });
 
   const updateStatusMutation = trpc.creditNote.updateStatus.useMutation({
-    onSuccess: () => { utils.creditNote.list.invalidate(); haptic.success(); },
+    onSuccess: () => {
+      utils.creditNote.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      haptic.success();
+    },
     onError: (err) => { haptic.error(); Alert.alert("Error", err.message); },
   });
 

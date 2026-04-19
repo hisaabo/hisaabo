@@ -42,8 +42,13 @@ export default function CreateExpenseScreen() {
   const [referenceNumber, setReferenceNumber] = useState("");
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
 
+  const utils = trpc.useUtils();
+
   const createExpense = trpc.expense.create.useMutation({
     onSuccess: () => {
+      utils.expense.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.bankAccount.list.invalidate();
       Alert.alert("Success", "Expense recorded successfully", [
         { text: "OK", onPress: () => router.back() },
       ]);

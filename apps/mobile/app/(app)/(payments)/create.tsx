@@ -260,6 +260,7 @@ export default function CreatePaymentScreen() {
       utils.invoice.list.invalidate();
       utils.dashboard.summary.invalidate();
       utils.bankAccount.list.invalidate();
+      utils.party.list.invalidate();
       Alert.alert("Success", "Payment recorded successfully", [
         { text: "OK", onPress: () => router.back() },
       ]);

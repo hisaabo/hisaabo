@@ -161,8 +161,16 @@ export default function DeliveryChallanCreateScreen() {
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.deliveryChallan.create.useMutation({
-    onSuccess: () => { haptic.success(); router.back(); },
+    onSuccess: () => {
+      utils.deliveryChallan.list.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
+      haptic.success();
+      router.back();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
 

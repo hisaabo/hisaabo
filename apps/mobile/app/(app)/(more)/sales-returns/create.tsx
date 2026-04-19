@@ -190,8 +190,18 @@ export default function SalesReturnCreateScreen() {
     setInvoiceDate(todayDate());
   }, [sourceInvoice]);
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.salesReturn.create.useMutation({
-    onSuccess: () => { haptic.success(); router.back(); },
+    onSuccess: () => {
+      utils.salesReturn.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
+      haptic.success();
+      router.back();
+    },
     onError: (err) => Alert.alert("Error", err.message),
   });
 

@@ -383,6 +383,9 @@ export default function InvoiceEditScreen() {
     onSuccess: (_data) => {
       utils.invoice.list.invalidate();
       utils.invoice.getById.invalidate({ id: id ?? "" });
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
       router.back();
     },
     onError: (err) => {

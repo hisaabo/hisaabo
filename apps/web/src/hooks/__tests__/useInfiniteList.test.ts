@@ -167,6 +167,77 @@ describe("useInfiniteList — cache invalidation (scroll stability)", () => {
       "item-6", "item-7", "item-8", "item-9", "item-10",
     ]);
   });
+
+  it("prepends newly created items when page 1 is refetched after cache invalidation", () => {
+    const { result, rerender } = renderInfiniteList();
+
+    // Accumulate pages 1 + 2 (10 items total)
+    rerender({
+      key: "test", data: page2, total: 13, page: 2,
+      isFetching: false, onLoadMore: vi.fn(), resetDeps: [],
+    });
+    expect(result.current.items).toHaveLength(10);
+
+    // Simulate: user creates a new invoice. Cache invalidation refetches page 1
+    // with a new record at the top (lists are sorted newest-first).
+    const newItem = { id: "item-99", name: "Freshly Created" };
+    const refreshedPage1 = [newItem, ...page1.slice(0, 4)]; // new item bumps out item-5 from page 1
+    rerender({
+      key: "test", data: refreshedPage1, total: 14, page: 1,
+      isFetching: false, onLoadMore: vi.fn(), resetDeps: [],
+    });
+
+    // 10 previous + 1 new = 11 total
+    expect(result.current.items).toHaveLength(11);
+    // New item appears at the top
+    expect(result.current.items[0].id).toBe("item-99");
+    // Other items kept in their previous positions (scroll stability)
+    expect(result.current.items[1].id).toBe("item-1");
+    expect(result.current.items[5].id).toBe("item-5");
+    expect(result.current.items[6].id).toBe("item-6");
+    expect(result.current.items[10].id).toBe("item-10");
+    // lastBatchSize reflects the one new item that arrived via invalidation
+    expect(result.current.lastBatchSize).toBe(1);
+  });
+
+  it("updates in place AND prepends new items in the same refetch", () => {
+    const { result, rerender } = renderInfiniteList();
+
+    // Accumulate pages 1 + 2
+    rerender({
+      key: "test", data: page2, total: 13, page: 2,
+      isFetching: false, onLoadMore: vi.fn(), resetDeps: [],
+    });
+    expect(result.current.items).toHaveLength(10);
+
+    // Page 1 refetch: item-99 is new; item-1 has an updated name.
+    const newItem = { id: "item-99", name: "Freshly Created" };
+    const updatedItem1 = { id: "item-1", name: "Updated Item 1" };
+    const refreshedPage1 = [
+      newItem,
+      updatedItem1,
+      ...page1.slice(1, 4), // items 2, 3, 4
+    ];
+    rerender({
+      key: "test", data: refreshedPage1, total: 14, page: 1,
+      isFetching: false, onLoadMore: vi.fn(), resetDeps: [],
+    });
+
+    // 10 previous + 1 new = 11
+    expect(result.current.items).toHaveLength(11);
+    // New item at the top
+    expect(result.current.items[0].id).toBe("item-99");
+    // Updated item merged in place at its previous position (index 1 after prepend)
+    expect(result.current.items[1].id).toBe("item-1");
+    expect((result.current.items[1] as any).name).toBe("Updated Item 1");
+    // Items that were NOT in the fresh page 1 payload are untouched (e.g., item-5)
+    expect(result.current.items[5].id).toBe("item-5");
+    // Page 2 items preserved
+    expect(result.current.items[6].id).toBe("item-6");
+    expect(result.current.items[10].id).toBe("item-10");
+    // lastBatchSize reflects only new items, not updates
+    expect(result.current.lastBatchSize).toBe(1);
+  });
 });
 
 describe("useInfiniteList — filter reset", () => {

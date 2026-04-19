@@ -193,6 +193,7 @@ export default function CreateShipmentScreen() {
   const createMutation = trpc.shipment.create.useMutation({
     onSuccess: () => {
       utils.shipment.list.invalidate();
+      utils.dashboard.shippingSummary.invalidate();
       router.back();
     },
     onError: (err) => {

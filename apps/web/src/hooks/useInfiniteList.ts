@@ -68,7 +68,8 @@ export function useInfiniteList<T extends { id: string }>({
   // Accumulate pages — NEVER replace accumulated items when page > 1.
   // When page === 1 and we already have accumulated items from pages > 1,
   // this is a cache invalidation refetch — merge updates into existing items
-  // instead of replacing everything (which causes scroll-to-top).
+  // (preserves scroll) and prepend any genuinely new items (so newly created
+  // records appear at the top immediately without a page refresh).
   useEffect(() => {
     if (!data) return;
 
@@ -81,20 +82,18 @@ export function useInfiniteList<T extends { id: string }>({
 
       if (page === 1 && prev.length > 0) {
         // Cache invalidation refetch of page 1 while we have accumulated items.
-        // Merge: update existing items in-place, prepend genuinely new ones.
-        const prevMap = new Map(prev.map((item) => [item.id, item]));
-        const merged = [...prev];
-
-        for (const item of data) {
-          if (prevMap.has(item.id)) {
-            // Update existing item in place (e.g., status change)
-            const idx = merged.findIndex((m) => m.id === item.id);
-            if (idx >= 0) merged[idx] = item;
-          }
-          // Don't prepend new page-1 items during invalidation —
-          // they'll appear on next full refresh
-        }
-        return merged;
+        // 1. Update existing items in place (preserves scroll position for status changes).
+        // 2. Prepend genuinely new items so freshly created records appear immediately.
+        // Assumes lists sort newest-first by date/createdAt (true for invoices, payments,
+        // expenses, shipments, accounts in this app). If a list is ascending, a new item
+        // may briefly appear out of order at the top — transient and strictly better than
+        // the record being invisible until a page refresh.
+        const freshById = new Map(data.map((item) => [item.id, item]));
+        const updated = prev.map((p) => freshById.get(p.id) ?? p);
+        const prevIds = new Set(prev.map((p) => p.id));
+        const newItems = data.filter((d) => !prevIds.has(d.id));
+        if (newItems.length > 0) setLastBatchSize(newItems.length);
+        return [...newItems, ...updated];
       }
 
       // page > 1: append new items, dedup by id

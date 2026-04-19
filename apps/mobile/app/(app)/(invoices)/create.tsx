@@ -1616,8 +1616,16 @@ export default function InvoiceCreateScreen() {
     { enabled: showPartyPicker || selectedParty !== null }
   );
 
+  const utils = trpc.useUtils();
+
   const createMutation = trpc.invoice.create.useMutation({
     onSuccess: (data) => {
+      // Invalidate lists and dashboards so the new invoice shows up immediately
+      // when the user navigates back. Mirrors web DocumentCreator behavior.
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
+      utils.item.list.invalidate();
       router.replace(`/(invoices)/${data.id}` as never);
     },
     onError: (err) => {

@@ -12,6 +12,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { accumulatePages } from "../../../src/lib/accumulate-pages";
 import { colors } from "../../../src/lib/theme";
 import {
   StatusBadge,
@@ -71,15 +72,9 @@ export default function InvoicesScreen() {
   const total = data?.total ?? 0;
   const hasMore = allInvoices.length < total;
 
-  // Accumulate pages — reset on page 1, append on subsequent pages
   useEffect(() => {
     if (data?.data) {
-      setAllInvoices((prev) => {
-        if (page === 1) return data.data;
-        const existingIds = new Set(prev.map((inv) => inv.id));
-        const newItems = data.data.filter((inv) => !existingIds.has(inv.id));
-        return [...prev, ...newItems];
-      });
+      setAllInvoices((prev) => accumulatePages(prev, data.data, page));
     }
   }, [data?.data, page]);
 

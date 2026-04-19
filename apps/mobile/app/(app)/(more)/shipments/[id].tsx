@@ -216,6 +216,7 @@ export default function ShipmentDetailScreen() {
     onSuccess: () => {
       utils.shipment.getById.invalidate({ id: id! });
       utils.shipment.list.invalidate();
+      utils.dashboard.shippingSummary.invalidate();
     },
     onError: (err) => {
       Alert.alert("Error", err.message || "Failed to update shipment.");
@@ -225,6 +226,7 @@ export default function ShipmentDetailScreen() {
   const deleteMutation = trpc.shipment.delete.useMutation({
     onSuccess: () => {
       utils.shipment.list.invalidate();
+      utils.dashboard.shippingSummary.invalidate();
       router.back();
     },
     onError: (err) => {

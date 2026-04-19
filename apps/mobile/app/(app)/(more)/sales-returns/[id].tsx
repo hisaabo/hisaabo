@@ -34,6 +34,7 @@ export default function SalesReturnDetailScreen() {
       haptic.success();
       refetch();
       utils.salesReturn.list.invalidate();
+      utils.dashboard.summary.invalidate();
       setUpdatingStatus(false);
     },
     onError: (err) => {
@@ -47,6 +48,9 @@ export default function SalesReturnDetailScreen() {
     onSuccess: () => {
       haptic.success();
       utils.salesReturn.list.invalidate();
+      utils.invoice.list.invalidate();
+      utils.dashboard.summary.invalidate();
+      utils.party.list.invalidate();
       router.back();
     },
     onError: (err) => {

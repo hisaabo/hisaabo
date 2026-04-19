@@ -57,11 +57,13 @@ const isMultiTenant = process.env.MULTI_TENANT === "true";
 // Self-hosted: single tenant DB is the same as the main DB
 const singleTenantUrl = process.env.DATABASE_URL!;
 let singleTenantDb: TenantDatabase | null = null;
+let singleTenantClient: ReturnType<typeof postgres> | null = null;
 
 function getSingleTenantDb(): TenantDatabase {
   if (!singleTenantDb) {
-    const { db } = createTenantDb(singleTenantUrl);
+    const { db, client } = createTenantDb(singleTenantUrl);
     singleTenantDb = db;
+    singleTenantClient = client;
   }
   return singleTenantDb;
 }
@@ -70,8 +72,10 @@ const tenantPools = new Map<string, PoolEntry>();
 const MAX_POOLS = parseInt(process.env.TENANT_POOL_MAX || "50", 10);
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-// Evict idle pools periodically (FINDING 19: close connection on eviction)
-setInterval(() => {
+// Evict idle pools periodically (FINDING 19: close connection on eviction).
+// .unref() so the timer does not keep the process alive on exit — critical
+// for test runs where we want Node to exit cleanly after all files finish.
+const evictionTimer = setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of tenantPools) {
     if (now - entry.lastUsed > IDLE_TIMEOUT_MS) {
@@ -80,6 +84,7 @@ setInterval(() => {
     }
   }
 }, 60_000);
+evictionTimer.unref();
 
 async function resolveConnectionString(tenantId: string): Promise<string> {
   const [tenant] = await controlDb
@@ -151,4 +156,36 @@ export async function getTenantDb(tenantId: string): Promise<TenantDatabase> {
   });
 
   return db;
+}
+
+/**
+ * Closes all tenant postgres.js pools held by this module instance. Intended
+ * for test teardown only — production code should leave pools alive for the
+ * life of the process.
+ *
+ * Exported because Vitest's per-file module isolation (`isolate: true` default)
+ * re-evaluates this module for each test file, so each file creates its own
+ * fresh `singleTenantDb` pool and/or per-tenant pools. Without an explicit
+ * close, the old pools' idle connections stay alive in the single worker
+ * process until `idle_timeout` elapses, and the test DB's `max_connections`
+ * limit gets exhausted mid-run. Calling this in the test helper's `afterAll`
+ * gives the pools a clean exit.
+ */
+export async function closeAllTenantPools(): Promise<void> {
+  clearInterval(evictionTimer);
+
+  const toClose: Promise<void>[] = [];
+
+  if (singleTenantClient) {
+    toClose.push(singleTenantClient.end({ timeout: 5 }));
+    singleTenantClient = null;
+    singleTenantDb = null;
+  }
+
+  for (const [, entry] of tenantPools) {
+    toClose.push(entry.client.end({ timeout: 5 }));
+  }
+  tenantPools.clear();
+
+  await Promise.all(toClose);
 }

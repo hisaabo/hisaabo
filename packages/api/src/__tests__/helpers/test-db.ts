@@ -25,6 +25,10 @@ import { drizzle } from "drizzle-orm/postgres-js";
 // schema objects for typing the two Drizzle instances, so we pull them via
 // named re-exports that the barrel already provides.
 import {
+  // Pool teardown (see closeTestDb below — required to prevent connection
+  // leaks across vitest's per-file module isolation)
+  closeControlClient,
+  closeAllTenantPools,
   // Control schema tables (used only for typing ControlTestDb)
   users,
   tenants,
@@ -243,14 +247,42 @@ export async function truncateAllTables(): Promise<void> {
 }
 
 /**
- * Closes all open postgres.js connections. Call in the global afterAll hook or
- * at the end of the last test suite to let Vitest exit cleanly.
+ * Closes all open postgres.js connections held by this test file.
+ *
+ * Call in the afterAll() hook of every test file that touches the DB.
+ *
+ * Closes THREE pools:
+ *   1. The test-helper's shared client (getTestClient / _client above).
+ *   2. The @hisaabo/db control-plane pool (controlClient in control-client.ts).
+ *   3. The @hisaabo/db tenant pools (singleTenantDb + per-tenant in
+ *      tenant-pool.ts).
+ *
+ * (2) and (3) matter because Vitest's per-file module isolation
+ * (`isolate: true` is the default and we rely on it for `vi.mock` scoping)
+ * re-evaluates @hisaabo/db for EACH test file, so each file gets its own
+ * fresh pools. If we only closed (1), the old @hisaabo/db pools from prior
+ * files would stay alive in the single worker process (`pool: "forks"` +
+ * `singleFork: true`) until `idle_timeout` expired, monotonically growing
+ * the total connection count and exhausting the test DB's
+ * `max_connections` limit mid-run. That manifested as intermittent
+ * `PostgresError: sorry, too many clients already` failures in the tests
+ * scheduled late in the suite.
  */
 export async function closeTestDb(): Promise<void> {
+  const pending: Promise<void>[] = [];
+
   if (_client) {
-    await _client.end({ timeout: 5 });
+    pending.push(_client.end({ timeout: 5 }));
     _client = null;
     _controlDb = null;
     _tenantDb = null;
   }
+
+  // Also close @hisaabo/db's module-level pools. These are re-created per
+  // test file by Vitest's module isolation, so they must be closed per file
+  // too — otherwise they leak across the run.
+  pending.push(closeControlClient());
+  pending.push(closeAllTenantPools());
+
+  await Promise.all(pending);
 }

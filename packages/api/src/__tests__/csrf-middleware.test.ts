@@ -183,4 +183,64 @@ describe("CSRF middleware — Hono layer for non-tRPC routes", () => {
 
     expect(res.status).toBe(200);
   });
+
+  it("CSRF middleware allows POST /store/:slug/order when session_id cookie is present and X-Requested-With is missing — /store/* is CSRF-exempt because those routes are auth-less; a same-origin admin session cookie must not trip the gate on a customer checkout", async () => {
+    // Mount the middleware with the production skip list for store.
+    const app = new Hono();
+    app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
+    app.all("/store/:slug/order", (c) => c.json({ ok: true }));
+
+    // Simulate the exact failure mode we are fixing: customer loads
+    // store.example.com on a browser that also holds an admin session
+    // cookie for the same origin; they submit the order; CSRF MUST NOT
+    // reject even though XRW is absent.
+    const res = await app.request("/store/my-shop/order", {
+      method: "POST",
+      headers: {
+        "cookie": "session_id=admin-session-xyz",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ customerPhone: "+919876543210", items: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("CSRF middleware allows POST /store/:slug/identify under the same exemption — the identify endpoint sits behind the same auth-less, Turnstile-gated contract as /order", async () => {
+    const app = new Hono();
+    app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
+    app.all("/store/:slug/identify", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/store/my-shop/identify", {
+      method: "POST",
+      headers: {
+        "cookie": "session_id=admin-session-xyz",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ phone: "+919876543210", turnstileToken: "t" }),
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("CSRF middleware still rejects POST on non-exempt paths when the /store/ skip is configured — regression guard so widening the skip list doesn't accidentally open /api/foo or similar", async () => {
+    const app = new Hono();
+    app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
+    app.all("/api/foo", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/api/foo", {
+      method: "POST",
+      headers: {
+        "cookie": "session_id=real-browser-session",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body).toEqual({ error: "CSRF validation failed" });
+  });
 });
