@@ -19,7 +19,7 @@
  *   8. A refresh-token Bearer still works for API calls (backwards compat for mobile).
  */
 
-import { describe, it, expect, afterAll, vi } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { sessions, accessTokens } from "@hisaabo/db";
@@ -50,18 +50,6 @@ function makeBearerRequest(token: string, xClient = "desktop") {
   });
 }
 
-function makeCookieRequest(sessionId: string) {
-  const headers = new Headers({
-    "content-type": "application/json",
-    "cookie": `session_id=${sessionId}`,
-    "x-requested-with": "hisaabo",
-  });
-  return new Request("http://localhost:3000/api/trpc/auth.me", {
-    method: "GET",
-    headers,
-  });
-}
-
 /** Create a bearer session for a given user and return the session ID. */
 async function createBearerSession(userId: string, tenantId?: string): Promise<string> {
   const db = getControlDb();
@@ -74,20 +62,6 @@ async function createBearerSession(userId: string, tenantId?: string): Promise<s
     expiresAt: new Date(now + 7 * 24 * 60 * 60 * 1000),
     maxExpiresAt: new Date(now + 30 * 24 * 60 * 60 * 1000),
     authMethod: "bearer",
-  });
-  return sessionId;
-}
-
-/** Create a cookie session for a given user and return the session ID. */
-async function createCookieSession(userId: string, tenantId?: string): Promise<string> {
-  const db = getControlDb();
-  const sessionId = nanoid(64);
-  await db.insert(sessions).values({
-    id: sessionId,
-    userId,
-    tenantId: tenantId ?? null,
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    authMethod: "cookie",
   });
   return sessionId;
 }

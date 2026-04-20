@@ -403,7 +403,12 @@ export function invalidateSessionCache(sessionId: string) {
   sessionCache.delete(sessionId);
 }
 
-export type Context = Awaited<ReturnType<typeof createContext>>;
+// Context is the shape returned by createContext. authTokenKind is required
+// in the inferred return type but tests that manually build context objects
+// may omit it — we make it optional here so the Context type is compatible
+// with both code paths.
+type RawContext = Awaited<ReturnType<typeof createContext>>;
+export type Context = Omit<RawContext, "authTokenKind"> & { authTokenKind?: "access" | "refresh" | "cookie" | null };
 
 function getCookie(req: Request, name: string): string | null {
   const cookies = req.headers.get("cookie");
