@@ -456,4 +456,33 @@ describe("desktop-session — getTokenSync returns access token on desktop", () 
 
     fetchSpy.mockRestore();
   });
+
+  it("returns null when the cached access token has passed its expiresAt (stale entry not served)", async () => {
+    // Stale-access-token invariant: even if `cachedAccess` still holds a
+    // token, `getTokenSync` must return null once wall-clock time is past
+    // `expiresAt`. Otherwise a tab that sat idle through the 15-min TTL
+    // would keep presenting an expired `at_*` Bearer that the server has
+    // already stopped honouring, leading to silent 401s on every request.
+    await seedRefreshToken("refresh-for-expiry-test");
+    invokeMock.mockReset();
+
+    // Issue a token that is already effectively expired (1ms in the past
+    // by the time getTokenSync reads it). The server would have signed a
+    // token with this `expiresAt`, and the client must detect it locally.
+    const expiresAt = new Date(Date.now() - 1);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(makeIssueResponse("at_already_expired", expiresAt), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await ensureAccessToken();
+
+    // `cachedAccess` is populated, but Date.now() >= expiresAt → getTokenSync
+    // must fall through the `if` guard and return null.
+    expect(getTokenSync()).toBeNull();
+
+    fetchSpy.mockRestore();
+  });
 });

@@ -179,6 +179,89 @@ describe("auth.issueAccessToken — chained access token rejection", () => {
   });
 });
 
+describe("auth.issueAccessToken — session lookup failures", () => {
+  it("throws UNAUTHORIZED when authTokenKind=refresh but no session token is present on the request", async () => {
+    // Defensive gate: passes the 'cookie'/'access' rejection guards but
+    // getSessionIdFromContext can't recover a session ID from the req
+    // (no cookie, no Bearer) — we must refuse rather than insert an
+    // access token against a mystery session.
+    await ensureTestWorld();
+    const ctx = createTestContext({
+      user: { id: userId, email: "test@example.com", name: "Test" },
+      tenantId,
+      authTokenKind: "refresh",
+    });
+    const caller = _callerFactory(ctx);
+
+    await expect(caller.auth.issueAccessToken()).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("throws UNAUTHORIZED when the req carries a Bearer whose session row does not exist in the DB", async () => {
+    // Race: session was revoked/deleted between createContext resolution
+    // and this mutation running. The select() returns no row → refuse.
+    await ensureTestWorld();
+
+    // nanoid(64) format matches sessions.id but was never inserted.
+    const ghostSessionId = nanoid(64);
+    const req = makeBearerRequest(ghostSessionId);
+    const ctx = {
+      user: { id: userId, email: "test@example.com", name: "Test" },
+      tenantId,
+      businessId: null,
+      req,
+      resHeaders: new Headers(),
+      ipAddress: null,
+      authTokenKind: "refresh" as const,
+    };
+    const caller = _callerFactory(ctx);
+
+    await expect(caller.auth.issueAccessToken()).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("throws BAD_REQUEST when the underlying session row has authMethod='cookie' even if authTokenKind=refresh", async () => {
+    // Belt-and-braces check: authTokenKind reflects how THIS request was
+    // resolved, but the session row is the source of truth for what kind
+    // of client owns the session. If they disagree (data skew, migration,
+    // an old client flipped header), we must not mint an at_* token
+    // against a cookie-provisioned session — that would downgrade its
+    // XSS-resistance by creating a JS-readable credential.
+    await ensureTestWorld();
+
+    const db = getControlDb();
+    const cookieSessionId = nanoid(64);
+    await db.insert(sessions).values({
+      id: cookieSessionId,
+      userId,
+      tenantId,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      authMethod: "cookie",
+    });
+
+    const req = makeBearerRequest(cookieSessionId);
+    const ctx = {
+      user: { id: userId, email: "test@example.com", name: "Test" },
+      tenantId,
+      businessId: null,
+      req,
+      resHeaders: new Headers(),
+      ipAddress: null,
+      authTokenKind: "refresh" as const,
+    };
+    const caller = _callerFactory(ctx);
+
+    await expect(caller.auth.issueAccessToken()).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+
+    // Cleanup
+    await db.delete(sessions).where(eq(sessions.id, cookieSessionId));
+  });
+});
+
 describe("access token authentication — carries full user identity", () => {
   it("an access token allows calling auth.me and returns the correct user", async () => {
     await ensureTestWorld();
