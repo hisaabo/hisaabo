@@ -75,7 +75,22 @@ app.use("*", async (c: Context, next: Next) => {
 });
 
 // ── CORS ───────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173").split(",");
+// Tauri desktop webviews serve the bundled app from `tauri.localhost` and
+// authenticate via Bearer tokens (not cookies). These origins are our own
+// shipped app, not third parties, so we accept them unconditionally — the
+// CSRF middleware's Bearer bypass is what actually gatekeeps desktop
+// requests, not CORS. Listed per-scheme so the `origin` callback comparison
+// matches exactly what the webview sends.
+const TAURI_DESKTOP_ORIGINS = [
+  "http://tauri.localhost",   // Linux / WSL (and the user-reported share URL)
+  "https://tauri.localhost",  // Windows / macOS default asset scheme
+  "tauri://localhost",        // Legacy custom protocol (kept for compat)
+];
+
+const allowedOrigins = [
+  ...(process.env.CORS_ORIGINS || "http://localhost:5173").split(","),
+  ...TAURI_DESKTOP_ORIGINS,
+];
 
 app.use("*", cors({
   origin: allowedOrigins,
@@ -121,6 +136,8 @@ function isSameOrigin(c: Context): boolean {
   if (CORS_ORIGINS.some((allowed) => origin === allowed)) return true;
   // Match *.hisaabo.in subdomains
   if (/^https?:\/\/([a-z0-9-]+\.)?hisaabo\.in$/i.test(origin)) return true;
+  // Our own Tauri desktop app — different scheme/host but first-party.
+  if (TAURI_DESKTOP_ORIGINS.includes(origin)) return true;
   return false;
 }
 
@@ -544,6 +561,10 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     lineItemHsn: lineItems.map(li => li.itemId ? (hsnMap.get(li.itemId) || "") : ""),
     isPaidPlan: tenant.plan !== "free",
     status: invoice.status,
+    // Logo bytes are carried into the PDF worker. Buffers survive
+    // structuredClone across worker threads as Uint8Array, and PDFKit
+    // accepts either.
+    logoBuffer: biz.logoData ?? undefined,
   };
 
   const pdfBuffer = await generatePDFInWorker(pdfData, format);
@@ -551,6 +572,80 @@ app.get("/api/invoices/:id/pdf", async (c) => {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf"`,
+    },
+  });
+});
+
+// ── Business Logo endpoint (authed) ───────────────────────────
+// GET /api/businesses/:id/logo — serves the business logo bytes to the
+// authenticated caller. Bytes come straight from the businesses.logo_data
+// bytea column. 404s with a 1x1 transparent PNG when no logo is set so
+// <img> tags don't show broken-image icons.
+//
+// Security: re-uses the same session/tenant/cross-tenant guard used by the
+// PDF endpoint. `nosniff` + strict CSP prevents any future browser from
+// sniffing the bytes as HTML/JS even if an attacker smuggled something past
+// the magic-byte check at upload time.
+const EMPTY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "base64",
+);
+const LOGO_SAFE_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'none'",
+  "Cross-Origin-Resource-Policy": "same-site",
+};
+
+app.get("/api/businesses/:id/logo", async (c) => {
+  const businessId = c.req.param("id");
+
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
+
+  const [sessionRow] = await controlDb
+    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+  if (!sessionRow || !sessionRow.tenantId) return c.json({ error: "Unauthorized" }, 401);
+
+  const [tenant] = await controlDb.select({ status: tenants.status })
+    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
+  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+
+  const db = await getTenantDb(sessionRow.tenantId);
+  const bizAccess = await verifyBusinessAccess(db, businessId, sessionRow.tenantId);
+  if (!bizAccess.ok) return c.json({ error: bizAccess.error }, 403);
+
+  const [row] = await db.select({
+    logoData: businesses.logoData,
+    logoMimeType: businesses.logoMimeType,
+    logoUpdatedAt: businesses.logoUpdatedAt,
+  }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
+
+  if (!row || !row.logoData || !row.logoMimeType) {
+    return new Response(new Uint8Array(EMPTY_PNG), {
+      status: 200,
+      headers: {
+        ...LOGO_SAFE_HEADERS,
+        "Content-Type": "image/png",
+        "Cache-Control": "private, max-age=60",
+      },
+    });
+  }
+
+  const etag = `"${row.logoUpdatedAt?.getTime() ?? 0}"`;
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+  }
+
+  return new Response(new Uint8Array(row.logoData), {
+    status: 200,
+    headers: {
+      ...LOGO_SAFE_HEADERS,
+      "Content-Type": row.logoMimeType,
+      "Cache-Control": "private, max-age=300",
+      ETag: etag,
     },
   });
 });
@@ -811,6 +906,55 @@ async function getStoreDb(tenantId: string) {
   return getTenantDb(isMultiTenant ? tenantId : "single");
 }
 
+// GET /store/:slug/logo — public logo bytes for the storefront header.
+// Fully public (like the rest of /store/*). Storefront-side rendering uses
+// <img src="...">, so scripts inside any hypothetical malformed file can't
+// execute (image context + nosniff). Still, we only ever serve bytes that
+// were magic-byte validated at upload time — PNG or JPEG, never SVG.
+app.get("/store/:slug/logo", async (c) => {
+  const slug = c.req.param("slug");
+  if (!checkStoreIpRateLimit(getClientIp(c), "/store/logo")) {
+    return c.json({ error: "Too many requests" }, 429);
+  }
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+  const [row] = await db.select({
+    logoData: businesses.logoData,
+    logoMimeType: businesses.logoMimeType,
+    logoUpdatedAt: businesses.logoUpdatedAt,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!row || !row.logoData || !row.logoMimeType) {
+    return new Response(new Uint8Array(EMPTY_PNG), {
+      status: 200,
+      headers: {
+        ...LOGO_SAFE_HEADERS,
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=60",
+      },
+    });
+  }
+
+  const etag = `"${row.logoUpdatedAt?.getTime() ?? 0}"`;
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+  }
+
+  return new Response(new Uint8Array(row.logoData), {
+    status: 200,
+    headers: {
+      ...LOGO_SAFE_HEADERS,
+      "Content-Type": row.logoMimeType,
+      "Cache-Control": "public, max-age=3600",
+      ETag: etag,
+    },
+  });
+});
+
 // GET /store/:slug/catalog.json — public item catalog
 app.get("/store/:slug/catalog.json", async (c) => {
   const slug = c.req.param("slug");
@@ -834,6 +978,8 @@ app.get("/store/:slug/catalog.json", async (c) => {
     city: businesses.city,
     state: businesses.state,
     address: businesses.address,
+    logoMimeType: businesses.logoMimeType,
+    logoUpdatedAt: businesses.logoUpdatedAt,
   }).from(businesses)
     .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
     .limit(1);
@@ -990,6 +1136,12 @@ app.get("/store/:slug/catalog.json", async (c) => {
         city: biz.city,
         state: biz.state,
         address: biz.address,
+        // Versioned URL so clients auto-refresh when the logo changes. Null
+        // when no logo is set — the storefront UI should treat null as "no
+        // logo, fall back to the business name in text".
+        logoUrl: biz.logoMimeType && biz.logoUpdatedAt
+          ? `/store/${slug}/logo?v=${biz.logoUpdatedAt.getTime()}`
+          : null,
       },
       items: transformedItems,
       categories,

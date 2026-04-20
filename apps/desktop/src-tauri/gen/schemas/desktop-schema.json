@@ -177,6 +177,24 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the main window to call clear_session_token, which removes\nthe Hisaabo session token from the OS keyring.\nIdempotent: succeeds even when no token is currently stored.\n",
+          "type": "string",
+          "const": "allow-clear-session-token",
+          "markdownDescription": "Allows the main window to call clear_session_token, which removes\nthe Hisaabo session token from the OS keyring.\nIdempotent: succeeds even when no token is currently stored.\n"
+        },
+        {
+          "description": "Allows the main window to call get_session_token, which reads\nthe Hisaabo session token from the OS keyring.\nReturns null (not an error) when no token is stored.\n",
+          "type": "string",
+          "const": "allow-get-session-token",
+          "markdownDescription": "Allows the main window to call get_session_token, which reads\nthe Hisaabo session token from the OS keyring.\nReturns null (not an error) when no token is stored.\n"
+        },
+        {
+          "description": "Allows the main window to call save_session_token, which writes\nthe Hisaabo session token to the OS keyring (keychain on macOS,\nCredential Manager on Windows, libsecret on Linux).\nNo scope constraints are needed because this command operates only\non a fixed service-name key derived from the app identifier.\n",
+          "type": "string",
+          "const": "allow-save-session-token",
+          "markdownDescription": "Allows the main window to call save_session_token, which writes\nthe Hisaabo session token to the OS keyring (keychain on macOS,\nCredential Manager on Windows, libsecret on Linux).\nNo scope constraints are needed because this command operates only\non a fixed service-name key derived from the app identifier.\n"
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
@@ -2143,6 +2161,60 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "Allows reading the opened deep link via the get_current command\n#### This default permission set includes:\n\n- `allow-get-current`",
+          "type": "string",
+          "const": "deep-link:default",
+          "markdownDescription": "Allows reading the opened deep link via the get_current command\n#### This default permission set includes:\n\n- `allow-get-current`"
+        },
+        {
+          "description": "Enables the get_current command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:allow-get-current",
+          "markdownDescription": "Enables the get_current command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:allow-is-registered",
+          "markdownDescription": "Enables the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:allow-register",
+          "markdownDescription": "Enables the register command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:allow-unregister",
+          "markdownDescription": "Enables the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_current command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:deny-get-current",
+          "markdownDescription": "Denies the get_current command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:deny-is-registered",
+          "markdownDescription": "Denies the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:deny-register",
+          "markdownDescription": "Denies the register command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "deep-link:deny-unregister",
+          "markdownDescription": "Denies the unregister command without any pre-configured scope."
         },
         {
           "description": "Allows the log command\n#### This default permission set includes:\n\n- `allow-log`",

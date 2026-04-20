@@ -8,6 +8,20 @@
       "when": 1776146659947,
       "tag": "0000_lame_molecule_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776598690031,
+      "tag": "0001_parallel_korg",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776599766999,
+      "tag": "0002_perfect_sugar_man",
+      "breakpoints": true
     }
   ]
 }

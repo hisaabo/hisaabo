@@ -2,9 +2,9 @@ import { eq, and, gt, lte, isNull, desc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as argon2 from "argon2";
-import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
+import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
@@ -12,7 +12,12 @@ import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions 
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 
+// TTL for short-lived access tokens (15 minutes)
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
+
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const BEARER_SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days sliding window
+const BEARER_MAX_SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30-day absolute cap
 
 // Per-email rate limiting for login attempts
 const LOGIN_MAX_ATTEMPTS = 5;
@@ -71,6 +76,20 @@ function isDesktopClient(req: Request): boolean {
   return req.headers.get("x-hisaabo-client") === "desktop";
 }
 
+/**
+ * Returns true when the session being minted will be consumed as a Bearer
+ * token rather than a cookie. Mobile and desktop clients carry
+ * `X-Hisaabo-Client: mobile | desktop`; they never rely on Set-Cookie.
+ *
+ * We use the client header (not the presence of an Authorization header) as
+ * the signal because at session creation time there IS no existing Bearer
+ * token yet — the whole point is we are minting the very first one.
+ */
+function isBearerClient(req: Request): boolean {
+  const client = req.headers.get("x-hisaabo-client");
+  return client === "mobile" || client === "desktop";
+}
+
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
@@ -113,6 +132,7 @@ async function getOrCreateDefaultTenant(userId: string, parentTx?: ControlTx): P
 async function createSessionForUser(
   userId: string,
   ctx: { req: Request; resHeaders: Headers },
+  authMethod: "cookie" | "bearer" = "cookie",
 ): Promise<string> {
   const memberships = await controlDb
     .select({ tenantId: tenantMembers.tenantId })
@@ -130,17 +150,29 @@ async function createSessionForUser(
     invalidateSessionCache(previousSessionId);
   }
 
+  const now = Date.now();
   const sessionId = nanoid(64);
+
+  // Bearer sessions use a 7-day sliding window with a 30-day absolute cap.
+  // Cookie sessions keep the existing 30-day fixed expiry.
+  const expiresAt = new Date(now + (authMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
+  const maxExpiresAt = authMethod === "bearer" ? new Date(now + BEARER_MAX_SESSION_DURATION_MS) : null;
+
   await controlDb.insert(sessions).values({
     id: sessionId,
     userId,
     tenantId: resolvedTenantId,
-    expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+    expiresAt,
+    maxExpiresAt,
+    authMethod,
     ipAddress: getClientIpFromRequest(ctx.req),
     userAgent: ctx.req.headers.get("user-agent") || null,
   });
 
-  setSessionCookie(ctx.resHeaders, sessionId);
+  // Cookie clients always get Set-Cookie; Bearer clients hold the token in-app.
+  if (authMethod === "cookie") {
+    setSessionCookie(ctx.resHeaders, sessionId);
+  }
   return sessionId;
 }
 
@@ -251,6 +283,7 @@ export const authRouter = router({
     // Require Turnstile when secret key is configured (production).
     // Self-hosted / dev without the key can skip verification.
     // Desktop (Tauri) clients also skip — see isDesktopClient() doc comment.
+    const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
     const desktop = isDesktopClient(ctx.req);
     if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken && !desktop) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
@@ -349,11 +382,17 @@ export const authRouter = router({
 
           await enforceSessionLimit(user.id, tx);
 
+          const regNow = Date.now();
+          const regExpiresAt = new Date(regNow + (registerAuthMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
+          const regMaxExpiresAt = registerAuthMethod === "bearer" ? new Date(regNow + BEARER_MAX_SESSION_DURATION_MS) : null;
+
           await tx.insert(sessions).values({
             id: sessionId,
             userId: user.id,
             tenantId: resolvedTenantId,
-            expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+            expiresAt: regExpiresAt,
+            maxExpiresAt: regMaxExpiresAt,
+            authMethod: registerAuthMethod,
             ipAddress: getClientIpFromRequest(ctx.req),
             userAgent: ctx.req.headers.get("user-agent") || null,
           });
@@ -365,7 +404,9 @@ export const authRouter = router({
     // Set-Cookie only after the tx has committed. If COMMIT fails, the error
     // bubbles out of withProvisionedTenantCleanup without ever reaching here,
     // so the client never gets a cookie for a rolled-back session.
-    setSessionCookie(ctx.resHeaders, sessionToken);
+    if (registerAuthMethod === "cookie") {
+      setSessionCookie(ctx.resHeaders, sessionToken);
+    }
 
     return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
@@ -419,7 +460,7 @@ export const authRouter = router({
       throw new TRPCError({ code: "FORBIDDEN", message: "Account has no organization membership" });
     }
 
-    const sessionToken = await createSessionForUser(user.id, ctx);
+    const sessionToken = await createSessionForUser(user.id, ctx, isBearerClient(ctx.req) ? "bearer" : "cookie");
 
     return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
   }),
@@ -499,6 +540,9 @@ export const authRouter = router({
 
   // ── Magic link: verify ───────────────────────────────────────
   verifyMagicLink: publicProcedure.input(magicLinkVerifySchema).mutation(async ({ input, ctx }) => {
+    // Determine authMethod once, before the transaction, using the same
+    // x-hisaabo-client signal as login/register.
+    const magicLinkAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
     const tokenH = hashToken(input.token);
 
     // ── Phase 1 (pre-tx peek) ────────────────────────────────────────
@@ -640,11 +684,17 @@ export const authRouter = router({
 
           await enforceSessionLimit(user.id, tx);
 
+          const mlNow = Date.now();
+          const mlExpiresAt = new Date(mlNow + (magicLinkAuthMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
+          const mlMaxExpiresAt = magicLinkAuthMethod === "bearer" ? new Date(mlNow + BEARER_MAX_SESSION_DURATION_MS) : null;
+
           await tx.insert(sessions).values({
             id: sessionId,
             userId: user.id,
             tenantId: resolvedTenantId,
-            expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+            expiresAt: mlExpiresAt,
+            maxExpiresAt: mlMaxExpiresAt,
+            authMethod: magicLinkAuthMethod,
             ipAddress: getClientIpFromRequest(ctx.req),
             userAgent: ctx.req.headers.get("user-agent") || null,
           });
@@ -656,7 +706,9 @@ export const authRouter = router({
     // ── Phase 5 (cookie, outside tx) ─────────────────────────────────
     // Write Set-Cookie only after COMMIT has succeeded so the client never
     // ends up with a cookie for a rolled-back session.
-    setSessionCookie(ctx.resHeaders, sessionToken);
+    if (magicLinkAuthMethod === "cookie") {
+      setSessionCookie(ctx.resHeaders, sessionToken);
+    }
     // `email` is captured to keep parity with the old log surface if needed later.
     void email;
 
@@ -851,6 +903,74 @@ export const authRouter = router({
       invalidateSessionCache(input.sessionId);
       return { success: true };
     }),
+
+  // ── Issue short-lived access token ──────────────────────────
+  //
+  // Only callable with a refresh token (session_id Bearer) or a cookie
+  // session. Calling with an access token (chained refresh) is rejected —
+  // access tokens cannot mint other access tokens; this closes the chain.
+  //
+  // Cookie-method sessions (web) are also rejected: the web app uses
+  // HttpOnly cookies and never needs access tokens. Issuing one would
+  // create a JS-readable token from a cookie session, undermining the
+  // XSS protection of the cookie-only flow.
+  issueAccessToken: protectedProcedure.mutation(async ({ ctx }) => {
+    // Reject if called via an access token (chained refresh = bad)
+    if (ctx.authTokenKind === "access") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Cannot issue an access token using another access token. Use the refresh token (session_id) instead.",
+      });
+    }
+
+    // Reject cookie-method sessions — web uses cookies, not Bearer.
+    // Issuing an access token here would create a JS-readable credential
+    // from an HttpOnly-cookie session, defeating its XSS protection.
+    if (ctx.authTokenKind === "cookie") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Access tokens are only issued for Bearer sessions (mobile/desktop). Web clients use HttpOnly cookies.",
+      });
+    }
+
+    // Retrieve the session row to verify it is a bearer-method session
+    // and to obtain the session ID.
+    const sessionId = getSessionIdFromContext(ctx);
+    if (!sessionId) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "No session found" });
+    }
+
+    const [session] = await controlDb
+      .select({ id: sessions.id, authMethod: sessions.authMethod })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+
+    if (!session) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "Session not found" });
+    }
+
+    if (session.authMethod !== "bearer") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Access tokens are only issued for Bearer sessions.",
+      });
+    }
+
+    // Generate a 64-char base64url random suffix for unguessability.
+    // 48 random bytes → 64 base64url chars = 384 bits of entropy.
+    const randomSuffix = randomBytes(48).toString("base64url");
+    const accessTokenId = `at_${randomSuffix}`;
+    const expiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS);
+
+    await controlDb.insert(accessTokens).values({
+      id: accessTokenId,
+      sessionId: session.id,
+      expiresAt,
+    });
+
+    return { accessToken: accessTokenId, expiresAt };
+  }),
 
   // ── Me ───────────────────────────────────────────────────────
   me: publicProcedure.query(async ({ ctx }) => {

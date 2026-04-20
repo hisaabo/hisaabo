@@ -31,6 +31,11 @@ export interface TestContextOptions {
   /** The active business ID (maps to a business row in the tenant DB). */
   businessId?: string;
   /**
+   * How the request was authenticated. Mirrors context.ts authTokenKind.
+   * Defaults to null (unauthenticated or API key).
+   */
+  authTokenKind?: "access" | "refresh" | "cookie" | null;
+  /**
    * Pre-provisioned tenant database instance. When supplied, the context
    * carries this db directly so tests can avoid the tenant pool lookup.
    * Only consumed by integration tests that build context manually — the
@@ -76,6 +81,7 @@ export function createTestContext(opts: TestContextOptions = {}): Context {
     req,
     resHeaders,
     ipAddress: null,
+    authTokenKind: opts.authTokenKind ?? null,
   };
 
   // Attach optional test-only extensions. These are not part of the Context

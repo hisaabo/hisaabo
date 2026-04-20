@@ -35,6 +35,17 @@ const conf32 = z.string().regex(/^-?\d+(\.\d{1,2})?$/).nullable();
 /** NUMERIC(5,2) — threshold fields. */
 const thresh52 = z.string().regex(/^-?\d+(\.\d{1,2})?$/);
 
+/**
+ * bytea envelope: bytes-in-JSON via `{ __type: "bytes", base64: "..." }`.
+ * Transforms to a Node Buffer so Drizzle's pg driver binds it directly as
+ * a bytea parameter on insert. `.nullable()` on the wrapper makes the
+ * column optional while still running the transform when a value exists.
+ */
+const byteaEnvelope = z
+  .object({ __type: z.literal("bytes"), base64: z.string() })
+  .transform((v) => Buffer.from(v.base64, "base64"));
+const byteaEnvelopeNullable = byteaEnvelope.nullable();
+
 // ── Enum literals mirroring pgEnum definitions ────────────────────────────────
 
 const partyType = z.enum(["customer", "supplier"]);
@@ -77,6 +88,14 @@ export const businessRowSchema = z.object({
   stateCode: z.string().nullable(),
   pincode: z.string().nullable(),
   logoUrl: z.string().nullable(),
+  // Logo bytes round-trip through the bytea envelope. Missing on imports
+  // from older exports (pre-logo-support) — `.nullable()` + `.optional()`
+  // keeps backwards compatibility.
+  logoData: byteaEnvelopeNullable.optional(),
+  logoMimeType: z.string().nullable().optional(),
+  logoWidth: z.number().int().nullable().optional(),
+  logoHeight: z.number().int().nullable().optional(),
+  logoUpdatedAt: isoDatetimeNullable.optional(),
   invoicePrefix: z.string(),
   nextInvoiceNumber: z.number().int(),
   paymentPrefix: z.string(),

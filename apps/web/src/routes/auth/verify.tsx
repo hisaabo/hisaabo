@@ -2,6 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Logo } from "@/components/ui/Logo";
+import { isDesktop } from "@/lib/isDesktop";
+import { saveDesktopToken } from "@/lib/desktop-session";
 
 export const Route = createFileRoute("/auth/verify")({
   component: VerifyPage,
@@ -31,7 +33,12 @@ function VerifyPage() {
   const calledRef = useRef(false);
 
   const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
+      // Desktop uses Bearer auth — persist the session token into the OS
+      // keychain so it survives across app restarts. No-op on web.
+      if (isDesktop() && data?.sessionToken) {
+        await saveDesktopToken(data.sessionToken);
+      }
       utils.auth.me.invalidate();
       const pendingToken = sessionStorage.getItem("pendingInviteToken");
       if (data.needsProfile) {

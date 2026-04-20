@@ -4,6 +4,7 @@ import { QueryClient, QueryCache } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 import { isDesktop } from "./isDesktop";
+import { ensureAccessToken } from "./desktop-session";
 
 // The explicit `as any` cast avoids TS2742 "inferred type cannot be named" error caused
 // by tRPC's internal .d.mts paths resolving through hoisted node_modules.
@@ -20,24 +21,48 @@ export function getBusinessId() {
 }
 
 function commonOptions() {
+  // Desktop uses Bearer-token auth (see apps/web/src/lib/desktop-session.ts
+  // for the rationale — SameSite=Lax cookies can't span `tauri.localhost`
+  // and `api.hisaabo.in`). Web keeps the HttpOnly cookie for XSS resistance.
+  //
+  // TWO-TOKEN FLOW (desktop):
+  // `headers()` is async — tRPC supports this. On desktop we await
+  // `ensureAccessToken()` which either returns a cached short-lived access
+  // token (at_*) or transparently issues a new one using the keychain
+  // refresh token. The result is placed in `Authorization: Bearer at_*`.
+  // This means the keychain refresh token is NEVER sent for normal API
+  // calls; it is only used by the `auth.issueAccessToken` endpoint inside
+  // `ensureAccessToken()` via a direct fetch.
+  const desktop = isDesktop();
   return {
     transformer: superjson,
-    headers() {
+    async headers() {
       const headers: Record<string, string> = {
         "X-Requested-With": "hisaabo",
       };
       if (currentBusinessId) {
         headers["x-business-id"] = currentBusinessId;
       }
-      if (isDesktop()) {
+      if (desktop) {
         // Signals the server to skip Turnstile. Spoofable by design — see
         // auth router for the trade-off documentation.
         headers["x-hisaabo-client"] = "desktop";
+        // Await the access token — issues a new one transparently if
+        // the cached one has expired or is within the 30s refresh window.
+        const token = await ensureAccessToken();
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
       }
       return headers;
     },
     fetch(url: URL | RequestInfo, options?: RequestInit) {
-      return fetch(url, { ...options, credentials: "include" as RequestCredentials });
+      // Only include cookies on web. Desktop is cross-origin to the API and
+      // sends Bearer instead; including credentials would make the browser
+      // demand CORS `Access-Control-Allow-Credentials: true` on every
+      // response to `tauri.localhost` without any auth benefit.
+      const credentials: RequestCredentials = desktop ? "omit" : "include";
+      return fetch(url, { ...options, credentials });
     },
   };
 }

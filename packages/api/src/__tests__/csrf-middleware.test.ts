@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
-import { createCsrfMiddleware } from "../lib/csrf-middleware.js";
+import { createCsrfMiddleware, isOriginAllowedForBearer, CSRF_TAURI_ORIGINS } from "../lib/csrf-middleware.js";
 
 /**
  * Build a minimal Hono app that mounts the CSRF middleware followed by
@@ -28,9 +28,23 @@ import { createCsrfMiddleware } from "../lib/csrf-middleware.js";
  * both Hono-scope (non-tRPC) and tRPC-scope behaviours on the same
  * instance.
  */
-function buildTestApp(opts: { skipPathPrefixes?: string[] } = {}) {
+// Default allowedBearerOrigins used throughout these tests — deterministic,
+// env-var independent. Mirrors a minimal CORS_ORIGINS config for a deployed
+// web app plus the Tauri desktop origins baked into the middleware.
+const TEST_CORS_ORIGINS = ["http://localhost:5173", "https://app.hisaabo.in"];
+
+function buildTestApp(
+  opts: { skipPathPrefixes?: string[]; allowedBearerOrigins?: readonly string[] } = {},
+) {
   const app = new Hono();
-  app.use("*", createCsrfMiddleware({ skipPathPrefixes: opts.skipPathPrefixes ?? [] }));
+  app.use(
+    "*",
+    createCsrfMiddleware({
+      skipPathPrefixes: opts.skipPathPrefixes ?? [],
+      // Provide an explicit list so tests are independent of CORS_ORIGINS env var.
+      allowedBearerOrigins: opts.allowedBearerOrigins ?? TEST_CORS_ORIGINS,
+    }),
+  );
   app.all("/api/store/order", (c) => c.json({ ok: true }));
   app.all("/api/trpc/auth.sendMagicLink", (c) => c.json({ ok: true }));
   app.all("/", (c) => c.json({ ok: true }));
@@ -227,7 +241,13 @@ describe("CSRF middleware — Hono layer for non-tRPC routes", () => {
 
   it("CSRF middleware still rejects POST on non-exempt paths when the /store/ skip is configured — regression guard so widening the skip list doesn't accidentally open /api/foo or similar", async () => {
     const app = new Hono();
-    app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: ["/api/trpc/", "/store/"],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+      }),
+    );
     app.all("/api/foo", (c) => c.json({ ok: true }));
 
     const res = await app.request("/api/foo", {
@@ -242,5 +262,203 @@ describe("CSRF middleware — Hono layer for non-tRPC routes", () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
     expect(body).toEqual({ error: "CSRF validation failed" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY — P1 #7: Bearer + Origin allowlist (defense-in-depth)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SECURITY — CSRF middleware Bearer-auth Origin allowlist (P1 #7 defense-in-depth)", () => {
+  /**
+   * WHY THIS BLOCK EXISTS:
+   * A stolen Bearer token replayed from a hostile browser page will carry an
+   * Origin header that does not match the allowlist. The check fires ONLY when
+   * Origin is present — mobile apps, CLIs, and server-to-server callers never
+   * send Origin and must not be affected.
+   *
+   * Each test names the invariant it protects so a future regression is
+   * immediately identifiable from the failing test title.
+   */
+
+  // Pure-function tests for isOriginAllowedForBearer — fast and env-independent.
+  describe("isOriginAllowedForBearer — pure-function unit tests", () => {
+    const corsOrigins = ["http://localhost:5173", "https://app.hisaabo.in"];
+
+    it("returns true for an empty origin string — mobile / server-to-server callers omit Origin and must never be blocked", () => {
+      expect(isOriginAllowedForBearer("", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for an exact match against a configured CORS origin — web app on localhost is a first-party client", () => {
+      expect(isOriginAllowedForBearer("http://localhost:5173", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for https://app.hisaabo.in — exact CORS origins list match", () => {
+      expect(isOriginAllowedForBearer("https://app.hisaabo.in", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for https://billing.hisaabo.in — *.hisaabo.in wildcard covers all first-party subdomains", () => {
+      expect(isOriginAllowedForBearer("https://billing.hisaabo.in", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for http://tauri.localhost — Tauri desktop app on Linux/WSL must not be blocked by the allowlist", () => {
+      expect(isOriginAllowedForBearer("http://tauri.localhost", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for https://tauri.localhost — Tauri desktop app on Windows/macOS default asset scheme", () => {
+      expect(isOriginAllowedForBearer("https://tauri.localhost", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns true for tauri://localhost — legacy Tauri custom protocol kept for backward compatibility", () => {
+      expect(isOriginAllowedForBearer("tauri://localhost", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(true);
+    });
+
+    it("returns false for https://evil.com — unrecognised origin is an indicator of stolen-token replay from a hostile page", () => {
+      expect(isOriginAllowedForBearer("https://evil.com", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(false);
+    });
+
+    it("returns false for https://notreallyhisaabo.in.evil.com — subdomain spoofing attempt must not match the hisaabo.in regex", () => {
+      expect(isOriginAllowedForBearer("https://notreallyhisaabo.in.evil.com", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(false);
+    });
+
+    it("returns false for https://hisaabo.in.evil.com — another subdomain-spoofing variant that anchors '.in' mid-string", () => {
+      expect(isOriginAllowedForBearer("https://hisaabo.in.evil.com", corsOrigins, CSRF_TAURI_ORIGINS)).toBe(false);
+    });
+  });
+
+  // Integration tests: full Hono middleware stack, verifying the correct HTTP
+  // response is returned for each scenario.
+  describe("Hono middleware integration — Bearer + Origin header combinations", () => {
+    it("Bearer + allowlisted browser Origin (http://localhost:5173) → request passes through to the handler — web app running locally must continue to work", async () => {
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer desktop-session-token",
+          "origin": "http://localhost:5173",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ ok: true });
+    });
+
+    it("Bearer + http://tauri.localhost Origin → request passes — Tauri desktop app is a first-party client that authenticates via Bearer", async () => {
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer tauri-desktop-token",
+          "origin": "http://tauri.localhost",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ ok: true });
+    });
+
+    it("Bearer + https://app.hisaabo.in Origin → request passes — production web app origin must not be blocked", async () => {
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer web-app-token",
+          "origin": "https://app.hisaabo.in",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ ok: true });
+    });
+
+    it("Bearer + https://billing.hisaabo.in Origin → request passes — *.hisaabo.in wildcard allows any first-party subdomain", async () => {
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer subdomain-token",
+          "origin": "https://billing.hisaabo.in",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+    });
+
+    it("Bearer + https://evil.com Origin → rejected with 403 and the specific error message — stolen token replayed from a hostile page must be blocked", async () => {
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer stolen-token",
+          "origin": "https://evil.com",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("Origin not permitted for Bearer-authenticated request");
+    });
+
+    it("Bearer + NO Origin header (mobile / server-to-server) → request passes — React Native fetch and curl never send Origin and must not be blocked", async () => {
+      const app = buildTestApp();
+
+      // This is the highest regression-risk path: previously the Bearer bypass
+      // called next() unconditionally; if the new check mistakenly required
+      // Origin to be present, every mobile POST would break.
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "authorization": "Bearer mobile-token",
+          "cookie": "session_id=stale-from-native-jar",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ ok: true });
+    });
+
+    it("Cookie auth + no Bearer + https://evil.com Origin → existing cookie-path handling (CSRF validation) unchanged — the Bearer Origin check must not tighten the cookie path", async () => {
+      // This test verifies that the new check is ONLY on the Bearer branch.
+      // A cookie-authenticated request with a hostile Origin and no X-Requested-With
+      // header must still be rejected by the pre-existing CSRF check, NOT by the
+      // new Bearer-Origin check (which should not have run at all).
+      const app = buildTestApp();
+
+      const res = await app.request("/api/store/order", {
+        method: "POST",
+        headers: {
+          "cookie": "session_id=real-browser-session",
+          "origin": "https://evil.com",
+          "content-type": "application/json",
+          // Deliberately no Authorization header and no X-Requested-With
+        },
+        body: "{}",
+      });
+
+      // Must be rejected by the existing CSRF check, not by the new Bearer-Origin check.
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("CSRF validation failed");
+    });
   });
 });

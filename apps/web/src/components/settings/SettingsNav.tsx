@@ -4,7 +4,10 @@ interface SettingsTab {
   value: string;
   label: string;
   icon: React.ReactNode;
+  /** Hidden for everyone except owner + superadmin (most restrictive). */
   ownerOnly?: boolean;
+  /** Hidden for everyone except owner/admin (matches server `requireTenantAdmin`). */
+  adminOnly?: boolean;
 }
 
 function BuildingIcon() {
@@ -101,6 +104,16 @@ function TruckIcon() {
   );
 }
 
+function RegisterIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2" />
+      <path d="M7 11h10M9 15h6" />
+    </svg>
+  );
+}
+
 const SETTINGS_TABS: SettingsTab[] = [
   { value: "business", label: "Business", icon: <BuildingIcon /> },
   { value: "documents", label: "Documents", icon: <DocumentIcon /> },
@@ -111,6 +124,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
   { value: "store", label: "Online Store", icon: <StoreIcon /> },
+  { value: "pos", label: "Point-of-Sale", icon: <RegisterIcon />, adminOnly: true },
   { value: "backup", label: "Backup", icon: <BackupIcon />, ownerOnly: true },
 ];
 
@@ -122,7 +136,13 @@ interface SettingsNavProps {
 
 export function SettingsNav({ value, onChange, role }: SettingsNavProps) {
   const isOwner = role === "owner" || role === "superadmin";
-  const visibleTabs = SETTINGS_TABS.filter((tab) => !tab.ownerOnly || isOwner);
+  // `admin` and `owner` both pass adminOnly. superadmin inherits admin privileges.
+  const isAdmin = isOwner || role === "admin";
+  const visibleTabs = SETTINGS_TABS.filter((tab) => {
+    if (tab.ownerOnly && !isOwner) return false;
+    if (tab.adminOnly && !isAdmin) return false;
+    return true;
+  });
 
   return (
     <>

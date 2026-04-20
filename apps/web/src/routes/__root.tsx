@@ -13,6 +13,7 @@ import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
+import { clearDesktopToken } from "@/lib/desktop-session";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -373,7 +374,11 @@ function RootLayout() {
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Clear the Bearer token from the OS keychain on desktop so a fresh
+      // launch doesn't silently re-authenticate. No-op on web (the server
+      // already cleared the cookie via Set-Cookie on the response).
+      await clearDesktopToken();
       setBusinessId(null);
       queryClient.clear();
       navigate({ to: "/login" });
@@ -575,6 +580,20 @@ function RootLayout() {
   // No businesses yet — user is in the onboarding flow. Hide the sidebar
   // since nav items are meaningless without a business context.
   const isOnboarding = Array.isArray(businesses) && businesses.length === 0;
+
+  // POS runs in a dedicated fullscreen register surface — no sidebar, no
+  // topbar, no chrome of any kind. Every pixel goes to the cashier.
+  // Matches the approach taken by Square / Lightspeed / Vyapaar POS where
+  // the register is a station, not a page.
+  const isPosMode = pathname === "/pos" || pathname.startsWith("/pos/");
+  if (isPosMode) {
+    return (
+      <>
+        <MaintenanceBanner />
+        <Outlet />
+      </>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-surface-0">

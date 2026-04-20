@@ -88,7 +88,13 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked --force
 
       - name: Build Tauri desktop app
-        run: cargo tauri build
+        # Merge the prod config overlay on top of the base `tauri.conf.json`.
+        # The overlay strips `http://localhost:3000` from the CSP connect-src
+        # (present in the base for `tauri dev`); shipping it in a signed
+        # production bundle would let a MITM on an open network redirect the
+        # desktop app at a local attacker server. See P2 #4 in the security
+        # review.
+        run: cargo tauri build --config src-tauri/tauri.conf.prod.json
         working-directory: apps/desktop
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}

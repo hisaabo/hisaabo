@@ -33,6 +33,7 @@ import {
   users,
   tenants,
   sessions,
+  accessTokens,
   tenantMembers,
   invitations,
   apiKeys,
@@ -78,6 +79,7 @@ const controlSchema = {
   users,
   tenants,
   sessions,
+  accessTokens,
   tenantMembers,
   invitations,
   apiKeys,
@@ -235,6 +237,7 @@ export async function truncateAllTables(): Promise<void> {
       parties,
       businesses,
       -- Control schema
+      access_tokens,
       api_keys,
       magic_link_tokens,
       invitations,

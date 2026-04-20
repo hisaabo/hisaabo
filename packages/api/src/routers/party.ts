@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc, asc, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, ilike, or, sql, desc, asc, gte, lte, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
@@ -51,7 +51,15 @@ export const partyRouter = router({
         )`);
       }
 
-      if (input.search) conditions.push(ilike(parties.name, `%${escapeLike(input.search)}%`));
+      if (input.search) {
+        // Match on name OR phone. Retail POS needs phone lookup as the
+        // primary recall path ("that aunty with number 98765..."); name is
+        // the fallback for named/B2B customers. Both fields are ILIKE'd
+        // with the same user-typed pattern — good enough for the typical
+        // catalog size. Tenant-scoped already, so no cross-business leak.
+        const pat = `%${escapeLike(input.search)}%`;
+        conditions.push(or(ilike(parties.name, pat), ilike(parties.phone, pat))!);
+      }
       if (input.category) conditions.push(eq(parties.category, input.category));
 
       const offset = (input.page - 1) * input.limit;

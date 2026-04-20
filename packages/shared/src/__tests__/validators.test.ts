@@ -19,6 +19,7 @@ import {
   registerSchema,
   // Business
   createBusinessSchema,
+  uploadBusinessLogoSchema,
   // Party
   createPartySchema,
   // Item
@@ -681,5 +682,233 @@ describe("paginationSchema — validates pagination parameters for list queries"
   it("accepts the maximum valid limit of 100", () => {
     const result = paginationSchema.safeParse({ page: 1, limit: 100 });
     expect(result.success).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// uploadBusinessLogoSchema — business logo data-URL shape gate
+// ─────────────────────────────────────────────────────────────────────────────
+describe("uploadBusinessLogoSchema — guards logo uploads before they hit the server", () => {
+  /**
+   * This schema is the FIRST of two defences on logo uploads. It rejects
+   * the obvious garbage (wrong prefix, wrong MIME, oversized payload,
+   * impossible dimensions) at the tRPC boundary so the business router's
+   * magic-byte check only has to handle inputs that passed the shape
+   * gate. If this schema gets too permissive, the server still catches
+   * the bytes via magic-byte inspection — but we burn CPU decoding
+   * megabytes of base64 garbage first, which is wasteful and a trivial
+   * DoS vector.
+   *
+   * All assertions below name the specific attack / mistake each rule
+   * defends against so a contributor can tell whether a rule is safe
+   * to relax.
+   */
+
+  // A tiny but structurally valid PNG data URL (1×1 red pixel). Reused
+  // across most tests so each case only states the ONE thing it's
+  // verifying.
+  const VALID_PNG_DATA_URL =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwAEOwJ/n7KJzAAAAABJRU5ErkJggg==";
+  const VALID_JPEG_DATA_URL =
+    "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A//2Q==";
+
+  it("accepts a PNG data URL with positive width/height", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a JPEG data URL — both PNG and JPEG are first-class, SVG is not", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_JPEG_DATA_URL,
+      width: 100,
+      height: 100,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an SVG data URL — SVG can carry script payloads, and the server has no SVG parser surface", () => {
+    const svgDataUrl =
+      "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIC8+";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: svgDataUrl,
+      width: 100,
+      height: 100,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a GIF data URL — the server only persists PNG or JPEG, so accepting GIF here would mislead the client about what's storable", () => {
+    const gifDataUrl = "data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: gifDataUrl,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a WebP data URL even though WebP is a common modern format — allow-list is strict to minimize renderer attack surface", () => {
+    const webpDataUrl = "data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: webpDataUrl,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a payload missing the `data:` prefix — naked base64 is not a data URL and would confuse the magic-byte check downstream", () => {
+    const base64Only =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwAEOwJ/n7KJzAAAAABJRU5ErkJggg==";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: base64Only,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a data URL with the wrong encoding (e.g. utf-8 instead of base64)", () => {
+    const wrongEncoding = "data:image/png;utf-8,<svg/>";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: wrongEncoding,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects base64 content containing characters outside the standard alphabet (attack: smuggling arbitrary bytes)", () => {
+    // `*` is not a valid base64 character
+    const smuggled = "data:image/png;base64,iVBORw0*AAA";
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: smuggled,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a data URL longer than the 1,500,000-character cap — the base64 expansion factor means ~1 MB decoded ≈ 1.34 MB encoded; the cap gives a small safety margin", () => {
+    // 1 byte 'A' * 1_500_001 = 1 char too many
+    const oversized = "data:image/png;base64," + "A".repeat(1_500_001);
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: oversized,
+      width: 1,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects zero-dimension width (pixelless image)", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: 0,
+      height: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects negative dimensions (impossible image)", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: -10,
+      height: 10,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects fractional dimensions — dimensions are pixel counts, always integers", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: 10.5,
+      height: 10,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects dimensions above 4000 px — pathological images waste server memory during magic-byte read and PDF rendering", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: 4001,
+      height: 4000,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts dimensions at the 4000 px ceiling — the limit is inclusive", () => {
+    const result = uploadBusinessLogoSchema.safeParse({
+      dataUrl: VALID_PNG_DATA_URL,
+      width: 4000,
+      height: 4000,
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// createInvoiceSchema — `source` origin-channel enum
+// ─────────────────────────────────────────────────────────────────────────────
+describe("createInvoiceSchema — source origin-channel enum attributes sales to their channel", () => {
+  /**
+   * The `source` field tags an invoice with the UI that produced it —
+   * "pos" for the fullscreen register, "online_store" for storefront
+   * orders, "webhook" for API / carrier-triggered invoices, and null
+   * for invoices typed into the classic form. It lands in the invoice
+   * list as a small chip and in reports so operators can tell retail
+   * vs. storefront revenue apart. Being a typed enum rather than a
+   * free-form string prevents reporting drift (every caller spells
+   * "POS" slightly differently).
+   */
+
+  const baseValid = {
+    partyId: "550e8400-e29b-41d4-a716-446655440000",
+    type: "sale" as const,
+    lineItems: [{
+      itemName: "Basmati Rice 1 kg",
+      quantity: "1",
+      unitPrice: "80.00",
+      taxPercent: "5.00",
+      discountPercent: "0.00",
+    }],
+  };
+
+  it("accepts source: 'pos' for fullscreen-register sales", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "pos" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts source: 'online_store' for storefront orders", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "online_store" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts source: 'webhook' for API / carrier-triggered invoices", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "webhook" });
+    expect(result.success).toBe(true);
+  });
+
+  it("treats source as optional — invoices typed into the classic form have no source, and that path must still validate", () => {
+    const result = createInvoiceSchema.safeParse(baseValid);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects arbitrary source strings — the DB column is a string but the schema is the gatekeeper, and accepting 'api' or 'mobile' would silently create a new reporting bucket", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "mobile" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty-string source — z.enum doesn't accept '' as a member so this must be explicit rather than an implicit default", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects uppercase or otherwise miscased source values — enum matching is strict to avoid 'POS' / 'Pos' / 'pos' coexisting", () => {
+    const result = createInvoiceSchema.safeParse({ ...baseValid, source: "POS" });
+    expect(result.success).toBe(false);
   });
 });

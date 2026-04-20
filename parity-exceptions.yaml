@@ -26,6 +26,17 @@ exceptions:
       - business.auditTrail
       # Bulk data export requires file system access; not available on mobile.
       - business.exportData
+      # Business logo upload/delete are web-only (canvas-based resize, file picker).
+      # Mobile displays the logo via /api/businesses/:id/logo but doesn't edit.
+      - business.uploadLogo
+      - business.deleteLogo
+      # Point-of-Sale mode is a web/desktop-only fullscreen register.
+      # Mobile doesn't have a POS terminal surface.
+      - business.setPosEnabled
+      - business.ensureWalkInParty
+      # POS catalog (tile grid with alt-unit / variant expansion) is a
+      # register-UI concern, not a mobile flow.
+      - pos.catalog
 
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
@@ -266,6 +277,13 @@ exceptions:
       # --- Business ---
       # Plan limit check — CLI doesn't create businesses.
       - business.canCreate
+      # Logo upload/delete are browser-only (canvas resize + file picker).
+      - business.uploadLogo
+      - business.deleteLogo
+      # Point-of-Sale is a browser-only UI feature — no CLI command surface.
+      - business.setPosEnabled
+      - business.ensureWalkInParty
+      - pos.catalog
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow. CLI uses transfer
@@ -346,6 +364,13 @@ exceptions:
       # --- Business ---
       # Plan limit check — MCP agents don't create businesses.
       - business.canCreate
+      # Logo is a browser UI concern; MCP agents don't manage brand assets.
+      - business.uploadLogo
+      - business.deleteLogo
+      # POS mode is a web/desktop-only cashier surface; not an MCP workflow.
+      - business.setPosEnabled
+      - business.ensureWalkInParty
+      - pos.catalog
 
       # --- Bank ---
       # Manual transaction entry — rare admin workflow.

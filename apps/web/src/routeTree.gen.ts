@@ -16,6 +16,7 @@ import { Route as SalesReturnsRouteImport } from './routes/sales-returns'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as QuotationsRouteImport } from './routes/quotations'
 import { Route as ProformaInvoicesRouteImport } from './routes/proforma-invoices'
+import { Route as PosRouteImport } from './routes/pos'
 import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as PartiesRouteImport } from './routes/parties'
 import { Route as LoginRouteImport } from './routes/login'
@@ -71,6 +72,11 @@ const QuotationsRoute = QuotationsRouteImport.update({
 const ProformaInvoicesRoute = ProformaInvoicesRouteImport.update({
   id: '/proforma-invoices',
   path: '/proforma-invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PosRoute = PosRouteImport.update({
+  id: '/pos',
+  path: '/pos',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PaymentsRoute = PaymentsRouteImport.update({
@@ -198,6 +204,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
+  '/pos': typeof PosRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
   '/reports': typeof ReportsRoute
@@ -228,6 +235,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
+  '/pos': typeof PosRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
   '/reports': typeof ReportsRoute
@@ -259,6 +267,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/parties': typeof PartiesRoute
   '/payments': typeof PaymentsRoute
+  '/pos': typeof PosRoute
   '/proforma-invoices': typeof ProformaInvoicesRoute
   '/quotations': typeof QuotationsRoute
   '/reports': typeof ReportsRoute
@@ -291,6 +300,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/parties'
     | '/payments'
+    | '/pos'
     | '/proforma-invoices'
     | '/quotations'
     | '/reports'
@@ -321,6 +331,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/parties'
     | '/payments'
+    | '/pos'
     | '/proforma-invoices'
     | '/quotations'
     | '/reports'
@@ -351,6 +362,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/parties'
     | '/payments'
+    | '/pos'
     | '/proforma-invoices'
     | '/quotations'
     | '/reports'
@@ -382,6 +394,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   PartiesRoute: typeof PartiesRoute
   PaymentsRoute: typeof PaymentsRoute
+  PosRoute: typeof PosRoute
   ProformaInvoicesRoute: typeof ProformaInvoicesRoute
   QuotationsRoute: typeof QuotationsRoute
   ReportsRoute: typeof ReportsRoute
@@ -443,6 +456,13 @@ declare module '@tanstack/react-router' {
       path: '/proforma-invoices'
       fullPath: '/proforma-invoices'
       preLoaderRoute: typeof ProformaInvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pos': {
+      id: '/pos'
+      path: '/pos'
+      fullPath: '/pos'
+      preLoaderRoute: typeof PosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/payments': {
@@ -614,6 +634,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   PartiesRoute: PartiesRoute,
   PaymentsRoute: PaymentsRoute,
+  PosRoute: PosRoute,
   ProformaInvoicesRoute: ProformaInvoicesRoute,
   QuotationsRoute: QuotationsRoute,
   ReportsRoute: ReportsRoute,

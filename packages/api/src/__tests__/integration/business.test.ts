@@ -19,8 +19,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
-import { bankAccounts } from "@hisaabo/db";
+import { eq, and } from "drizzle-orm";
+import { bankAccounts, parties, businesses } from "@hisaabo/db";
 import {
   createUser,
   createTenant,
@@ -365,5 +365,105 @@ describe("business.updateSequenceNumber", () => {
         newNumber: 1,
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POS: setPosEnabled, ensureWalkInParty, walk-in seed in business.create
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POS mode — business.setPosEnabled", () => {
+  let posBizId: string;
+
+  beforeAll(async () => {
+    const caller = tenantLevelCaller(owner, tenant.id);
+    const biz = await caller.business.create({
+      name: "POS Test Shop",
+      pan: "ABCDE1234F",
+      phone: "9876543210",
+      address: "POS Address",
+      stateCode: "08",
+      gstRegistrationType: "unregistered",
+      invoicePrefix: "POS",
+      currency: "INR",
+    });
+    posBizId = biz.id;
+  });
+
+  it("owner can enable POS mode", async () => {
+    const caller = tenantLevelCaller(owner, tenant.id);
+    const result = await caller.business.setPosEnabled({ id: posBizId, enabled: true });
+    expect(result.posEnabled).toBe(true);
+
+    const tenantDb = getTenantTestDb();
+    const [row] = await tenantDb
+      .select({ posEnabled: businesses.posEnabled })
+      .from(businesses)
+      .where(eq(businesses.id, posBizId));
+    expect(row?.posEnabled).toBe(true);
+  });
+
+  it("owner can disable POS mode", async () => {
+    const caller = tenantLevelCaller(owner, tenant.id);
+    const result = await caller.business.setPosEnabled({ id: posBizId, enabled: false });
+    expect(result.posEnabled).toBe(false);
+  });
+
+  it("seller (non-admin) receives FORBIDDEN", async () => {
+    const caller = tenantLevelCaller(seller, tenant.id);
+    await expect(
+      caller.business.setPosEnabled({ id: posBizId, enabled: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("POS mode — business.ensureWalkInParty", () => {
+  let bizId: string;
+
+  beforeAll(async () => {
+    const caller = tenantLevelCaller(owner, tenant.id);
+    const biz = await caller.business.create({
+      name: "Walk-in Test Shop",
+      pan: "ABCDE1234F",
+      phone: "9876543210",
+      address: "Address",
+      stateCode: "08",
+      gstRegistrationType: "unregistered",
+      invoicePrefix: "WIT",
+      currency: "INR",
+    });
+    bizId = biz.id;
+  });
+
+  it("business.create auto-seeds a Walk-in Customer party in the same transaction", async () => {
+    const tenantDb = getTenantTestDb();
+    const rows = await tenantDb
+      .select()
+      .from(parties)
+      .where(and(eq(parties.businessId, bizId), eq(parties.name, "Walk-in Customer")));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.type).toBe("customer");
+  });
+
+  it("ensureWalkInParty returns the existing walk-in row without creating a duplicate", async () => {
+    const caller = tenantLevelCaller(owner, tenant.id);
+    const first = await caller.business.ensureWalkInParty({ id: bizId });
+    const second = await caller.business.ensureWalkInParty({ id: bizId });
+    expect(first.id).toBe(second.id);
+    expect(first.created).toBe(false);
+    expect(second.created).toBe(false);
+
+    const tenantDb = getTenantTestDb();
+    const rows = await tenantDb
+      .select()
+      .from(parties)
+      .where(and(eq(parties.businessId, bizId), eq(parties.name, "Walk-in Customer")));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("seller can call ensureWalkInParty (no admin gate) — needed for POS bootstrap by non-admin cashiers", async () => {
+    const caller = tenantLevelCaller(seller, tenant.id);
+    const result = await caller.business.ensureWalkInParty({ id: bizId });
+    expect(result.id).toBeTruthy();
   });
 });

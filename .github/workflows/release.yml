@@ -189,6 +189,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ""
         with:
           projectPath: apps/desktop
+          # Apply the production CSP overlay (strips localhost:3000 —
+          # needed for `tauri dev` but dangerous in a signed release). See
+          # apps/desktop/src-tauri/tauri.conf.prod.json.
+          args: "--config src-tauri/tauri.conf.prod.json"
           tagName: ${{ github.ref_name }}
           releaseName: "Hisaabo ${{ github.ref_name }}"
           releaseBody: "Desktop builds for ${{ github.ref_name }}. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."

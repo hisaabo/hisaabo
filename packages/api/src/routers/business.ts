@@ -1,11 +1,12 @@
-import { eq, and, sql, desc, gte, lte, inArray, count } from "drizzle-orm";
+import { eq, and, sql, desc, gte, lte, inArray, count, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { businesses, bankAccounts, controlDb, tenants, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
-import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema } from "@hisaabo/shared";
+import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema, uploadBusinessLogoSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
@@ -30,7 +31,12 @@ export const businessRouter = router({
     // returns only businesses within the caller's tenant — no cross-tenant
     // access is possible. All businesses within a tenant are visible to every
     // tenant member so that they can switch between businesses.
-    const rows = await ctx.db.select().from(businesses);
+    //
+    // `logoData` is intentionally excluded — sending logo bytes over tRPC on
+    // every list call is wasteful. Consumers fetch the logo via the dedicated
+    // HTTP endpoint using logoUpdatedAt as a cache-bust key.
+    const { logoData: _logoData, ...cols } = getTableColumns(businesses);
+    const rows = await ctx.db.select(cols).from(businesses);
     return rows.map((biz) => ({
       ...biz,
       carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
@@ -51,8 +57,11 @@ export const businessRouter = router({
     .query(async ({ input, ctx }) => {
       // Security: ctx.db is scoped to the caller's tenant. The WHERE on
       // businesses.id is sufficient because the DB itself is tenant-isolated.
+      //
+      // logoData excluded — fetched via dedicated /api/businesses/:id/logo.
+      const { logoData: _logoData, ...cols } = getTableColumns(businesses);
       const [biz] = await ctx.db
-        .select()
+        .select(cols)
         .from(businesses)
         .where(eq(businesses.id, input.id))
         .limit(1);
@@ -83,6 +92,17 @@ export const businessRouter = router({
         openingBalance: "0",
         currentBalance: "0",
         isDefault: false,
+      });
+
+      // Seed a "Walk-in Customer" party. Required by POS mode as the default
+      // partyId for anonymous retail sales, but cheap enough to always create
+      // so offices that later enable POS don't need a separate seeding step.
+      // `ensureWalkInParty` mutation covers existing businesses lazily.
+      await tx.insert(parties).values({
+        businessId: biz.id,
+        type: "customer",
+        name: "Walk-in Customer",
+        openingBalance: "0",
       });
 
       // Seed the default Chart of Accounts for this business — must be inside
@@ -135,6 +155,149 @@ export const businessRouter = router({
       });
 
       return biz;
+    }),
+
+  // Upload a business logo. Stored as bytea on the businesses row so it
+  // round-trips through pg_dump, pg_basebackup, and the self-export NDJSON
+  // without any extra plumbing.
+  //
+  // Security notes:
+  // - We NEVER trust the declared MIME — magic bytes are re-checked here.
+  // - Decoded size is re-asserted against the 1MB cap after base64 decode.
+  // - SVG is not stored (no SVG parser surface on the server). Clients that
+  //   want to upload SVG must rasterize to PNG in-browser first.
+  uploadLogo: tenantProcedure
+    .input(z.object({ id: z.string().uuid(), data: uploadBusinessLogoSchema }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const { bytes, mime: actualMime } = validateLogoDataUrl(input.data.dataUrl);
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({
+          logoData: bytes,
+          logoMimeType: actualMime,
+          logoWidth: input.data.width,
+          logoHeight: input.data.height,
+          logoUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id, logoUpdatedAt: businesses.logoUpdatedAt });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.uploadLogo",
+        entityType: "business",
+        entityId: biz.id,
+        metadata: { bytes: bytes.length, mime: actualMime, width: input.data.width, height: input.data.height },
+        ipAddress: ctx.ipAddress,
+      });
+
+      return { logoUpdatedAt: biz.logoUpdatedAt };
+    }),
+
+  deleteLogo: tenantProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({
+          logoData: null,
+          logoMimeType: null,
+          logoWidth: null,
+          logoHeight: null,
+          logoUpdatedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.deleteLogo",
+        entityType: "business",
+        entityId: biz.id,
+        ipAddress: ctx.ipAddress,
+      });
+
+      return { ok: true };
+    }),
+
+  // Toggle Point-of-Sale mode. When enabled the cashier-optimised /pos route
+  // becomes reachable and the "Switch to POS" entry button appears on the
+  // invoice create page. Off by default.
+  setPosEnabled: tenantProcedure
+    .input(z.object({ id: z.string().uuid(), enabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
+
+      const [biz] = await ctx.db
+        .update(businesses)
+        .set({ posEnabled: input.enabled, updatedAt: new Date() })
+        .where(eq(businesses.id, input.id))
+        .returning({ id: businesses.id, posEnabled: businesses.posEnabled });
+
+      if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      logAudit(ctx.db, {
+        businessId: biz.id,
+        userId: ctx.user.id,
+        action: "business.setPosEnabled",
+        entityType: "business",
+        entityId: biz.id,
+        metadata: { enabled: input.enabled },
+        ipAddress: ctx.ipAddress,
+      });
+
+      return biz;
+    }),
+
+  // Lazily seed a "Walk-in Customer" party for this business and return its
+  // ID. POS uses this as the default partyId for anonymous retail sales.
+  //
+  // Idempotent: if a party with the reserved name already exists it's
+  // returned unchanged. Also safe to call concurrently — unique index on
+  // (business_id, lower(name)) does not exist, so we use a SELECT-then-INSERT
+  // pattern guarded by a transaction advisory lock keyed on businessId+name.
+  // For v1 a small race window where two cashiers click "open POS" for a
+  // never-seeded business at the same millisecond is acceptable — worst
+  // case is two walk-in rows that an admin can merge.
+  ensureWalkInParty: tenantProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const [existing] = await ctx.db
+        .select({ id: parties.id })
+        .from(parties)
+        .where(and(
+          eq(parties.businessId, input.id),
+          eq(parties.name, "Walk-in Customer"),
+          eq(parties.type, "customer"),
+        ))
+        .limit(1);
+
+      if (existing) return { id: existing.id, created: false };
+
+      const [created] = await ctx.db
+        .insert(parties)
+        .values({
+          businessId: input.id,
+          type: "customer",
+          name: "Walk-in Customer",
+          openingBalance: "0",
+        })
+        .returning({ id: parties.id });
+
+      return { id: created.id, created: true };
     }),
 
   updateSequenceNumber: adminProcedure

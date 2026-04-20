@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/web",
-  "version": "0.8.4",
+  "version": "0.8.6",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "@hisaabo/shared": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.160.0",
+    "@tauri-apps/api": "^2.1.0",
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "jszip": "^3.10.1",

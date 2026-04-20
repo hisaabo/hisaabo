@@ -197,6 +197,32 @@ export async function provisionTenantDatabase(
     if (!result.success) {
       throw new Error(`Tenant schema migration failed: ${result.error}`);
     }
+
+    // ── Step 4: Grant the per-tenant user access to drizzle metadata ──
+    //
+    // The drizzle migrator auto-created the `drizzle` schema during Step 3
+    // while connected as the superuser. That schema is owned by the
+    // superuser and nothing has granted it to the per-tenant user, so if
+    // anything connecting as the per-tenant user ever tries to introspect
+    // migration state it would hit "permission denied for schema drizzle".
+    //
+    // Tenant migrations themselves now always run as the superuser (see
+    // migrate.ts::buildTenantConnectionString), but the grants here are
+    // defence-in-depth so the per-tenant user can still read its own
+    // migration history if an operator or admin tool asks for it.
+    const grantClient = postgres(`${baseUrl}/${dbName}`, {
+      max: 1,
+      idle_timeout: 0,
+      connect_timeout: 15,
+      onnotice: () => {},
+    });
+    try {
+      await grantClient.unsafe(`GRANT USAGE ON SCHEMA drizzle TO "${dbUser}"`);
+      await grantClient.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO "${dbUser}"`);
+      await grantClient.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT SELECT ON TABLES TO "${dbUser}"`);
+    } finally {
+      await grantClient.end();
+    }
   } catch (err) {
     // Compensate: drop whatever was created (idempotent, best-effort).
     await cleanupTenantDatabase(dbName, dbUser);

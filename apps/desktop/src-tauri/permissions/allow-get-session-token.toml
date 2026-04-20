@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-get-session-token"
+description = """
+Allows the main window to call get_session_token, which reads
+the Hisaabo session token from the OS keyring.
+Returns null (not an error) when no token is stored.
+"""
+commands.allow = ["get_session_token"]
