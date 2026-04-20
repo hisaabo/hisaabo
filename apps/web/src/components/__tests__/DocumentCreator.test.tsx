@@ -40,7 +40,23 @@ const { invoiceCreateMutate, quotationCreateMutate, invalidateStub } =
   }));
 
 vi.mock("@/lib/trpc", () => ({
+  getBusinessId: () => "biz-1",
   trpc: {
+    business: {
+      list: {
+        useQuery: () => ({
+          data: [
+            {
+              id: "biz-1",
+              name: "Test Business",
+              defaultRoundOff: false,
+              defaultTermsAndConditions: null,
+            },
+          ],
+          isFetching: false,
+        }),
+      },
+    },
     party: {
       list: {
         useQuery: () => ({

@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useId } from "react";
-import { trpc } from "@/lib/trpc";
+import { useState, useMemo, useEffect, useId, useRef } from "react";
+import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, cn } from "@/lib/utils";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
@@ -141,7 +142,28 @@ export function DocumentCreator({
   const [invoiceDiscount, setInvoiceDiscount] = useState("0");
   const [invoiceDiscountType, setInvoiceDiscountType] = useState<"amount" | "percent">("amount");
   const [roundOff, setRoundOff] = useState("0");
+  // Tracks whether the user has manually edited the Round Off field on this
+  // document. Once true we stop applying the per-business "round down to
+  // integer" auto-fill so we don't silently undo their override.
+  const [roundOffOverridden, setRoundOffOverridden] = useState(false);
   const [referenceDocumentId, _setReferenceDocumentId] = useState<string | undefined>(prefillFromInvoiceId || undefined);
+
+  // Confirm dialog when closing with unsaved data
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+
+  // Ref the date input so we can move focus there as soon as a customer is
+  // picked — otherwise Tab cycles back to the customer combobox in the
+  // dialog's focus order.
+  const dateInputRef = useRef<HTMLInputElement>(null);
+
+  // Active business — used to read defaultRoundOff and defaultTermsAndConditions.
+  // The list is already cached by __root.tsx; this query is essentially free.
+  const { data: businessList } = trpc.business.list.useQuery();
+  const currentBizId = getBusinessId();
+  const activeBusiness =
+    businessList?.find((b) => b.id === currentBizId) ?? businessList?.[0];
+  const bizDefaultTerms = activeBusiness?.defaultTermsAndConditions ?? "";
+  const bizDefaultRoundOff = activeBusiness?.defaultRoundOff ?? false;
 
   // Server-side search for party picker
   const [partySearch, setPartySearch] = useState("");
@@ -173,6 +195,20 @@ export function DocumentCreator({
 
   const isEditing = !!editInvoiceId;
   const prefillId = editInvoiceId || prefillFromInvoiceId;
+
+  // Pre-fill standard Terms & Conditions from business defaults on new docs
+  // only — editing a saved doc must respect what was actually persisted.
+  // Runs once when the biz default first becomes available; if the user has
+  // already typed something, we don't clobber it.
+  const termsHydratedRef = useRef(false);
+  useEffect(() => {
+    if (isEditing || prefillId) return;
+    if (termsHydratedRef.current) return;
+    if (!bizDefaultTerms) return;
+    if (terms.trim().length > 0) return;
+    setTerms(bizDefaultTerms);
+    termsHydratedRef.current = true;
+  }, [bizDefaultTerms, isEditing, prefillId, terms]);
 
   // Auto-calculate due date: party's credit period or default 7 days
   useEffect(() => {
@@ -266,6 +302,46 @@ export function DocumentCreator({
     toast.error(isEditing ? "Failed to update document" : "Failed to create document", err.message);
   }
 
+  // Dirty detection: snapshot the form once it has settled (after editData
+  // applies for edits, or on first mount for new docs) and compare every
+  // render. The snapshot is taken in a microtask so React has flushed all
+  // setStates triggered by the editData effect before we baseline.
+  const formSnapshot = useMemo(
+    () => JSON.stringify({
+      partyId,
+      invoiceDate,
+      dueDate,
+      notes,
+      terms,
+      // Strip the random `id` field so re-mounted line items don't appear
+      // dirty just because of a fresh UUID.
+      items: items.map(({ id: _id, ...rest }) => rest),
+      charges,
+      invoiceDiscount,
+      invoiceDiscountType,
+      roundOff,
+    }),
+    [partyId, invoiceDate, dueDate, notes, terms, items, charges, invoiceDiscount, invoiceDiscountType, roundOff]
+  );
+  const formSnapshotRef = useRef(formSnapshot);
+  formSnapshotRef.current = formSnapshot;
+  const baselineRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Re-baseline whenever editData becomes available (or stays undefined for
+    // a new doc). The microtask defer waits for setStates inside the editData
+    // effect to land before snapshotting.
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      baselineRef.current = formSnapshotRef.current;
+    });
+    return () => { cancelled = true; };
+  }, [editData]);
+
+  const isDirty =
+    baselineRef.current !== null && baselineRef.current !== formSnapshot;
+
   // All mutation hooks called unconditionally (React rules)
   const invoiceMutation = trpc.invoice.create.useMutation({
     onSuccess: isEditing ? handleSuccess : handleInvoiceCreateSuccess,
@@ -343,6 +419,24 @@ export function DocumentCreator({
       total: money.toNumber(result.total),
     };
   }, [items, charges, invoiceDiscount, invoiceDiscountType, roundOff]);
+
+  // Auto-fill round-off so the grand total floors to a whole rupee, when the
+  // business has "round down to integer" enabled. Stops as soon as the user
+  // edits the field manually (`roundOffOverridden`) so we never silently
+  // override their explicit number.  Edit mode preserves whatever round-off
+  // was saved with the original document.
+  useEffect(() => {
+    if (isEditing) return;
+    if (roundOffOverridden) return;
+    if (!bizDefaultRoundOff) return;
+    const current = parseFloat(roundOff || "0");
+    const rawTotal = totals.total - current;
+    if (!Number.isFinite(rawTotal)) return;
+    const target = (Math.floor(rawTotal) - rawTotal).toFixed(2);
+    if (target !== current.toFixed(2)) {
+      setRoundOff(target);
+    }
+  }, [bizDefaultRoundOff, isEditing, roundOffOverridden, totals.total, roundOff]);
 
   function updateItem(id: string, field: keyof LineItem, value: string) {
     setItems((prev) =>
@@ -546,16 +640,29 @@ export function DocumentCreator({
   // Stable prefix for accessible line item IDs
   const lineItemIdPrefix = useId();
 
+  // Close-attempt handler — only show the confirm dialog when there's data
+  // worth losing. A pristine empty form closes silently.
+  function handleCloseAttempt(): boolean {
+    if (!isDirty) return true;
+    setConfirmCloseOpen(true);
+    return false;
+  }
+
   return (
     <>
     <SlideOver
       open={true}
       onClose={onClose}
+      onCloseAttempt={handleCloseAttempt}
       title={isEditing ? `Edit ${label}` : `New ${label}`}
       description={isEditing ? `Edit ${invoiceType} ${label.toLowerCase()}` : `Create a new ${invoiceType} ${label.toLowerCase()}`}
       footer={
         <div className="flex justify-end gap-3">
-          <button type="button" className="btn-secondary" onClick={onClose}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => { if (handleCloseAttempt()) onClose(); }}
+          >
             Cancel
           </button>
           <button
@@ -578,7 +685,15 @@ export function DocumentCreator({
             label={partyLabel}
             required
             value={partyId}
-            onChange={setPartyId}
+            onChange={(id) => {
+              setPartyId(id);
+              // After picking a party, jump to the date input so Tab order
+              // doesn't bounce focus back into the (now-selected) combobox
+              // and re-open its dropdown.
+              if (id) {
+                requestAnimationFrame(() => dateInputRef.current?.focus());
+              }
+            }}
             options={partyOptions}
             placeholder={`Search ${partyLabel.toLowerCase()}...`}
             emptyMessage={`No ${partyLabel.toLowerCase()}s found`}
@@ -589,10 +704,12 @@ export function DocumentCreator({
               setQuickPartyOpen(true);
             }}
             createNewLabel={`Create ${partyLabel.toLowerCase()}`}
+            autoFocus={!isEditing && !partyId}
           />
           <div>
             <label className="label">Date</label>
             <input
+              ref={dateInputRef}
               type="date"
               value={invoiceDate}
               onChange={(e) => setInvoiceDate(e.target.value)}
@@ -646,8 +763,13 @@ export function DocumentCreator({
                     className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 disabled:opacity-20 disabled:cursor-not-allowed transition-colors shrink-0 mt-0.5"
                     aria-label="Remove line"
                   >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M4 4l8 8M12 4l-8 8" />
+                    {/* Trash icon — distinct from the combobox's clear-X
+                        which sits next to it inside the product picker. */}
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M2.5 4h11" />
+                      <path d="M6.5 4V2.5h3V4" />
+                      <path d="M3.75 4l.75 9a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1l.75-9" />
+                      <path d="M6.5 7v4M9.5 7v4" />
                     </svg>
                   </button>
                 </div>
@@ -968,12 +1090,25 @@ export function DocumentCreator({
             )}
 
             <div className="flex justify-between items-center text-sm">
-              <span className="text-text-secondary">Round Off</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-text-secondary">Round Off</span>
+                {bizDefaultRoundOff && !isEditing && !roundOffOverridden && (
+                  <span
+                    className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded text-brand-700 dark:text-brand-400 bg-brand-600/[0.1]"
+                    title="Auto-rounded down to nearest integer (per Settings → Documents). Edit to override."
+                  >
+                    Auto
+                  </span>
+                )}
+              </div>
               <input
                 type="number"
                 className="input w-32 text-right tabular-nums"
                 value={roundOff}
-                onChange={(e) => setRoundOff(e.target.value)}
+                onChange={(e) => {
+                  setRoundOff(e.target.value);
+                  setRoundOffOverridden(true);
+                }}
                 step="0.01"
               />
             </div>
@@ -1028,6 +1163,21 @@ export function DocumentCreator({
       onCreated={handleQuickItemCreated}
       initialName={quickItemName}
       invoiceType={invoiceType}
+    />
+
+    <ConfirmDialog
+      open={confirmCloseOpen}
+      title="Discard unsaved changes?"
+      description="You have entered information on this document. Closing now will lose those changes."
+      confirmLabel="Discard"
+      variant="danger"
+      onCancel={() => setConfirmCloseOpen(false)}
+      onConfirm={() => {
+        setConfirmCloseOpen(false);
+        // Bypass the dirty guard for this close — the user has confirmed.
+        baselineRef.current = formSnapshotRef.current;
+        onClose();
+      }}
     />
     </>
   );

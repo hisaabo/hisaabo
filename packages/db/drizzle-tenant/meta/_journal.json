@@ -22,6 +22,13 @@
       "when": 1776599766999,
       "tag": "0002_perfect_sugar_man",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776712378497,
+      "tag": "0003_needy_siren",
+      "breakpoints": true
     }
   ]
 }

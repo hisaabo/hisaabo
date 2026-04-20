@@ -885,12 +885,20 @@ function InvoicesPage() {
   const dateRange = useDateRange("invoices", "this-month");
 
   // Open the invoice detail panel when navigated here with ?id=<invoiceId>
-  const { id: idFromSearch } = useSearch({ from: "/invoices" });
+  // or open the create slider when navigated here with ?create=1 (used by
+  // the Dashboard "+ New Invoice" CTA so users land directly in the form
+  // rather than just on the list).
+  const { id: idFromSearch, create: createFromSearch } = useSearch({ from: "/invoices" });
   useEffect(() => {
     if (idFromSearch) {
       setSelectedInvoiceId(idFromSearch);
     }
   }, [idFromSearch]);
+  useEffect(() => {
+    if (createFromSearch) {
+      setShowCreate(true);
+    }
+  }, [createFromSearch]);
 
   const debouncedSearch = useDebounce(search, 300);
 

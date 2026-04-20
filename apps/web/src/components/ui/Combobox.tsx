@@ -34,6 +34,8 @@ export interface ComboboxProps {
   onCreateNew?: (query: string) => void;
   /** Label for the create-new action. Defaults to "Create new". */
   createNewLabel?: string;
+  /** Mark the combobox input as the dialog's preferred autofocus target. */
+  autoFocus?: boolean;
 }
 
 export function Combobox({
@@ -50,6 +52,7 @@ export function Combobox({
   isLoading,
   onCreateNew,
   createNewLabel = "Create new",
+  autoFocus,
 }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -145,11 +148,26 @@ export function Combobox({
   };
 
   const handleInputFocus = () => {
-    openDropdown();
-    // Show current selection in input as query so user can edit/filter
-    if (value && selectedOption) {
-      setQuery("");
+    // When focusing into a field that already has a selection, show the
+    // selected label as editable text instead of blanking the input.
+    // Without this, the value visually disappears the moment the field is
+    // focused (and the open-on-focus dropdown obscures the selection),
+    // which users perceive as the item name being lost.
+    if (value && selectedOption && !query) {
+      setQuery(selectedOption.label);
+      // Select the text so the user can immediately overwrite it. Skip the
+      // onQueryChange call — we already have the matching option locally
+      // and don't want to trigger a redundant server search for the same
+      // label that's already selected.
+      requestAnimationFrame(() => inputRef.current?.select());
+      // Don't auto-open the dropdown when a selection already exists — Tab
+      // cycling through the form would otherwise re-open the picker every
+      // time focus lands here, which feels like the field is "sticky".
+      // Users who want to change the selection can press ArrowDown, type,
+      // or click the chevron.
+      return;
     }
+    openDropdown();
   };
 
   // The "create new" action counts as one extra navigable slot after the options
@@ -198,7 +216,12 @@ export function Combobox({
         }
         break;
       case "Backspace":
-        if (query === "" && value) {
+        // Keyboard-only deselect. Triggered when the field is showing the
+        // unmodified selected label (either empty query, or query still
+        // equals the label because the user just focused in and hasn't
+        // typed yet — see handleInputFocus).
+        if (value && (query === "" || query === selectedOption?.label)) {
+          e.preventDefault();
           clearSelection();
         }
         break;
@@ -251,8 +274,15 @@ export function Combobox({
           value={displayValue}
           onChange={handleInputChange}
           onFocus={handleInputFocus}
+          onMouseDown={() => {
+            // Click reliably opens the dropdown, even when a selection
+            // exists (focus alone intentionally doesn't, to avoid Tab
+            // cycling re-opening the picker).
+            if (!open) openDropdown();
+          }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
+          data-autofocus={autoFocus ? "" : undefined}
           className={cn(
             "input pr-8",
             error && "border-red-500 focus:border-red-500"

@@ -9,6 +9,13 @@ interface SlideOverProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  /**
+   * Called before any close attempt (Escape, overlay click, header X).
+   * Return false to veto the close — typically used to show a "discard
+   * unsaved changes?" confirm dialog. If omitted (or returns true), the
+   * default onClose runs.
+   */
+  onCloseAttempt?: () => boolean;
 }
 
 export function SlideOver({
@@ -18,38 +25,45 @@ export function SlideOver({
   description,
   children,
   footer,
+  onCloseAttempt,
 }: SlideOverProps): React.JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(dialogRef, open);
 
+  function attemptClose() {
+    if (onCloseAttempt && onCloseAttempt() === false) return;
+    onClose();
+  }
+
   // Move focus inside the dialog when it opens (ARIA dialog best practice).
-  // We focus the first focusable element if no [autofocus] element is present.
+  // Prefer an element marked [autofocus] / [data-autofocus]; fall back to the
+  // first focusable child.
   useEffect(() => {
     if (!open || !dialogRef.current) return;
-    const autoFocusEl = dialogRef.current.querySelector<HTMLElement>("[autofocus], [data-autofocus]");
-    if (!autoFocusEl) {
-      const first = dialogRef.current.querySelector<HTMLElement>(
+    const target =
+      dialogRef.current.querySelector<HTMLElement>("[autofocus], [data-autofocus]") ??
+      dialogRef.current.querySelector<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
       );
-      // Defer focus by one event-loop tick so the panel slide-in animation
-      // has begun before we move focus.  setTimeout(fn, 0) is used instead
-      // of requestAnimationFrame so that the timing is predictable in tests
-      // (vi.useFakeTimers() + vi.runAllTimers() flushes setTimeout but rAF
-      // flushing behaviour is environment-dependent in jsdom).
-      const id = setTimeout(() => first?.focus(), 0);
-      return () => clearTimeout(id);
-    }
+    // Defer focus by one event-loop tick so the panel slide-in animation
+    // has begun before we move focus.  setTimeout(fn, 0) is used instead
+    // of requestAnimationFrame so that the timing is predictable in tests
+    // (vi.useFakeTimers() + vi.runAllTimers() flushes setTimeout but rAF
+    // flushing behaviour is environment-dependent in jsdom).
+    const id = setTimeout(() => target?.focus(), 0);
+    return () => clearTimeout(id);
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") attemptClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onClose, onCloseAttempt]);
 
   if (!open) return null;
 
@@ -62,7 +76,7 @@ export function SlideOver({
     >
       <div
         className="fixed inset-0 bg-black/40 animate-fade-in"
-        onClick={onClose}
+        onClick={attemptClose}
       />
       <div
         ref={dialogRef}
@@ -85,7 +99,7 @@ export function SlideOver({
           <button
             type="button"
             className="btn-icon ml-4 shrink-0"
-            onClick={onClose}
+            onClick={attemptClose}
             aria-label="Close"
           >
             <svg

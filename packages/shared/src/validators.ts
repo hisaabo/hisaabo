@@ -73,6 +73,9 @@ export const createBusinessSchema = z.object({
   creditNotePrefix: z.string().min(1).max(10).default("CN"),
   deliveryChallanPrefix: z.string().min(1).max(10).default("DC"),
   proformaPrefix: z.string().min(1).max(10).default("PI"),
+  // Document defaults — applied to new documents but always overridable per-doc.
+  defaultRoundOff: z.boolean().default(true),
+  defaultTermsAndConditions: z.string().max(2000).nullable().optional(),
 });
 
 export const updateBusinessSchema = createBusinessSchema.partial();
