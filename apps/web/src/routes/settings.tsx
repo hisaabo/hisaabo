@@ -7,10 +7,8 @@ import { BusinessTab, BusinessForm } from "@/components/settings/BusinessTab";
 import { DocumentsTab } from "@/components/settings/DocumentsTab";
 import { TeamTab } from "@/components/settings/TeamTab";
 import { SalesTargetsTab } from "@/components/settings/SalesTargetsTab";
-import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { DataTab } from "@/components/settings/DataTab";
 import { AccountTab } from "@/components/settings/AccountTab";
-import { BackupTab } from "@/components/settings/BackupTab";
 import { StoreTab } from "@/components/settings/StoreTab";
 import { POSTab } from "@/components/settings/POSTab";
 import { ShippingTab } from "@/components/settings/ShippingTab";
@@ -245,12 +243,10 @@ function SettingsPage() {
           {tab === "shipping" && biz && <ShippingTab biz={biz} />}
           {tab === "team" && <TeamTab />}
           {tab === "targets" && <SalesTargetsTab />}
-          {tab === "appearance" && <AppearanceTab />}
           {tab === "data" && <DataTab />}
           {tab === "account" && <AccountTab />}
           {tab === "store" && <StoreTab />}
           {tab === "pos" && biz && <POSTab biz={biz} />}
-          {tab === "backup" && <BackupTab />}
         </div>
       </div>
     </div>

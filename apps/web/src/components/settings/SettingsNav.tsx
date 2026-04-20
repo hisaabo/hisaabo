@@ -38,15 +38,6 @@ function UsersIcon() {
   );
 }
 
-function PaletteIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 2a10 10 0 000 20c1.1 0 2-.9 2-2v-.5c0-.8.7-1.5 1.5-1.5H17a3 3 0 003-3 8 8 0 00-8-8z" />
-    </svg>
-  );
-}
-
 function DatabaseIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
@@ -86,16 +77,6 @@ function TargetIcon() {
   );
 }
 
-function BackupIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  );
-}
-
 function TruckIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
@@ -120,12 +101,10 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "shipping", label: "Shipping", icon: <TruckIcon /> },
   { value: "team", label: "Team", icon: <UsersIcon /> },
   { value: "targets", label: "Sales Targets", icon: <TargetIcon /> },
-  { value: "appearance", label: "Appearance", icon: <PaletteIcon /> },
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
   { value: "store", label: "Online Store", icon: <StoreIcon /> },
   { value: "pos", label: "Point-of-Sale", icon: <RegisterIcon />, adminOnly: true },
-  { value: "backup", label: "Backup", icon: <BackupIcon />, ownerOnly: true },
 ];
 
 interface SettingsNavProps {
