@@ -22,7 +22,7 @@
  * tRPC is mocked so the tests run without a real API server.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -32,11 +32,22 @@ import userEvent from "@testing-library/user-event";
 // reference normal top-level vars inside them. vi.hoisted() is the
 // official escape hatch — it runs BEFORE the hoisted factories so the
 // references are available at mock-initialisation time.
-const { invoiceCreateMutate, quotationCreateMutate, invalidateStub } =
+const { invoiceCreateMutate, quotationCreateMutate, invalidateStub, businessListQuery } =
   vi.hoisted(() => ({
     invoiceCreateMutate: vi.fn(),
     quotationCreateMutate: vi.fn(),
     invalidateStub: vi.fn(),
+    businessListQuery: vi.fn(() => ({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: false,
+          defaultTermsAndConditions: null as string | null,
+        },
+      ],
+      isFetching: false,
+    })),
   }));
 
 vi.mock("@/lib/trpc", () => ({
@@ -44,17 +55,7 @@ vi.mock("@/lib/trpc", () => ({
   trpc: {
     business: {
       list: {
-        useQuery: () => ({
-          data: [
-            {
-              id: "biz-1",
-              name: "Test Business",
-              defaultRoundOff: false,
-              defaultTermsAndConditions: null,
-            },
-          ],
-          isFetching: false,
-        }),
+        useQuery: () => businessListQuery(),
       },
     },
     party: {
@@ -559,5 +560,289 @@ describe("DocumentCreator — Bug C AltUnitSelector pill row", () => {
 
     // No radiogroup should appear
     expect(screen.queryByRole("radiogroup", { name: /select unit/i })).not.toBeInTheDocument();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Confirm-close on dirty form
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("DocumentCreator — confirm-close on dirty form", () => {
+  beforeEach(() => {
+    invoiceCreateMutate.mockClear();
+    invalidateStub.mockClear();
+    vi.mocked(toast.error).mockClear();
+    businessListQuery.mockReturnValue({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: false,
+          defaultTermsAndConditions: null,
+        },
+      ],
+      isFetching: false,
+    });
+  });
+
+  it("pristine close fires onClose directly without showing confirm dialog", async () => {
+    const onClose = vi.fn();
+    renderCreator({ onClose });
+
+    // Wait for the baseline microtask to settle
+    await waitFor(() => {});
+
+    // Click the Cancel footer button on a pristine (untouched) form
+    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
+    fireEvent.click(cancelBtn);
+
+    // onClose fires immediately — no confirm dialog
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Discard unsaved changes?")).not.toBeInTheDocument();
+  });
+
+  it("typing in a line's notes marks the form dirty and shows confirm dialog on Cancel", async () => {
+    const onClose = vi.fn();
+    renderCreator({ onClose });
+
+    // Wait for the baseline microtask to settle
+    await waitFor(() => {});
+
+    // Type into the first line notes textarea to mark dirty
+    const notesInput = getFirstNotesTextarea();
+    fireEvent.change(notesInput, { target: { value: "abc" } });
+
+    // Click Cancel
+    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
+    fireEvent.click(cancelBtn);
+
+    // Confirm dialog should appear, onClose should NOT have been called yet
+    expect(await screen.findByText("Discard unsaved changes?")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("clicking Discard on the confirm dialog fires onClose and removes the dialog", async () => {
+    const onClose = vi.fn();
+    renderCreator({ onClose });
+
+    // Wait for the baseline microtask to settle
+    await waitFor(() => {});
+
+    // Make form dirty
+    const notesInput = getFirstNotesTextarea();
+    fireEvent.change(notesInput, { target: { value: "abc" } });
+
+    // Click Cancel to open confirm dialog
+    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
+    fireEvent.click(cancelBtn);
+
+    // Wait for the confirm dialog
+    await screen.findByText("Discard unsaved changes?");
+
+    // Click the "Discard" button inside the dialog
+    const discardBtn = screen.getByRole("button", { name: /^discard$/i });
+    fireEvent.click(discardBtn);
+
+    // onClose must fire and the dialog must disappear
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Discard unsaved changes?")).not.toBeInTheDocument();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto round-off from business default
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Locate the Round Off number input.
+ * JSX structure:
+ *   outer div.flex.justify-between
+ *     inner div.flex.items-center (span "Round Off" + optional Auto badge)
+ *     input[type="number"]
+ * We go: span → parent inner div → parent outer div → querySelector input
+ */
+function getRoundOffInput(): HTMLInputElement {
+  const span = screen.getByText("Round Off");
+  // span.parentElement = inner "flex items-center gap-1.5" div
+  // span.parentElement.parentElement = outer "flex justify-between" div
+  const outerDiv = span.parentElement?.parentElement;
+  const input = outerDiv?.querySelector('input[type="number"]') as HTMLInputElement | null;
+  if (!input) throw new Error("Could not locate Round Off input");
+  return input;
+}
+
+describe("DocumentCreator — auto round-off from business default", () => {
+  beforeEach(() => {
+    invoiceCreateMutate.mockClear();
+    invalidateStub.mockClear();
+    vi.mocked(toast.error).mockClear();
+    // Enable defaultRoundOff for all tests in this block
+    businessListQuery.mockReturnValue({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: true,
+          defaultTermsAndConditions: null,
+        },
+      ],
+      isFetching: false,
+    });
+  });
+
+  afterEach(() => {
+    // Restore default
+    businessListQuery.mockReturnValue({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: false,
+          defaultTermsAndConditions: null,
+        },
+      ],
+      isFetching: false,
+    });
+  });
+
+  it("auto-fills round-off so the grand total floors to a whole rupee", async () => {
+    renderCreator();
+    const user = userEvent.setup();
+    await pickSteelRod(user);
+
+    // Change unit price to 100.25 → with 18% tax, pre-round total ≈ 118.295
+    // round-off should auto-fill to a non-zero value to floor the total
+    const priceInput = screen.getAllByLabelText("Unit price")[0] as HTMLInputElement;
+    fireEvent.change(priceInput, { target: { value: "100.25" } });
+
+    // Wait for the auto-fill effect to run
+    await waitFor(() => {
+      const roInput = getRoundOffInput();
+      expect(roInput.value).not.toBe("0");
+    });
+
+    const roundOffInput = getRoundOffInput();
+    // round-off value must be non-zero (auto-filled to floor the total)
+    expect(roundOffInput.value).not.toBe("0");
+  });
+
+  it("'Auto' badge appears next to Round Off label when bizDefaultRoundOff is on and user hasn't overridden", async () => {
+    renderCreator();
+
+    // The Auto badge should appear once the component renders with defaultRoundOff: true
+    await waitFor(() => {
+      expect(screen.getByText("Auto")).toBeInTheDocument();
+    });
+
+    // Both "Round Off" text and "Auto" badge should be visible
+    expect(screen.getByText("Round Off")).toBeInTheDocument();
+    expect(screen.getByText("Auto")).toBeInTheDocument();
+  });
+
+  it("editing the Round Off input manually stops auto-fill and hides the Auto badge", async () => {
+    renderCreator();
+
+    // Confirm Auto badge is present initially
+    await waitFor(() => {
+      expect(screen.getByText("Auto")).toBeInTheDocument();
+    });
+
+    // Manually edit the round-off input
+    const roundOffInput = getRoundOffInput();
+    fireEvent.change(roundOffInput, { target: { value: "5" } });
+
+    // Auto badge should disappear
+    await waitFor(() => {
+      expect(screen.queryByText("Auto")).not.toBeInTheDocument();
+    });
+
+    // Further changes to price should NOT re-populate round-off
+    const priceInput = screen.getAllByLabelText("Unit price")[0] as HTMLInputElement;
+    fireEvent.change(priceInput, { target: { value: "200" } });
+
+    // Round-off stays at what the user set ("5"), auto-fill doesn't override
+    await waitFor(() => {
+      expect(getRoundOffInput().value).toBe("5");
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T&C pre-fill from business default
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("DocumentCreator — T&C pre-fill from business default", () => {
+  const DEFAULT_TERMS = "Payment due within 15 days";
+
+  beforeEach(() => {
+    invoiceCreateMutate.mockClear();
+    invalidateStub.mockClear();
+    vi.mocked(toast.error).mockClear();
+    // Enable defaultTermsAndConditions for all tests in this block
+    businessListQuery.mockReturnValue({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: false,
+          defaultTermsAndConditions: DEFAULT_TERMS as string | null,
+        },
+      ],
+      isFetching: false,
+    });
+  });
+
+  afterEach(() => {
+    // Restore default
+    businessListQuery.mockReturnValue({
+      data: [
+        {
+          id: "biz-1",
+          name: "Test Business",
+          defaultRoundOff: false,
+          defaultTermsAndConditions: null,
+        },
+      ],
+      isFetching: false,
+    });
+  });
+
+  it("terms textarea pre-fills from bizDefaultTerms on a new doc", async () => {
+    renderCreator();
+
+    const termsTextarea = screen.getByPlaceholderText("Payment terms, warranty, etc…") as HTMLTextAreaElement;
+
+    await waitFor(() => {
+      expect(termsTextarea.value).toBe(DEFAULT_TERMS);
+    });
+  });
+
+  it("terms textarea does NOT re-populate if user has already typed something", async () => {
+    renderCreator();
+
+    const termsTextarea = screen.getByPlaceholderText("Payment terms, warranty, etc…") as HTMLTextAreaElement;
+
+    // Immediately type into terms before the effect fires
+    fireEvent.change(termsTextarea, { target: { value: "hand-written terms" } });
+
+    // Wait a tick for any effects
+    await waitFor(() => {});
+
+    // The user's input should be preserved, not overwritten by the default
+    expect(termsTextarea.value).toBe("hand-written terms");
+  });
+
+  it("terms does NOT pre-fill when prefillFromInvoiceId is passed (prefill mode)", async () => {
+    // prefillFromInvoiceId puts the form in prefill mode (prefillId is set),
+    // which causes the termsHydratedRef guard to skip hydration.
+    renderCreator({ prefillFromInvoiceId: "some-invoice-id" });
+
+    const termsTextarea = screen.getByPlaceholderText("Payment terms, warranty, etc…") as HTMLTextAreaElement;
+
+    // Wait for any async effects
+    await waitFor(() => {});
+
+    // Terms should remain empty — editData returns null (mocked), so setTerms
+    // stays at "" and the hydration effect is blocked by prefillId guard.
+    expect(termsTextarea.value).toBe("");
   });
 });

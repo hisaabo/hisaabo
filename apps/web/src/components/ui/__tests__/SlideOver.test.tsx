@@ -269,4 +269,84 @@ describe("SlideOver — right-side panel used for all data-entry forms", () => {
       expect(results).toHaveNoViolations();
     });
   });
+
+  // ─── onCloseAttempt veto hook ──────────────────────────────────────────────
+
+  describe("onCloseAttempt veto hook", () => {
+    it("onCloseAttempt returning true allows Escape to close", async () => {
+      const onClose = vi.fn();
+      const onCloseAttempt = vi.fn(() => true);
+      renderSlideOver({ onClose, onCloseAttempt });
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(onCloseAttempt).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("onCloseAttempt returning false vetoes Escape", async () => {
+      const onClose = vi.fn();
+      const onCloseAttempt = vi.fn(() => false);
+      renderSlideOver({ onClose, onCloseAttempt });
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(onCloseAttempt).toHaveBeenCalledOnce();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("onCloseAttempt returning false vetoes backdrop click", async () => {
+      const onClose = vi.fn();
+      const onCloseAttempt = vi.fn(() => false);
+      renderSlideOver({ onClose, onCloseAttempt });
+
+      const backdrop = document.querySelector(
+        ".fixed.inset-0.bg-black\\/40"
+      ) as HTMLElement;
+      await userEvent.click(backdrop);
+
+      expect(onCloseAttempt).toHaveBeenCalledOnce();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("onCloseAttempt returning false vetoes the header X button", async () => {
+      const onClose = vi.fn();
+      const onCloseAttempt = vi.fn(() => false);
+      renderSlideOver({ onClose, onCloseAttempt });
+
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+
+      expect(onCloseAttempt).toHaveBeenCalledOnce();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("without onCloseAttempt, Escape still closes normally", async () => {
+      const onClose = vi.fn();
+      renderSlideOver({ onClose });
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("onCloseAttempt veto followed by returning true allows the next attempt", async () => {
+      const onClose = vi.fn();
+      let callCount = 0;
+      const onCloseAttempt = vi.fn(() => {
+        callCount += 1;
+        return callCount > 1;
+      });
+      renderSlideOver({ onClose, onCloseAttempt });
+
+      // First Escape — veto (returns false on first call)
+      await userEvent.keyboard("{Escape}");
+      expect(onCloseAttempt).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second Escape — allowed (returns true on second call)
+      await userEvent.keyboard("{Escape}");
+      expect(onCloseAttempt).toHaveBeenCalledTimes(2);
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+  });
 });
