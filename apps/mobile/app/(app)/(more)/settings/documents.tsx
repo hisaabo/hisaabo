@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -17,7 +16,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBusinessStore } from "../../../../src/stores/business";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton } from "../../../../src/components/ui";
 
 const DOC_TYPES = [
@@ -38,6 +38,8 @@ interface SeqEditorState {
 }
 
 export default function DocumentsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const businessId = useBusinessStore((s) => s.businessId);
 
@@ -351,7 +353,7 @@ export default function DocumentsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -585,4 +587,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-});
+}));

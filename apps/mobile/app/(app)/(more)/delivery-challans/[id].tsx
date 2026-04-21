@@ -4,7 +4,6 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  StyleSheet,
   Alert,
   ActivityIndicator,
 } from "react-native";
@@ -13,10 +12,13 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
 
 export default function DeliveryChallanDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const utils = trpc.useUtils();
@@ -272,7 +274,7 @@ export default function DeliveryChallanDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingBottom: 32 },
@@ -417,4 +419,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   actionBtnConvertText: { fontSize: 14, fontWeight: "700", color: colors.textPrimary, flex: 1 },
-});
+}));

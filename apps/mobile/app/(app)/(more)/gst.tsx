@@ -1,9 +1,12 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 
 export default function GSTReportsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.body}>
@@ -20,7 +23,7 @@ export default function GSTReportsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   body: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 },
   iconWrapper: {
@@ -42,4 +45,4 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   comingSoonText: { fontSize: 13, fontWeight: "600", color: colors.brand },
-});
+}));

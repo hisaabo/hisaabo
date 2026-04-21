@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   Modal,
   FlatList,
   ActivityIndicator,
@@ -17,7 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { DatePickerField } from "../../../../src/components/ui";
 
 /* ── Constants ──────────────────────────────────────────────────── */
@@ -50,6 +50,8 @@ function PartyPickerModal({
   onSelect: (p: { id: string; name: string }) => void;
   onClose: () => void;
 }) {
+  const ms = useMs();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery(
     { type: "customer", page: 1, limit: 200 },
@@ -121,6 +123,8 @@ function CarrierPickerModal({
   onSelect: (key: string) => void;
   onClose: () => void;
 }) {
+  const ms = useMs();
+  const colors = useColors();
   return (
     <Modal visible={visible} animationType="slide" transparent presentationStyle="overFullScreen">
       <View style={ms.overlay}>
@@ -160,6 +164,8 @@ function CarrierPickerModal({
 /* ── Main Screen ────────────────────────────────────────────────── */
 
 export default function CreateShipmentScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
 
   // Party
@@ -450,7 +456,7 @@ export default function CreateShipmentScreen() {
 
 /* ── Styles ─────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingBottom: 32 },
@@ -566,9 +572,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
   },
-});
+}));
 
-const ms = StyleSheet.create({
+const useMs = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
@@ -659,4 +665,4 @@ const ms = StyleSheet.create({
     fontSize: 13,
     padding: 24,
   },
-});
+}));

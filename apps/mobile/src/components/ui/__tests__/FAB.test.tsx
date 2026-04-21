@@ -26,7 +26,8 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { screen, fireEvent } from "@testing-library/react-native";
+import { renderWithTheme as render } from "../../../test-utils";
 import { FAB } from "../FAB";
 
 // ---------------------------------------------------------------------------

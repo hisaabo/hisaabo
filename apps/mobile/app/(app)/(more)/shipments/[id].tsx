@@ -1,9 +1,9 @@
+import { useMemo } from "react";
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  StyleSheet,
   Alert,
   ActivityIndicator,
   Linking,
@@ -13,18 +13,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatDate, formatCurrency } from "../../../../src/lib/utils";
-import { colors, fonts } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
+import { fonts } from "../../../../src/lib/theme";
 import { QueryError } from "../../../../src/components/ui";
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: colors.warning,
-  shipped: colors.info,
-  in_transit: colors.brand,
-  delivered: colors.success,
-  returned: colors.danger,
-};
+function useStatusColors(): Record<string, string> {
+  const colors = useColors();
+  return useMemo(() => ({
+    pending: colors.warning,
+    shipped: colors.info,
+    in_transit: colors.brand,
+    delivered: colors.success,
+    returned: colors.danger,
+  }), [colors]);
+}
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
@@ -52,6 +57,9 @@ const TRANSITION_LABELS: Record<string, string> = {
 /* ── Status badge ────────────────────────────────────────────────── */
 
 function StatusBadge({ status }: { status: string }) {
+  const badge = useBadge();
+  const colors = useColors();
+  const STATUS_COLORS = useStatusColors();
   const color = STATUS_COLORS[status] ?? colors.textMuted;
   const label = STATUS_LABELS[status] ?? status;
   return (
@@ -62,7 +70,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-const badge = StyleSheet.create({
+const useBadge = makeStyles((_colors) => ({
   wrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -82,7 +90,7 @@ const badge = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
   },
-});
+}));
 
 /* ── Info row ────────────────────────────────────────────────────── */
 
@@ -99,6 +107,8 @@ function InfoRow({
   onPress?: () => void;
   mono?: boolean;
 }) {
+  const infoRow = useInfoRow();
+  const colors = useColors();
   return (
     <View style={infoRow.row}>
       <View style={infoRow.iconWrap}>
@@ -126,7 +136,7 @@ function InfoRow({
   );
 }
 
-const infoRow = StyleSheet.create({
+const useInfoRow = makeStyles((colors) => ({
   row: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -156,11 +166,12 @@ const infoRow = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: "500",
   },
-});
+}));
 
 /* ── Section card ────────────────────────────────────────────────── */
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+  const card = useCard();
   return (
     <View style={card.wrap}>
       <Text style={card.title}>{title}</Text>
@@ -169,7 +180,7 @@ function SectionCard({ title, children }: { title: string; children: React.React
   );
 }
 
-const card = StyleSheet.create({
+const useCard = makeStyles((colors) => ({
   wrap: {
     backgroundColor: colors.surface,
     borderRadius: 16,
@@ -193,17 +204,21 @@ const card = StyleSheet.create({
     paddingBottom: 6,
     // rows handle their own vertical padding
   },
-});
+}));
 
 /* ── Divider ─────────────────────────────────────────────────────── */
 
 function Divider() {
+  const colors = useColors();
   return <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 2 }} />;
 }
 
 /* ── Main screen ─────────────────────────────────────────────────── */
 
 export default function ShipmentDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
+  const STATUS_COLORS = useStatusColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
 
@@ -561,7 +576,7 @@ export default function ShipmentDetailScreen() {
 
 /* ── Styles ─────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   headerBar: {
@@ -693,4 +708,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.danger,
   },
-});
+}));

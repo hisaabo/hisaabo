@@ -28,7 +28,8 @@
 
 import React from "react";
 import { Platform } from "react-native";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { screen, fireEvent } from "@testing-library/react-native";
+import { renderWithTheme as render } from "../../../test-utils";
 import { SearchBar } from "../SearchBar";
 
 // ---------------------------------------------------------------------------

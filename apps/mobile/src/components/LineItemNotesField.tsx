@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TextInput, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../lib/theme";
+import { makeStyles } from "../lib/makeStyles";
+import { useColors } from "../contexts/ThemeContext";
 
 /**
  * Bug B — line-item free-text notes.
@@ -52,6 +53,8 @@ export function LineItemNotesField({
   // concern — the parent only cares about the committed value.
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<TextInput>(null);
+  const s = useS();
+  const colors = useColors();
 
   // Auto-focus when we enter edit mode so the keyboard pops immediately.
   useEffect(() => {
@@ -159,7 +162,7 @@ export function LineItemNotesField({
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   // Collapsed default — muted text button
   addLinkWrap: {
     alignSelf: "flex-start",
@@ -234,4 +237,4 @@ const s = StyleSheet.create({
     fontWeight: "700",
     color: colors.brand,
   },
-});
+}));

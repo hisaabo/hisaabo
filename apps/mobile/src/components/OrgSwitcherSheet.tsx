@@ -14,7 +14,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../lib/theme";
+import { makeStyles } from "../lib/makeStyles";
+import { useColors } from "../contexts/ThemeContext";
 import { haptic } from "../lib/haptics";
 
 interface OrgItem {
@@ -59,6 +60,8 @@ export function OrgSwitcherSheet({
   isCreating,
 }: OrgSwitcherSheetProps) {
   const [slideAnim] = useState(() => new Animated.Value(0));
+  const styles = useStyles();
+  const colors = useColors();
 
   useEffect(() => {
     if (visible) {
@@ -190,7 +193,7 @@ export function OrgSwitcherSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     justifyContent: "flex-end",
@@ -301,4 +304,4 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: colors.textSecondary,
   },
-});
+}));

@@ -4,7 +4,6 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,7 +12,8 @@ import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { accumulatePages } from "../../../src/lib/accumulate-pages";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import {
   StatusBadge,
   FAB,
@@ -42,6 +42,8 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 const PAGE_SIZE = 20;
 
 export default function InvoicesScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const params = useLocalSearchParams<{ type?: string; status?: string }>();
   const { businessId } = useBusinessStore();
@@ -240,7 +242,7 @@ export default function InvoicesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -379,4 +381,4 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     alignItems: "center",
   },
-});
+}));

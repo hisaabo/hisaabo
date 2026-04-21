@@ -12,7 +12,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useBiometricStore } from "../stores/biometric";
-import { colors } from "../lib/theme";
+import { makeStyles } from "../lib/makeStyles";
+import { useColors } from "../contexts/ThemeContext";
 import { haptic } from "../lib/haptics";
 import * as LocalAuthentication from "expo-local-authentication";
 
@@ -32,6 +33,8 @@ export function BiometricSetupPrompt({ visible, onDismiss }: Props) {
     markSetupPrompted,
     checkHardware,
   } = useBiometricStore();
+  const styles = useStyles();
+  const colors = useColors();
 
   const [step, setStep] = useState<Step>("prompt");
   const [hardwareAvailable, setHardwareAvailable] = useState(false);
@@ -311,7 +314,7 @@ export function BiometricSetupPrompt({ visible, onDismiss }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     justifyContent: "flex-end",
@@ -462,4 +465,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.textPrimary,
   },
-});
+}));

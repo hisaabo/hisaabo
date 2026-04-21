@@ -1,16 +1,19 @@
 import { useEffect, useCallback, useMemo, useRef } from "react";
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../src/lib/trpc";
 import { useAuthStore } from "../../src/stores/auth";
 import { useBusinessStore } from "../../src/stores/business";
-import { colors } from "../../src/lib/theme";
+import { makeStyles } from "../../src/lib/makeStyles";
+import { useColors } from "../../src/contexts/ThemeContext";
 import { queryClient } from "../../src/lib/query-client";
 import { BusinessSwitcherProvider } from "../../src/contexts/BusinessSwitcherContext";
 import { MaintenanceBanner } from "../../src/components/MaintenanceBanner";
 
 export default function AppLayout() {
+  const styles = useStyles();
+  const colors = useColors();
   const token = useAuthStore((s) => s.token);
   const router = useRouter();
   const utils = trpc.useUtils();
@@ -217,7 +220,7 @@ export default function AppLayout() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   loading: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -261,4 +264,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 15,
   },
-});
+}));

@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -19,7 +18,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBusinessStore } from "../../../../src/stores/business";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { Skeleton } from "../../../../src/components/ui";
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,8 @@ function useDebounce<T>(value: T, delay: number): T {
 // ---------------------------------------------------------------------------
 
 export default function StoreSettingsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const businessId = useBusinessStore((s) => s.businessId);
   const utils = trpc.useUtils();
@@ -400,6 +402,8 @@ function Field({
   autoCapitalize?: "none" | "words" | "sentences" | "characters";
   prefix?: string;
 }) {
+  const fieldStyles = useFieldStyles();
+  const colors = useColors();
   return (
     <View style={fieldStyles.wrapper}>
       <Text style={fieldStyles.label}>{label}</Text>
@@ -424,7 +428,7 @@ function Field({
   );
 }
 
-const fieldStyles = StyleSheet.create({
+const useFieldStyles = makeStyles((colors) => ({
   wrapper: {
     marginBottom: 14,
   },
@@ -470,7 +474,7 @@ const fieldStyles = StyleSheet.create({
     borderTopLeftRadius: 0,
     borderBottomLeftRadius: 0,
   },
-});
+}));
 
 // ---------------------------------------------------------------------------
 // Store Items Modal
@@ -493,6 +497,8 @@ function StoreItemsModal({
   onClose: () => void;
   businessId: string | null;
 }) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const utils = trpc.useUtils();
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
@@ -817,7 +823,7 @@ function StoreItemsModal({
 // Modal Styles
 // ---------------------------------------------------------------------------
 
-const modalStyles = StyleSheet.create({
+const useModalStyles = makeStyles((colors) => ({
   fullScreen: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -1080,13 +1086,13 @@ const modalStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
-});
+}));
 
 // ---------------------------------------------------------------------------
 // Screen Styles
 // ---------------------------------------------------------------------------
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -1231,4 +1237,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.brand,
   },
-});
+}));

@@ -1,17 +1,17 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
-  StyleSheet,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import {
   FAB,
   SearchBar,
@@ -31,14 +31,6 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "returned", label: "Returned" },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: colors.warning,
-  shipped: colors.info,
-  in_transit: colors.brand,
-  delivered: colors.success,
-  returned: colors.danger,
-};
-
 const STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
   shipped: "Shipped",
@@ -50,6 +42,15 @@ const STATUS_LABELS: Record<string, string> = {
 const PAGE_SIZE = 20;
 
 function ShipmentStatusBadge({ status }: { status: string }) {
+  const sb = useSb();
+  const colors = useColors();
+  const STATUS_COLORS: Record<string, string> = useMemo(() => ({
+    pending: colors.warning,
+    shipped: colors.info,
+    in_transit: colors.brand,
+    delivered: colors.success,
+    returned: colors.danger,
+  }), [colors]);
   const color = STATUS_COLORS[status] ?? colors.textMuted;
   const label = STATUS_LABELS[status] ?? status;
   return (
@@ -59,7 +60,7 @@ function ShipmentStatusBadge({ status }: { status: string }) {
   );
 }
 
-const sb = StyleSheet.create({
+const useSb = makeStyles((_colors) => ({
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -70,9 +71,11 @@ const sb = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-});
+}));
 
 export default function ShipmentsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -221,7 +224,7 @@ export default function ShipmentsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flatListContent: { paddingBottom: 100 },
   listHeader: { paddingBottom: 8 },
@@ -297,4 +300,4 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   loadMoreText: { fontSize: 14, fontWeight: "600", color: colors.brand },
-});
+}));

@@ -4,14 +4,14 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  StyleSheet,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import {
   StatusBadge,
   SearchBar,
@@ -35,6 +35,8 @@ const STATUS_TABS: { key: "all" | OrderStatus; label: string }[] = [
 const PAGE_SIZE = 20;
 
 export default function StoreOrdersScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const [statusFilter, setStatusFilter] = useState<"all" | OrderStatus>("all");
   const [search, setSearch] = useState("");
@@ -172,7 +174,7 @@ export default function StoreOrdersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flatListContent: { paddingBottom: 40 },
   listHeader: { paddingBottom: 8 },
@@ -249,4 +251,4 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   loadMoreText: { fontSize: 14, fontWeight: "600", color: colors.brand },
-});
+}));

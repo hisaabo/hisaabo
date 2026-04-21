@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -16,7 +15,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card" | "payment_gateway";
@@ -39,6 +39,8 @@ function normaliseType(raw: string): AccountType {
 }
 
 export default function BankAccountEditScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const utils = trpc.useUtils();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -251,7 +253,7 @@ export default function BankAccountEditScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
@@ -350,4 +352,4 @@ const s = StyleSheet.create({
   },
   saveBtnDisabled: { opacity: 0.7 },
   saveBtnText: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-});
+}));

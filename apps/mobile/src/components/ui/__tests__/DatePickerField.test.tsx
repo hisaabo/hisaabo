@@ -12,7 +12,8 @@
  * and the visual calendar icon affordance.
  */
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { screen, fireEvent } from "@testing-library/react-native";
+import { renderWithTheme as render } from "../../../test-utils";
 import { DatePickerField } from "../DatePickerField";
 
 // Mock the native date picker — not available in Jest environment

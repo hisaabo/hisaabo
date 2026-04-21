@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   RefreshControl,
@@ -23,7 +22,8 @@ import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
 
@@ -55,7 +55,7 @@ async function sharePDF(
 
 type NextStatus = { label: string; status: StatusKey; color: string };
 
-function getNextStatuses(current: string): NextStatus[] {
+function getNextStatuses(current: string, colors: { info: string }): NextStatus[] {
   switch (current) {
     case "draft":
       return [{ label: "Mark as Sent", status: "sent", color: colors.info }];
@@ -71,13 +71,16 @@ function getNextStatuses(current: string): NextStatus[] {
 type ShipmentStatus = "pending" | "shipped" | "in_transit" | "delivered" | "returned";
 type ShipmentMode = "hand_delivery" | "courier" | "transport" | "post" | string;
 
-const SHIPMENT_STATUS_CONFIG: Record<ShipmentStatus, { label: string; color: string; bg: string; icon: React.ComponentProps<typeof Ionicons>["name"] }> = {
-  pending:    { label: "Pending",     color: colors.warning,  bg: colors.warningBg,  icon: "time-outline" },
-  shipped:    { label: "Shipped",     color: colors.info,     bg: colors.infoBg,     icon: "cube-outline" },
-  in_transit: { label: "In Transit",  color: colors.brand,    bg: colors.brandLight, icon: "navigate-outline" },
-  delivered:  { label: "Delivered",   color: colors.success,  bg: colors.successBg,  icon: "checkmark-circle-outline" },
-  returned:   { label: "Returned",    color: colors.danger,   bg: colors.dangerBg,   icon: "return-down-back-outline" },
-};
+function useShipmentStatusConfig(): Record<ShipmentStatus, { label: string; color: string; bg: string; icon: React.ComponentProps<typeof Ionicons>["name"] }> {
+  const colors = useColors();
+  return useMemo(() => ({
+    pending:    { label: "Pending",     color: colors.warning,  bg: colors.warningBg,  icon: "time-outline" },
+    shipped:    { label: "Shipped",     color: colors.info,     bg: colors.infoBg,     icon: "cube-outline" },
+    in_transit: { label: "In Transit",  color: colors.brand,    bg: colors.brandLight, icon: "navigate-outline" },
+    delivered:  { label: "Delivered",   color: colors.success,  bg: colors.successBg,  icon: "checkmark-circle-outline" },
+    returned:   { label: "Returned",    color: colors.danger,   bg: colors.dangerBg,   icon: "return-down-back-outline" },
+  }), [colors]);
+}
 
 const MODE_LABELS: Record<string, string> = {
   hand_delivery: "Self/Driver",
@@ -121,6 +124,8 @@ function AddTrackingSheet({
   onClose,
   onSaved,
 }: AddTrackingSheetProps) {
+  const sheetStyles = useSheetStyles();
+  const colors = useColors();
   const [carrier, setCarrier] = useState(initialCarrier ?? "");
   const [trackingNumber, setTrackingNumber] = useState(initialTrackingNumber ?? "");
   const [mode, setMode] = useState(initialMode ?? "courier");
@@ -226,6 +231,10 @@ interface ShipmentSectionProps {
 }
 
 function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
+  const styles = useStyles();
+  const shipmentStyles = useShipmentStyles();
+  const colors = useColors();
+  const SHIPMENT_STATUS_CONFIG = useShipmentStatusConfig();
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
   const utils = trpc.useUtils();
 
@@ -455,6 +464,8 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
 // ---------------------------------------------------------------------------
 
 export default function InvoiceDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const businessId = useBusinessStore((s) => s.businessId);
@@ -585,7 +596,7 @@ export default function InvoiceDetailScreen() {
     );
   }
 
-  const nextStatuses = getNextStatuses(invoice.status);
+  const nextStatuses = getNextStatuses(invoice.status, colors);
   const subtotal = invoice.lineItems.reduce(
     (sum, li) => sum + parseFloat(li.totalAmount ?? "0"),
     0
@@ -930,7 +941,7 @@ export default function InvoiceDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -1173,10 +1184,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-});
+}));
 
 // Styles shared between shipment section and action chips
-const shipmentStyles = StyleSheet.create({
+const useShipmentStyles = makeStyles((colors) => ({
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1240,10 +1251,10 @@ const shipmentStyles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-});
+}));
 
 // Bottom sheet styles
-const sheetStyles = StyleSheet.create({
+const useSheetStyles = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.55)",
@@ -1328,4 +1339,4 @@ const sheetStyles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
   },
-});
+}));

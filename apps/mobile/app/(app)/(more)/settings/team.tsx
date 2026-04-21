@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -13,21 +12,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
-
-const ROLE_COLORS: Record<string, string> = {
-  owner: colors.brand,
-  superadmin: colors.brand,
-  admin: colors.info,
-  seller_manager: colors.warning,
-  seller: colors.success,
-  accountant: colors.amber,
-  member: colors.textMuted,
-  viewer: colors.textMuted,
-};
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Owner",
@@ -48,6 +37,18 @@ const INVITE_ROLES: Array<{ key: string; label: string }> = [
 ];
 
 function RoleBadge({ role }: { role: string }) {
+  const badgeStyles = useBadgeStyles();
+  const colors = useColors();
+  const ROLE_COLORS: Record<string, string> = useMemo(() => ({
+    owner: colors.brand,
+    superadmin: colors.brand,
+    admin: colors.info,
+    seller_manager: colors.warning,
+    seller: colors.success,
+    accountant: colors.amber,
+    member: colors.textMuted,
+    viewer: colors.textMuted,
+  }), [colors]);
   const color = ROLE_COLORS[role] ?? colors.textMuted;
   const label = ROLE_LABELS[role] ?? role;
   return (
@@ -57,7 +58,7 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
-const badgeStyles = StyleSheet.create({
+const useBadgeStyles = makeStyles((_colors) => ({
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -68,11 +69,13 @@ const badgeStyles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-});
+}));
 
 type ChangeRoleTarget = { userId: string; currentRole: string; displayName: string } | null;
 
 export default function TeamScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -496,7 +499,7 @@ export default function TeamScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -720,4 +723,4 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 4,
   },
-});
+}));

@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import {
-  useColorScheme,
   View,
   StyleSheet,
   Animated,
@@ -13,6 +12,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { TRPCProvider } from "../src/providers/TRPCProvider";
+import { ThemeProvider, useTheme } from "../src/contexts/ThemeContext";
 import { useAuthStore } from "../src/stores/auth";
 import { useBusinessStore } from "../src/stores/business";
 import { useBiometricStore } from "../src/stores/biometric";
@@ -25,8 +25,13 @@ SplashScreen.preventAutoHideAsync();
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 /* --- Brand Colors -------------------------------------------------------- */
+// The splash is an intentional brand visual that renders before the theme
+// context hydrates. It always uses the dark brand palette (`#141417` matches
+// the themed dark `bg`), so the handoff into a dark-mode app is seamless.
+// Light-mode users see a single dark splash flash on cold boot; this is
+// accepted as part of the brand identity.
 const C = {
-  bg: "#0f0f1a",
+  bg: "#141417",
   brand: "#5b5bd6",
   brandLight: "rgba(91, 91, 214, 0.15)",
   brandBorder: "rgba(91, 91, 214, 0.25)",
@@ -466,7 +471,15 @@ type AuthGateState = "loading" | "locked" | "ready" | "login";
 const RELOCK_THRESHOLD = 30_000;
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  return (
+    <ThemeProvider>
+      <RootLayoutInner />
+    </ThemeProvider>
+  );
+}
+
+function RootLayoutInner() {
+  const { scheme } = useTheme();
   const router = useRouter();
 
   // Auth store
@@ -675,7 +688,7 @@ export default function RootLayout() {
   // as a safety net, and handles business/tenant selection.
   return (
     <TRPCProvider>
-      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+      <StatusBar style={scheme === "dark" ? "light" : "dark"} />
       <AuthGateRouter authGate={authGate} token={token} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />

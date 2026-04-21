@@ -4,7 +4,6 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   TextInput,
@@ -15,7 +14,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
 import { haptic } from "../../../../src/lib/haptics";
 
@@ -28,6 +28,8 @@ const STATUS_NEXT: Partial<Record<OrderStatus, { label: string; nextStatus: "pre
 };
 
 export default function StoreOrderDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [cancelReason, setCancelReason] = useState("");
@@ -323,7 +325,7 @@ export default function StoreOrderDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   notFoundText: { fontSize: 15, color: colors.textMuted },
@@ -518,4 +520,4 @@ const styles = StyleSheet.create({
   },
   modalConfirmBtnText: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
   btnDisabled: { opacity: 0.7 },
-});
+}));

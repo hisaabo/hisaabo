@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { PressableRow } from "../../../src/components/ui";
 
 /* ── Menu items ──────────────────────────────────────────────── */
@@ -55,6 +56,7 @@ async function trackRecent(route: string) {
 /* ── Screen ──────────────────────────────────────────────────── */
 
 export default function MoreScreen() {
+  const s = useS();
   const router = useRouter();
   const [recentRoutes, setRecentRoutes] = useState<string[]>([]);
 
@@ -111,6 +113,8 @@ export default function MoreScreen() {
 /* ── Grid item ───────────────────────────────────────────────── */
 
 function GridItem({ item, onPress }: { item: MenuItem; onPress: () => void }) {
+  const s = useS();
+  const colors = useColors();
   return (
     <PressableRow style={s.card} onPress={onPress}>
       <View style={s.iconWrap}>
@@ -123,7 +127,7 @@ function GridItem({ item, onPress }: { item: MenuItem; onPress: () => void }) {
 
 /* ── Styles ──────────────────────────────────────────────────── */
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
   title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, letterSpacing: -0.5 },
@@ -170,4 +174,4 @@ const s = StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
   },
-});
+}));

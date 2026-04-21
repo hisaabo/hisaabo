@@ -20,7 +20,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { useContacts, type PhoneContact } from "../../../src/hooks/useContacts";
 import { DatePickerField } from "../../../src/components/ui";
@@ -124,6 +125,10 @@ interface InlinePartyFormState {
 }
 
 function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
+  const pickerStyles = usePickerStyles();
+  const inlineCreateStyles = useInlineCreateStyles();
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const partyType = type === "sale" ? "customer" : "supplier";
@@ -505,7 +510,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
   );
 }
 
-const pickerStyles = StyleSheet.create({
+const usePickerStyles = makeStyles((colors) => ({
   sectionHeader: {
     fontSize: 11,
     fontWeight: "700",
@@ -598,11 +603,11 @@ const pickerStyles = StyleSheet.create({
     fontSize: 13,
     color: colors.textSecondary,
   },
-});
+}));
 
 // ── OPT-03: Inline party create styles ────────────────────────
 
-const inlineCreateStyles = StyleSheet.create({
+const useInlineCreateStyles = makeStyles((colors) => ({
   container: {
     marginHorizontal: 16,
     marginBottom: 8,
@@ -714,7 +719,7 @@ const inlineCreateStyles = StyleSheet.create({
     fontWeight: "600",
     color: colors.brand,
   },
-});
+}));
 
 // ── Item Picker Modal ──────────────────────────────────────────
 
@@ -753,6 +758,12 @@ const TAX_PRESETS = ["0", "5", "12", "18", "28"];
 const UNIT_OPTIONS = ["pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box", "dozen", "pair", "set", "other"];
 
 function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPickerProps) {
+  const pickerStyles = usePickerStyles();
+  const inlineCreateStyles = useInlineCreateStyles();
+  const itemPickerStyles = useItemPickerStyles();
+  const inlineItemCreateStyles = useInlineItemCreateStyles();
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
@@ -1073,7 +1084,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
 
 // ── Item picker badge styles ──────────────────────────────────
 
-const itemPickerStyles = StyleSheet.create({
+const useItemPickerStyles = makeStyles((colors) => ({
   itemNameRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1095,11 +1106,11 @@ const itemPickerStyles = StyleSheet.create({
     color: colors.brand,
     letterSpacing: 0.3,
   },
-});
+}));
 
 // ── Inline item create styles ────────────────────────────────
 
-const inlineItemCreateStyles = StyleSheet.create({
+const useInlineItemCreateStyles = makeStyles((colors) => ({
   sectionLabel: {
     marginBottom: 4,
   },
@@ -1173,11 +1184,11 @@ const inlineItemCreateStyles = StyleSheet.create({
     fontWeight: "700",
     color: colors.brand,
   },
-});
+}));
 
 // ── G-08: Sub-selector styles ─────────────────────────────────
 
-const subSelectorStyles = StyleSheet.create({
+const useSubSelectorStyles = makeStyles((colors) => ({
   container: {
     marginBottom: 10,
   },
@@ -1259,7 +1270,7 @@ const subSelectorStyles = StyleSheet.create({
   unitPillPriceSelected: {
     color: colors.brand + "cc",
   },
-});
+}));
 
 // ── Line Item Row ──────────────────────────────────────────────
 // Stacked 2-row layout per line item:
@@ -1281,6 +1292,8 @@ interface LineItemRowProps {
 }
 
 function LineItemRow({ item, index, invoiceType, onChange, onRemove, onPickItem, onSelectVariant, onSelectUnit, allItems }: LineItemRowProps) {
+  const styles = useStyles();
+  const colors = useColors();
   const qtyRef = useRef<TextInput>(null);
   const rateRef = useRef<TextInput>(null);
   const gstRef = useRef<TextInput>(null);
@@ -1436,6 +1449,9 @@ interface VariantSubSelectorProps {
 }
 
 function VariantSubSelector({ itemId, selectedVariantId, onSelect }: VariantSubSelectorProps) {
+  const subSelectorStyles = useSubSelectorStyles();
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [modalVisible, setModalVisible] = useState(false);
   const { data: variants, isLoading } = trpc.item.listVariants.useQuery(
     { itemId },
@@ -1535,6 +1551,7 @@ interface AltUnitSelectorProps {
 }
 
 function AltUnitSelector({ baseUnit, unitVariants, selectedUnit, invoiceType, onSelect }: AltUnitSelectorProps) {
+  const subSelectorStyles = useSubSelectorStyles();
   return (
     <View style={subSelectorStyles.container}>
       <Text style={subSelectorStyles.label}>Unit</Text>
@@ -1587,6 +1604,8 @@ function AltUnitSelector({ baseUnit, unitVariants, selectedUnit, invoiceType, on
 // ── Main Create Screen ────────────────────────────────────────
 
 export default function InvoiceCreateScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const params = useLocalSearchParams<{ type?: string }>();
   const [invoiceType, setInvoiceType] = useState<InvoiceType>(
@@ -2067,7 +2086,7 @@ export default function InvoiceCreateScreen() {
 
 // ── Styles ────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -2390,9 +2409,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textPrimary,
   },
-});
+}));
 
-const modalStyles = StyleSheet.create({
+const useModalStyles = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.7)",
@@ -2490,4 +2509,4 @@ const modalStyles = StyleSheet.create({
     fontSize: 14,
     color: colors.textMuted,
   },
-});
+}));

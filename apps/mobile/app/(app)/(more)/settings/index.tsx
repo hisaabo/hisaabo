@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -14,7 +13,8 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { PressableRow } from "../../../../src/components/ui";
 import { OrgSwitcherSheet } from "../../../../src/components/OrgSwitcherSheet";
 import { queryClient } from "../../../../src/lib/query-client";
@@ -32,6 +32,7 @@ const SETTINGS: SettingItem[] = [
   { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents" },
   { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
   { label: "Online Store", icon: "storefront-outline", description: "Store settings and items", route: "/(more)/settings/store" },
+  { label: "Appearance", icon: "color-palette-outline", description: "Light, dark, or system", route: "/(more)/settings/appearance" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
   { label: "Account", icon: "shield-checkmark-outline", description: "Sessions and activity log", route: "/(more)/settings/account" },
   { label: "API Keys", icon: "key-outline", description: "Programmatic access tokens", route: "/(more)/settings/api-keys" },
@@ -39,6 +40,8 @@ const SETTINGS: SettingItem[] = [
 ];
 
 export default function SettingsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const logout = useAuthStore((s) => s.logout);
   const utils = trpc.useUtils();
@@ -196,7 +199,7 @@ export default function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -285,4 +288,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 32,
   },
-});
+}));
