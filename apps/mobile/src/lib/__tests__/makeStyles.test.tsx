@@ -139,7 +139,10 @@ describe("makeStyles — theme-aware StyleSheet hook", () => {
     const { result, rerender } = renderHook(() => useStyles(), { wrapper });
 
     const first = result.current;
-    rerender();
+    // rerender() requires an argument for the hook's props; our hook takes
+    // none, so pass undefined to satisfy the types while still forcing a
+    // re-render of the same tree.
+    rerender(undefined);
     const second = result.current;
 
     // Strict object-identity equality — NOT .toEqual (deep). We specifically

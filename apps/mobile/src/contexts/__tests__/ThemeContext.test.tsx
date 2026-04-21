@@ -199,7 +199,10 @@ describe("ThemeContext — mode, palette, and persistence", () => {
     //      prevents. If you change this, you MUST also update the
     //      comment-block at the top of ThemeContext.tsx and coordinate a
     //      visual QA pass.
-    mockUseColorScheme.mockReturnValue(null);
+    // RN 0.83 narrowed `ColorSchemeName` to `"light" | "dark"` in its .d.ts,
+    // but the hook still returns `null` at runtime before the Appearance API
+    // has reported. Cast here so we can simulate that real first-tick state.
+    mockUseColorScheme.mockReturnValue(null as unknown as "dark");
 
     const { result } = renderHook(() => useTheme(), {
       wrapper: ({ children }) => (
