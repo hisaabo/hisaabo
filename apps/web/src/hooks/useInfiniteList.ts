@@ -96,11 +96,16 @@ export function useInfiniteList<T extends { id: string }>({
         return [...newItems, ...updated];
       }
 
-      // page > 1: append new items, dedup by id
+      // page > 1: merge updates from this page's data into prev (so a
+      // status change on a row that's currently visible shows up after
+      // mutation invalidation, even when the user has scrolled past page 1)
+      // AND append items new to the accumulated set.
+      const freshById = new Map(data.map((item) => [item.id, item]));
+      const merged = prev.map((p) => freshById.get(p.id) ?? p);
       const existingIds = new Set(prev.map((item) => item.id));
       const newItems = data.filter((item) => !existingIds.has(item.id));
       setLastBatchSize(newItems.length);
-      return [...prev, ...newItems];
+      return [...merged, ...newItems];
     });
   }, [data, page]);
 

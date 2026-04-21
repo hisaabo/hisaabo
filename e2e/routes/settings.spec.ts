@@ -2,9 +2,10 @@
  * settings.spec.ts — Layer 1 (Presence) specification for /settings.
  *
  * The settings page renders a vertical nav sidebar (desktop) with tabs:
- * Business, Documents, Shipping, Team, Sales Targets, Appearance, Data,
- * Account, Online Store.  Business tab is active by default and shows
- * business details including the GSTIN field.
+ * Business, Documents, Shipping, Team, Sales Targets, Data, Account,
+ * Online Store. Business tab is active by default and shows business
+ * details including the GSTIN field. Theme selection lives on the top
+ * bar (no dedicated Appearance tab).
  *
  * Because the global setup seeds a business, the full settings layout
  * (not the first-run "Almost there!" form) is expected to render.
@@ -49,14 +50,22 @@ test.describe("Settings — Presence", () => {
     ).toBeVisible();
   });
 
-  test("renders Appearance tab", async ({ page }) => {
-    await page.getByText("Appearance", { exact: true }).first().click();
-    await expect(page.locator("h1, h2, h3, label").first()).toBeVisible();
+  test("theme toggle is available on the top bar", async ({ page }) => {
+    // Theme is controlled by a top-bar toggle, not a settings tab.
+    // The button cycles System → Light → Dark, so its aria-label matches one of those.
+    await expect(
+      page.getByRole("button", { name: /system theme|light mode|dark mode/i }).first(),
+    ).toBeVisible();
   });
 
-  test("renders Data tab", async ({ page }) => {
+  test("renders Data tab with import, CSV export, and backup sections", async ({ page }) => {
     await page.getByRole("button", { name: "Data" }).first().click();
-    await expect(page.getByText("Export Data").first()).toBeVisible({ timeout: 5_000 });
+    // Import section is always shown
+    await expect(page.getByText("Import data").first()).toBeVisible({ timeout: 5_000 });
+    // CSV export section is always shown
+    await expect(page.getByText("Export as CSV").first()).toBeVisible();
+    // Full Backup section is owner-only, and the e2e fixture runs as owner
+    await expect(page.getByText(/full backup/i).first()).toBeVisible();
   });
 
   test("renders Account tab", async ({ page }) => {

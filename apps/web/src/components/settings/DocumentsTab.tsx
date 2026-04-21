@@ -23,6 +23,16 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
   const [editingSeq, setEditingSeq] = useState<string | null>(null);
   const [prefixesDirty, setPrefixesDirty] = useState(false);
 
+  // Document defaults (round-off + standard T&C). Tracked separately so each
+  // section has its own dirty state and Save button.
+  const [defaultRoundOff, setDefaultRoundOff] = useState<boolean>(
+    biz.defaultRoundOff ?? true
+  );
+  const [defaultTerms, setDefaultTerms] = useState<string>(
+    biz.defaultTermsAndConditions ?? ""
+  );
+  const [defaultsDirty, setDefaultsDirty] = useState(false);
+
   const utils = trpc.useUtils();
 
   const updateMutation = trpc.business.update.useMutation({
@@ -32,6 +42,15 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
       setPrefixesDirty(false);
     },
     onError: (err) => toast.error("Failed to save prefixes", err.message),
+  });
+
+  const defaultsMutation = trpc.business.update.useMutation({
+    onSuccess: () => {
+      toast.success("Document defaults saved");
+      utils.business.list.invalidate();
+      setDefaultsDirty(false);
+    },
+    onError: (err) => toast.error("Failed to save defaults", err.message),
   });
 
   const updateSeqMutation = trpc.business.updateSequenceNumber.useMutation({
@@ -53,6 +72,16 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
       DOC_TYPES.map((d) => [d.prefixField, prefixes[d.prefixField] || undefined])
     );
     updateMutation.mutate({ id: biz.id, data });
+  }
+
+  function handleSaveDefaults() {
+    defaultsMutation.mutate({
+      id: biz.id,
+      data: {
+        defaultRoundOff,
+        defaultTermsAndConditions: defaultTerms.trim() ? defaultTerms : null,
+      },
+    });
   }
 
   return (
@@ -124,6 +153,83 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
               )}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Document defaults — applied at creation time, always editable per-document */}
+      <div className="card overflow-hidden">
+        <div className="px-6 py-4 border-b border-border-light flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Document Defaults</h3>
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Applied to every new invoice, quotation and credit note. Always overridable per document.
+            </p>
+          </div>
+          {defaultsDirty && (
+            <button
+              className="btn-primary btn-sm"
+              onClick={handleSaveDefaults}
+              disabled={defaultsMutation.isPending}
+            >
+              {defaultsMutation.isPending ? "Saving..." : "Save"}
+            </button>
+          )}
+        </div>
+        <div className="divide-y divide-border-light">
+          {/* Round off toggle */}
+          <div className="px-6 py-4 flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-text-primary">Round invoice totals down to nearest integer</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Auto-fills the Round Off field on new invoices so the grand total floors to a whole rupee.
+                The auto-fill stops as soon as you edit Round Off manually on a given invoice.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={defaultRoundOff}
+              aria-label="Round totals down by default"
+              onClick={() => {
+                setDefaultRoundOff((v) => !v);
+                setDefaultsDirty(true);
+              }}
+              className={`relative inline-flex h-6 w-11 shrink-0 mt-0.5 items-center rounded-full transition-colors ${
+                defaultRoundOff ? "bg-brand-600" : "bg-surface-2"
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                  defaultRoundOff ? "translate-x-5" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Standard T&C textarea */}
+          <div className="px-6 py-4">
+            <label className="block text-sm font-medium text-text-primary mb-1" htmlFor="default-terms">
+              Standard Terms &amp; Conditions
+            </label>
+            <p className="text-xs text-text-tertiary mb-2">
+              Pre-filled into the Terms &amp; Conditions field of every new document. Leave blank to skip.
+            </p>
+            <textarea
+              id="default-terms"
+              className="input resize-y min-h-[7rem] text-sm"
+              rows={5}
+              maxLength={2000}
+              value={defaultTerms}
+              onChange={(e) => {
+                setDefaultTerms(e.target.value);
+                setDefaultsDirty(true);
+              }}
+              placeholder="e.g. Payment due within 15 days. Goods once sold will not be taken back. Subject to local jurisdiction."
+            />
+            <p className="text-[11px] text-text-tertiary text-right mt-1 tabular-nums">
+              {defaultTerms.length} / 2000
+            </p>
+          </div>
         </div>
       </div>
     </div>

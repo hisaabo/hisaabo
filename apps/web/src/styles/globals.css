@@ -128,6 +128,20 @@ input, select, textarea {
     @apply opacity-50 cursor-not-allowed;
   }
 
+  /* Suppress native number-input spinner buttons everywhere — they push the
+     value text against the right edge of the field and look inconsistent
+     across browsers. We rely on type="number" for keyboard/IME behaviour and
+     server-side validation, not the spinner UI. */
+  .input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  .input[type="number"]::-webkit-outer-spin-button,
+  .input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
   .label {
     @apply block text-xs font-medium mb-1.5;
     color: var(--text-secondary);

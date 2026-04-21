@@ -11,18 +11,18 @@ Hisaabo lets you export a complete snapshot of your organization's data and rest
 
 ## Exporting a backup
 
-Go to **Settings > Backup** to download a full backup.
+Go to **Settings > Data** to download a full backup.
 
 1. Navigate to **Settings** in the sidebar
-2. Click the **Backup** tab (owner-only)
-3. Click **Export Data**
+2. Click the **Data** tab
+3. In the **Full backup (restorable)** section (owner-only), click **Download backup**
 4. A `.tar.gz` archive downloads to your browser
 
 The archive contains all businesses, parties, items, invoices, payments, expenses, bank accounts, and other records in your organization. It uses NDJSON (newline-delimited JSON) format internally.
 
 **Limits:** You can export up to 2 times per day per organization.
 
-**Who can export:** Only organization owners can request an export.
+**Who can export:** Only organization owners can request a full backup. Non-owners can still use **Export as CSV** in the same tab to download the current business as spreadsheet-friendly CSVs (not restorable).
 
 ## Restoring a backup
 

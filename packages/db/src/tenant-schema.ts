@@ -95,6 +95,10 @@ export const businesses = pgTable("businesses", {
   // reachable and the "Switch to POS" entry button appears on invoice
   // create. Off by default; toggle lives on Settings → POS.
   posEnabled: boolean("pos_enabled").default(false).notNull(),
+  // Document defaults applied at invoice/quote creation time. Editable per
+  // business under Settings → Documents.
+  defaultRoundOff: boolean("default_round_off").default(true).notNull(),
+  defaultTermsAndConditions: text("default_terms_and_conditions"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [

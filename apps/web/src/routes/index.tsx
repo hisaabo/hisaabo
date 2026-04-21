@@ -1249,7 +1249,7 @@ function DashboardPage() {
               customTo={customTo}
               onCustomChange={setCustomRange}
             />
-            <Link to="/invoices" className="btn-primary">
+            <Link to="/invoices" search={{ create: "1" }} className="btn-primary">
               + New Invoice
             </Link>
           </div>
