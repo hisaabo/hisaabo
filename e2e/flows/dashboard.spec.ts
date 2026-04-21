@@ -35,7 +35,8 @@ test.describe("Dashboard Flow", () => {
   });
 
   test("dashboard shows + New Invoice link", async ({ page }) => {
-    // Rendered as a <Link to="/invoices"> with class btn-primary
+    // Rendered as a <Link to="/invoices"> with class btn-primary; the dashboard
+    // CTA now deep-links the creator open via ?create=1.
     const newInvoiceLink = page
       .getByText("+ New Invoice")
       .or(page.getByRole("link", { name: /new invoice/i }))
@@ -45,7 +46,7 @@ test.describe("Dashboard Flow", () => {
 
   test("+ New Invoice link points to /invoices", async ({ page }) => {
     const link = page.getByRole("link", { name: /new invoice/i }).first();
-    await expect(link).toHaveAttribute("href", "/invoices");
+    await expect(link).toHaveAttribute("href", /^\/invoices(\?|$)/);
   });
 
   test("dashboard shows Gross Profit and Net Profit cards", async ({ page }) => {

@@ -54,7 +54,7 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     // Creator should be pre-filled — verify party is already selected
     // The party name should appear in the creator (it's pre-filled)
-    await expect(creator.getByText(/CN\/SR Test Customer/i).or(creator.getByText(/customer/i))).toBeVisible();
+    await expect(creator.getByText(/CN\/SR Test Customer/i).first()).toBeVisible();
 
     // Creator should show line items from the invoice
     // At minimum, the total should be non-zero (pre-filled from invoice)
