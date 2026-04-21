@@ -1,6 +1,7 @@
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../../lib/theme";
+import { makeStyles } from "../../lib/makeStyles";
+import { useColors } from "../../contexts/ThemeContext";
 
 interface Props {
   message?: string;
@@ -8,6 +9,8 @@ interface Props {
 }
 
 export function QueryError({ message = "Something went wrong", onRetry }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.container}>
       <Ionicons name="cloud-offline-outline" size={48} color={colors.danger} />
@@ -22,7 +25,7 @@ export function QueryError({ message = "Something went wrong", onRetry }: Props)
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, justifyContent: "center", alignItems: "center", padding: 32, gap: 12 },
   title: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
   message: { fontSize: 13, color: colors.textMuted, textAlign: "center", lineHeight: 20 },
@@ -34,4 +37,4 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   retryText: { fontSize: 14, fontWeight: "600", color: "#ffffff" },
-});
+}));

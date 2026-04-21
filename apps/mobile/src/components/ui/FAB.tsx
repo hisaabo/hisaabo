@@ -1,7 +1,7 @@
-import { TouchableOpacity, StyleSheet, ViewStyle, StyleProp } from "react-native";
+import { TouchableOpacity, ViewStyle, StyleProp } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors } from "../../lib/theme";
+import { makeStyles } from "../../lib/makeStyles";
 import { haptic } from "../../lib/haptics";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 
 export function FAB({ onPress, icon = "add", style }: Props) {
   const insets = useSafeAreaInsets();
+  const styles = useStyles();
 
   return (
     <TouchableOpacity
@@ -24,7 +25,7 @@ export function FAB({ onPress, icon = "add", style }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   fab: {
     position: "absolute",
     right: 24,
@@ -40,4 +41,4 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
   },
-});
+}));

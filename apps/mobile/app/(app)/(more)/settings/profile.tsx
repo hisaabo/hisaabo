@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -18,13 +17,16 @@ import { useState, useEffect, useCallback } from "react";
 import * as LocalAuthentication from "expo-local-authentication";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBiometricStore } from "../../../../src/stores/biometric";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
 
 const PIN_LENGTH = 4;
 
 export default function ProfileScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
 
   // Biometric / security state
@@ -493,7 +495,7 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -757,4 +759,4 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-});
+}));

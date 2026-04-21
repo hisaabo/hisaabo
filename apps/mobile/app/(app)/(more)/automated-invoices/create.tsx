@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   Modal,
   FlatList,
   ActivityIndicator,
@@ -18,7 +17,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
@@ -71,6 +71,8 @@ interface PartyPickerProps {
 }
 
 function PartyPickerModal({ visible, onSelect, onClose }: PartyPickerProps) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery(
     { page: 1, limit: 200 },
@@ -139,6 +141,8 @@ interface LineItemRowProps {
 }
 
 function LineItemRow({ item, index, onChange, onRemove }: LineItemRowProps) {
+  const styles = useStyles();
+  const colors = useColors();
   const lineTotal = useMemo(() => {
     const qty = safeNum(item.quantity);
     const price = safeNum(item.unitPrice);
@@ -197,6 +201,8 @@ function LineItemRow({ item, index, onChange, onRemove }: LineItemRowProps) {
 /* ── Main Screen ──────────────────────────────────────────────── */
 
 export default function CreateRecurringInvoiceScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
 
   const [name, setName] = useState("");
@@ -491,7 +497,7 @@ export default function CreateRecurringInvoiceScreen() {
 
 /* ── Styles ────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
   section: { marginBottom: 20 },
@@ -623,11 +629,11 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.6 },
   submitBtnText: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
-});
+}));
 
 /* ── Modal Styles ──────────────────────────────────────────────── */
 
-const modalStyles = StyleSheet.create({
+const useModalStyles = makeStyles((colors) => ({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.surface,
@@ -684,4 +690,4 @@ const modalStyles = StyleSheet.create({
   listItemName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   listItemSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   emptyText: { textAlign: "center", paddingTop: 40, fontSize: 14, color: colors.textMuted },
-});
+}));

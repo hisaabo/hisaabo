@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -16,7 +15,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { DatePickerField } from "../../../src/components/ui";
 import { calculateGatewayCharge } from "@hisaabo/shared";
@@ -110,6 +110,8 @@ function allocateChronologically(
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function CreatePaymentScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const params = useLocalSearchParams<{ partyId?: string; partyName?: string; invoiceId?: string }>();
   const utils = trpc.useUtils();
@@ -744,7 +746,7 @@ export default function CreatePaymentScreen() {
 
 // ── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -1084,4 +1086,4 @@ const styles = StyleSheet.create({
   partyAvatarText: { fontSize: 16, fontWeight: "700", color: colors.brand },
   partyName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   partyPhone: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-});
+}));

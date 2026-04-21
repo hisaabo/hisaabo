@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   Modal,
   FlatList,
   ActivityIndicator,
@@ -19,7 +18,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { formatCurrency } from "../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
@@ -61,6 +61,8 @@ interface PartyPickerProps {
 }
 
 function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const partyType = type === "sale" ? "customer" : "supplier";
 
@@ -147,6 +149,8 @@ interface ItemPickerProps {
 }
 
 function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPickerProps) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
 
   const { data } = trpc.item.list.useQuery(
@@ -231,6 +235,8 @@ interface LineItemRowProps {
 }
 
 function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRowProps) {
+  const styles = useStyles();
+  const colors = useColors();
   const lineTotal = useMemo(() => {
     const qty = safeNum(item.quantity);
     const price = safeNum(item.unitPrice);
@@ -325,6 +331,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
 // ── Main Edit Screen ──────────────────────────────────────────
 
 export default function InvoiceEditScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const utils = trpc.useUtils();
@@ -672,7 +680,7 @@ export default function InvoiceEditScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
@@ -861,9 +869,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   notesInput: { minHeight: 80, paddingTop: 12 },
-});
+}));
 
-const modalStyles = StyleSheet.create({
+const useModalStyles = makeStyles((colors) => ({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
@@ -930,4 +938,4 @@ const modalStyles = StyleSheet.create({
   listItemName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   listItemSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   emptyText: { textAlign: "center", color: colors.textMuted, paddingVertical: 40 },
-});
+}));

@@ -12,7 +12,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useBiometricStore } from "../stores/biometric";
-import { colors } from "../lib/theme";
+import { makeStyles } from "../lib/makeStyles";
+import { useColors } from "../contexts/ThemeContext";
 import { haptic } from "../lib/haptics";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -40,6 +41,8 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
     authenticate,
     verifyPin,
   } = useBiometricStore();
+  const styles = useStyles();
+  const colors = useColors();
 
   const [mode, setMode] = useState<Mode>(biometricEnabled ? "biometric" : "pin");
   const [pin, setPin] = useState("");
@@ -370,7 +373,7 @@ function LogoIcon({ size = 64 }: { size?: number }) {
 
 /* -- Styles ------------------------------------------------- */
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: colors.bg,
@@ -519,4 +522,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.textPrimary,
   },
-});
+}));

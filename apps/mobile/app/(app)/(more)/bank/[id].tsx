@@ -4,7 +4,6 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   Modal,
@@ -15,7 +14,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 
@@ -42,6 +42,8 @@ interface AddTransactionModalProps {
 }
 
 function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTransactionModalProps) {
+  const ms = useMs();
+  const colors = useColors();
   const [txType, setTxType] = useState<TxType>("deposit");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
@@ -157,6 +159,8 @@ function AddTransactionModal({ visible, accountId, onClose, onSuccess }: AddTran
 const PAGE_SIZE = 30;
 
 export default function BankAccountDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [page, setPage] = useState(1);
@@ -422,7 +426,7 @@ export default function BankAccountDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
   notFoundText: { fontSize: 15, color: colors.textMuted },
@@ -563,9 +567,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   loadMoreText: { fontSize: 14, fontWeight: "600", color: colors.brand },
-});
+}));
 
-const ms = StyleSheet.create({
+const useMs = makeStyles((colors) => ({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.surface,
@@ -652,4 +656,4 @@ const ms = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.7 },
   submitBtnText: { fontSize: 15, fontWeight: "700", color: colors.textPrimary },
-});
+}));

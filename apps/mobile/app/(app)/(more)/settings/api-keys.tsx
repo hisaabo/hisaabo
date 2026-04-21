@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -16,7 +15,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import * as Clipboard from "expo-clipboard";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors, fonts } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
+import { fonts } from "../../../../src/lib/theme";
 import { Card, Skeleton, QueryError } from "../../../../src/components/ui";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -64,6 +65,8 @@ const EXPIRY_OPTIONS: Array<{ label: string; days: number | null }> = [
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function ApiKeysScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const utils = trpc.useUtils();
 
@@ -433,7 +436,7 @@ export default function ApiKeysScreen() {
 
 // ── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -762,4 +765,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
   },
-});
+}));

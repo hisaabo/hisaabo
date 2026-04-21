@@ -1,8 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
   ScrollView,
   TouchableOpacity,
@@ -14,7 +13,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
@@ -27,13 +27,14 @@ const MODE_COLORS: Record<PaymentMode, { bg: string; text: string }> = {
   other: { bg: "rgba(156, 163, 175, 0.15)", text: "#9ca3af" },
 };
 
-const CATEGORY_COLORS = [
-  colors.brand, "#22c55e", "#f59e0b", colors.danger, "#a855f7", "#3b82f6", "#ec4899", "#14b8a6",
-];
-
 const PAGE_SIZE = 20;
 
 export default function ExpensesScreen() {
+  const styles = useStyles();
+  const colors = useColors();
+  const CATEGORY_COLORS = useMemo(() => [
+    colors.brand, "#22c55e", "#f59e0b", colors.danger, "#a855f7", "#3b82f6", "#ec4899", "#14b8a6",
+  ], [colors]);
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -197,7 +198,7 @@ export default function ExpensesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -276,4 +277,4 @@ const styles = StyleSheet.create({
   date: { fontSize: 12, color: colors.textMuted },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   badgeText: { fontSize: 11, fontWeight: "600" },
-});
+}));

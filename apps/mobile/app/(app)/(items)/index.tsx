@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
@@ -14,12 +13,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
 
 type ItemTypeFilter = "product" | "service" | null;
 
 export default function ItemsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { businessId } = useBusinessStore();
   const [search, setSearch] = useState("");
@@ -336,7 +338,7 @@ export default function ItemsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -528,4 +530,4 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     alignItems: "center",
   },
-});
+}));

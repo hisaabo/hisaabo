@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   RefreshControl,
@@ -9,11 +8,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { Card, QueryError, Skeleton, DatePickerField } from "../../../src/components/ui";
 
 type Period = "month" | "quarter" | "fy" | "all" | "custom";
@@ -60,15 +60,6 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "custom", label: "Custom" },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  paid: colors.success,
-  partial: colors.warning,
-  unpaid: colors.danger,
-  overdue: colors.danger,
-  draft: colors.textMuted,
-  cancelled: colors.textMuted,
-};
-
 interface PercentBarProps {
   value: number;
   total: number;
@@ -76,6 +67,7 @@ interface PercentBarProps {
 }
 
 function PercentBar({ value, total, color }: PercentBarProps) {
+  const barStyles = useBarStyles();
   const pct = total > 0 ? Math.max((value / total) * 100, 2) : 0;
   return (
     <View style={barStyles.bg}>
@@ -84,7 +76,7 @@ function PercentBar({ value, total, color }: PercentBarProps) {
   );
 }
 
-const barStyles = StyleSheet.create({
+const useBarStyles = makeStyles((colors) => ({
   bg: {
     height: 6,
     backgroundColor: colors.border,
@@ -96,14 +88,25 @@ const barStyles = StyleSheet.create({
     height: "100%",
     borderRadius: 3,
   },
-});
+}));
 
 export default function ReportsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { businessId } = useBusinessStore();
   const [period, setPeriod] = useState<Period>("fy");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
   const [customTo, setCustomTo] = useState<Date | null>(null);
+
+  const STATUS_COLORS = useMemo<Record<string, string>>(() => ({
+    paid: colors.success,
+    partial: colors.warning,
+    unpaid: colors.danger,
+    overdue: colors.danger,
+    draft: colors.textMuted,
+    cancelled: colors.textMuted,
+  }), [colors]);
 
   const dates = getPeriodDates(period, customFrom, customTo);
 
@@ -394,6 +397,7 @@ function PLRow({
   negative?: boolean;
   suffix?: string;
 }) {
+  const plStyles = usePlStyles();
   const display = negative
     ? `-${formatCurrency(Math.abs(parseFloat(value)))}`
     : formatCurrency(parseFloat(value));
@@ -410,7 +414,7 @@ function PLRow({
   );
 }
 
-const plStyles = StyleSheet.create({
+const usePlStyles = makeStyles((colors) => ({
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -440,9 +444,9 @@ const plStyles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 2,
   },
-});
+}));
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -650,4 +654,4 @@ const styles = StyleSheet.create({
     minWidth: 80,
     textAlign: "right",
   },
-});
+}));

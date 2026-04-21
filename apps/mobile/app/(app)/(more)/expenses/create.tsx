@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -12,7 +11,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 
@@ -32,6 +32,8 @@ const COMMON_CATEGORIES = [
 ];
 
 export default function CreateExpenseScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
 
   const [category, setCategory] = useState("");
@@ -206,7 +208,7 @@ export default function CreateExpenseScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
   section: { marginBottom: 20 },
@@ -263,4 +265,4 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.6 },
   submitBtnText: { color: colors.textPrimary, fontSize: 16, fontWeight: "700" },
-});
+}));

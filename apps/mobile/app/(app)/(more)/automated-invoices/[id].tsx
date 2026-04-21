@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
@@ -15,7 +14,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError } from "../../../../src/components/ui";
 
@@ -49,6 +49,8 @@ const RUN_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 /* ── Main Screen ──────────────────────────────────────────────── */
 
 export default function RecurringInvoiceDetailScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const utils = trpc.useUtils();
@@ -592,7 +594,7 @@ export default function RecurringInvoiceDetailScreen() {
 
 /* ── Styles ────────────────────────────────────────────────────── */
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
@@ -777,4 +779,4 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   deleteBtnText: { fontSize: 15, fontWeight: "600", color: colors.danger },
-});
+}));

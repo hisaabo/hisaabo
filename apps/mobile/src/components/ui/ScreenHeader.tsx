@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet } from "react-native";
-import { colors } from "../../lib/theme";
+import { View, Text } from "react-native";
+import { makeStyles } from "../../lib/makeStyles";
 
 interface Props {
   title: string;
@@ -8,6 +8,7 @@ interface Props {
 }
 
 export function ScreenHeader({ title, subtitle, right }: Props) {
+  const styles = useStyles();
   return (
     <View style={styles.container}>
       <View style={styles.textWrap}>
@@ -19,9 +20,9 @@ export function ScreenHeader({ title, subtitle, right }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 },
   textWrap: { flex: 1 },
   title: { fontSize: 28, fontWeight: "700", color: colors.textPrimary, letterSpacing: -0.5 },
   subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-});
+}));

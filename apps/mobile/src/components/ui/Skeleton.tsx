@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Animated, ViewStyle, StyleProp } from "react-native";
-import { colors } from "../../lib/theme";
+import { useColors } from "../../contexts/ThemeContext";
 
 interface Props {
   width: number | string;
@@ -11,6 +11,7 @@ interface Props {
 
 export function Skeleton({ width, height, borderRadius = 8, style }: Props) {
   const opacity = useRef(new Animated.Value(0.3)).current;
+  const colors = useColors();
 
   useEffect(() => {
     const anim = Animated.loop(

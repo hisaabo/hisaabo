@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   Modal,
@@ -18,7 +17,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 
@@ -56,6 +56,8 @@ function AccountPickerModal({
   title: string;
   excludeId?: string;
 }) {
+  const ms = useMs();
+  const colors = useColors();
   const filtered = excludeId ? accounts.filter((a) => a.id !== excludeId) : accounts;
 
   return (
@@ -103,6 +105,8 @@ function AccountPickerModal({
 function todayDate() { return new Date(); }
 
 export default function BankTransferScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const utils = trpc.useUtils();
   const [fromAccount, setFromAccount] = useState<Account | null>(null);
@@ -302,7 +306,7 @@ export default function BankTransferScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -380,9 +384,9 @@ const s = StyleSheet.create({
   },
   transferBtnDisabled: { opacity: 0.7 },
   transferBtnText: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-});
+}));
 
-const ms = StyleSheet.create({
+const useMs = makeStyles((colors) => ({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.surface,
@@ -406,4 +410,4 @@ const ms = StyleSheet.create({
   listItemSub: { fontSize: 12, color: colors.textMuted },
   listItemBalance: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   emptyText: { textAlign: "center", paddingTop: 40, fontSize: 14, color: colors.textMuted },
-});
+}));

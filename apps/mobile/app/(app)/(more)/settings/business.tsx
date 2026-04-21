@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -16,7 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect, useRef, forwardRef } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useBusinessStore } from "../../../../src/stores/business";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton } from "../../../../src/components/ui";
 
 interface FormState {
@@ -40,6 +40,8 @@ const GST_TYPES: Array<{ key: "regular" | "composition" | "unregistered"; label:
 ];
 
 export default function BusinessSettingsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const businessId = useBusinessStore((s) => s.businessId);
   const setBusiness = useBusinessStore((s) => s.setBusiness);
@@ -341,6 +343,8 @@ const Field = forwardRef<TextInput, {
   { label, value, onChangeText, placeholder, keyboardType, autoCapitalize, autoCorrect, multiline, returnKeyType, onSubmitEditing, blurOnSubmit },
   ref
 ) {
+  const fieldStyles = useFieldStyles();
+  const colors = useColors();
   return (
     <View style={fieldStyles.wrapper}>
       <Text style={fieldStyles.label}>{label}</Text>
@@ -364,7 +368,7 @@ const Field = forwardRef<TextInput, {
   );
 });
 
-const fieldStyles = StyleSheet.create({
+const useFieldStyles = makeStyles((colors) => ({
   wrapper: {
     marginBottom: 14,
   },
@@ -390,9 +394,9 @@ const fieldStyles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: "top",
   },
-});
+}));
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -455,4 +459,4 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
   },
-});
+}));

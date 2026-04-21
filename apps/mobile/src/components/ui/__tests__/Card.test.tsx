@@ -11,7 +11,7 @@
  * While this is a simple layout component, its visual properties are
  * load-bearing for the design system:
  *   - `backgroundColor: colors.surface` — differentiates the card from the
- *     page background (#0f0f1a → #1a1a2e)
+ *     page background (dark: #141417 → #1a1a1f; light: #ffffff → #f8f9fa)
  *   - `borderRadius: 16` — the signature rounded corner of the Hisaabo design
  *   - `borderWidth: 1` + `borderColor: colors.border` — subtle definition
  *   - `padding: 16` — consistent content spacing
@@ -31,7 +31,8 @@
 
 import React from "react";
 import { Text, View } from "react-native";
-import { render, screen } from "@testing-library/react-native";
+import { screen } from "@testing-library/react-native";
+import { renderWithTheme as render } from "../../../test-utils";
 import { Card } from "../Card";
 import { colors } from "../../../lib/theme";
 
@@ -70,11 +71,12 @@ describe("Card — surface container for invoice, party, and dashboard data", ()
   });
 
   // -------------------------------------------------------------------------
-  it("applies the surface background colour (#1a1a2e) to differentiate from the page background", () => {
-    // WHAT: The card background must be `colors.surface` ("#1a1a2e"), which is
-    //       lighter than the page background `colors.bg` ("#0f0f1a").
+  it("applies the surface background colour from the active palette", () => {
+    // WHAT: The card background must be `colors.surface`, which is one step
+    //       lighter than the page background `colors.bg` in both dark and
+    //       light palettes.
     // WHY: Without the surface background, cards are invisible against the
-    //      dark page — all list items blend together and there is no visual
+    //      page — all list items blend together and there is no visual
     //      separation between data entries.
     const { UNSAFE_getByType } = render(
       <Card>

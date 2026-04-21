@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   Modal,
   FlatList,
   ActivityIndicator,
@@ -19,7 +18,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
@@ -51,6 +51,8 @@ function PartyPickerModal({
   onSelect: (p: { id: string; name: string }) => void;
   onClose: () => void;
 }) {
+  const ms = useMs();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
   const parties = data?.data ?? [];
@@ -100,6 +102,8 @@ function ItemPickerModal({
   onSelect: (i: { id: string; name: string; salePrice?: string | null; taxPercent: string }) => void;
   onClose: () => void;
 }) {
+  const ms = useMs();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.item.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
   const items = data?.data ?? [];
@@ -145,6 +149,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
   onChange: (i: number, f: keyof LineItem, v: string) => void;
   onRemove: (i: number) => void; onPickItem: (i: number) => void;
 }) {
+  const s = useS();
+  const colors = useColors();
   const lineTotal = useMemo(() => {
     const q = safeNum(item.quantity), p = safeNum(item.unitPrice), t = safeNum(item.taxPercent), d = safeNum(item.discountPercent);
     const after = q * p * (1 - d / 100);
@@ -182,6 +188,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
 }
 
 export default function CreditNoteCreateScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const { prefillFromInvoiceId } = useLocalSearchParams<{ prefillFromInvoiceId?: string }>();
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
@@ -364,7 +372,7 @@ export default function CreditNoteCreateScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
@@ -413,9 +421,9 @@ const s = StyleSheet.create({
   createBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: colors.brand, borderRadius: 16, paddingVertical: 16, gap: 10, shadowColor: colors.brand, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8, elevation: 6 },
   createBtnDisabled: { opacity: 0.7 },
   createBtnText: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-});
+}));
 
-const ms = StyleSheet.create({
+const useMs = makeStyles((colors) => ({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   sheet: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.border, maxHeight: "80%", paddingBottom: 32 },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 },
@@ -431,4 +439,4 @@ const ms = StyleSheet.create({
   listItemName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   listItemSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   emptyText: { textAlign: "center", paddingTop: 40, fontSize: 14, color: colors.textMuted },
-});
+}));

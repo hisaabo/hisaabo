@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { View, Text, TouchableOpacity, Platform, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, Platform } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../../lib/theme";
+import { makeStyles } from "../../lib/makeStyles";
+import { useColors } from "../../contexts/ThemeContext";
 
 interface Props {
   label: string;
@@ -14,6 +15,8 @@ interface Props {
 
 export function DatePickerField({ label, value, onChange, minimumDate, maximumDate }: Props) {
   const [show, setShow] = useState(false);
+  const s = useS();
+  const colors = useColors();
 
   const formatted = value.toLocaleDateString("en-IN", {
     day: "numeric",
@@ -47,7 +50,7 @@ export function DatePickerField({ label, value, onChange, minimumDate, maximumDa
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   label: { fontSize: 12, fontWeight: "600", color: colors.textSecondary, marginBottom: 6 },
   field: {
     flexDirection: "row",
@@ -61,4 +64,4 @@ const s = StyleSheet.create({
     paddingVertical: 12,
   },
   value: { fontSize: 14, color: colors.textPrimary, fontWeight: "500" },
-});
+}));

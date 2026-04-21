@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -15,7 +14,8 @@ import { useState, useMemo } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
 import { useBusinessStore } from "../../../../src/stores/business";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
 import { parseUserAgent } from "../../../../src/lib/parse-user-agent";
 
@@ -103,6 +103,7 @@ function PillTabs<T extends string>({
   active: T;
   onPress: (key: T) => void;
 }) {
+  const s = useS();
   return (
     <View style={s.pillRow}>
       {tabs.map((t) => (
@@ -124,6 +125,8 @@ function PillTabs<T extends string>({
 /* ─── Sessions Tab ─────────────────────────────────────────────────────────── */
 
 function SessionsTab() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const logout = useAuthStore((s) => s.logout);
   const clearBusiness = useBusinessStore((s) => s.clearBusiness);
@@ -317,6 +320,8 @@ function SessionsTab() {
 /* ─── Activity Log Tab ─────────────────────────────────────────────────────── */
 
 function ActivityTab() {
+  const s = useS();
+  const colors = useColors();
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [page, setPage] = useState(1);
 
@@ -448,6 +453,8 @@ function ActivityTab() {
 /* ─── Main Account Screen ──────────────────────────────────────────────────── */
 
 export default function AccountScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const [mainTab, setMainTab] = useState<MainTab>("sessions");
 
@@ -482,7 +489,7 @@ export default function AccountScreen() {
 
 /* ─── Styles ───────────────────────────────────────────────────────────────── */
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -686,4 +693,4 @@ const s = StyleSheet.create({
     fontWeight: "600",
     color: colors.brand,
   },
-});
+}));

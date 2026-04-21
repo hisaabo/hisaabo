@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
@@ -11,7 +10,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { PressableRow, EmptyState, FAB } from "../../../../src/components/ui";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "payment_gateway" | "other";
@@ -27,6 +27,7 @@ const ACCOUNT_TYPE_CONFIG: Record<AccountType, { label: string; color: string; b
 };
 
 function AccountTypeBadge({ type }: { type: string }) {
+  const styles = useStyles();
   const config = ACCOUNT_TYPE_CONFIG[type as AccountType] ?? ACCOUNT_TYPE_CONFIG.other;
   return (
     <View style={[styles.badge, { backgroundColor: config.bg }]}>
@@ -36,6 +37,8 @@ function AccountTypeBadge({ type }: { type: string }) {
 }
 
 export default function BankAccountsScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
 
   const { data: accounts, isLoading: accountsLoading } = trpc.bankAccount.list.useQuery();
@@ -150,7 +153,7 @@ export default function BankAccountsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -237,4 +240,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 2,
   },
-});
+}));

@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   Modal,
   FlatList,
   ActivityIndicator,
@@ -19,7 +18,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency } from "../../../../src/lib/utils";
 import { calcInvoiceTotals } from "@hisaabo/shared";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
@@ -70,6 +70,8 @@ interface PartyPickerProps {
 }
 
 function PartyPickerModal({ visible, onSelect, onClose }: PartyPickerProps) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery(
     { type: "customer", page: 1, limit: 200 },
@@ -137,6 +139,8 @@ interface ItemPickerProps {
 }
 
 function ItemPickerModal({ visible, onSelect, onClose }: ItemPickerProps) {
+  const modalStyles = useModalStyles();
+  const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.item.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
   const items = data?.data ?? [];
@@ -205,6 +209,8 @@ interface LineItemRowProps {
 }
 
 function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRowProps) {
+  const styles = useStyles();
+  const colors = useColors();
   const lineTotal = useMemo(() => {
     const qty = safeNum(item.quantity);
     const price = safeNum(item.unitPrice);
@@ -260,6 +266,8 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
 // ── Main Screen ────────────────────────────────────────────────
 
 export default function QuotationCreateScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const [selectedParty, setSelectedParty] = useState<{ id: string; name: string } | null>(null);
   const [invoiceDate, setInvoiceDate] = useState(todayDate());
@@ -520,7 +528,7 @@ export default function QuotationCreateScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   topBar: {
@@ -699,9 +707,9 @@ const styles = StyleSheet.create({
   },
   createBtnDisabled: { opacity: 0.7 },
   createBtnText: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-});
+}));
 
-const modalStyles = StyleSheet.create({
+const useModalStyles = makeStyles((colors) => ({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.surface,
@@ -759,4 +767,4 @@ const modalStyles = StyleSheet.create({
   listItemName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   listItemSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   emptyText: { textAlign: "center", paddingTop: 40, fontSize: 14, color: colors.textMuted },
-});
+}));

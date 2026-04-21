@@ -1,6 +1,7 @@
-import { View, TextInput, TouchableOpacity, StyleSheet, Platform } from "react-native";
+import { View, TextInput, TouchableOpacity, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { colors } from "../../lib/theme";
+import { makeStyles } from "../../lib/makeStyles";
+import { useColors } from "../../contexts/ThemeContext";
 
 interface Props {
   value: string;
@@ -9,6 +10,8 @@ interface Props {
 }
 
 export function SearchBar({ value, onChangeText, placeholder = "Search..." }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.container}>
       <Ionicons name="search-outline" size={18} color={colors.textMuted} />
@@ -31,7 +34,7 @@ export function SearchBar({ value, onChangeText, placeholder = "Search..." }: Pr
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flexDirection: "row",
     alignItems: "center",
@@ -49,4 +52,4 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: 0,
   },
-});
+}));

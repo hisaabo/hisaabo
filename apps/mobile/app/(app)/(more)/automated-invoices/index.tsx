@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
@@ -13,7 +12,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatDateShort } from "../../../../src/lib/utils";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
 
 /* ── Status styling ───────────────────────────────────────────── */
@@ -50,6 +50,8 @@ const STATUS_FILTERS: { value: TemplateStatus | null; label: string }[] = [
 const PAGE_SIZE = 20;
 
 export default function AutomatedInvoicesScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const [selectedStatus, setSelectedStatus] = useState<TemplateStatus | null>(null);
   const [page, setPage] = useState(1);
@@ -224,7 +226,7 @@ export default function AutomatedInvoicesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: "row",
@@ -302,4 +304,4 @@ const styles = StyleSheet.create({
   },
   footerItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   footerText: { fontSize: 12, color: colors.textMuted },
-});
+}));

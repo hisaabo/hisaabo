@@ -2,7 +2,6 @@ import { useState, useRef } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   ScrollView,
   TouchableOpacity,
   TextInput,
@@ -17,7 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 
 const UNITS = [
@@ -46,6 +46,8 @@ const UNITS = [
 type Unit = (typeof UNITS)[number];
 
 export default function CreateItemScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const utils = trpc.useUtils();
 
@@ -509,7 +511,7 @@ export default function CreateItemScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -752,4 +754,4 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginLeft: 20,
   },
-});
+}));

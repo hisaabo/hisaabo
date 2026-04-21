@@ -29,7 +29,8 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { screen, fireEvent } from "@testing-library/react-native";
+import { renderWithTheme as render } from "../../test-utils";
 import { LineItemNotesField } from "../LineItemNotesField";
 
 describe("LineItemNotesField — collapsible per-line notes editor", () => {

@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
@@ -13,12 +12,15 @@ import { useRouter } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
 
 type PartyType = "customer" | "supplier";
 
 export default function PartiesScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { businessId } = useBusinessStore();
   const [activeTab, setActiveTab] = useState<PartyType>("customer");
@@ -231,7 +233,7 @@ export default function PartiesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -372,4 +374,4 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     alignItems: "center",
   },
-});
+}));

@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -16,7 +15,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { colors } from "../../../../src/lib/theme";
+import { makeStyles } from "../../../../src/lib/makeStyles";
+import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card" | "payment_gateway";
@@ -41,6 +41,8 @@ const GATEWAY_MODES = [
 type GatewayModeKey = (typeof GATEWAY_MODES)[number]["key"];
 
 export default function BankAccountCreateScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const utils = trpc.useUtils();
 
@@ -361,7 +363,7 @@ export default function BankAccountCreateScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -458,4 +460,4 @@ const s = StyleSheet.create({
   createBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: colors.brand, borderRadius: 16, paddingVertical: 16, gap: 10, shadowColor: colors.brand, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8, elevation: 6 },
   createBtnDisabled: { opacity: 0.7 },
   createBtnText: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
-});
+}));

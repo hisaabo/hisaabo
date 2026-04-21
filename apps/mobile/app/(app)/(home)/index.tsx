@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, RefreshControl, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, ScrollView, RefreshControl, TouchableOpacity } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,7 +20,8 @@ function formatSummary(value: string | number): string {
     maximumFractionDigits: 0,
   }).format(num);
 }
-import { colors } from "../../../src/lib/theme";
+import { makeStyles } from "../../../src/lib/makeStyles";
+import { useColors } from "../../../src/contexts/ThemeContext";
 import { StatusBadge, Skeleton, QueryError } from "../../../src/components/ui";
 import { BiometricSetupPrompt } from "../../../src/components/BiometricSetupPrompt";
 
@@ -64,6 +65,8 @@ function getPeriodDates(period: Period): { fromDate?: string; toDate?: string } 
 /* ── Dashboard ──────────────────────────────────────────────── */
 
 export default function DashboardScreen() {
+  const s = useS();
+  const colors = useColors();
   const router = useRouter();
   const businessName = useBusinessStore((s) => s.businessName);
   const businessId = useBusinessStore((s) => s.businessId);
@@ -213,6 +216,7 @@ export default function DashboardScreen() {
 /* ── Summary card ───────────────────────────────────────────── */
 
 function SummaryCard({ label, value, color, onPress }: { label: string; value: string; color: string; onPress?: () => void }) {
+  const s = useS();
   const content = (
     <>
       <View style={[s.cardDot, { backgroundColor: color }]} />
@@ -240,7 +244,7 @@ function SummaryCard({ label, value, color, onPress }: { label: string; value: s
 
 /* ── Styles ──────────────────────────────────────────────────── */
 
-const s = StyleSheet.create({
+const useS = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingHorizontal: 16, paddingBottom: 32 },
   header: { paddingTop: 16, marginBottom: 16 },
@@ -272,4 +276,4 @@ const s = StyleSheet.create({
   emptyCard: { backgroundColor: colors.surface, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 32, alignItems: "center", gap: 8 },
   emptyText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
   emptyHint: { fontSize: 12, color: colors.textMuted, textAlign: "center" },
-});
+}));
