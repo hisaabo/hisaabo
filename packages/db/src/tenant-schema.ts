@@ -1173,3 +1173,31 @@ export const journalEntryLinesRelations = relations(journalEntryLines, ({ one })
   journalEntry: one(journalEntries, { fields: [journalEntryLines.journalEntryId], references: [journalEntries.id] }),
   account: one(chartOfAccounts, { fields: [journalEntryLines.accountId], references: [chartOfAccounts.id] }),
 }));
+
+// ── Business-date column registry ─────────────────────────────────
+// The canonical user-entered business date for each document table.
+// Date-range filters coming from the UI (pills like "This Month", "This FY"),
+// reports, and dashboards must filter on these columns — never on `createdAt`,
+// which is a row-insertion timestamp and unrelated to the business event.
+//
+// When adding a new document table with a user-entered date, register it here
+// and prefer the `buildBusinessDateFilter` helper in `@hisaabo/api` over
+// hand-written `gte`/`lte` on the column.
+
+export type BusinessDateTable =
+  | typeof invoices
+  | typeof payments
+  | typeof expenses
+  | typeof bankTransactions
+  | typeof journalEntries;
+
+export function businessDateColumnFor(table: BusinessDateTable) {
+  if (table === invoices) return invoices.invoiceDate;
+  if (table === payments) return payments.paymentDate;
+  if (table === expenses) return expenses.expenseDate;
+  if (table === bankTransactions) return bankTransactions.transactionDate;
+  if (table === journalEntries) return journalEntries.entryDate;
+  // Unreachable when the input is a registered BusinessDateTable. If a caller
+  // passes something else, the TS compiler has been bypassed; fail loudly.
+  throw new Error(`no business-date column registered for this table`);
+}

@@ -6,6 +6,7 @@ import type { TenantDatabase } from "../trpc.js";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 // ── Zod schemas ────────────────────────────────────────────────
 
@@ -67,8 +68,7 @@ async function computeTargetProgress(
     eq(invoices.documentType, "invoice"),
     isNull(invoices.deletedAt),
     sql`${invoices.createdByUserId} = ${target.userId}`,
-    gte(invoices.invoiceDate, target.periodStart),
-    lte(invoices.invoiceDate, target.periodEnd),
+    ...buildBusinessDateFilter(invoices, { from: target.periodStart, to: target.periodEnd }),
     sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
   ];
 

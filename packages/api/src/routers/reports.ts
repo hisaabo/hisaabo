@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -16,6 +16,7 @@ import {
   journalEntryLines,
 } from "@hisaabo/db";
 import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 import {
   daybookInputSchema,
   outstandingInputSchema,
@@ -71,8 +72,7 @@ export const reportsRouter = router({
               .where(
                 and(
                   eq(invoices.businessId, ctx.businessId),
-                  gte(invoices.invoiceDate, dayStart),
-                  lte(invoices.invoiceDate, dayEnd),
+                  ...buildBusinessDateFilter(invoices, { from: dayStart, to: dayEnd }),
                   isNull(invoices.deletedAt),
                 ),
               )
@@ -95,8 +95,7 @@ export const reportsRouter = router({
               .where(
                 and(
                   eq(payments.businessId, ctx.businessId),
-                  gte(payments.paymentDate, dayStart),
-                  lte(payments.paymentDate, dayEnd),
+                  ...buildBusinessDateFilter(payments, { from: dayStart, to: dayEnd }),
                   isNull(payments.deletedAt),
                 ),
               )
@@ -117,8 +116,7 @@ export const reportsRouter = router({
               .where(
                 and(
                   eq(expenses.businessId, ctx.businessId),
-                  gte(expenses.expenseDate, dayStart),
-                  lte(expenses.expenseDate, dayEnd),
+                  ...buildBusinessDateFilter(expenses, { from: dayStart, to: dayEnd }),
                   isNull(expenses.deletedAt),
                 ),
               )
@@ -355,8 +353,7 @@ export const reportsRouter = router({
         sql`${invoices.documentType} IN ('invoice', 'credit_note', 'debit_note')`,
         sql`${invoices.status} != 'cancelled'`,
         isNull(invoices.deletedAt),
-        gte(invoices.invoiceDate, new Date(input.fromDate)),
-        lte(invoices.invoiceDate, new Date(input.toDate)),
+        ...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }),
       ];
 
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
@@ -396,8 +393,7 @@ export const reportsRouter = router({
             and(
               eq(invoices.businessId, ctx.businessId),
               eq(invoices.type, "sale"),
-              gte(invoices.invoiceDate, new Date(input.fromDate)),
-              lte(invoices.invoiceDate, new Date(input.toDate)),
+              ...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }),
               isNull(invoices.deletedAt),
             ),
           )
@@ -436,8 +432,7 @@ export const reportsRouter = router({
         eq(invoices.documentType, "invoice"),
         sql`${invoices.status} != 'cancelled'`,
         isNull(invoices.deletedAt),
-        gte(invoices.invoiceDate, new Date(input.fromDate)),
-        lte(invoices.invoiceDate, new Date(input.toDate)),
+        ...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }),
       ];
 
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
@@ -475,8 +470,7 @@ export const reportsRouter = router({
             and(
               eq(invoices.businessId, ctx.businessId),
               eq(invoices.type, "purchase"),
-              gte(invoices.invoiceDate, new Date(input.fromDate)),
-              lte(invoices.invoiceDate, new Date(input.toDate)),
+              ...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }),
               isNull(invoices.deletedAt),
             ),
           )
@@ -533,8 +527,7 @@ export const reportsRouter = router({
             eq(invoices.documentType, "invoice"),
             sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
             isNull(invoices.deletedAt),
-            gte(invoices.invoiceDate, new Date(input.fromDate)),
-            lte(invoices.invoiceDate, new Date(input.toDate)),
+            ...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }),
             typeCondition,
           ),
         )
@@ -607,7 +600,7 @@ export const reportsRouter = router({
           .where(
             and(
               eq(expenses.businessId, ctx.businessId),
-              gte(expenses.expenseDate, sql`NOW() - INTERVAL '30 days'`),
+              ...buildBusinessDateFilter(expenses, { from: sql`NOW() - INTERVAL '30 days'` }),
             ),
           ),
       ]);
@@ -818,8 +811,7 @@ export const reportsRouter = router({
         eq(invoices.documentType, "invoice"),
         sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
         isNull(invoices.deletedAt),
-        gte(invoices.invoiceDate, fromDate),
-        lte(invoices.invoiceDate, toDate),
+        ...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }),
       ];
 
       if (input.category) conditions.push(eq(items.category, input.category));
@@ -879,8 +871,7 @@ export const reportsRouter = router({
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
           isNull(invoices.deletedAt),
-          gte(invoices.invoiceDate, prevFromDate),
-          lte(invoices.invoiceDate, prevToDate),
+          ...buildBusinessDateFilter(invoices, { from: prevFromDate, to: prevToDate }),
           ...(input.category ? [eq(items.category, input.category)] : []),
         ];
 
@@ -1060,14 +1051,8 @@ export const reportsRouter = router({
         isNull(payments.deletedAt),
       ];
 
-      if (input.fromDate) {
-        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
-        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
-      }
+      invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
+      paymentConditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
 
       const [partyInvoices, partyPayments] = await Promise.all([
         ctx.db
@@ -1164,8 +1149,7 @@ export const reportsRouter = router({
       const paymentConditions = [
         eq(payments.businessId, ctx.businessId),
         isNull(payments.deletedAt),
-        gte(payments.paymentDate, fromDate),
-        lte(payments.paymentDate, toDate),
+        ...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }),
       ];
       if (input.bankAccountId) paymentConditions.push(eq(payments.bankAccountId, input.bankAccountId));
 
@@ -1206,8 +1190,7 @@ export const reportsRouter = router({
                 and(
                   eq(expenses.businessId, ctx.businessId),
                   isNull(expenses.deletedAt),
-                  gte(expenses.expenseDate, fromDate),
-                  lte(expenses.expenseDate, toDate),
+                  ...buildBusinessDateFilter(expenses, { from: fromDate, to: toDate }),
                 ),
               )
               .groupBy(expenses.mode)
@@ -1626,8 +1609,7 @@ export const reportsRouter = router({
       .where(and(
         eq(journalEntryLines.accountId, input.accountId),
         eq(journalEntries.businessId, ctx.businessId),
-        gte(journalEntries.entryDate, from),
-        lte(journalEntries.entryDate, to),
+        ...buildBusinessDateFilter(journalEntries, { from, to }),
       ));
 
       const journalLines: LedgerLine[] = jeRows.map(je => ({
@@ -2000,8 +1982,7 @@ export const reportsRouter = router({
         .where(
           and(
             eq(journalEntries.businessId, ctx.businessId),
-            gte(journalEntries.entryDate, from),
-            lte(journalEntries.entryDate, to),
+            ...buildBusinessDateFilter(journalEntries, { from, to }),
           ),
         )
         .orderBy(journalEntries.entryDate);

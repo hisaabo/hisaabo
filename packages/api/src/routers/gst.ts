@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { invoices, businesses } from "@hisaabo/db";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { generateGSTR1, generateGSTR3B, gstr1ToCSV, gstr1ToPortalJson } from "../lib/gst-reports.js";
 import { generateGSTR9, gstr9ToPortalJson } from "../lib/gstr9-generator.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 export const gstRouter = router({
   // Reports are available for ALL businesses — GST-registered get GST terminology,
@@ -126,8 +127,7 @@ export const gstRouter = router({
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
           sql`${invoices.status} != 'cancelled'`,
-          gte(invoices.invoiceDate, quarterStart),
-          lte(invoices.invoiceDate, quarterEnd),
+          ...buildBusinessDateFilter(invoices, { from: quarterStart, to: quarterEnd }),
         ));
 
       let taxableValue = 0;

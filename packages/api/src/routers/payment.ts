@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, notInArray, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, notInArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
@@ -7,6 +7,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
 
 export const paymentRouter = router({
@@ -24,8 +25,7 @@ export const paymentRouter = router({
       const conditions = [eq(payments.businessId, ctx.businessId), isNull(payments.deletedAt)];
       if (input.partyId) conditions.push(eq(payments.partyId, input.partyId));
       if (input.invoiceId) conditions.push(eq(payments.invoiceId, input.invoiceId));
-      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
       if (input.search) {
         conditions.push(
           sql`(${payments.paymentNumber} ILIKE ${'%' + escapeLike(input.search) + '%'} OR EXISTS (
@@ -821,8 +821,7 @@ export const paymentRouter = router({
         );
       }
       if (input.mode) conditions.push(eq(payments.mode, input.mode));
-      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
 
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select({

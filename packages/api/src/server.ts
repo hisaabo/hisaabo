@@ -5,8 +5,9 @@ import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, gte, lte, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, gt, lt, inArray, isNull, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
+import { buildBusinessDateFilter } from "./lib/business-date.js";
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -712,14 +713,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     eq(payments.businessId, businessId),
   ] as Parameters<typeof and>[0][];
 
-  if (fromDate) {
-    invoiceConditions.push(gte(invoices.invoiceDate, fromDate));
-    paymentConditions.push(gte(payments.paymentDate, fromDate));
-  }
-  if (toDate) {
-    invoiceConditions.push(lte(invoices.invoiceDate, toDate));
-    paymentConditions.push(lte(payments.paymentDate, toDate));
-  }
+  invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }));
+  paymentConditions.push(...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }));
 
   const [partyInvoices, partyPayments] = await Promise.all([
     db.select({

@@ -1,4 +1,4 @@
-import { eq, and, ilike, or, sql, desc, asc, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, ilike, or, sql, desc, asc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
 import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 
 export const partyRouter = router({
@@ -392,14 +393,8 @@ export const partyRouter = router({
         eq(payments.businessId, ctx.businessId),
       ];
 
-      if (input.fromDate) {
-        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
-        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
-      }
+      invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
+      paymentConditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
 
       const [partyInvoices, partyPayments] = await Promise.all([
         ctx.db.select({
@@ -519,14 +514,8 @@ export const partyRouter = router({
         eq(payments.businessId, ctx.businessId),
       ];
 
-      if (input.fromDate) {
-        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
-        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
-      }
+      invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
+      paymentConditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
 
       const [partyInvoices, partyPayments] = await Promise.all([
         ctx.db.select({
@@ -643,16 +632,9 @@ export const partyRouter = router({
       const paymentConditions = [eq(payments.businessId, ctx.businessId)];
       const expenseConditions = [eq(expenses.businessId, ctx.businessId)];
 
-      if (input.fromDate) {
-        invoiceConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        paymentConditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-        expenseConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        invoiceConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
-        paymentConditions.push(lte(payments.paymentDate, new Date(input.toDate)));
-        expenseConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
-      }
+      invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
+      paymentConditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
+      expenseConditions.push(...buildBusinessDateFilter(expenses, { from: input.fromDate, to: input.toDate }));
 
       const [allInvoices, allPayments, allExpenses] = await Promise.all([
         ctx.db.select({
