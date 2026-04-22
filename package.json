@@ -12,6 +12,7 @@
     "db:reset": "pnpm --filter @hisaabo/db db:reset",
     "db:studio": "pnpm --filter @hisaabo/db studio",
     "lint": "pnpm exec oxlint --deny-warnings --ignore-path .gitignore --ignore-pattern '**/target/**' ./packages ./apps",
+    "licenses:check": "node scripts/license-check.mjs",
     "typecheck": "turbo typecheck",
     "test": "turbo test --concurrency 1",
     "test:api": "pnpm --filter @hisaabo/shared test && pnpm --filter @hisaabo/api test",
