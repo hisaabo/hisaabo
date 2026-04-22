@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, asc } from "drizzle-orm";
+import { eq, and, sql, desc, asc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { bankAccounts, bankTransactions, paymentGatewayConfigs } from "@hisaabo/db";
@@ -13,6 +13,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { logAudit } from "../lib/audit.js";
 
 export const bankAccountRouter = router({
@@ -251,12 +252,7 @@ export const bankAccountRouter = router({
       const conditions = [eq(bankTransactions.bankAccountId, input.bankAccountId)];
 
       if (input.type) conditions.push(eq(bankTransactions.type, input.type));
-      if (input.fromDate) {
-        conditions.push(gte(bankTransactions.transactionDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        conditions.push(lte(bankTransactions.transactionDate, new Date(input.toDate)));
-      }
+      conditions.push(...buildBusinessDateFilter(bankTransactions, { from: input.fromDate, to: input.toDate }));
 
       const offset = (input.page - 1) * input.limit;
 

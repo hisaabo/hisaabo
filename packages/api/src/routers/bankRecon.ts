@@ -11,7 +11,7 @@
  * Permission checks use requireCan() from @casl-based permissions.
  */
 
-import { eq, and, sql, desc, isNull, gte, lte, or, ilike, asc } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, or, ilike, asc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -36,6 +36,7 @@ import {
 import { router, viewerProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 import {
   parseCSV,
   detectColumnMapping,
@@ -300,8 +301,7 @@ export const bankReconRouter = router({
           .where(and(
             eq(payments.businessId, ctx.businessId),
             isNull(payments.deletedAt),
-            gte(payments.paymentDate, fromDate),
-            lte(payments.paymentDate, toDate),
+            ...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }),
           )),
         ctx.db
           .select({
@@ -316,8 +316,7 @@ export const bankReconRouter = router({
           .where(and(
             eq(expenses.businessId, ctx.businessId),
             isNull(expenses.deletedAt),
-            gte(expenses.expenseDate, fromDate),
-            lte(expenses.expenseDate, toDate),
+            ...buildBusinessDateFilter(expenses, { from: fromDate, to: toDate }),
           )),
         ctx.db
           .select({
@@ -332,8 +331,7 @@ export const bankReconRouter = router({
           .where(and(
             eq(bankTransactions.businessId, ctx.businessId),
             eq(bankTransactions.bankAccountId, importRecord.bankAccountId),
-            gte(bankTransactions.transactionDate, fromDate),
-            lte(bankTransactions.transactionDate, toDate),
+            ...buildBusinessDateFilter(bankTransactions, { from: fromDate, to: toDate }),
           )),
       ]);
 

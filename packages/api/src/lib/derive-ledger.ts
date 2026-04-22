@@ -25,7 +25,7 @@
  *   Debit Note / Purchase Return → Dr 2000 Payable / Cr 5010 Purchase Returns + Cr Input GST
  */
 
-import { eq, and, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import {
   invoices,
   payments,
@@ -36,6 +36,7 @@ import {
   journalEntries,
   journalEntryLines,
 } from "@hisaabo/db";
+import { buildBusinessDateFilter } from "./business-date.js";
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -255,8 +256,7 @@ export async function deriveLedger(
       and(
         eq(invoices.businessId, businessId),
         isNull(invoices.deletedAt),
-        gte(invoices.invoiceDate, fromDate),
-        lte(invoices.invoiceDate, toDate),
+        ...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }),
       ),
     );
 
@@ -461,8 +461,7 @@ export async function deriveLedger(
       and(
         eq(payments.businessId, businessId),
         isNull(payments.deletedAt),
-        gte(payments.paymentDate, fromDate),
-        lte(payments.paymentDate, toDate),
+        ...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }),
       ),
     );
 
@@ -528,8 +527,7 @@ export async function deriveLedger(
       and(
         eq(expenses.businessId, businessId),
         isNull(expenses.deletedAt),
-        gte(expenses.expenseDate, fromDate),
-        lte(expenses.expenseDate, toDate),
+        ...buildBusinessDateFilter(expenses, { from: fromDate, to: toDate }),
       ),
     );
 
@@ -624,8 +622,7 @@ export async function deriveFullLedger(
     .where(
       and(
         eq(journalEntries.businessId, businessId),
-        gte(journalEntries.entryDate, fromDate),
-        lte(journalEntries.entryDate, toDate),
+        ...buildBusinessDateFilter(journalEntries, { from: fromDate, to: toDate }),
       ),
     );
 

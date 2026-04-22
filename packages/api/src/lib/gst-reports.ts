@@ -1,6 +1,7 @@
-import { eq, and, sql, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
+import { buildBusinessDateFilter } from "./business-date.js";
 
 // Split a tax amount exactly in half using paise-level integer arithmetic
 // to avoid floating-point rounding errors on odd amounts (e.g. ₹1.01).
@@ -159,8 +160,7 @@ export async function generateGSTR1(
       eq(invoices.documentType, "invoice"),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
-      gte(invoices.invoiceDate, startDate),
-      lte(invoices.invoiceDate, endDate),
+      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ))
     .orderBy(invoices.invoiceDate);
 
@@ -313,8 +313,7 @@ export async function generateGSTR1(
       inArray(invoices.documentType, ["credit_note", "sales_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
-      gte(invoices.invoiceDate, startDate),
-      lte(invoices.invoiceDate, endDate),
+      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ))
     .orderBy(invoices.invoiceDate);
 
@@ -335,8 +334,7 @@ export async function generateGSTR1(
       inArray(invoices.documentType, ["debit_note", "purchase_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
-      gte(invoices.invoiceDate, startDate),
-      lte(invoices.invoiceDate, endDate),
+      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ))
     .orderBy(invoices.invoiceDate);
 
@@ -424,8 +422,7 @@ export async function generateGSTR3B(
       eq(invoices.type, "purchase"),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
-      gte(invoices.invoiceDate, startDate),
-      lte(invoices.invoiceDate, endDate),
+      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ));
 
   let itcIgst = 0, itcCgst = 0, itcSgst = 0;

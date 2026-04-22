@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
 import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 
@@ -46,8 +47,7 @@ export const invoiceRouter = router({
         conditions.push(eq(invoices.status, input.status));
       }
       if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
-      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
       if (input.search) {
         const term = `%${escapeLike(input.search)}%`;
         conditions.push(

@@ -11,6 +11,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { generateInvoiceFromTemplate, computeNextRunDate } from "../lib/recurring-invoice-generator.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 export const recurringInvoiceRouter = router({
   list: viewerProcedure
@@ -374,7 +375,7 @@ export const recurringInvoiceRouter = router({
       .where(and(
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, "invoice"),
-        gte(invoices.invoiceDate, lookbackDate),
+        ...buildBusinessDateFilter(invoices, { from: lookbackDate }),
       ))
       .orderBy(invoices.partyId, invoices.invoiceDate);
 

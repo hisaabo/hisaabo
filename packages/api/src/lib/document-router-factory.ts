@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -18,6 +18,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { logAudit } from "./audit.js";
+import { buildBusinessDateFilter } from "./business-date.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -107,8 +108,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           }
         }
         if (input.partyId) conditions.push(eq(invoices.partyId, input.partyId));
-        if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+        conditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
 
         const offset = (input.page - 1) * input.limit;
 

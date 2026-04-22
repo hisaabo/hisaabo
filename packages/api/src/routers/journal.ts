@@ -1,4 +1,4 @@
-import { eq, and, gte, lte, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { journalEntries, journalEntryLines, chartOfAccounts, journalEntryTemplates } from "@hisaabo/db";
@@ -11,6 +11,7 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 export const journalRouter = router({
   list: viewerProcedure
@@ -22,13 +23,7 @@ export const journalRouter = router({
       requireCan(ctx.ability, "read", "Report");
 
       const conditions = [eq(journalEntries.businessId, ctx.businessId)];
-
-      if (input.fromDate) {
-        conditions.push(gte(journalEntries.entryDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        conditions.push(lte(journalEntries.entryDate, new Date(input.toDate)));
-      }
+      conditions.push(...buildBusinessDateFilter(journalEntries, { from: input.fromDate, to: input.toDate }));
 
       // Return entries with line count and total amount via subqueries
       const entries = await ctx.db

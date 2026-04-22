@@ -5,8 +5,9 @@ import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, gte, lte, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, gt, lt, inArray, isNull, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
+import { buildBusinessDateFilter } from "./lib/business-date.js";
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -148,7 +149,19 @@ function isSameOrigin(c: Context): boolean {
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
+
+// Escape hatch for e2e test harnesses that hammer the API during seeding.
+// Only honored outside production, so accidentally setting this in a real
+// deployment does nothing.
+const rateLimitDisabled =
+  process.env.DISABLE_RATE_LIMIT === "1" &&
+  process.env.NODE_ENV !== "production";
+
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
+  if (rateLimitDisabled) {
+    await next();
+    return;
+  }
   const ip = getClientIp(c);
   const hasSession = c.req.header("cookie")?.includes("session_id=")
     || c.req.header("authorization")?.startsWith("Bearer ");
@@ -712,14 +725,8 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     eq(payments.businessId, businessId),
   ] as Parameters<typeof and>[0][];
 
-  if (fromDate) {
-    invoiceConditions.push(gte(invoices.invoiceDate, fromDate));
-    paymentConditions.push(gte(payments.paymentDate, fromDate));
-  }
-  if (toDate) {
-    invoiceConditions.push(lte(invoices.invoiceDate, toDate));
-    paymentConditions.push(lte(payments.paymentDate, toDate));
-  }
+  invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }));
+  paymentConditions.push(...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }));
 
   const [partyInvoices, partyPayments] = await Promise.all([
     db.select({

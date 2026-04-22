@@ -1,9 +1,10 @@
-import { eq, and, sql, desc, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, payments, expenses, parties, businesses } from "@hisaabo/db";
 import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 
 export const dashboardRouter = router({
@@ -35,10 +36,9 @@ export const dashboardRouter = router({
     const periodStart = input?.fromDate ? new Date(input.fromDate) : fyStart;
     const periodEnd = input?.toDate ? new Date(input.toDate) : undefined;
 
-    const dateCondition = (dateCol: Parameters<typeof gte>[0]) => {
+    const dateCondition = (table: Parameters<typeof buildBusinessDateFilter>[0]) => {
       if (!hasDateFilter) return undefined; // All Time — no date filter
-      if (periodEnd) return and(gte(dateCol, periodStart), lte(dateCol, periodEnd));
-      return gte(dateCol, periodStart);
+      return and(...buildBusinessDateFilter(table, { from: periodStart, to: periodEnd }));
     };
 
     const [
@@ -60,7 +60,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           isNull(invoices.deletedAt),
-          dateCondition(invoices.invoiceDate),
+          dateCondition(invoices),
         )),
 
       // Purchase total (FY)
@@ -72,7 +72,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           isNull(invoices.deletedAt),
-          dateCondition(invoices.invoiceDate),
+          dateCondition(invoices),
         )),
 
       // Expense total (FY)
@@ -82,7 +82,7 @@ export const dashboardRouter = router({
         .where(and(
           eq(expenses.businessId, ctx.businessId),
           isNull(expenses.deletedAt),
-          dateCondition(expenses.expenseDate),
+          dateCondition(expenses),
         )),
 
       // Receivable = current outstanding balance (balance sheet metric, NOT period-scoped)
@@ -135,7 +135,7 @@ export const dashboardRouter = router({
         .where(and(
           eq(payments.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
-          dateCondition(payments.paymentDate),
+          dateCondition(payments),
         )),
 
       // Cash out = payments made for purchases (period-scoped)
@@ -146,7 +146,7 @@ export const dashboardRouter = router({
         .where(and(
           eq(payments.businessId, ctx.businessId),
           eq(invoices.type, "purchase"),
-          dateCondition(payments.paymentDate),
+          dateCondition(payments),
         )),
     ]);
 
@@ -184,8 +184,7 @@ export const dashboardRouter = router({
         sql`${invoices.status} != 'cancelled'`,
       ];
 
-      if (input?.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input?.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(invoices, { from: input?.fromDate, to: input?.toDate }));
 
       const [shippingCharged] = await ctx.db.select({
         total: sql<string>`COALESCE(SUM(
@@ -203,8 +202,7 @@ export const dashboardRouter = router({
         isNull(expenses.deletedAt),
         sql`LOWER(${expenses.category}) IN ('shipping', 'freight', 'delivery', 'courier')`,
       ];
-      if (input?.fromDate) expenseConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      if (input?.toDate) expenseConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      expenseConditions.push(...buildBusinessDateFilter(expenses, { from: input?.fromDate, to: input?.toDate }));
 
       const [shippingExpenses] = await ctx.db.select({
         total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
@@ -413,8 +411,7 @@ export const dashboardRouter = router({
         eq(invoices.documentType, sql`'invoice'`),
         sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
       ];
-      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
 
       const results = await ctx.db
         .select({
@@ -448,8 +445,7 @@ export const dashboardRouter = router({
         eq(invoices.documentType, sql`'invoice'`),
         sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
       ];
-      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
       if (input.itemType) conditions.push(eq(items.itemType, input.itemType));
 
       // Historical aggregation — top-selling items over the period. A
@@ -487,8 +483,7 @@ export const dashboardRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
       const conditions = [eq(expenses.businessId, ctx.businessId)];
-      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(expenses, { from: input.fromDate, to: input.toDate }));
 
       return ctx.db
         .select({
@@ -513,8 +508,7 @@ export const dashboardRouter = router({
         eq(invoices.businessId, ctx.businessId),
         eq(invoices.documentType, sql`'invoice'`),
       ];
-      if (input.fromDate) conditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
 
       return ctx.db
         .select({
@@ -541,14 +535,8 @@ export const dashboardRouter = router({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const expConditions: any[] = [eq(expenses.businessId, ctx.businessId)];
 
-      if (input.fromDate) {
-        invConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-        expConditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      }
-      if (input.toDate) {
-        invConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
-        expConditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
-      }
+      invConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
+      expConditions.push(...buildBusinessDateFilter(expenses, { from: input.fromDate, to: input.toDate }));
 
       const [
         [sales],
@@ -708,8 +696,7 @@ export const dashboardRouter = router({
         eq(payments.businessId, ctx.businessId),
         sql`${payments.deletedAt} IS NULL`,
       ];
-      if (input.fromDate) conditions.push(gte(payments.paymentDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(payments.paymentDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(payments, { from: input.fromDate, to: input.toDate }));
 
       const results = await ctx.db
         .select({
@@ -742,8 +729,7 @@ export const dashboardRouter = router({
         eq(invoices.documentType, "invoice"),
         sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
       ];
-      if (input.fromDate) currConditions.push(gte(invoices.invoiceDate, new Date(input.fromDate)));
-      if (input.toDate) currConditions.push(lte(invoices.invoiceDate, new Date(input.toDate)));
+      currConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
 
       const [curr] = await ctx.db
         .select({
@@ -770,8 +756,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          gte(invoices.invoiceDate, prevFrom),
-          lte(invoices.invoiceDate, prevTo),
+          ...buildBusinessDateFilter(invoices, { from: prevFrom, to: prevTo }),
         ];
 
         const [prev] = await ctx.db
@@ -817,8 +802,7 @@ export const dashboardRouter = router({
         eq(expenses.businessId, ctx.businessId),
         sql`${expenses.deletedAt} IS NULL`,
       ];
-      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(expenses, { from: input.fromDate, to: input.toDate }));
 
       const results = await ctx.db
         .select({
@@ -872,8 +856,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          gte(invoices.invoiceDate, currMonthStart),
-          lte(invoices.invoiceDate, currMonthEnd),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
         )),
 
         ctx.db.select({
@@ -883,24 +866,21 @@ export const dashboardRouter = router({
           eq(invoices.type, "sale"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          gte(invoices.invoiceDate, prevMonthStart),
-          lte(invoices.invoiceDate, prevMonthEnd),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          gte(expenses.expenseDate, currMonthStart),
-          lte(expenses.expenseDate, currMonthEnd),
+          ...buildBusinessDateFilter(expenses, { from: currMonthStart, to: currMonthEnd }),
         )),
 
         ctx.db.select({
           total: sql<string>`COALESCE(SUM(${expenses.amount}::numeric), 0)::text`,
         }).from(expenses).where(and(
           eq(expenses.businessId, ctx.businessId),
-          gte(expenses.expenseDate, prevMonthStart),
-          lte(expenses.expenseDate, prevMonthEnd),
+          ...buildBusinessDateFilter(expenses, { from: prevMonthStart, to: prevMonthEnd }),
         )),
 
         ctx.db.select({
@@ -910,8 +890,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          gte(invoices.invoiceDate, currMonthStart),
-          lte(invoices.invoiceDate, currMonthEnd),
+          ...buildBusinessDateFilter(invoices, { from: currMonthStart, to: currMonthEnd }),
         )),
 
         ctx.db.select({
@@ -921,8 +900,7 @@ export const dashboardRouter = router({
           eq(invoices.type, "purchase"),
           eq(invoices.documentType, "invoice"),
           sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
-          gte(invoices.invoiceDate, prevMonthStart),
-          lte(invoices.invoiceDate, prevMonthEnd),
+          ...buildBusinessDateFilter(invoices, { from: prevMonthStart, to: prevMonthEnd }),
         )),
       ]);
 

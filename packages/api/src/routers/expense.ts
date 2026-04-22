@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, gte, lte, ilike, or, isNull, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, ilike, or, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
@@ -7,6 +7,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { buildBusinessDateFilter } from "../lib/business-date.js";
 
 // Map payment mode to the bank account type(s) to search for.
 // Returns null when no bank debit should be created.
@@ -33,8 +34,7 @@ export const expenseRouter = router({
       requireCan(ctx.ability, "read", "Expense");
       const conditions = [eq(expenses.businessId, ctx.businessId), isNull(expenses.deletedAt)];
       if (input.category) conditions.push(eq(expenses.category, input.category));
-      if (input.fromDate) conditions.push(gte(expenses.expenseDate, new Date(input.fromDate)));
-      if (input.toDate) conditions.push(lte(expenses.expenseDate, new Date(input.toDate)));
+      conditions.push(...buildBusinessDateFilter(expenses, { from: input.fromDate, to: input.toDate }));
       if (input.search) {
         conditions.push(
           or(
