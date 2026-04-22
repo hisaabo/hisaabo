@@ -41,6 +41,7 @@ export default defineConfig({
       timeout: 60_000,
       stdout: "pipe",
       stderr: "pipe",
+      env: { DISABLE_RATE_LIMIT: "1" },
     },
     {
       command: "pnpm --filter @hisaabo/web dev",

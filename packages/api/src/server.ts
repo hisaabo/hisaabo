@@ -149,7 +149,19 @@ function isSameOrigin(c: Context): boolean {
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
+
+// Escape hatch for e2e test harnesses that hammer the API during seeding.
+// Only honored outside production, so accidentally setting this in a real
+// deployment does nothing.
+const rateLimitDisabled =
+  process.env.DISABLE_RATE_LIMIT === "1" &&
+  process.env.NODE_ENV !== "production";
+
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
+  if (rateLimitDisabled) {
+    await next();
+    return;
+  }
   const ip = getClientIp(c);
   const hasSession = c.req.header("cookie")?.includes("session_id=")
     || c.req.header("authorization")?.startsWith("Bearer ");
