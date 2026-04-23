@@ -4,6 +4,7 @@ import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { apiUrl } from "@/lib/api-url";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -116,7 +117,7 @@ function DownloadPDFButton({
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/invoices/${invoiceId}/pdf?format=${format}`,
+        apiUrl(`/api/invoices/${invoiceId}/pdf?format=${format}`),
         {
           credentials: "include",
           headers: { "x-business-id": getBusinessId() || "" },

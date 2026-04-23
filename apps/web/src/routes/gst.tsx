@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { apiUrl } from "@/lib/api-url";
 import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
@@ -1253,7 +1254,7 @@ function PartyLedgerView() {
       const params = new URLSearchParams();
       if (fromDate) params.set("from", fromDate);
       if (toDate) params.set("to", toDate);
-      const res = await fetch(`/api/parties/${partyId}/ledger.pdf?${params}`, {
+      const res = await fetch(apiUrl(`/api/parties/${partyId}/ledger.pdf?${params}`), {
         credentials: "include",
         headers: { "x-business-id": getBusinessId() || "" },
       });
