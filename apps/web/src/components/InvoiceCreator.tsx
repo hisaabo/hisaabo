@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency } from "@/lib/utils";
+import { apiUrl } from "@/lib/api-url";
 import { getBusinessId } from "@/lib/trpc";
 
 interface LineItem {
@@ -651,7 +652,7 @@ export function DownloadPDFButton({ invoiceId, invoiceNumber }: { invoiceId: str
     setOpen(false);
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices/${invoiceId}/pdf?format=${format}`, {
+      const res = await fetch(apiUrl(`/api/invoices/${invoiceId}/pdf?format=${format}`), {
         credentials: "include",
         headers: {
           "x-business-id": getBusinessId() || "",
