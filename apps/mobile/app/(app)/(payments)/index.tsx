@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
+import { accumulatePages } from "../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
@@ -142,15 +143,14 @@ export default function PaymentsScreen() {
     { enabled: !!businessId, placeholderData: (prev) => prev }
   );
 
-  // Accumulate pages — reset on page 1, append on subsequent pages
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  // In particular, page-1 refetches after a mutation invalidation
+  // prepend freshly-created records so they appear immediately when the
+  // user returns from the create screen (this was the "table doesn't
+  // update after save" bug on the payments list).
   useEffect(() => {
     if (data?.data) {
-      setAllPayments((prev) => {
-        if (page === 1) return data.data;
-        const existingIds = new Set(prev.map((p) => p.id));
-        const newItems = data.data.filter((p) => !existingIds.has(p.id));
-        return [...prev, ...newItems];
-      });
+      setAllPayments((prev) => accumulatePages(prev, data.data, page));
     }
   }, [data?.data, page]);
 
