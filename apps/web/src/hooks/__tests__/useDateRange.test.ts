@@ -76,6 +76,31 @@ describe("getDatePreset (pure helper)", () => {
     expect(toDate).toBe("");
   });
 
+  it("last-30: fromDate is exactly 30 days before 'now', toDate is 'now'", () => {
+    const { fromDate, toDate } = getDatePreset("last-30");
+
+    // toDate === fixed "now"
+    expect(toDate).toBe(FIXED_NOW.toISOString());
+
+    // fromDate === now - 30 days (UTC)
+    const expectedFrom = new Date(FIXED_NOW);
+    expectedFrom.setUTCDate(expectedFrom.getUTCDate() - 30);
+    expect(fromDate).toBe(expectedFrom.toISOString());
+  });
+
+  it("last-30: fromDate-to-toDate spans exactly 30 days", () => {
+    const { fromDate, toDate } = getDatePreset("last-30");
+    const spanMs = new Date(toDate).getTime() - new Date(fromDate).getTime();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    expect(spanMs).toBe(thirtyDaysMs);
+  });
+
+  it("unknown preset: falls back to empty strings (default branch)", () => {
+    const { fromDate, toDate } = getDatePreset("not-a-real-preset");
+    expect(fromDate).toBe("");
+    expect(toDate).toBe("");
+  });
+
   // ── TIMEZONE REGRESSION TESTS ─────────────────────────────────────────
   // Bug: using local-time Date constructor caused April 1 IST → March 31 UTC,
   // making FY charts include the previous March. These tests ensure all
@@ -114,6 +139,14 @@ describe("getDatePreset (pure helper)", () => {
     vi.setSystemTime(new Date("2025-04-01T00:00:00.000Z"));
     const { fromDate } = getDatePreset("this-fy");
     expect(fromDate).toMatch(/2025-04-01T00:00:00/);
+  });
+
+  // Edge case: last-fy while in Jan-Mar — previous FY ran two calendar years ago
+  it("last-fy when month < April: last FY starts two calendar years back", () => {
+    vi.setSystemTime(new Date("2026-02-15T00:00:00.000Z"));
+    const { fromDate, toDate } = getDatePreset("last-fy");
+    expect(fromDate).toMatch(/2024-04-01T00:00:00/);
+    expect(toDate).toMatch(/2025-03-31T23:59:59/);
   });
 });
 

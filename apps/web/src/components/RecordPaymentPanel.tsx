@@ -24,7 +24,7 @@ export interface RecordPaymentPanelProps {
 
 // ── Account type icons ────────────────────────────────────────────────────────
 
-function accountTypeIcon(type: string): string {
+export function accountTypeIcon(type: string): string {
   switch (type) {
     case "cash":            return "💵";
     case "current":         return "🏦";
@@ -36,7 +36,7 @@ function accountTypeIcon(type: string): string {
   }
 }
 
-function accountTypeLabel(type: string): string {
+export function accountTypeLabel(type: string): string {
   switch (type) {
     case "savings":         return "Savings";
     case "current":         return "Current";
@@ -49,7 +49,7 @@ function accountTypeLabel(type: string): string {
 }
 
 // Map account type to payment mode
-function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "other" {
+export function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "other" {
   if (type === "cash") return "cash";
   if (type === "upi") return "upi";
   return "bank";

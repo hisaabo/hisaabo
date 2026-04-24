@@ -54,7 +54,7 @@ const PERIOD_TYPE_OPTIONS = [
 
 // ── Utility helpers ────────────────────────────────────────────
 
-function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: string } {
+export function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: string } {
   const now = new Date();
   const today = formatDateInput(now);
 
@@ -86,7 +86,7 @@ function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: st
   }
 }
 
-function formatTargetValue(target: SalesTarget): string {
+export function formatTargetValue(target: SalesTarget): string {
   if (target.targetType === "order_value") {
     return formatCurrency(target.targetValue);
   }

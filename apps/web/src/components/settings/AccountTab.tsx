@@ -80,7 +80,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function timeAgo(date: Date | string | null): string {
+export function timeAgo(date: Date | string | null): string {
   if (!date) return "Unknown";
   const now = Date.now();
   const then = new Date(date).getTime();
