@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
@@ -84,9 +84,7 @@ export function RecordPaymentPanel({
   const [amountOverridden, setAmountOverridden] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [referenceNumber, setReferenceNumber] = useState("");
-  const [paymentDate, setPaymentDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
+  const [paymentDate, setPaymentDate] = useState(todayISODate);
   const [notes, setNotes] = useState("");
   const [gatewayMode, setGatewayMode] = useState<string>("credit_card");
 
@@ -129,9 +127,7 @@ export function RecordPaymentPanel({
       setSelectedAccountId(editData.bankAccountId ?? null);
       setReferenceNumber(editData.referenceNumber ?? "");
       setPaymentDate(
-        editData.paymentDate
-          ? new Date(editData.paymentDate).toISOString().split("T")[0]
-          : new Date().toISOString().split("T")[0]
+        editData.paymentDate ? formatDateInput(editData.paymentDate) : todayISODate()
       );
       setNotes(editData.notes ?? "");
       // Restore gateway mode from edit data if it's a gateway mode
@@ -161,7 +157,7 @@ export function RecordPaymentPanel({
       setManualAmount("");
       setAmountOverridden(false);
       setReferenceNumber("");
-      setPaymentDate(new Date().toISOString().split("T")[0]);
+      setPaymentDate(todayISODate());
       setNotes("");
       setGatewayMode("credit_card");
     }
@@ -367,7 +363,11 @@ export function RecordPaymentPanel({
         ? accountTypeToMode(selectedAccount.accountType)
         : "cash";
 
-    const paymentDateISO = new Date(paymentDate + "T00:00:00").toISOString();
+    const paymentDateISO = toISOString(paymentDate);
+    if (!paymentDateISO) {
+      toast.error("Invalid payment date");
+      return;
+    }
 
     if (isEditMode) {
       updateMutation.mutate({

@@ -111,6 +111,9 @@ importers:
       '@trpc/react-query':
         specifier: ^11.0.0
         version: 11.14.1(@tanstack/react-query@5.95.0(react@19.2.0))(@trpc/client@11.14.1(@trpc/server@11.14.1(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.14.1(typescript@5.9.3))(react@19.2.0)(typescript@5.9.3)
+      dayjs:
+        specifier: ^1.11.20
+        version: 1.11.20
       expo:
         specifier: ~55.0.11
         version: 55.0.11(@babel/core@7.29.0)(@expo/dom-webview@55.0.3)(@expo/metro-runtime@55.0.9)(expo-router@55.0.10)(react-dom@19.2.4(react@19.2.0))(react-native@0.83.4(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
@@ -263,6 +266,9 @@ importers:
       '@trpc/react-query':
         specifier: ^11.0.0
         version: 11.14.1(@tanstack/react-query@5.95.0(react@19.2.0))(@trpc/client@11.14.1(@trpc/server@11.14.1(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.14.1(typescript@5.9.3))(react@19.2.0)(typescript@5.9.3)
+      dayjs:
+        specifier: ^1.11.20
+        version: 1.11.20
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -4815,6 +4821,9 @@ packages:
 
   dateformat@4.6.3:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
+
+  dayjs@1.11.20:
+    resolution: {integrity: sha512-YbwwqR/uYpeoP4pu043q+LTDLFBLApUP6VxRihdfNTqu4ubqMlGDLd6ErXhEgsyvY0K6nCs7nggYumAN+9uEuQ==}
 
   debounce-fn@6.0.0:
     resolution: {integrity: sha512-rBMW+F2TXryBwB54Q0d8drNEI+TfoS9JpNTAoVpukbWEhjXQq4rySFYLaqXMFXwdv61Zb2OHtj5bviSoimqxRQ==}
@@ -12038,7 +12047,9 @@ snapshots:
       metro-runtime: 0.83.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
     optional: true
 
   '@react-native/normalize-colors@0.83.4': {}
@@ -14006,6 +14017,8 @@ snapshots:
       whatwg-url: 14.2.0
 
   dateformat@4.6.3: {}
+
+  dayjs@1.11.20: {}
 
   debounce-fn@6.0.0:
     dependencies:

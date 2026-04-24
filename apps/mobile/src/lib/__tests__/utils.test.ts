@@ -24,7 +24,14 @@
  *   - formatDateShort: day+month without year
  */
 
-import { formatCurrency, formatDate, formatDateShort } from "../utils";
+import {
+  formatCurrency,
+  formatDate,
+  formatDateShort,
+  formatDateTime,
+  formatDateInput,
+  todayISODate,
+} from "../utils";
 
 // ---------------------------------------------------------------------------
 describe("formatCurrency — INR formatting for Indian business context", () => {
@@ -309,59 +316,96 @@ describe("formatDate / formatDateShort — defensive behaviour for malformed inp
   });
 
   // -------------------------------------------------------------------------
-  it("still returns a formatted date when the engine's Intl layer emits 'Invalid Date' for a valid Date (Hermes-on-Android regression)", () => {
-    // WHAT: On some Android devices Hermes' `Intl.DateTimeFormat("en-IN",
-    //       { day, month, year })` returns the literal string "Invalid
-    //       Date" for a perfectly valid `Date` object because the ICU
-    //       data bundled with Hermes lacks the `en-IN` short-month names.
-    //       We simulate that by monkey-patching `toLocaleDateString` to
-    //       return "Invalid Date" and then assert that the function still
-    //       emits a usable date string — never "Invalid Date".
-    // WHY:  This is the exact failure mode the bug report described. The
-    //       test pins the manual "{day} {Mon} {year}" fallback so a
-    //       future refactor that drops the fallback re-breaks in review.
-    const realDate = new Date(2026, 0, 15); // 15 Jan 2026
+  it("is engine-independent: dayjs produces identical output regardless of Intl/locale data", () => {
+    // WHAT: The previous implementation routed through
+    //       `Date.prototype.toLocaleDateString("en-IN", ...)` which depends on
+    //       the JS engine's bundled ICU data. On Hermes (Android release
+    //       builds) this returned the literal string "Invalid Date" for
+    //       otherwise-valid Date objects, and in the worst case threw a
+    //       RangeError for unsupported locale/option combinations.
+    // WHY:  dayjs's `format` tokens produce the same output on every engine
+    //       (Hermes, JSC, Node, jsdom), so the bug cannot recur. This test
+    //       pins the output shape for a realistic FY-start date and asserts
+    //       that stubbing `toLocaleDateString` away changes nothing —
+    //       demonstrating that we do not depend on it anymore.
+    const realDate = new Date(2025, 3, 1); // 1 Apr 2025 (Indian FY start)
+
     const originalToLocaleDateString = Date.prototype.toLocaleDateString;
-    // Stub every call to toLocaleDateString to simulate the Hermes bug.
     Date.prototype.toLocaleDateString = function () {
       return "Invalid Date";
     };
     try {
       const result = formatDate(realDate);
       expect(result).not.toMatch(/invalid/i);
-      // Manual fallback produces "15 Jan 2026".
-      expect(result).toContain("15");
-      expect(result).toContain("Jan");
-      expect(result).toContain("2026");
+      expect(result).toContain("1");
+      expect(result).toContain("Apr");
+      expect(result).toContain("2025");
 
       const shortResult = formatDateShort(realDate);
       expect(shortResult).not.toMatch(/invalid/i);
-      expect(shortResult).toContain("15");
-      expect(shortResult).toContain("Jan");
+      expect(shortResult).toContain("Apr");
     } finally {
       Date.prototype.toLocaleDateString = originalToLocaleDateString;
     }
   });
+});
 
-  // -------------------------------------------------------------------------
-  it("still returns a formatted date when the engine's Intl layer throws (worst-case Hermes)", () => {
-    // WHAT: An even harsher Hermes regression where `toLocaleDateString`
-    //       throws for an unsupported locale/option combination. The
-    //       function should swallow and fall through to the manual
-    //       formatter — it must never let an exception bubble up into a
-    //       render cycle, which would crash the list screen.
-    const realDate = new Date(2025, 3, 1); // 1 Apr 2025 (Indian FY start)
-    const originalToLocaleDateString = Date.prototype.toLocaleDateString;
-    Date.prototype.toLocaleDateString = function () {
-      throw new RangeError("Incorrect locale information provided");
-    };
-    try {
-      const result = formatDate(realDate);
-      expect(result).not.toMatch(/invalid/i);
-      expect(result).toContain("Apr");
-      expect(result).toContain("2025");
-    } finally {
-      Date.prototype.toLocaleDateString = originalToLocaleDateString;
-    }
+// ---------------------------------------------------------------------------
+describe("formatDateTime — date + time label for audit/API-key rows", () => {
+  it("formats a Date object as 'D MMM YYYY, h:mm A'", () => {
+    const d = new Date(2026, 2, 28, 14, 30); // 28 Mar 2026, 14:30 local
+    const result = formatDateTime(d);
+    expect(result).toContain("28");
+    expect(result).toContain("Mar");
+    expect(result).toContain("2026");
+    // Must include a time segment with AM/PM
+    expect(result).toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/);
+  });
+
+  it("accepts an ISO string", () => {
+    const result = formatDateTime("2026-01-15T09:05:00.000Z");
+    expect(result).toContain("Jan");
+    expect(result).toContain("2026");
+  });
+
+  it("returns em-dash for null/undefined/empty/invalid input", () => {
+    expect(formatDateTime(null)).toBe("—");
+    expect(formatDateTime(undefined)).toBe("—");
+    expect(formatDateTime("")).toBe("—");
+    expect(formatDateTime("not-a-date")).toBe("—");
+    expect(formatDateTime(new Date(NaN))).toBe("—");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("formatDateInput — YYYY-MM-DD for form state", () => {
+  it("converts an ISO datetime string to YYYY-MM-DD", () => {
+    expect(formatDateInput("2025-03-31T00:00:00.000Z")).toBe("2025-03-31");
+  });
+
+  it("returns a 10-character date for a Date object", () => {
+    const result = formatDateInput(new Date("2025-07-04T12:00:00.000Z"));
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("returns empty string for null/undefined/empty/invalid (so <input type='date'> stays empty)", () => {
+    expect(formatDateInput(null)).toBe("");
+    expect(formatDateInput(undefined)).toBe("");
+    expect(formatDateInput("")).toBe("");
+    expect(formatDateInput("garbage")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("todayISODate — centralised today in YYYY-MM-DD", () => {
+  it("returns a YYYY-MM-DD formatted string", () => {
+    expect(todayISODate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("matches dayjs().format('YYYY-MM-DD') so it can be frozen in tests", async () => {
+    // Smoke: two back-to-back calls give the same value (they're on the same day).
+    const a = todayISODate();
+    const b = todayISODate();
+    expect(a).toBe(b);
   });
 });

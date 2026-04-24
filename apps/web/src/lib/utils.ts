@@ -1,3 +1,5 @@
+import dayjs from "dayjs";
+
 export function formatCurrency(amount: string | number, currency = "INR"): string {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;
   return new Intl.NumberFormat("en-IN", {
@@ -8,18 +10,68 @@ export function formatCurrency(amount: string | number, currency = "INR"): strin
   }).format(num);
 }
 
-export function formatDate(date: string | Date): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return new Intl.DateTimeFormat("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(d);
+// User-visible fallback for an absent or malformed date (see
+// apps/mobile/src/lib/utils.ts for the fuller rationale). Web and mobile
+// must agree so screenshots and E2E assertions stay in sync.
+const INVALID_DATE_FALLBACK = "—";
+
+export function formatDate(date: string | Date | null | undefined): string {
+  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
+  const d = dayjs(date);
+  if (!d.isValid()) return INVALID_DATE_FALLBACK;
+  return d.format("DD MMM YYYY");
 }
 
-export function formatDateInput(date: string | Date): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return d.toISOString().split("T")[0];
+// Short day+month label (no year) — used in chart week labels and other
+// compact list contexts where the year is implied by the surrounding filter.
+// e.g. "3 Mar".
+export function formatDateShort(date: string | Date | null | undefined): string {
+  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
+  const d = dayjs(date);
+  if (!d.isValid()) return INVALID_DATE_FALLBACK;
+  return d.format("D MMM");
+}
+
+// Short month+year label for monthly chart axes, e.g. "Mar 25".
+// Kept separate from formatDate so callers don't need to inline `dayjs(...).format(...)`.
+export function formatMonthYearShort(date: string | Date | null | undefined): string {
+  if (date === null || date === undefined || date === "") return INVALID_DATE_FALLBACK;
+  const d = dayjs(date);
+  if (!d.isValid()) return INVALID_DATE_FALLBACK;
+  return d.format("MMM YY");
+}
+
+export function formatDateInput(date: string | Date | null | undefined): string {
+  if (date === null || date === undefined || date === "") return "";
+  const d = dayjs(date);
+  if (!d.isValid()) return "";
+  return d.format("YYYY-MM-DD");
+}
+
+// Centralised "today in YYYY-MM-DD" — used as a form default for
+// <input type="date"> and as the TODAY_ISO module constant. Goes through
+// dayjs so tests can freeze time and so the format is single-sourced.
+export function todayISODate(): string {
+  return dayjs().format("YYYY-MM-DD");
+}
+
+// Convert a `YYYY-MM-DD` input value (or a Date) to a full ISO string suitable
+// for tRPC mutation inputs guarded by `z.string().datetime()`. Returns undefined
+// for absent / invalid input so callers can pass it straight to an optional field.
+export function toISOString(date: string | Date | null | undefined): string | undefined {
+  if (date === null || date === undefined || date === "") return undefined;
+  const d = dayjs(date);
+  if (!d.isValid()) return undefined;
+  return d.toISOString();
+}
+
+// End-of-day variant for range filters: upper-bound "to" inputs should include
+// the whole day, so we push to 23:59:59.999 before emitting ISO.
+export function toISOStringEndOfDay(date: string | Date | null | undefined): string | undefined {
+  if (date === null || date === undefined || date === "") return undefined;
+  const d = dayjs(date);
+  if (!d.isValid()) return undefined;
+  return d.endOf("day").toISOString();
 }
 
 export function cn(...classes: (string | false | null | undefined)[]): string {

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn, downloadCSV } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, downloadCSV, todayISODate, toISOString } from "@/lib/utils";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -2511,7 +2511,7 @@ function AdjustStockModal({
   const [adjustType, setAdjustType] = useState<"add" | "remove">("add");
   const [quantity, setQuantity] = useState("");
   const [reason, setReason] = useState("");
-  const [adjustmentDate, setAdjustmentDate] = useState(new Date().toISOString().split("T")[0]);
+  const [adjustmentDate, setAdjustmentDate] = useState(todayISODate);
   const [selectedVariantId, setSelectedVariantId] = useState<string>("");
 
   const utils = trpc.useUtils();
@@ -2548,7 +2548,7 @@ function AdjustStockModal({
       variantId: isVariantItem ? selectedVariantId || undefined : undefined,
       quantity: adjustedQty,
       reason: reason || undefined,
-      adjustmentDate: new Date(adjustmentDate).toISOString(),
+      adjustmentDate: toISOString(adjustmentDate),
     });
   }
 

@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import { trpc } from "@/lib/trpc";
 
 export function MaintenanceBanner() {
@@ -8,21 +9,17 @@ export function MaintenanceBanner() {
 
   if (!data) return null;
 
-  const now = new Date();
+  const now = dayjs();
   const isActive = data.enabled;
   const isScheduled =
-    !data.enabled && data.startsAt && new Date(data.startsAt) > now;
+    !data.enabled && data.startsAt && dayjs(data.startsAt).isAfter(now);
 
   if (!isActive && !isScheduled) return null;
 
   const formatTime = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const d = dayjs(iso);
+    if (!d.isValid()) return "—";
+    return d.format("D MMM, HH:mm");
   };
 
   if (isActive) {

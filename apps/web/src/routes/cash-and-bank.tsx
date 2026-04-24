@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { cn, formatCurrency, formatDate, formatDateInput, toISOString, toISOStringEndOfDay, todayISODate } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -197,7 +197,7 @@ function CashAndBankPage() {
       const csv = [
         `Account,${selectedAccount?.accountName || ""}`,
         `Period,${datePreset}`,
-        `Exported,${new Date().toLocaleDateString("en-IN")}`,
+        `Exported,${formatDate(new Date())}`,
         `Transactions,${allData.length}`,
         "",
         headers.join(","),
@@ -421,13 +421,11 @@ function CashAndBankPage() {
                   <div className="flex items-center gap-2 ml-2">
                     <input
                       type="date"
-                      value={dateRange.fromDate ? dateRange.fromDate.split("T")[0] : ""}
+                      value={formatDateInput(dateRange.fromDate)}
                       onChange={(e) =>
                         setDateRange((prev) => ({
                           ...prev,
-                          fromDate: e.target.value
-                            ? new Date(e.target.value).toISOString()
-                            : "",
+                          fromDate: toISOString(e.target.value) ?? "",
                         }))
                       }
                       className="input py-1 text-xs w-32"
@@ -435,13 +433,11 @@ function CashAndBankPage() {
                     <span className="text-text-tertiary text-xs">to</span>
                     <input
                       type="date"
-                      value={dateRange.toDate ? dateRange.toDate.split("T")[0] : ""}
+                      value={formatDateInput(dateRange.toDate)}
                       onChange={(e) =>
                         setDateRange((prev) => ({
                           ...prev,
-                          toDate: e.target.value
-                            ? new Date(e.target.value + "T23:59:59").toISOString()
-                            : "",
+                          toDate: toISOStringEndOfDay(e.target.value) ?? "",
                         }))
                       }
                       className="input py-1 text-xs w-32"
@@ -1530,9 +1526,7 @@ function AddTransactionModal({
   const [txnType, setTxnType] = useState("deposit");
   const [txnAmount, setTxnAmount] = useState("");
   const [txnDescription, setTxnDescription] = useState("");
-  const [txnDate, setTxnDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
+  const [txnDate, setTxnDate] = useState(todayISODate);
 
   const utils = trpc.useUtils();
 
@@ -1554,7 +1548,7 @@ function AddTransactionModal({
       type: txnType as "deposit" | "withdrawal",
       amount: txnAmount,
       description: txnDescription || undefined,
-      transactionDate: txnDate,
+      transactionDate: toISOString(txnDate),
     });
   }
 

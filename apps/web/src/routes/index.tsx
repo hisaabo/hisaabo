@@ -14,7 +14,7 @@ import {
   Cell,
 } from "recharts";
 import { trpc, getBusinessId } from "@/lib/trpc";
-import { formatCurrency, cn } from "@/lib/utils";
+import { formatCurrency, cn, formatDateShort, formatMonthYearShort } from "@/lib/utils";
 import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -447,15 +447,14 @@ function formatPeriodLabel(period: string, granularity: "week" | "month" | "fy")
     const start = new Date(period);
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
-    const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-    return `${fmt(start)}-${fmt(end)}`;
+    return `${formatDateShort(start)}-${formatDateShort(end)}`;
   }
   if (granularity === "fy") {
     const year = parseInt(period);
     return `FY ${String(year).slice(-2)}-${String(year + 1).slice(-2)}`;
   }
   // month — show "Apr 24", "Mar 25" etc.
-  return new Date(period).toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+  return formatMonthYearShort(period);
 }
 
 function SalesTrendChart({

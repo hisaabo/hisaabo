@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
@@ -49,7 +49,7 @@ function modeColor(mode: string) {
   }
 }
 
-const TODAY_ISO = new Date().toISOString().split("T")[0];
+const TODAY_ISO = todayISODate();
 
 type ExpenseFormState = {
   category: string;
@@ -94,7 +94,7 @@ function ExpensesPage() {
       key: "n",
       handler: () => {
         setEditExpenseId(null);
-        setForm({ ...EMPTY_FORM, expenseDate: new Date().toISOString().split("T")[0] });
+        setForm({ ...EMPTY_FORM, expenseDate: todayISODate() });
         setFormErrors({});
         setShowAddModal(true);
       },
@@ -136,7 +136,7 @@ function ExpensesPage() {
       utils.dashboard.summary.invalidate();
       toast.success("Expense added");
       setShowAddModal(false);
-      setForm({ ...EMPTY_FORM, expenseDate: new Date().toISOString().split("T")[0] });
+      setForm({ ...EMPTY_FORM, expenseDate: todayISODate() });
     },
     onError: (err) => toast.error(err.message),
   });
@@ -150,7 +150,7 @@ function ExpensesPage() {
       toast.success("Expense updated");
       setShowAddModal(false);
       setEditExpenseId(null);
-      setForm({ ...EMPTY_FORM, expenseDate: new Date().toISOString().split("T")[0] });
+      setForm({ ...EMPTY_FORM, expenseDate: todayISODate() });
     },
     onError: (err) => toast.error(err.message),
   });
@@ -169,7 +169,7 @@ function ExpensesPage() {
 
   function openAdd() {
     setEditExpenseId(null);
-    setForm({ ...EMPTY_FORM, expenseDate: new Date().toISOString().split("T")[0] });
+    setForm({ ...EMPTY_FORM, expenseDate: todayISODate() });
     setFormErrors({});
     setShowAddModal(true);
   }
@@ -181,7 +181,7 @@ function ExpensesPage() {
       description: exp.description || "",
       amount: exp.amount,
       mode: exp.mode,
-      expenseDate: new Date(exp.expenseDate).toISOString().split("T")[0],
+      expenseDate: formatDateInput(exp.expenseDate),
       referenceNumber: exp.referenceNumber || "",
     });
     setFormErrors({});
@@ -205,7 +205,7 @@ function ExpensesPage() {
       description: form.description.trim() || undefined,
       amount: parseFloat(form.amount).toFixed(2),
       mode: form.mode as any,
-      expenseDate: form.expenseDate ? new Date(form.expenseDate).toISOString() : undefined,
+      expenseDate: toISOString(form.expenseDate),
       referenceNumber: form.referenceNumber.trim() || undefined,
     };
     if (editExpenseId) {

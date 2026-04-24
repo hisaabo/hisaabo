@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput, toISOString } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
@@ -128,11 +128,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
       setEditMode(shipment.mode ?? "");
       setEditTracking(shipment.trackingNumber ?? "");
       setEditNotes(shipment.notes ?? "");
-      setEditEstDelivery(
-        shipment.estimatedDelivery
-          ? new Date(shipment.estimatedDelivery).toISOString().split("T")[0]
-          : ""
-      );
+      setEditEstDelivery(formatDateInput(shipment.estimatedDelivery));
     }
   }, [shipment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -166,9 +162,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
       mode: editMode || undefined,
       trackingNumber: editTracking || undefined,
       notes: editNotes || undefined,
-      estimatedDelivery: editEstDelivery
-        ? new Date(editEstDelivery).toISOString()
-        : undefined,
+      estimatedDelivery: toISOString(editEstDelivery),
     });
   }
 

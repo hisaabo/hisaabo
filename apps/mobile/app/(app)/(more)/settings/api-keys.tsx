@@ -19,6 +19,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { fonts } from "../../../../src/lib/theme";
 import { Card, Skeleton, QueryError } from "../../../../src/components/ui";
+import { formatDateTime } from "../../../../src/lib/utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -34,11 +35,7 @@ function timeAgo(date: Date | string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
-  return new Date(date).toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return formatDateTime(date);
 }
 
 function formatExpiry(expiresAt: Date | string | null): string {
@@ -46,11 +43,7 @@ function formatExpiry(expiresAt: Date | string | null): string {
   const d = new Date(expiresAt);
   const now = new Date();
   if (d < now) return "Expired";
-  return `Expires ${d.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  })}`;
+  return `Expires ${formatDateTime(expiresAt)}`;
 }
 
 // ── Expiry picker options ────────────────────────────────────────────────────

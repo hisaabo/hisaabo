@@ -4,7 +4,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Modal } from "@/components/ui/Modal";
 import { PillTabs } from "@/components/ui/Tabs";
 import { toast } from "@/hooks/useToast";
-import { cn } from "@/lib/utils";
+import { cn, todayISODate } from "@/lib/utils";
+import dayjs from "dayjs";
 import { parseUserAgent } from "@/lib/parse-user-agent";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 
@@ -376,16 +377,18 @@ const AUDIT_FILTERS = [
 ];
 
 function getDateRange(filter: string): { fromDate?: string; toDate?: string } {
-  const now = new Date();
+  const now = dayjs();
   if (filter === "this-week") {
-    const from = new Date(now);
-    from.setDate(from.getDate() - 7);
-    from.setHours(0, 0, 0, 0);
-    return { fromDate: from.toISOString(), toDate: now.toISOString() };
+    return {
+      fromDate: now.subtract(7, "day").startOf("day").toISOString(),
+      toDate: now.toISOString(),
+    };
   }
   if (filter === "this-month") {
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    return { fromDate: from.toISOString(), toDate: now.toISOString() };
+    return {
+      fromDate: now.startOf("month").toISOString(),
+      toDate: now.toISOString(),
+    };
   }
   return {};
 }
@@ -681,7 +684,7 @@ function ApiKeysContent() {
                 className="input w-full"
                 value={newKeyExpiry}
                 onChange={(e) => setNewKeyExpiry(e.target.value)}
-                min={new Date().toISOString().split("T")[0]}
+                min={todayISODate()}
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">

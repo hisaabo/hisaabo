@@ -19,6 +19,7 @@
     "@tauri-apps/api": "^2.1.0",
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
+    "dayjs": "^1.11.20",
     "jszip": "^3.10.1",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^5.5.207",

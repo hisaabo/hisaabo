@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
@@ -118,7 +118,7 @@ const EMPTY_LINE_ITEM: LineItemForm = {
   discountPercent: "0",
 };
 
-const TODAY_ISO = new Date().toISOString().split("T")[0];
+const TODAY_ISO = todayISODate();
 
 const EMPTY_FORM: TemplateFormState = {
   name: "",
@@ -243,7 +243,7 @@ function AutomatedInvoicesPage() {
 
   function openAdd() {
     setEditTemplateId(null);
-    setForm({ ...EMPTY_FORM, startDate: new Date().toISOString().split("T")[0] });
+    setForm({ ...EMPTY_FORM, startDate: todayISODate() });
     setFormErrors({});
     setShowFormSlideOver(true);
   }
@@ -272,8 +272,8 @@ function AutomatedInvoicesPage() {
                 itemId: li.itemId || undefined,
               }))
             : [{ ...EMPTY_LINE_ITEM }],
-        startDate: full.startDate ? new Date(full.startDate).toISOString().split("T")[0] : TODAY_ISO,
-        endDate: full.endDate ? new Date(full.endDate).toISOString().split("T")[0] : "",
+        startDate: full.startDate ? formatDateInput(full.startDate) : TODAY_ISO,
+        endDate: formatDateInput(full.endDate),
         maxRuns: full.maxRuns ? String(full.maxRuns) : "",
         notes: full.notes || "",
         termsAndConditions: full.termsAndConditions || "",
@@ -343,13 +343,15 @@ function AutomatedInvoicesPage() {
           frequency: form.frequency as any,
           customIntervalDays: form.frequency === "custom" ? parseInt(form.customIntervalDays) : undefined,
           lineItems,
-          endDate: form.endDate ? new Date(form.endDate).toISOString() : undefined,
+          endDate: toISOString(form.endDate),
           maxRuns: form.maxRuns ? parseInt(form.maxRuns) : undefined,
           notes: form.notes.trim() || undefined,
           termsAndConditions: form.termsAndConditions.trim() || undefined,
         },
       });
     } else {
+      const startDateISO = toISOString(form.startDate);
+      if (!startDateISO) return;
       createMutation.mutate({
         name: form.name.trim(),
         partyId: form.partyId,
@@ -357,8 +359,8 @@ function AutomatedInvoicesPage() {
         frequency: form.frequency as any,
         customIntervalDays: form.frequency === "custom" ? parseInt(form.customIntervalDays) : undefined,
         lineItems,
-        startDate: new Date(form.startDate).toISOString(),
-        endDate: form.endDate ? new Date(form.endDate).toISOString() : undefined,
+        startDate: startDateISO,
+        endDate: toISOString(form.endDate),
         maxRuns: form.maxRuns ? parseInt(form.maxRuns) : undefined,
         notes: form.notes.trim() || undefined,
         termsAndConditions: form.termsAndConditions.trim() || undefined,
@@ -397,7 +399,7 @@ function AutomatedInvoicesPage() {
       type: suggestion.type || "sale",
       frequency: suggestion.suggestedFrequency || "monthly",
       name: `${suggestion.partyName} - ${suggestion.type === "purchase" ? "Purchase" : "Sales"} Invoice`,
-      startDate: new Date().toISOString().split("T")[0],
+      startDate: todayISODate(),
       lineItems: [{ ...EMPTY_LINE_ITEM }],
     });
     setFormErrors({});

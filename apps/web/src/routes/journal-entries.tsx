@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -42,7 +42,7 @@ const EMPTY_LINE: JournalLine = {
   narration: "",
 };
 
-const TODAY_ISO = new Date().toISOString().split("T")[0];
+const TODAY_ISO = todayISODate();
 
 const EMPTY_FORM: EntryFormState = {
   entryDate: TODAY_ISO,
@@ -176,7 +176,7 @@ function JournalEntriesPage() {
   function openCreate() {
     setEditEntryId(null);
     setForm({
-      entryDate: new Date().toISOString().split("T")[0],
+      entryDate: todayISODate(),
       narration: "",
       lines: [{ ...EMPTY_LINE }, { ...EMPTY_LINE }],
     });
@@ -187,7 +187,7 @@ function JournalEntriesPage() {
     if (!expandedEntry) return;
     setEditEntryId(entry.id);
     setForm({
-      entryDate: new Date(entry.entryDate).toISOString().split("T")[0],
+      entryDate: formatDateInput(entry.entryDate),
       narration: entry.narration || "",
       lines: expandedEntry.lines.map((l: any) => ({
         accountId: l.accountId,
@@ -202,7 +202,7 @@ function JournalEntriesPage() {
   function openFromTemplate(template: any) {
     setEditEntryId(null);
     setForm({
-      entryDate: new Date().toISOString().split("T")[0],
+      entryDate: todayISODate(),
       narration: template.narration || "",
       lines: template.lines.map((l: any) => ({
         accountId: l.accountId,
@@ -266,16 +266,18 @@ function JournalEntriesPage() {
         narration: l.narration || undefined,
       }));
 
+    const entryDateISO = toISOString(form.entryDate);
+    if (!entryDateISO) return;
     if (editEntryId) {
       updateMutation.mutate({
         id: editEntryId,
-        entryDate: new Date(form.entryDate).toISOString(),
+        entryDate: entryDateISO,
         narration: form.narration.trim() || undefined,
         lines,
       });
     } else {
       createMutation.mutate({
-        entryDate: new Date(form.entryDate).toISOString(),
+        entryDate: entryDateISO,
         narration: form.narration.trim() || undefined,
         lines,
       });

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, toISOString } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
@@ -1227,7 +1227,7 @@ function CreateExpenseFromLineSlideOver({
         description: description.trim() || undefined,
         amount: line.debit,
         mode: "bank",
-        expenseDate: new Date(line.transactionDate).toISOString(),
+        expenseDate: toISOString(line.transactionDate),
         referenceNumber: line.referenceNumber ?? undefined,
       },
     });
