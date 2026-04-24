@@ -129,20 +129,14 @@ html[data-platform="desktop"] .platform-mobile {
 
 /* ── Persona-aware content ─────────────────────────────────── */
 
-/* When a specific persona is active, hide content for other personas.
-   "all" means no persona selected — show everything. */
-html[data-persona="ca"] .persona-business,
-html[data-persona="ca"] .persona-developer {
+/* When a specific persona is active, hide content for the other persona.
+   "all" means no persona selected — show everything. Two personas only
+   (CA + Business); developers are served by api-docs. */
+html[data-persona="ca"] .persona-business {
   display: none !important;
 }
 
-html[data-persona="business"] .persona-ca,
-html[data-persona="business"] .persona-developer {
-  display: none !important;
-}
-
-html[data-persona="developer"] .persona-ca,
-html[data-persona="developer"] .persona-business {
+html[data-persona="business"] .persona-ca {
   display: none !important;
 }
 
@@ -231,6 +225,81 @@ html[data-persona="developer"] .persona-business {
     padding: 0.3rem;
   }
 }
+
+/* ── Theme toggle (sidebar footer + mobile drawer) ─────────────
+   Segmented Light / Auto / Dark control, same pill aesthetic as
+   persona + device switchers. Icon-only; labels live in sr-only
+   spans and title attributes. */
+.theme-toggle {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.theme-btn:hover {
+  color: var(--sl-color-white);
+  background: var(--sl-color-gray-5);
+}
+
+.theme-btn:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
+.theme-btn.active {
+  background: var(--sl-color-accent);
+  color: var(--sl-color-black);
+}
+
+.theme-btn svg {
+  display: block;
+}
+
+/* ── Sidebar footer: "Appearance" block pinned below the sidebar nav
+   on desktop. Hidden below md via .sl-hidden .md\\:sl-flex on the
+   wrapper element (mobile places the ThemeToggle inside the existing
+   .mobile-preferences block via the ThemeSelect override). */
+.sidebar-theme-footer {
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem 1rem;
+  margin-top: auto;
+  border-top: 1px solid var(--sl-color-hairline-light);
+  background: var(--sl-color-bg-sidebar, var(--sl-color-black));
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+}
+
+.sidebar-theme-footer-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sl-color-gray-3);
+}
+
+/* The mobile-only ThemeToggle slot inside ThemeSelect needs no explicit
+   display rule — `md:sl-hidden` (display:none at md+) from Starlight's
+   utils layer handles desktop, and default block flow works inside the
+   mobile flex container. */
 
 /* ── Mobile switcher bar ───────────────────────────────────────
    Move the persona/device pills to the top of the mobile sidebar

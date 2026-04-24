@@ -5,9 +5,22 @@ sidebar:
   order: 1
 ---
 
+import ForCA from '../../../components/ForCA.astro';
+import ForBusiness from '../../../components/ForBusiness.astro';
+
 Hisaabo gives you 11 ready-made reports that cover every aspect of your business finances. All reports pull live data from your invoices, payments, and expenses — no manual data entry needed.
 
 You will find the reports page at **Reports** in the sidebar navigation after selecting a business.
+
+<ForBusiness>
+The three reports you'll live in: **Outstanding** (who owes you money, sorted by how late they are), **Cash Flow Forecast** (can I afford this month's rent?), and **Daybook** (what happened today). Open them in that order on a Monday morning.
+</ForBusiness>
+
+<ForCA>
+:::tip[CA reading order]
+For client reviews, start with the **Party Statement** (full ledger per party), then **Sales Register** and **Purchase Register** for GST reconciliation, then **Tax Summary** to cross-check output/input tax against GSTR-3B before filing. The **Daybook** is your chronological audit trail — export to CSV for working papers.
+:::
+</ForCA>
 
 ---
 

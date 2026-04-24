@@ -1,15 +1,21 @@
 ---
 /**
- * Starlight ThemeSelect override — injects the DeviceSwitcher
- * next to the theme toggle in the header.
+ * Starlight ThemeSelect override.
+ *
+ * Replaces the default single-select theme toggle with our audience
+ * controls: PersonaSwitcher + DeviceSwitcher. The native theme picker
+ * is removed from this slot entirely — the new segmented ThemeToggle
+ * lives in the sidebar footer on desktop (see overrides/Sidebar.astro)
+ * and inside the mobile drawer (rendered below, hidden at md+).
  */
-import type { Props } from '@astrojs/starlight/props';
-import Default from '@astrojs/starlight/components/ThemeSelect.astro';
-import DeviceSwitcher from '../DeviceSwitcher.astro';
-import PersonaSwitcher from '../PersonaSwitcher.astro';
+import PersonaSwitcher from "../PersonaSwitcher.astro";
+import DeviceSwitcher from "../DeviceSwitcher.astro";
+import ThemeToggle from "../ThemeToggle.astro";
 ---
-<div class="sl-flex" style="gap: 0.25rem; align-items: center;">
+<div class="sl-flex" style="gap: 0.35rem; align-items: center;">
   <PersonaSwitcher />
   <DeviceSwitcher />
-  <Default {...Astro.props}><slot /></Default>
+  <div class="theme-mobile-slot md:sl-hidden">
+    <ThemeToggle />
+  </div>
 </div>

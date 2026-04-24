@@ -17,10 +17,9 @@ hero:
 
 import ForCA from '../../components/ForCA.astro';
 import ForBusiness from '../../components/ForBusiness.astro';
-import ForDev from '../../components/ForDev.astro';
 
 :::tip[Who are you?]
-Use the **CA / Business / Dev** toggle in the top-right header to personalize these docs. The content adapts to show the most relevant guides and FAQ for your role.
+Use the **CA / Business** toggle in the top-right header to personalize these docs. The content adapts to show the most relevant guides and FAQ for your role. Developers looking for API integration should head to the [API reference](https://api.hisaabo.in).
 :::
 
 ## Quick Start
@@ -44,11 +43,6 @@ Use the **CA / Business / Dev** toggle in the top-right header to personalize th
 5. **[Generate GST returns](/gst/)** — GSTR-1 and GSTR-3B auto-generate from invoice data
 </ForCA>
 
-<ForDev>
-**For developers:**
-
-1. **Clone and run locally** — `git clone`, `docker compose up -d`, `pnpm install && pnpm db:push && pnpm dev`
-2. **Explore the API** — 200+ typed tRPC endpoints at `localhost:3000`. Full reference at [api.hisaabo.in](https://api.hisaabo.in)
-3. **Connect an AI agent** — install `@hisaabo/mcp` for Claude Desktop, or use the [CLI](/ai/cli/) for terminal automation
-4. **Read the architecture** — [Hono + tRPC + Drizzle + PostgreSQL](/getting-started/) with typed contracts end-to-end
-</ForDev>
+:::note[Building on the API?]
+API reference, tRPC endpoints, MCP integration, and the CLI live in the [API documentation](https://api.hisaabo.in). The [AI & Automation](/ai) section here covers the higher-level integration story for non-developers.
+:::
