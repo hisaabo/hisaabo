@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/mobile",
-  "version": "0.8.6",
+  "version": "0.8.8",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
