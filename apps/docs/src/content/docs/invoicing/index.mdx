@@ -7,6 +7,8 @@ sidebar:
 
 import ForDesktop from '../../../components/ForDesktop.astro';
 import ForMobile from '../../../components/ForMobile.astro';
+import ForCA from '../../../components/ForCA.astro';
+import ForBusiness from '../../../components/ForBusiness.astro';
 
 Invoicing is the core of Hisaabo. Every sale or purchase you make flows through an invoice. This page gives you a map of the invoicing system so you know which feature to reach for in each situation.
 
@@ -67,6 +69,12 @@ Invoice numbers are assigned inside a PostgreSQL transaction using a `SELECT FOR
 
 The format is `PREFIX-NNNNN`, for example `INV-00001`. The counter pads to 5 digits by default.
 
+<ForCA>
+:::tip[Audit-friendly numbering]
+The `SELECT FOR UPDATE` lock guarantees no gaps and no duplicates — exactly what you need for GSTR-1 reconciliation and Rule 46 compliance. If a client reports a "missing" invoice number during audit, it was either cancelled (still visible, filter by status) or never created. Hisaabo cannot silently skip a number.
+:::
+</ForCA>
+
 ## How stock is updated
 
 When you create a sale invoice, stock is **decremented** for every line item that references an item in your catalogue. When you create a purchase invoice, stock is **incremented**. This happens inside the same database transaction as the invoice creation, so stock and invoice totals are always consistent.
@@ -110,6 +118,16 @@ See [GST on Invoices](/invoicing/gst-on-invoices) for full details.
 Every invoice can be downloaded as a PDF in three formats: A4 portrait, A5 landscape, and 80mm thermal roll. The PDF includes your business logo, GSTIN, party details, line items with HSN codes, tax breakdown, and optionally your bank account details and a UPI QR code for easy payment.
 
 See [Invoice PDF](/invoicing/invoice-pdf) for full details.
+
+<ForBusiness>
+Send the PDF to your customer on WhatsApp the moment the invoice is saved. The 80mm thermal format prints on a standard receipt printer if you run a counter. A UPI QR code on the invoice typically cuts collection time in half.
+</ForBusiness>
+
+<ForCA>
+:::note[Client communication]
+For month-end client reviews, the A4 PDF is the format your client expects attached to emails. Bulk-download a month's invoices via the [Sales Register](/reports) CSV export plus the per-invoice PDFs for archival.
+:::
+</ForCA>
 
 ## Document conversion
 

@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Modal } from "@/components/ui/Modal";
 import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
-import { cn, formatCurrency, formatDate, formatDateInput } from "@/lib/utils";
+import { cn, formatCurrency, formatDate, formatDateInput, toISOString, toISOStringEndOfDay } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ const PERIOD_TYPE_OPTIONS = [
 
 // ── Utility helpers ────────────────────────────────────────────
 
-function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: string } {
+export function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: string } {
   const now = new Date();
   const today = formatDateInput(now);
 
@@ -86,7 +86,7 @@ function getDefaultPeriodDates(periodType: PeriodType): { start: string; end: st
   }
 }
 
-function formatTargetValue(target: SalesTarget): string {
+export function formatTargetValue(target: SalesTarget): string {
   if (target.targetType === "order_value") {
     return formatCurrency(target.targetValue);
   }
@@ -321,8 +321,12 @@ function TargetFormModal({
       return;
     }
 
-    const startIso = new Date(periodStart + "T00:00:00").toISOString();
-    const endIso = new Date(periodEnd + "T23:59:59").toISOString();
+    const startIso = toISOString(periodStart);
+    const endIso = toISOStringEndOfDay(periodEnd);
+    if (!startIso || !endIso) {
+      toast.error("Please select valid start and end dates");
+      return;
+    }
 
     if (editTarget) {
       updateMutation.mutate({

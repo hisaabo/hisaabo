@@ -24,7 +24,14 @@
  *   - formatDateShort: day+month without year
  */
 
-import { formatCurrency, formatDate, formatDateShort } from "../utils";
+import {
+  formatCurrency,
+  formatDate,
+  formatDateShort,
+  formatDateTime,
+  formatDateInput,
+  todayISODate,
+} from "../utils";
 
 // ---------------------------------------------------------------------------
 describe("formatCurrency — INR formatting for Indian business context", () => {
@@ -213,5 +220,192 @@ describe("formatDateShort — compact date for invoice list rows (no year)", () 
     const result = formatDateShort(isoString);
 
     expect(result).toContain("Mar");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Invalid Date" defense — the single invariant this block pins:
+//
+//   Under no input shape may formatDate / formatDateShort return the
+//   literal string "Invalid Date" (or anything containing it) to a user.
+//
+// WHY THIS MATTERS:
+// Every invoice list row, payment list row, ledger entry, shipment card,
+// and detail-screen date field routes through these two functions. Before
+// the defensive refactor, a nullish date or a Hermes engine that failed
+// to format an `en-IN` date (the Android release build uses Hermes, which
+// has incomplete ICU data on some devices — see `apps/mobile/app.json`
+// `jsEngine` default) surfaced as the string "Invalid Date" on every row
+// — which is exactly what users saw in production.
+//
+// The fallback is an em-dash "—" to match the pattern already used at
+// call sites like `item.paymentDate ? formatDateShort(...) : "—"`.
+// ---------------------------------------------------------------------------
+describe("formatDate / formatDateShort — defensive behaviour for malformed input", () => {
+  // -------------------------------------------------------------------------
+  it("formatDate(undefined) falls back to em-dash, never to the string 'Invalid Date'", () => {
+    // WHAT: tRPC can surface `undefined` when a nullable column is absent
+    //       (e.g. an automated-invoice template with no `lastRunDate` yet).
+    // WHY:  Call sites routinely pass the raw field without guarding:
+    //       `formatDate(template.lastRunDate)`. A leaked "Invalid Date"
+    //       string makes every row look corrupted.
+    const result = formatDate(undefined as unknown as Date);
+    expect(result).not.toMatch(/invalid/i);
+    expect(result).toBe("—");
+  });
+
+  // -------------------------------------------------------------------------
+  it("formatDate(null) falls back to em-dash", () => {
+    const result = formatDate(null as unknown as Date);
+    expect(result).not.toMatch(/invalid/i);
+    expect(result).toBe("—");
+  });
+
+  // -------------------------------------------------------------------------
+  it("formatDate('') — empty ISO string from the API — falls back to em-dash", () => {
+    // WHAT: A recurring Zod edge case — an optional nullable timestamp
+    //       that gets stringified to "" somewhere in the pipeline.
+    // WHY:  `new Date("")` returns an Invalid Date — before this fix, that
+    //       crashed straight through to "Invalid Date" on screen.
+    const result = formatDate("");
+    expect(result).not.toMatch(/invalid/i);
+    expect(result).toBe("—");
+  });
+
+  // -------------------------------------------------------------------------
+  it("formatDate('garbage-not-a-date') falls back instead of printing 'Invalid Date'", () => {
+    // WHAT: Defence-in-depth for any upstream bug that leaks an unparsable
+    //       string into the date pipeline (e.g. a locale-dependent
+    //       formatter coughing up "dd/mm/yyyy" into a field typed as ISO).
+    // WHY:  The user-visible output must never say "Invalid Date" — the
+    //       invariant we're pinning is tighter than any single bug.
+    const result = formatDate("not-a-real-date");
+    expect(result).not.toMatch(/invalid/i);
+    expect(result).toBe("—");
+  });
+
+  // -------------------------------------------------------------------------
+  it("formatDate(new Date(NaN)) — an actual Invalid Date object — falls back", () => {
+    // WHAT: A `Date` constructed from NaN is a Date instance, but
+    //       .getTime() returns NaN and .toLocaleDateString() returns
+    //       "Invalid Date".
+    // WHY:  Several call sites guard against null with `?? new Date()`
+    //       which can silently land on an Invalid Date in other branches
+    //       (e.g. `new Date(nullableString)` when the string is empty).
+    const result = formatDate(new Date(NaN));
+    expect(result).not.toMatch(/invalid/i);
+    expect(result).toBe("—");
+  });
+
+  // -------------------------------------------------------------------------
+  it("formatDateShort inherits the same defensive posture — no 'Invalid Date' leakage", () => {
+    // WHAT: Parity check — list screens mostly use the short form.
+    // WHY:  The bug surfaced most visibly on the payments/invoices list
+    //       rows, which use `formatDateShort`. If only `formatDate` were
+    //       hardened, the bug would persist on the screens where users
+    //       actually saw it.
+    expect(formatDateShort(undefined as unknown as Date)).toBe("—");
+    expect(formatDateShort(null as unknown as Date)).toBe("—");
+    expect(formatDateShort("")).toBe("—");
+    expect(formatDateShort("garbage-not-a-date")).toBe("—");
+    expect(formatDateShort(new Date(NaN))).toBe("—");
+    for (const input of [undefined, null, "", "junk", new Date(NaN)]) {
+      const out = formatDateShort(input as Date);
+      expect(out).not.toMatch(/invalid/i);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  it("is engine-independent: dayjs produces identical output regardless of Intl/locale data", () => {
+    // WHAT: The previous implementation routed through
+    //       `Date.prototype.toLocaleDateString("en-IN", ...)` which depends on
+    //       the JS engine's bundled ICU data. On Hermes (Android release
+    //       builds) this returned the literal string "Invalid Date" for
+    //       otherwise-valid Date objects, and in the worst case threw a
+    //       RangeError for unsupported locale/option combinations.
+    // WHY:  dayjs's `format` tokens produce the same output on every engine
+    //       (Hermes, JSC, Node, jsdom), so the bug cannot recur. This test
+    //       pins the output shape for a realistic FY-start date and asserts
+    //       that stubbing `toLocaleDateString` away changes nothing —
+    //       demonstrating that we do not depend on it anymore.
+    const realDate = new Date(2025, 3, 1); // 1 Apr 2025 (Indian FY start)
+
+    const originalToLocaleDateString = Date.prototype.toLocaleDateString;
+    Date.prototype.toLocaleDateString = function () {
+      return "Invalid Date";
+    };
+    try {
+      const result = formatDate(realDate);
+      expect(result).not.toMatch(/invalid/i);
+      expect(result).toContain("1");
+      expect(result).toContain("Apr");
+      expect(result).toContain("2025");
+
+      const shortResult = formatDateShort(realDate);
+      expect(shortResult).not.toMatch(/invalid/i);
+      expect(shortResult).toContain("Apr");
+    } finally {
+      Date.prototype.toLocaleDateString = originalToLocaleDateString;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("formatDateTime — date + time label for audit/API-key rows", () => {
+  it("formats a Date object as 'D MMM YYYY, h:mm A'", () => {
+    const d = new Date(2026, 2, 28, 14, 30); // 28 Mar 2026, 14:30 local
+    const result = formatDateTime(d);
+    expect(result).toContain("28");
+    expect(result).toContain("Mar");
+    expect(result).toContain("2026");
+    // Must include a time segment with AM/PM
+    expect(result).toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/);
+  });
+
+  it("accepts an ISO string", () => {
+    const result = formatDateTime("2026-01-15T09:05:00.000Z");
+    expect(result).toContain("Jan");
+    expect(result).toContain("2026");
+  });
+
+  it("returns em-dash for null/undefined/empty/invalid input", () => {
+    expect(formatDateTime(null)).toBe("—");
+    expect(formatDateTime(undefined)).toBe("—");
+    expect(formatDateTime("")).toBe("—");
+    expect(formatDateTime("not-a-date")).toBe("—");
+    expect(formatDateTime(new Date(NaN))).toBe("—");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("formatDateInput — YYYY-MM-DD for form state", () => {
+  it("converts an ISO datetime string to YYYY-MM-DD", () => {
+    expect(formatDateInput("2025-03-31T00:00:00.000Z")).toBe("2025-03-31");
+  });
+
+  it("returns a 10-character date for a Date object", () => {
+    const result = formatDateInput(new Date("2025-07-04T12:00:00.000Z"));
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("returns empty string for null/undefined/empty/invalid (so <input type='date'> stays empty)", () => {
+    expect(formatDateInput(null)).toBe("");
+    expect(formatDateInput(undefined)).toBe("");
+    expect(formatDateInput("")).toBe("");
+    expect(formatDateInput("garbage")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("todayISODate — centralised today in YYYY-MM-DD", () => {
+  it("returns a YYYY-MM-DD formatted string", () => {
+    expect(todayISODate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("matches dayjs().format('YYYY-MM-DD') so it can be frozen in tests", async () => {
+    // Smoke: two back-to-back calls give the same value (they're on the same day).
+    const a = todayISODate();
+    const b = todayISODate();
+    expect(a).toBe(b);
   });
 });

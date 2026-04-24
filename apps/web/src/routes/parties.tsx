@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, getInitials, cn, downloadCSV } from "@/lib/utils";
+import { formatCurrency, formatDate, getInitials, cn, downloadCSV, toISOString } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -1208,9 +1208,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
       creditPeriodDays: creditPeriodDays ? parseInt(creditPeriodDays, 10) : undefined,
       creditLimit: creditLimit || undefined,
       contactPersonName: contactPersonName || undefined,
-      contactPersonDob: contactPersonDob
-        ? new Date(contactPersonDob).toISOString()
-        : undefined,
+      contactPersonDob: toISOString(contactPersonDob),
       bankAccountNumber: bankAccountNumber || undefined,
       bankIfsc: bankIfsc || undefined,
       bankName: bankName || undefined,

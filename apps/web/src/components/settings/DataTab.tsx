@@ -4,14 +4,15 @@ import { ImportWizard } from "@/components/ImportWizard";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
 import { Spinner } from "@/components/ui/Spinner";
+import { todayISODate } from "@/lib/utils";
+import dayjs from "dayjs";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  const d = dayjs(iso);
+  if (!d.isValid()) return "—";
+  return d.format("D MMM YYYY, h:mm A");
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ function CsvExportSection() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `hisaabo-export-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `hisaabo-export-${todayISODate()}.zip`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success("Data exported successfully");

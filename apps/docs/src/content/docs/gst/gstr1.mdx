@@ -5,6 +5,9 @@ sidebar:
   order: 2
 ---
 
+import ForCA from '../../../components/ForCA.astro';
+import ForBusiness from '../../../components/ForBusiness.astro';
+
 GSTR-1 is the monthly return you file with the GST portal listing all your outward supplies (sales). Hisaabo generates this report automatically from your invoice data.
 
 ## Generating the report
@@ -15,6 +18,16 @@ GSTR-1 is the monthly return you file with the GST portal listing all your outwa
 4. Click **Generate**.
 
 The report loads immediately — it is computed in real time from your invoice data. There is no caching, so it always reflects the latest state of your invoices.
+
+<ForBusiness>
+Your CA will ask for this report every month. Generate it, click **Export CSV**, and email or WhatsApp the file — they'll take it from there. You don't need to understand every section below; skip to [Filing workflow](/gst#filing-workflow-recommended) if you just want the handover checklist.
+</ForBusiness>
+
+<ForCA>
+:::tip[Before you file]
+Two sanity checks before exporting: (1) confirm no invoices are still in `draft` status for the period — drafts **are** counted in the report and are the most common source of post-filing amendments, and (2) spot-check a B2B row against the original invoice PDF for GSTIN and taxable value accuracy.
+:::
+</ForCA>
 
 ## Report sections
 

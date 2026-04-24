@@ -1,0 +1,16 @@
+---
+/**
+ * Starlight Sidebar override — wraps the default sidebar and pins the
+ * ThemeToggle to the bottom on desktop. Mobile renders ThemeToggle
+ * inside .mobile-preferences via the ThemeSelect override, so we hide
+ * this footer below the md breakpoint to avoid duplication.
+ */
+import Default from "@astrojs/starlight/components/Sidebar.astro";
+import ThemeToggle from "../ThemeToggle.astro";
+---
+<Default {...Astro.props}><slot /></Default>
+
+<div class="sidebar-theme-footer sl-hidden md:sl-flex">
+  <span class="sidebar-theme-footer-label">Appearance</span>
+  <ThemeToggle />
+</div>

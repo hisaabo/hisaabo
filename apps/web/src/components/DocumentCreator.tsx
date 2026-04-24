@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useId, useRef } from "react";
 import { trpc, getBusinessId } from "@/lib/trpc";
-import { formatCurrency, cn } from "@/lib/utils";
+import { formatCurrency, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
+import dayjs from "dayjs";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { Combobox } from "@/components/ui/Combobox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -126,14 +127,8 @@ export function DocumentCreator({
   initialPartyId,
 }: DocumentCreatorProps) {
   const [partyId, setPartyId] = useState(initialPartyId ?? "");
-  const [invoiceDate, setInvoiceDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
-  const [dueDate, setDueDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 7);
-    return d.toISOString().split("T")[0];
-  });
+  const [invoiceDate, setInvoiceDate] = useState(todayISODate);
+  const [dueDate, setDueDate] = useState(() => dayjs().add(7, "day").format("YYYY-MM-DD"));
   const [dueDateManuallySet, setDueDateManuallySet] = useState(false);
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
@@ -215,9 +210,8 @@ export function DocumentCreator({
     if (dueDateManuallySet || isEditing) return;
     const selectedParty = partiesData?.data.find((p) => p.id === partyId);
     const creditDays = selectedParty?.creditPeriodDays ?? 7;
-    const base = new Date(invoiceDate || new Date().toISOString().split("T")[0]);
-    base.setDate(base.getDate() + creditDays);
-    setDueDate(base.toISOString().split("T")[0]);
+    const base = dayjs(invoiceDate || todayISODate()).add(creditDays, "day");
+    setDueDate(base.format("YYYY-MM-DD"));
   }, [invoiceDate, partyId, partiesData, dueDateManuallySet, isEditing]);
 
   const utils = trpc.useUtils();
@@ -232,8 +226,8 @@ export function DocumentCreator({
     setPartyId(editData.partyId);
     if (isEditing) {
       // Editing: use the document's own date
-      setInvoiceDate(new Date(editData.invoiceDate).toISOString().split("T")[0]);
-      if (editData.dueDate) setDueDate(new Date(editData.dueDate).toISOString().split("T")[0]);
+      setInvoiceDate(formatDateInput(editData.invoiceDate));
+      if (editData.dueDate) setDueDate(formatDateInput(editData.dueDate));
     }
     // Prefill from source: keep today's date (already the default)
     setNotes(editData.notes || "");
@@ -592,8 +586,8 @@ export function DocumentCreator({
       updateMutation.mutate({
         id: editInvoiceId!,
         partyId,
-        invoiceDate: new Date(invoiceDate).toISOString(),
-        dueDate: dueDate ? new Date(dueDate).toISOString() : null,
+        invoiceDate: toISOString(invoiceDate),
+        dueDate: toISOString(dueDate) ?? null,
         notes: notes || null,
         termsAndConditions: terms || null,
         charges: chargesPayload,
@@ -606,8 +600,8 @@ export function DocumentCreator({
       createMutation.mutate({
         partyId,
         type: invoiceType,
-        invoiceDate: new Date(invoiceDate).toISOString(),
-        dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
+        invoiceDate: toISOString(invoiceDate),
+        dueDate: toISOString(dueDate),
         notes: notes || undefined,
         termsAndConditions: terms || undefined,
         charges: chargesPayload,

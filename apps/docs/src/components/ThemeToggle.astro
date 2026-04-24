@@ -1,0 +1,111 @@
+---
+/**
+ * Theme toggle — segmented control (Light / Auto / Dark) that replaces
+ * Starlight's native <select> with a keyboard-accessible radio group.
+ *
+ * Runtime contract matches Starlight's so the built-in FOUC-safe init
+ * script in ThemeProvider.astro keeps applying the stored preference
+ * on page load:
+ *   - localStorage key:  'starlight-theme'
+ *   - stored values:     'light' | 'dark' | '' (empty string for auto)
+ *   - <html data-theme>: always 'light' or 'dark' (auto resolves via OS)
+ *
+ * Rendered both in the desktop sidebar footer (via the Sidebar override)
+ * and inside the mobile drawer's .mobile-preferences block (via the
+ * ThemeSelect override). Click handling is delegated at document level
+ * so multiple instances share one listener.
+ */
+---
+<div class="theme-toggle" role="radiogroup" aria-label="Colour theme">
+  <button class="theme-btn" data-theme-target="light" role="radio" aria-checked="false" title="Light theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+    </svg>
+    <span class="sr-only">Light</span>
+  </button>
+  <button class="theme-btn" data-theme-target="auto" role="radio" aria-checked="false" title="Use system theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+      <line x1="8" y1="21" x2="16" y2="21"></line>
+      <line x1="12" y1="17" x2="12" y2="21"></line>
+    </svg>
+    <span class="sr-only">Auto</span>
+  </button>
+  <button class="theme-btn" data-theme-target="dark" role="radio" aria-checked="false" title="Dark theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+    </svg>
+    <span class="sr-only">Dark</span>
+  </button>
+</div>
+
+<script is:inline>
+  (function () {
+    var KEY = 'starlight-theme';
+
+    function loadTheme() {
+      var v = localStorage.getItem(KEY);
+      return v === 'light' || v === 'dark' ? v : 'auto';
+    }
+    function osIsLight() {
+      return window.matchMedia('(prefers-color-scheme: light)').matches;
+    }
+    function applyTheme(theme) {
+      var concrete = theme === 'auto' ? (osIsLight() ? 'light' : 'dark') : theme;
+      document.documentElement.dataset.theme = concrete;
+    }
+    function storeTheme(theme) {
+      // Starlight stores '' for auto — matching that contract keeps the
+      // built-in init script's fallback path happy.
+      localStorage.setItem(KEY, theme === 'light' || theme === 'dark' ? theme : '');
+    }
+    function markActive(theme) {
+      document.querySelectorAll('.theme-btn').forEach(function (btn) {
+        var active = btn.getAttribute('data-theme-target') === theme;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-checked', String(active));
+      });
+    }
+
+    markActive(loadTheme());
+
+    var mql = window.matchMedia('(prefers-color-scheme: light)');
+    var onOsChange = function () {
+      if (loadTheme() === 'auto') applyTheme('auto');
+    };
+    if (mql.addEventListener) mql.addEventListener('change', onOsChange);
+    else if (mql.addListener) mql.addListener(onOsChange);
+
+    if (!document.__hisaaboThemeDelegated) {
+      document.__hisaaboThemeDelegated = true;
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.theme-btn');
+        if (!btn) return;
+        var target = btn.getAttribute('data-theme-target');
+        if (target !== 'light' && target !== 'dark' && target !== 'auto') return;
+        applyTheme(target);
+        storeTheme(target);
+        markActive(target);
+      });
+    }
+
+    // Keyboard: arrow-key navigation within the radio group.
+    if (!document.__hisaaboThemeKeysDelegated) {
+      document.__hisaaboThemeKeysDelegated = true;
+      document.addEventListener('keydown', function (e) {
+        var btn = e.target.closest('.theme-btn');
+        if (!btn) return;
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        var group = btn.closest('.theme-toggle');
+        if (!group) return;
+        var buttons = Array.prototype.slice.call(group.querySelectorAll('.theme-btn'));
+        var i = buttons.indexOf(btn);
+        var next = e.key === 'ArrowRight' ? (i + 1) % buttons.length : (i - 1 + buttons.length) % buttons.length;
+        buttons[next].focus();
+        buttons[next].click();
+      });
+    }
+  })();
+</script>

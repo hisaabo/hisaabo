@@ -7,10 +7,9 @@ sidebar:
 
 import ForCA from '../../components/ForCA.astro';
 import ForBusiness from '../../components/ForBusiness.astro';
-import ForDev from '../../components/ForDev.astro';
 
 :::tip
-Select your role using the **CA / Business / Dev** toggle in the header. The FAQ below will adapt to show the most relevant questions for you.
+Select your role using the **CA / Business** toggle in the header. The FAQ below adapts to show the most relevant questions. Developers building on the API should head to the [API documentation](https://api.hisaabo.in) for endpoints, auth, and integration examples.
 :::
 
 ## Getting Started
@@ -24,10 +23,6 @@ Select your role using the **CA / Business / Dev** toggle in the header. The FAQ
 <ForCA>
 **For CA firms:** Create an account and set up one business per client. Invite each client with `Seller` or `Admin` access so they can create invoices from their phone. You get a single dashboard to see all clients. See [the CA workflow guide](/getting-started/) for the full monthly and year-end process.
 </ForCA>
-
-<ForDev>
-**For developers:** Clone the repo, run `docker compose up -d && pnpm install && pnpm db:push && pnpm dev`. The API runs at `localhost:3000`, web at `localhost:5173`. All 200+ endpoints are documented at [api.hisaabo.in](https://api.hisaabo.in). Use tRPC client or raw HTTP calls.
-</ForDev>
 
 ### Is Hisaabo free?
 
@@ -73,28 +68,6 @@ ITC entries are auto-created from purchase invoices. The ITC dashboard shows ava
 
 Yes. The web app is fully responsive — open your Hisaabo URL in any mobile browser. On Hisaabo Cloud, there's also a native Android/iOS app with barcode scanning and WhatsApp sharing.
 </ForBusiness>
-
-<ForDev>
-### How do I create an invoice via the API?
-
-```javascript
-const invoice = await trpc.invoice.create.mutate({
-  partyId: "customer-uuid",
-  type: "sale",
-  lineItems: [{
-    description: "Basmati Rice 25kg",
-    quantity: "20.000",
-    unitPrice: "1250.00",
-    taxPercent: "5.00",
-    itemId: "rice-item-uuid",
-  }],
-});
-// invoice.invoiceNumber → "INV-0043"
-// invoice.totalAmount → "26250.00" (₹25,000 + ₹1,250 GST)
-```
-
-The API atomically generates the invoice number, calculates GST split, and adjusts stock. See the [API Reference](https://api.hisaabo.in/#/group/invoices/endpoint/invoice-create).
-</ForDev>
 
 ---
 
@@ -150,39 +123,6 @@ Invite clerks with the **Seller** or **Seller Manager** role, scoped to specific
 
 Yes. Your account shows all businesses in the organization. Switch between clients from the top navigation. Each business is completely isolated — data from one client is never visible in another's context.
 </ForCA>
-
----
-
-## Developer & Integration
-
-<ForDev>
-### How do I authenticate API calls?
-
-Call `auth.login` to get a session token. Then include it as `Authorization: Bearer <token>` in every request. For business-scoped endpoints, also include the `x-business-id: <uuid>` header. The tRPC client handles batching and SuperJSON serialization automatically.
-
-### How do monetary values work in the API?
-
-All money values are **strings** (e.g., `"12500.00"`), backed by PostgreSQL `NUMERIC(15,2)`. Never use `parseFloat()` or `Number()` for arithmetic — you'll lose precision. The `@hisaabo/shared` package has safe money utilities.
-
-### Can I connect AI agents?
-
-Yes. Install `@hisaabo/mcp` and add it to Claude Desktop's config. The MCP server exposes every API endpoint as a callable tool. There's also a CLI (`@hisaabo/cli`) for terminal-based automation. See [AI & Automation](/ai/).
-
-### What's the rate limit?
-
-| Origin | Auth | Limit/min |
-|--------|------|-----------|
-| Same origin | Authenticated | 120 |
-| Same origin | Unauthenticated | 60 |
-| External | Authenticated | 60 |
-| External | Unauthenticated | 10 |
-
-Exceeding returns `429 Too Many Requests` with `Retry-After: 60`.
-
-### Where are the full API docs?
-
-The complete API reference with 200+ endpoints, code examples (JavaScript, cURL, Python), and interactive documentation is at **[api.hisaabo.in](https://api.hisaabo.in)**.
-</ForDev>
 
 ---
 

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput, todayISODate } from "@/lib/utils";
 import { StatCard } from "@/components/ui/StatCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
@@ -147,7 +147,7 @@ function EntryTypeIcon({ entryType }: { entryType: DaybookEntry["entryType"] }) 
 function groupEntriesByDate(entries: DaybookEntry[]): Map<string, DaybookEntry[]> {
   const map = new Map<string, DaybookEntry[]>();
   for (const entry of entries) {
-    const dateKey = new Date(entry.time).toISOString().split("T")[0];
+    const dateKey = formatDateInput(entry.time);
     const group = map.get(dateKey) ?? [];
     group.push(entry);
     map.set(dateKey, group);
@@ -167,13 +167,13 @@ function DaybookReport({
   const [typeFilter, setTypeFilter] = useState<DaybookTypeFilter>("all");
 
   // Extract date-only strings (YYYY-MM-DD) — daybookInputSchema uses z.string().date()
-  const fromDateOnly = fromDate ? fromDate.split("T")[0] : undefined;
-  const toDateOnly = toDate ? toDate.split("T")[0] : undefined;
+  const fromDateOnly = fromDate ? formatDateInput(fromDate) : undefined;
+  const toDateOnly = toDate ? formatDateInput(toDate) : undefined;
 
   const { data, isLoading, error } = trpc.reports.daybook.useQuery(
     {
-      fromDate: fromDateOnly ?? new Date().toISOString().split("T")[0],
-      toDate: toDateOnly ?? new Date().toISOString().split("T")[0],
+      fromDate: fromDateOnly ?? todayISODate(),
+      toDate: toDateOnly ?? todayISODate(),
       typeFilter,
     },
     { enabled: !!(fromDateOnly && toDateOnly) }
@@ -183,7 +183,7 @@ function DaybookReport({
     if (!data) return;
     const headers = ["Date", "Time", "Type", "Ref #", "Party / Category", "Debit", "Credit", "Mode", "Status"];
     const rows: (string | number)[][] = data.entries.map((entry) => [
-      new Date(entry.time).toISOString().split("T")[0],
+      formatDateInput(entry.time),
       new Date(entry.time).toLocaleTimeString(),
       entry.entryType,
       entry.number ?? "",

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
@@ -24,7 +24,7 @@ export interface RecordPaymentPanelProps {
 
 // ── Account type icons ────────────────────────────────────────────────────────
 
-function accountTypeIcon(type: string): string {
+export function accountTypeIcon(type: string): string {
   switch (type) {
     case "cash":            return "💵";
     case "current":         return "🏦";
@@ -36,7 +36,7 @@ function accountTypeIcon(type: string): string {
   }
 }
 
-function accountTypeLabel(type: string): string {
+export function accountTypeLabel(type: string): string {
   switch (type) {
     case "savings":         return "Savings";
     case "current":         return "Current";
@@ -49,7 +49,7 @@ function accountTypeLabel(type: string): string {
 }
 
 // Map account type to payment mode
-function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "other" {
+export function accountTypeToMode(type: string): "cash" | "bank" | "upi" | "cheque" | "other" {
   if (type === "cash") return "cash";
   if (type === "upi") return "upi";
   return "bank";
@@ -84,9 +84,7 @@ export function RecordPaymentPanel({
   const [amountOverridden, setAmountOverridden] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [referenceNumber, setReferenceNumber] = useState("");
-  const [paymentDate, setPaymentDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
+  const [paymentDate, setPaymentDate] = useState(todayISODate);
   const [notes, setNotes] = useState("");
   const [gatewayMode, setGatewayMode] = useState<string>("credit_card");
 
@@ -129,9 +127,7 @@ export function RecordPaymentPanel({
       setSelectedAccountId(editData.bankAccountId ?? null);
       setReferenceNumber(editData.referenceNumber ?? "");
       setPaymentDate(
-        editData.paymentDate
-          ? new Date(editData.paymentDate).toISOString().split("T")[0]
-          : new Date().toISOString().split("T")[0]
+        editData.paymentDate ? formatDateInput(editData.paymentDate) : todayISODate()
       );
       setNotes(editData.notes ?? "");
       // Restore gateway mode from edit data if it's a gateway mode
@@ -161,7 +157,7 @@ export function RecordPaymentPanel({
       setManualAmount("");
       setAmountOverridden(false);
       setReferenceNumber("");
-      setPaymentDate(new Date().toISOString().split("T")[0]);
+      setPaymentDate(todayISODate());
       setNotes("");
       setGatewayMode("credit_card");
     }
@@ -367,7 +363,11 @@ export function RecordPaymentPanel({
         ? accountTypeToMode(selectedAccount.accountType)
         : "cash";
 
-    const paymentDateISO = new Date(paymentDate + "T00:00:00").toISOString();
+    const paymentDateISO = toISOString(paymentDate);
+    if (!paymentDateISO) {
+      toast.error("Invalid payment date");
+      return;
+    }
 
     if (isEditMode) {
       updateMutation.mutate({

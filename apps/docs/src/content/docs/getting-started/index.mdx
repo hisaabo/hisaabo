@@ -5,6 +5,19 @@ sidebar:
   order: 1
 ---
 
+import ForCA from '../../../components/ForCA.astro';
+import ForBusiness from '../../../components/ForBusiness.astro';
+
+<ForBusiness>
+New here? The fastest path is: add your business, add one party (your first customer), raise invoice #1. Ten minutes, no training videos. Jump to [Self-Hosting Setup](/getting-started/self-hosting) or start with [Create Your Business](/getting-started/create-business).
+</ForBusiness>
+
+<ForCA>
+:::tip[CA workflow]
+Managing multiple clients? Each client is a separate **business** under your single Hisaabo login — switch between them from the top nav. Start by importing a client's Tally or MyBillBook export via [Import Data](/getting-started/import-data), then have the client invite you as an **Accountant** role (full read access to reports and ledgers, no billing settings).
+:::
+</ForCA>
+
 Hisaabo is a **self-hosted invoicing and business management app** designed for Indian small businesses. It replaces tools like MyBillBook, Vyaapaar, and Tally for teams that want to own their data and run the software on their own infrastructure.
 
 You get GST-compliant invoicing, party (customer/supplier) management, inventory tracking, payment recording, expense management, banking, and a built-in online store — all in one app. The full-featured web application works in any browser on any device. Hisaabo Cloud adds native Android/iOS apps and a desktop app for macOS, Windows, and Linux.
@@ -106,3 +119,9 @@ Passwords are hashed with Argon2id. Sessions use HttpOnly, Secure, SameSite=Lax 
 
 **Does it support multiple users per business?**
 Yes. You can invite team members and assign them roles: Superadmin, Admin, Seller Manager, Seller, or Accountant. Each role has different permissions. See [Team & Roles](/team) for details.
+
+<ForCA>
+:::note[For CAs managing client books]
+Use the **Accountant** role when a client adds you to their business — you get full read access to reports, invoices, and GST data without seeing the admin or billing settings. One Hisaabo login can be an Accountant across dozens of client businesses.
+:::
+</ForCA>

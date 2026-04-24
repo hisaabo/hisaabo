@@ -1,5 +1,11 @@
 // Logo — the Hisaabo mark. Inlined SVG matches public/favicon.svg so offline/first-paint renders work.
-// If you change this, update public/favicon.svg too so tab icon and in-app mark stay in sync.
+// If you change this, keep the mark in sync across every sibling file:
+//   apps/web/public/favicon.svg          (browser tab icon)
+//   apps/web/public/bimi.svg             (BIMI email avatar — SVG Tiny P/S profile)
+//   apps/docs/public/favicon.svg         (Starlight docs tab icon)
+//   apps/docs/src/assets/logo-light.svg  (Starlight header, light theme)
+//   apps/docs/src/assets/logo-dark.svg   (Starlight header, dark theme)
+//   apps/api-docs/public/favicon.svg     (API reference tab icon)
 interface LogoProps {
   className?: string;
 }

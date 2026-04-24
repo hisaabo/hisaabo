@@ -5,6 +5,9 @@ sidebar:
   order: 1
 ---
 
+import ForCA from '../../../components/ForCA.astro';
+import ForBusiness from '../../../components/ForBusiness.astro';
+
 Hisaabo is designed to make GST compliance as automatic as possible. This page gives you an overview of how GST flows through the system from invoice creation to report generation.
 
 ## How GST is calculated on invoices
@@ -68,14 +71,24 @@ To export: open the GSTR-1 report for the desired month and click **Export CSV**
 
 ## Filing workflow (recommended)
 
-1. At the end of each month, open **GST** in the left navigation.
-2. Select the month and year, then view the **GSTR-1** report.
-3. Verify the totals match your expectation. If an invoice is missing, check that it is not in `cancelled` status — cancelled invoices are excluded from reports.
-4. Export the GSTR-1 CSV.
-5. Use the GST Offline Utility or your CA's software to prepare the final filing from the CSV.
-6. File GSTR-1 on the GST portal by the 11th of the following month.
-7. Review the **GSTR-3B** report for your ITC and net tax payable calculation.
-8. File GSTR-3B and pay any tax due by the 20th of the following month.
+<ForBusiness>
+At the end of each month:
+
+1. Open **GST** in the left navigation and pick the month.
+2. Glance at the GSTR-1 totals — do they match roughly what you sold? If a number looks off, the most common cause is a cancelled invoice or a party with the wrong state code.
+3. Export the CSV and send it to your CA. That's it on your side — your CA handles the actual portal upload.
+4. Check the **GSTR-3B** tab to see your net tax liability before the 20th, so you know how much to keep in the bank.
+</ForBusiness>
+
+<ForCA>
+:::tip[CA filing workflow]
+1. Open the client's business, select **GST** → **GSTR-1**, pick the month.
+2. Verify B2B invoice count and aggregate tax against the client's books. Cancelled invoices are excluded; draft invoices are **included** if dated in the period — flag drafts before filing.
+3. Export the CSV. Re-format into the GST Offline Utility's template (or use your firm's conversion macro) and generate the JSON.
+4. Upload JSON to the GST portal by the **11th**. File GSTR-3B by the **20th** after reviewing ITC in the 3B tab.
+5. For amendments, correct the invoice in Hisaabo, re-generate GSTR-1, and report the delta in the next month's amendment tables on the portal.
+:::
+</ForCA>
 
 ## Frequently asked questions
 

@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate } from "@/lib/utils";
+
+dayjs.extend(utc);
 import { apiUrl } from "@/lib/api-url";
 import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -592,26 +596,27 @@ function ProfitAndLossView() {
 }
 
 // ── FY date helpers ────────────────────────────────────────────
+// All boundaries are UTC — the DB stores UTC timestamps and local-time
+// construction in IST would shift April 1 → March 31 UTC, pulling the
+// previous March into the current FY.
 function getCurrentFYBounds(): { start: string; end: string; year: number } {
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = now.getUTCMonth();
-  const fyYear = mm >= 3 ? yyyy : yyyy - 1;
+  const now = dayjs.utc();
+  const mm = now.month();
+  const fyYear = mm >= 3 ? now.year() : now.year() - 1;
   return {
-    start: new Date(Date.UTC(fyYear, 3, 1)).toISOString(),
+    start: dayjs.utc().year(fyYear).month(3).date(1).startOf("day").toISOString(),
     end: now.toISOString(),
     year: fyYear,
   };
 }
 
 function getPreviousFYBounds(): { start: string; end: string; year: number } {
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = now.getUTCMonth();
-  const prevFyYear = mm >= 3 ? yyyy - 1 : yyyy - 2;
+  const now = dayjs.utc();
+  const mm = now.month();
+  const prevFyYear = mm >= 3 ? now.year() - 1 : now.year() - 2;
   return {
-    start: new Date(Date.UTC(prevFyYear, 3, 1)).toISOString(),
-    end: new Date(Date.UTC(prevFyYear + 1, 2, 31, 23, 59, 59)).toISOString(),
+    start: dayjs.utc().year(prevFyYear).month(3).date(1).startOf("day").toISOString(),
+    end: dayjs.utc().year(prevFyYear + 1).month(2).date(31).endOf("day").toISOString(),
     year: prevFyYear,
   };
 }

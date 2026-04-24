@@ -3,6 +3,8 @@
  * Persona switcher — "I am a..." selector that adapts doc content.
  * Uses the same data-attribute pattern as DeviceSwitcher.
  * Sets `data-persona` on <html> and persists to localStorage.
+ *
+ * Two personas only: CA and Business. Developers are served by api-docs.
  */
 ---
 
@@ -19,12 +21,6 @@
     </svg>
     <span>Business</span>
   </button>
-  <button class="persona-btn" data-persona-target="developer" aria-pressed="false" title="I'm a developer">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-    </svg>
-    <span>Dev</span>
-  </button>
 </div>
 
 <script is:inline>
@@ -39,8 +35,11 @@
       });
     }
 
-    // Apply stored/default state
-    setPersona(localStorage.getItem('hisaabo-docs-persona') || 'all');
+    // Apply stored/default state. Coerce any legacy value (e.g. "developer"
+    // from the 3-persona iteration) back to "all" so stale localStorage
+    // doesn't leave the UI in a state with no active pill.
+    var stored = localStorage.getItem('hisaabo-docs-persona');
+    setPersona(stored === 'ca' || stored === 'business' ? stored : 'all');
 
     // Event delegation — works regardless of how many copies of the buttons exist
     if (!document.__personaDelegated) {

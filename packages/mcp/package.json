@@ -1,6 +1,6 @@
 {
   "name": "@hisaabo/mcp",
-  "version": "0.8.6",
+  "version": "0.8.8",
   "description": "Hisaabo MCP server — expose Hisaabo tools (invoices, parties, items, reports) to LLMs via the Model Context Protocol.",
   "keywords": [
     "hisaabo",

@@ -17,9 +17,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   cn,
   formatDateInput,
+  formatDateShort,
+  formatMonthYearShort,
   getDocumentTypeLabel,
   getDocumentTypeColor,
   downloadCSV,
+  toISOString,
+  toISOStringEndOfDay,
+  todayISODate,
 } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +128,118 @@ describe("formatDateInput() — converts dates to YYYY-MM-DD for HTML date input
 
   it("produces a string with exactly 10 characters (YYYY-MM-DD)", () => {
     expect(formatDateInput("2024-12-31T23:59:59.000Z")).toHaveLength(10);
+  });
+
+  it("returns an empty string for null/undefined so <input type='date' value=''> stays empty", () => {
+    // REGRESSION: the old implementation returned `undefined` for these cases,
+    // which React would render as an uncontrolled-input warning. The dayjs
+    // implementation centralises on "" so every consumer gets a controlled value.
+    expect(formatDateInput(null)).toBe("");
+    expect(formatDateInput(undefined)).toBe("");
+    expect(formatDateInput("")).toBe("");
+  });
+
+  it("returns an empty string for an invalid date string rather than 'Invalid Date'", () => {
+    // Before the dayjs pass, `new Date("garbage").toISOString()` threw —
+    // breaking any form that round-tripped a malformed API value.
+    expect(formatDateInput("garbage-not-a-date")).toBe("");
+  });
+
+  it("accepts a Date object input (in addition to ISO strings)", () => {
+    const d = new Date("2025-07-04T12:00:00.000Z");
+    expect(formatDateInput(d)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// formatDateShort / formatMonthYearShort — compact chart axis labels
+// ─────────────────────────────────────────────────────────────────────────────
+describe("formatDateShort() — 'D MMM' for week-range chart labels", () => {
+  it("formats a Date object as day + short month (no year)", () => {
+    const result = formatDateShort(new Date(2026, 0, 15));
+    expect(result).toContain("15");
+    expect(result).toContain("Jan");
+    expect(result).not.toContain("2026");
+  });
+
+  it("returns em-dash for nullish/invalid input", () => {
+    expect(formatDateShort(null)).toBe("—");
+    expect(formatDateShort("")).toBe("—");
+    expect(formatDateShort("garbage")).toBe("—");
+  });
+});
+
+describe("formatMonthYearShort() — 'MMM YY' for monthly chart axes", () => {
+  it("formats as 'Mar 25' for March 2025", () => {
+    expect(formatMonthYearShort("2025-03-15T00:00:00.000Z")).toContain("Mar");
+    expect(formatMonthYearShort("2025-03-15T00:00:00.000Z")).toContain("25");
+  });
+
+  it("returns em-dash for nullish/invalid input", () => {
+    expect(formatMonthYearShort(null)).toBe("—");
+    expect(formatMonthYearShort("")).toBe("—");
+    expect(formatMonthYearShort("garbage")).toBe("—");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toISOString / toISOStringEndOfDay — form input → ISO for tRPC mutations
+// ─────────────────────────────────────────────────────────────────────────────
+describe("toISOString() — YYYY-MM-DD → ISO for z.string().datetime() inputs", () => {
+  it("returns a full ISO string for a valid YYYY-MM-DD input", () => {
+    const result = toISOString("2025-03-31");
+    // Must be a full ISO timestamp (20 or more chars, with T and Z)
+    expect(result).toBeDefined();
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(result).toContain("2025-03-31");
+  });
+
+  it("accepts a Date object", () => {
+    const result = toISOString(new Date("2025-03-31T12:00:00.000Z"));
+    expect(result).toBe("2025-03-31T12:00:00.000Z");
+  });
+
+  it("returns undefined for null/undefined/empty so optional mutation fields stay absent", () => {
+    expect(toISOString(null)).toBeUndefined();
+    expect(toISOString(undefined)).toBeUndefined();
+    expect(toISOString("")).toBeUndefined();
+  });
+
+  it("returns undefined for invalid input rather than 'Invalid Date' ISO", () => {
+    expect(toISOString("garbage")).toBeUndefined();
+    expect(toISOString(new Date(NaN))).toBeUndefined();
+  });
+});
+
+describe("toISOStringEndOfDay() — upper-bound range filters include the whole day", () => {
+  it("pushes to 23:59:59.999 before serialising", () => {
+    const result = toISOStringEndOfDay("2025-03-31");
+    expect(result).toBeDefined();
+    // dayjs endOf("day") → 23:59:59.999 in local tz, then .toISOString()
+    // Exact time depends on tz but must end with ":59.999Z" after conversion to UTC.
+    expect(result).toMatch(/\.999Z$/);
+  });
+
+  it("returns undefined for null/undefined/empty/invalid", () => {
+    expect(toISOStringEndOfDay(null)).toBeUndefined();
+    expect(toISOStringEndOfDay("")).toBeUndefined();
+    expect(toISOStringEndOfDay("garbage")).toBeUndefined();
+  });
+});
+
+describe("todayISODate() — centralised today in YYYY-MM-DD", () => {
+  it("returns a string in YYYY-MM-DD format", () => {
+    expect(todayISODate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("returns exactly 10 characters", () => {
+    expect(todayISODate()).toHaveLength(10);
+  });
+
+  it("two calls on the same tick return the same value", () => {
+    const a = todayISODate();
+    const b = todayISODate();
+    expect(a).toBe(b);
   });
 });
 

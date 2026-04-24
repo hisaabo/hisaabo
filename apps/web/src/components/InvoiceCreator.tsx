@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, todayISODate, toISOString } from "@/lib/utils";
 import { apiUrl } from "@/lib/api-url";
 import { getBusinessId } from "@/lib/trpc";
 
@@ -50,7 +50,7 @@ interface Props {
 
 export function InvoiceCreator({ type, onClose }: Props) {
   const [partyId, setPartyId] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [invoiceDate, setInvoiceDate] = useState(todayISODate);
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
@@ -181,8 +181,8 @@ export function InvoiceCreator({ type, onClose }: Props) {
     createMutation.mutate({
       partyId,
       type,
-      invoiceDate: new Date(invoiceDate).toISOString(),
-      dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
+      invoiceDate: toISOString(invoiceDate),
+      dueDate: toISOString(dueDate),
       notes: notes || undefined,
       termsAndConditions: terms || undefined,
       // Bug B: itemName is the required frozen snapshot; description carries

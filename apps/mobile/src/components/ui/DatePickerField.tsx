@@ -4,6 +4,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { makeStyles } from "../../lib/makeStyles";
 import { useColors } from "../../contexts/ThemeContext";
+import { formatDate } from "../../lib/utils";
 
 interface Props {
   label: string;
@@ -18,11 +19,7 @@ export function DatePickerField({ label, value, onChange, minimumDate, maximumDa
   const s = useS();
   const colors = useColors();
 
-  const formatted = value.toLocaleDateString("en-IN", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  const formatted = formatDate(value);
 
   return (
     <View>
