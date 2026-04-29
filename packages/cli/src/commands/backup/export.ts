@@ -116,12 +116,11 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
   let exportUrl: string;
   try {
     const result = await client.selfExport.request({ tenantId });
-    // The server returns a full URL (built from APP_URL + /api/export/:tenantId?token=...)
-    exportUrl = result.url;
-    // If for any reason the URL is relative, resolve it against apiUrl
-    if (exportUrl.startsWith("/")) {
-      exportUrl = `${cfg.apiUrl}${exportUrl}`;
-    }
+    // Server returns a relative URL: /api/export/:tenantId?token=...
+    // (older servers may have returned an absolute URL — handle both.)
+    exportUrl = result.url.startsWith("/")
+      ? `${cfg.apiUrl}${result.url}`
+      : result.url;
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;

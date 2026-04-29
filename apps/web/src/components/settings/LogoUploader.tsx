@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { apiUrl } from "@/lib/api-url";
 import { toast } from "@/hooks/useToast";
 
 // Matches the A4 invoice slot (80×56pt) visually so users see how the logo
@@ -68,7 +69,7 @@ export function LogoUploader({ businessId, logoUpdatedAt, hasLogo }: Props) {
     ? Date.parse(logoUpdatedAt)
     : logoUpdatedAt?.getTime?.() ?? 0;
   const existingLogoUrl = hasLogo
-    ? `/api/businesses/${businessId}/logo?v=${cacheBuster}`
+    ? apiUrl(`/api/businesses/${businessId}/logo?v=${cacheBuster}`)
     : null;
 
   async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {

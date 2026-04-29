@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { apiUrl } from "@/lib/api-url";
 import { toast } from "@/hooks/useToast";
 import { Spinner } from "@/components/ui/Spinner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -90,7 +91,9 @@ export function RestoreOnboarding({ tenantId, onBack }: RestoreOnboardingProps) 
 
     try {
       const { url } = await importMut.mutateAsync({ tenantId });
-      const uploadUrl = url.startsWith("http") ? url : `${window.location.origin}${url}`;
+      // Resolve against VITE_API_URL when the server returns a relative path
+      // so split-host deploys hit the API host, not the SPA host.
+      const uploadUrl = url.startsWith("http") ? url : apiUrl(url);
 
       const result = await new Promise<ImportResult>((resolve, reject) => {
         const xhr = new XMLHttpRequest();

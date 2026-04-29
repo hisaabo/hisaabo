@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { getBusinessId } from "@/lib/trpc";
+import { apiUrl } from "@/lib/api-url";
 
 interface Props {
   /** Invoice to print; null means "nothing to print right now". */
@@ -37,7 +38,7 @@ export function ReceiptPrinter({ invoiceId, onDone }: Props) {
     (async () => {
       try {
         const res = await fetch(
-          `/api/invoices/${invoiceId}/pdf?format=thermal`,
+          apiUrl(`/api/invoices/${invoiceId}/pdf?format=thermal`),
           {
             credentials: "include",
             headers: { "x-business-id": getBusinessId() || "" },
