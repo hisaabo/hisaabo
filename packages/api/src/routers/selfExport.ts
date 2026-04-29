@@ -115,10 +115,11 @@ export const selfExportRouter = router({
       // ── Issue token ───────────────────────────────────────────────────────────
       const { token, expiresAt } = signExportToken(input.tenantId, ctx.user.id);
 
-      const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
-      // Strip trailing /api from APP_URL if present (APP_URL points to the frontend)
-      const apiBase = baseUrl.replace(/\/api$/, "");
-      const url = `${apiBase}/api/export/${input.tenantId}?token=${encodeURIComponent(token)}`;
+      // Return a relative URL — the client resolves it against the API base
+      // (apiUrl helper on the web; cfg.apiUrl on the CLI). Building an
+      // absolute URL server-side would require knowing the API host, but
+      // APP_URL points to the frontend in split-host deployments.
+      const url = `/api/export/${input.tenantId}?token=${encodeURIComponent(token)}`;
 
       logger.info(
         { tenantId: input.tenantId, userId: ctx.user.id, expiresAt },

@@ -2,6 +2,7 @@ import { useState } from "react";
 import JSZip from "jszip";
 import { ImportWizard } from "@/components/ImportWizard";
 import { trpc } from "@/lib/trpc";
+import { apiUrl } from "@/lib/api-url";
 import { toast } from "@/hooks/useToast";
 import { Spinner } from "@/components/ui/Spinner";
 import { todayISODate } from "@/lib/utils";
@@ -158,9 +159,10 @@ function CsvExportSection() {
 function FullBackupSection({ tenantId }: { tenantId: string }) {
   const exportMut = trpc.selfExport.request.useMutation({
     onSuccess: (data) => {
-      const href = data.url.startsWith("http")
-        ? data.url
-        : `${window.location.origin}${data.url}`;
+      // Resolve the URL against VITE_API_URL when the server returns a
+      // relative path (split-host deploys: app.hisaabo.in + api.hisaabo.in).
+      // Falls through unchanged when the server returns an absolute URL.
+      const href = data.url.startsWith("http") ? data.url : apiUrl(data.url);
       const anchor = document.createElement("a");
       anchor.href = href;
       anchor.download = "";
