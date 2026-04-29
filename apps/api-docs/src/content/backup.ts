@@ -16,10 +16,10 @@ export const backupEndpoints: EndpointGroup = {
         { name: "tenantId", type: "string (UUID)", required: true, description: "The tenant to export. Caller must be an owner of this tenant." },
       ],
       output: {
-        description: "A signed download token and URL.",
+        description: "A signed download token and a relative URL. Resolve the URL against your API base (e.g. https://api.hisaabo.in) before downloading.",
         example: {
           token: "eyJhbGciOiJIUzI1NiIs...",
-          url: "https://api.hisaabo.in/api/export/550e8400-e29b-41d4-a716-446655440000?token=eyJhbGci...",
+          url: "/api/export/550e8400-e29b-41d4-a716-446655440000?token=eyJhbGci...",
           expiresAt: "2026-04-16T10:05:00.000Z",
         },
       },
@@ -30,15 +30,15 @@ curl -X POST https://api.hisaabo.in/api/trpc/selfExport.request \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{"json":{"tenantId":"550e8400-e29b-41d4-a716-446655440000"}}'
 
-# Step 2: Download the backup using the returned URL
-curl -o backup.tar.gz "RETURNED_URL"`,
+# Step 2: Download the backup (URL is relative — prefix with API base)
+curl -o backup.tar.gz "https://api.hisaabo.in\${RETURNED_URL}"`,
         javascript: `// Step 1: Request token
 const { url } = await trpc.selfExport.request.mutate({
   tenantId: "550e8400-e29b-41d4-a716-446655440000",
 });
 
-// Step 2: Download the backup
-const response = await fetch(url);
+// Step 2: Download the backup. The URL is relative — resolve against your API base.
+const response = await fetch(\`https://api.hisaabo.in\${url}\`);
 const blob = await response.blob();
 // Save blob to file...`,
       },

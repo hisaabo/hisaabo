@@ -281,4 +281,74 @@ describe("DataTab — FullBackupSection", () => {
     expect(vi.mocked(toast.error).mock.calls[0][0]).toContain("Failed to start export");
     expect(vi.mocked(toast.error).mock.calls[0][1]).toBe("boom");
   });
+
+  // ── URL resolution (split-host prod regression guard) ──────────────────────
+  // Background: the server used to return an absolute URL built from APP_URL
+  // (the frontend host), so the anchor click went to app.hisaabo.in instead
+  // of api.hisaabo.in and silently failed. Server now returns a relative URL
+  // and this component resolves it via apiUrl(VITE_API_URL).
+
+  it("relative URL is resolved against VITE_API_URL in split-host mode", () => {
+    vi.stubEnv("VITE_API_URL", "https://api.hisaabo.in");
+    try {
+      // Spy on createElement so we can capture the anchor the component creates
+      // without disturbing the rest of the render path.
+      const createElement = document.createElement.bind(document);
+      const anchors: HTMLAnchorElement[] = [];
+      const spy = vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+        const el = createElement(tag);
+        if (tag === "a") {
+          // Stub click — jsdom would otherwise try to navigate
+          (el as HTMLAnchorElement).click = vi.fn();
+          anchors.push(el as HTMLAnchorElement);
+        }
+        return el;
+      });
+
+      renderTab();
+      lastSelfExportOpts.current.onSuccess({
+        token: "tok-1",
+        url: "/api/export/ten-1?token=tok-1",
+        expiresAt: "2026-04-29T08:39:21.127Z",
+      });
+
+      expect(anchors).toHaveLength(1);
+      // jsdom resolves anchor.href against the document base URL when assigned
+      // from a relative href, so we compare on .href directly which reflects
+      // exactly what the browser would navigate to.
+      expect(anchors[0].href).toBe("https://api.hisaabo.in/api/export/ten-1?token=tok-1");
+
+      spy.mockRestore();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("absolute URL from server is used as-is (back-compat with older servers)", () => {
+    vi.stubEnv("VITE_API_URL", "https://api.hisaabo.in");
+    try {
+      const createElement = document.createElement.bind(document);
+      const anchors: HTMLAnchorElement[] = [];
+      const spy = vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+        const el = createElement(tag);
+        if (tag === "a") {
+          (el as HTMLAnchorElement).click = vi.fn();
+          anchors.push(el as HTMLAnchorElement);
+        }
+        return el;
+      });
+
+      renderTab();
+      lastSelfExportOpts.current.onSuccess({
+        token: "tok-1",
+        url: "https://legacy.example.com/api/export/ten-1?token=tok-1",
+        expiresAt: "2026-04-29T08:39:21.127Z",
+      });
+
+      expect(anchors[0].href).toBe("https://legacy.example.com/api/export/ten-1?token=tok-1");
+      spy.mockRestore();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
