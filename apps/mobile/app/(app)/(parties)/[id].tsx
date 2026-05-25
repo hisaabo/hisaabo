@@ -22,6 +22,7 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 type LedgerTab = "ledger" | "topItems" | "report";
 
@@ -38,6 +39,8 @@ export default function PartyDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<LedgerTab>("ledger");
+  const canUpdate = useCan("update", "Party");
+  const canDelete = useCan("delete", "Party");
   const [ledgerPage, _setLedgerPage] = useState(1);
   const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
   const [ledgerTo, setLedgerTo] = useState<Date | null>(null);
@@ -233,27 +236,33 @@ export default function PartyDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.topNavActions}>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={22} color={colors.brand} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.mergeButton}
-            onPress={handleOpenMerge}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="git-merge-outline" size={20} color={colors.info} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.danger} />
-          </TouchableOpacity>
+          {canUpdate && (
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.brand} />
+            </TouchableOpacity>
+          )}
+          {canUpdate && (
+            <TouchableOpacity
+              style={styles.mergeButton}
+              onPress={handleOpenMerge}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="git-merge-outline" size={20} color={colors.info} />
+            </TouchableOpacity>
+          )}
+          {canDelete && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -363,16 +372,18 @@ export default function PartyDetailScreen() {
               </Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={20} color={colors.brand} />
-            <Text style={[styles.actionButtonText, { color: colors.brand }]}>
-              Edit
-            </Text>
-          </TouchableOpacity>
+          {canUpdate && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={20} color={colors.brand} />
+              <Text style={[styles.actionButtonText, { color: colors.brand }]}>
+                Edit
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={[styles.actionButton, styles.actionButtonPrimary]}
             activeOpacity={0.7}

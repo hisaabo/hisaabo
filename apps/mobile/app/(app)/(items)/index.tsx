@@ -16,6 +16,7 @@ import { formatCurrency } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 type ItemTypeFilter = "product" | "service" | null;
 
@@ -27,6 +28,7 @@ export default function ItemsScreen() {
   const [search, setSearch] = useState("");
   const [itemType, setItemType] = useState<ItemTypeFilter>(null);
   const [lowStock, setLowStock] = useState(false);
+  const canCreate = useCan("create", "Item");
   const [page, setPage] = useState(1);
   const [allItems, setAllItems] = useState<NonNullable<typeof data>["data"]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -333,7 +335,7 @@ export default function ItemsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(app)/(items)/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(app)/(items)/create" as never)} />}
     </SafeAreaView>
   );
 }

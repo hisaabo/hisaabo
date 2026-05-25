@@ -26,6 +26,7 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
+import { useCan, useCanModify } from "../../../src/hooks/useCan";
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
 
@@ -476,6 +477,9 @@ export default function InvoiceDetailScreen() {
     { enabled: !!id }
   );
 
+  const canDelete = useCan("delete", "Invoice");
+  const editAffordance = useCanModify("update", "Invoice", invoice ? { createdAt: invoice.createdAt as any } : undefined);
+
   const utils = trpc.useUtils();
 
   const updateStatus = trpc.invoice.updateStatus.useMutation({
@@ -860,8 +864,8 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
-        {/* Edit Invoice (only for draft/sent) */}
-        {(invoice.status === "draft" || invoice.status === "sent") && (
+        {/* Edit Invoice — gated by role permission and 2-hour seller window */}
+        {(invoice.status === "draft" || invoice.status === "sent") && editAffordance.allowed && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}
@@ -875,6 +879,23 @@ export default function InvoiceDetailScreen() {
                 style={styles.actionIcon}
               />
               <Text style={[styles.actionBtnText, { color: colors.brand }]}>Edit Invoice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {(invoice.status === "draft" || invoice.status === "sent") && !editAffordance.allowed && editAffordance.reason === "window-expired" && (
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => Alert.alert("Edit window expired", "The 2-hour edit window for this invoice has expired. Ask a manager to make changes.")}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="lock-closed-outline"
+                size={18}
+                color={colors.textMuted}
+                style={styles.actionIcon}
+              />
+              <Text style={[styles.actionBtnText, { color: colors.textMuted }]}>Edit window expired</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -914,7 +935,7 @@ export default function InvoiceDetailScreen() {
         </View>
 
         {/* Delete — hidden when any payment has been recorded */}
-        {amountPaid <= 0 && (
+        {amountPaid <= 0 && canDelete && (
           <View style={[styles.actionGroup, styles.dangerGroup]}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.dangerBtn]}

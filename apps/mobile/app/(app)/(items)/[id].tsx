@@ -21,6 +21,7 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 type DetailTab = "stats" | "priceHistory" | "stockMovements";
 
@@ -42,6 +43,8 @@ export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const utils = trpc.useUtils();
+  const canUpdate = useCan("update", "Item");
+  const canDelete = useCan("delete", "Item");
 
   const [activeTab, setActiveTab] = useState<DetailTab>("stats");
   const [adjustModalVisible, setAdjustModalVisible] = useState(false);
@@ -332,27 +335,33 @@ export default function ItemDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.topNavActions}>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => router.push({ pathname: "/(app)/(items)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={22} color={colors.brand} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.actionMenuButton}
-            onPress={() => setActionMenuVisible(true)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="ellipsis-vertical" size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.danger} />
-          </TouchableOpacity>
+          {canUpdate && (
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => router.push({ pathname: "/(app)/(items)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.brand} />
+            </TouchableOpacity>
+          )}
+          {canUpdate && (
+            <TouchableOpacity
+              style={styles.actionMenuButton}
+              onPress={() => setActionMenuVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="ellipsis-vertical" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+          {canDelete && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 

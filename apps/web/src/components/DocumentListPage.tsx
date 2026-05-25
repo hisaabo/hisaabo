@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -126,6 +127,10 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   );
   const [status, setStatus] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  // All these document types are Invoice-backed on the server, so the role
+  // permission they require is "create:Invoice" / "delete:Invoice".
+  const canCreate = useCan("create", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
@@ -197,9 +202,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
         title={title}
         description={description}
         actions={
-          <button className="btn-primary" onClick={() => setShowCreate(true)}>
-            {buttonLabel}
-          </button>
+          canCreate ? (
+            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+              {buttonLabel}
+            </button>
+          ) : null
         }
       />
 
@@ -251,9 +258,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           title={emptyTitle}
           description={emptyDescription(type, status)}
           action={
-            <button className="btn-primary" onClick={() => setShowCreate(true)}>
-              {buttonLabel}
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowCreate(true)}>
+                {buttonLabel}
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -335,7 +344,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                             : "Convert to Invoice"}
                         </button>
                       )}
-                      {doc.status === "draft" && (
+                      {doc.status === "draft" && canDelete && (
                         <button
                           onClick={() =>
                             confirmDelete(doc.id, doc.invoiceNumber)
@@ -364,7 +373,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           selectedDoc ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
-                {selectedDoc.status === "draft" && (
+                {selectedDoc.status === "draft" && canDelete && (
                   <button
                     onClick={() => {
                       setSelectedId(null);

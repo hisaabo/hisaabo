@@ -8,6 +8,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, TextareaField } from "@/components/ui/FormField";
@@ -149,6 +150,8 @@ function AutomatedInvoicesPage() {
 
   const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Partial<Record<string, string>>>({});
+  const canCreate = useCan("create", "RecurringInvoice");
+  const canDelete = useCan("delete", "RecurringInvoice");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -435,9 +438,11 @@ function AutomatedInvoicesPage() {
         title="Recurring Invoices"
         description="Manage recurring invoice templates"
         actions={
-          <button className="btn-primary" onClick={openAdd}>
-            + New Template
-          </button>
+          canCreate ? (
+            <button className="btn-primary" onClick={openAdd}>
+              + New Template
+            </button>
+          ) : null
         }
       />
 
@@ -562,7 +567,7 @@ function AutomatedInvoicesPage() {
                 : "Create your first recurring invoice template to automate billing"
             }
             action={
-              !search && !statusFilter ? (
+              !search && !statusFilter && canCreate ? (
                 <button className="btn-primary text-sm" onClick={openAdd}>
                   + Create Template
                 </button>
@@ -655,14 +660,16 @@ function AutomatedInvoicesPage() {
                           >
                             <EditIcon />
                           </button>
-                          <button
-                            onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
-                            className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
-                            aria-label="Delete template"
-                            title="Delete"
-                          >
-                            <DeleteIcon />
-                          </button>
+                          {canDelete && (
+                            <button
+                              onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
+                              className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
+                              aria-label="Delete template"
+                              title="Delete"
+                            >
+                              <DeleteIcon />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
