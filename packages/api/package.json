@@ -19,6 +19,7 @@
     "@hisaabo/db": "workspace:*",
     "@hisaabo/shared": "workspace:*",
     "@hono/node-server": "^1.13.0",
+    "@resvg/resvg-wasm": "^2.6.2",
     "@trpc/server": "^11.0.0",
     "argon2": "^0.41.0",
     "dotenv": "^17.3.1",
@@ -29,6 +30,7 @@
     "pino": "^10.3.1",
     "postgres": "^3.4.5",
     "qrcode": "^1.5.4",
+    "satori": "^0.26.0",
     "superjson": "^2.2.0",
     "tar-stream": "^3.1.8",
     "zod": "^3.24.0"

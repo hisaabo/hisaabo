@@ -29,6 +29,8 @@ import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
 import { getStorage } from "./lib/storage/index.js";
+import { getOrRenderStoreOg, storeMetaSummary, injectStoreMeta, jsonLdScriptSafe } from "./lib/og/index.js";
+import { readFileSync, existsSync } from "node:fs";
 
 // ── Process crash handlers ────────────────────────────────────
 process.on("unhandledRejection", (reason) => {
@@ -1077,6 +1079,241 @@ app.get("/store/:slug/items/:itemId/images/:imageId", async (c) => {
     },
   });
 });
+
+// ── Store OG image + SEO shell ─────────────────────────────────
+// Public base URLs used for share metadata. API base feeds the og:image URL;
+// store base feeds the canonical storefront URL. Both default to the cloud
+// hosts and fall back to the request origin for self-host.
+function getApiPublicBase(c: Context): string {
+  const env = process.env.API_PUBLIC_URL;
+  if (env) return env.replace(/\/$/, "");
+  const proto = c.req.header("x-forwarded-proto") ?? "https";
+  const host = c.req.header("host") ?? "localhost:3000";
+  return `${proto}://${host}`;
+}
+function getStorePublicBase(c: Context): string {
+  const env = process.env.STORE_PUBLIC_URL;
+  if (env) return env.replace(/\/$/, "");
+  // Self-host: no separate store host — the storefront lives on this origin.
+  return getApiPublicBase(c);
+}
+
+// GET /store/:slug/og.png — dynamic Open Graph image (1200×630) featuring the
+// store's top sellers. Rendered with satori+resvg and cached in object storage
+// keyed by a content hash, so repeat hits are a single storage read.
+app.get("/store/:slug/og.png", async (c) => {
+  const slug = c.req.param("slug");
+  if (!checkStoreIpRateLimit(getClientIp(c), "/store/og")) {
+    return c.json({ error: "Too many requests" }, 429);
+  }
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+  const [biz] = await db.select({
+    name: businesses.name,
+    storeTagline: businesses.storeTagline,
+    storeAccentColor: businesses.storeAccentColor,
+    currency: businesses.currency,
+    logoData: businesses.logoData,
+    logoMimeType: businesses.logoMimeType,
+    logoUpdatedAt: businesses.logoUpdatedAt,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  try {
+    const { png, version } = await getOrRenderStoreOg({
+      db,
+      businessId: resolved.businessId,
+      slug,
+      business: biz,
+      storeBaseUrl: getStorePublicBase(c),
+    });
+
+    const etag = `"og-${version}"`;
+    if (c.req.header("if-none-match") === etag) {
+      return new Response(null, { status: 304, headers: { ETag: etag } });
+    }
+    return new Response(new Uint8Array(png), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        // Crawlers re-fetch periodically; keep it cacheable but let the content
+        // hash (ETag) drive precise invalidation.
+        "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+        ETag: etag,
+      },
+    });
+  } catch (err) {
+    logger.error({ err, slug }, "OG image render failed");
+    return c.json({ error: "Image generation failed" }, 500);
+  }
+});
+
+// GET /store/:slug/meta.json — lightweight store identity for share metadata.
+// Used by the Cloudflare Pages Function to inject per-store <meta> tags without
+// pulling the full catalog. Public, like the rest of /store/*.
+app.get("/store/:slug/meta.json", async (c) => {
+  const slug = c.req.param("slug");
+  if (!checkStoreIpRateLimit(getClientIp(c), "/store/meta")) {
+    return c.json({ error: "Too many requests" }, 429);
+  }
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+  const [biz] = await db.select({
+    name: businesses.name,
+    storeTagline: businesses.storeTagline,
+    storeAccentColor: businesses.storeAccentColor,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  return c.json(
+    { name: biz.name, tagline: biz.storeTagline, accentColor: biz.storeAccentColor },
+    200,
+    { "Cache-Control": "public, max-age=300, s-maxage=3600" },
+  );
+});
+
+// GET /store/:slug — SEO HTML shell with per-store Open Graph tags. Crawlers
+// don't run JS, so the storefront SPA's static index.html alone can't carry
+// per-store share metadata. In production the store SPA lives on Cloudflare
+// Pages (a Pages Function injects these same tags); this route covers the
+// self-host case where the store is served from this origin.
+app.get("/store/:slug", async (c) => {
+  const slug = c.req.param("slug");
+  if (!checkStoreIpRateLimit(getClientIp(c), "/store/shell")) {
+    return c.json({ error: "Too many requests" }, 429);
+  }
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) {
+    return c.html(
+      brandedHtml("Store not found", "Store not found", "This storefront doesn't exist or is no longer available.", 404),
+      404,
+    );
+  }
+
+  const db = await getStoreDb(resolved.tenantId);
+  const [biz] = await db.select({
+    name: businesses.name,
+    storeTagline: businesses.storeTagline,
+    storeAccentColor: businesses.storeAccentColor,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+
+  if (!biz) {
+    return c.html(
+      brandedHtml("Store not found", "Store not found", "This storefront doesn't exist or is no longer available.", 404),
+      404,
+    );
+  }
+
+  const meta = storeMetaSummary({
+    slug,
+    name: biz.name,
+    tagline: biz.storeTagline,
+    accentColor: biz.storeAccentColor,
+    apiBaseUrl: getApiPublicBase(c),
+    storeBaseUrl: getStorePublicBase(c),
+  });
+
+  // If the built store SPA is colocated with the API (self-host with assets),
+  // inject the meta into its real index.html so the page also boots the SPA.
+  const template = loadStoreIndexHtml();
+  if (template) {
+    return c.html(injectStoreMeta(template, meta));
+  }
+
+  // Otherwise serve a minimal, crawler-correct shell.
+  return c.html(storeSeoShell(meta));
+});
+
+// Locate + cache the built store SPA index.html, if it's deployed alongside the
+// API. Self-host images don't currently ship it (the store is a separate CF
+// Pages deploy), so this is typically absent and we fall back to the SEO shell.
+let storeIndexHtmlCache: string | null | undefined;
+function loadStoreIndexHtml(): string | null {
+  if (storeIndexHtmlCache !== undefined) return storeIndexHtmlCache;
+  const override = process.env.STORE_DIST_DIR;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    override ? path.join(override, "index.html") : null,
+    path.join(here, "..", "store", "index.html"),
+    path.join(here, "..", "..", "..", "..", "apps", "store", "dist", "index.html"),
+  ].filter(Boolean) as string[];
+  for (const file of candidates) {
+    if (existsSync(file)) {
+      storeIndexHtmlCache = readFileSync(file, "utf8");
+      return storeIndexHtmlCache;
+    }
+  }
+  storeIndexHtmlCache = null;
+  return null;
+}
+
+// Minimal self-contained shell: correct meta for crawlers + a friendly card
+// for humans linking through to the live store.
+function storeSeoShell(meta: ReturnType<typeof storeMetaSummary>): string {
+  const e = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const jsonLd = jsonLdScriptSafe({
+    "@context": "https://schema.org",
+    "@type": "Store",
+    name: meta.title.replace(/ — Online Store$/, ""),
+    description: meta.description,
+    url: meta.storeUrl,
+    image: meta.ogImageUrl,
+  });
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${e(meta.title)}</title>
+  <meta name="description" content="${e(meta.description)}" />
+  <meta name="theme-color" content="${e(meta.accentColor)}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Hisaabo" />
+  <meta property="og:title" content="${e(meta.title)}" />
+  <meta property="og:description" content="${e(meta.description)}" />
+  <meta property="og:url" content="${e(meta.storeUrl)}" />
+  <meta property="og:image" content="${e(meta.ogImageUrl)}" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:locale" content="en_IN" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${e(meta.title)}" />
+  <meta name="twitter:description" content="${e(meta.description)}" />
+  <meta name="twitter:image" content="${e(meta.ogImageUrl)}" />
+  <script type="application/ld+json">${jsonLd}</script>
+  <style>
+    body{margin:0;font-family:system-ui,sans-serif;background:#f8f9fa;color:#1a1a2e;min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{text-align:center;padding:2rem;max-width:640px}
+    img{max-width:100%;border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.12)}
+    h1{margin:1.25rem 0 .25rem;font-size:1.5rem}
+    p{color:#6b7280;margin:0 0 1.25rem}
+    a{display:inline-block;background:${e(meta.accentColor)};color:#fff;text-decoration:none;padding:.7rem 1.4rem;border-radius:10px;font-weight:600}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="${e(meta.ogImageUrl)}" width="1200" height="630" alt="${e(meta.title)}" />
+    <h1>${e(meta.title.replace(/ — Online Store$/, ""))}</h1>
+    <p>${e(meta.description)}</p>
+    <a href="${e(meta.storeUrl)}">Visit store</a>
+  </div>
+</body>
+</html>`;
+}
 
 // GET /store/:slug/catalog.json — public item catalog
 app.get("/store/:slug/catalog.json", async (c) => {
