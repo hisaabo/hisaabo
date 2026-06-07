@@ -33,6 +33,7 @@ import {
   payments,
   expenses,
   bankAccounts,
+  shipments,
 } from "@hisaabo/db";
 import { getControlDb, getTenantTestDb, type TenantTestDb } from "./test-db.js";
 
@@ -54,6 +55,7 @@ export type TestInvoiceItem = typeof invoiceItems.$inferSelect;
 export type TestPayment = typeof payments.$inferSelect;
 export type TestExpense = typeof expenses.$inferSelect;
 export type TestBankAccount = typeof bankAccounts.$inferSelect;
+export type TestShipment = typeof shipments.$inferSelect;
 
 // ── Control plane factories ────────────────────────────────────────────────────
 
@@ -446,6 +448,31 @@ export async function createBankAccount(
       openingBalance: "0.00",
       currentBalance: "0.00",
       isDefault: true,
+      ...overrides,
+    })
+    .returning();
+
+  return row!;
+}
+
+/**
+ * Creates a shipment for the given business, optionally linked to an invoice
+ * and/or party. Used by IDOR tests that pass another business's invoiceId to
+ * `shipment.list` to confirm the businessId WHERE clause is enforced.
+ */
+export async function createShipment(
+  db: TenantTestDb,
+  businessId: string,
+  overrides: Partial<InferInserted<typeof shipments>> = {},
+): Promise<TestShipment> {
+  const [row] = await db
+    .insert(shipments)
+    .values({
+      businessId,
+      carrier: "Delhivery",
+      mode: "courier",
+      status: "pending",
+      cost: "0.00",
       ...overrides,
     })
     .returning();
