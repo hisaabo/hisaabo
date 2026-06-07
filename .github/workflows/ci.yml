@@ -54,6 +54,27 @@ jobs:
       - name: Check production dependency licenses
         run: pnpm licenses:check
 
+  ownership-scoping:
+    name: Ownership Scoping (IDOR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install tsx
+        run: npm install -g tsx
+
+      # Fails when a tRPC procedure accepts a client-supplied identifier but its
+      # handler never scopes by ctx.businessId / ctx.tenantId (a likely
+      # cross-tenant IDOR). Genuine exceptions live in
+      # scripts/ownership-scoping-allowlist.json.
+      - name: Check ownership scoping
+        run: tsx scripts/check-ownership-scoping.ts --scan
+
   test:
     name: Test
     runs-on: ubuntu-latest

@@ -25,6 +25,25 @@ async function requireTenantAdmin(userId: string, tenantId: string) {
   }
 }
 
+// Verify a business belongs to the caller's tenant. Businesses carry no tenantId
+// column — ownership is derived through the creator's tenant membership. In
+// self-hosted mode (MULTI_TENANT !== "true") every tenant shares ONE physical
+// DB, so a `businesses.id` WHERE clause alone does NOT isolate tenants: a
+// foreign businessId would still resolve. This mirrors the hasBusinessAccess
+// middleware and is the ownership scope for tenant-level handlers that accept a
+// raw businessId without going through hasBusinessAccess.
+async function businessBelongsToTenant(createdByUserId: string, tenantId: string): Promise<boolean> {
+  const [membership] = await controlDb
+    .select({ userId: tenantMembers.userId })
+    .from(tenantMembers)
+    .where(and(
+      eq(tenantMembers.tenantId, tenantId),
+      eq(tenantMembers.userId, createdByUserId),
+    ))
+    .limit(1);
+  return Boolean(membership);
+}
+
 export const businessRouter = router({
   list: tenantProcedure.query(async ({ ctx }) => {
     // Security: ctx.db is already scoped to the caller's tenant DB, so this
@@ -55,8 +74,10 @@ export const businessRouter = router({
   getById: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      // Security: ctx.db is scoped to the caller's tenant. The WHERE on
-      // businesses.id is sufficient because the DB itself is tenant-isolated.
+      // Security: in self-hosted mode all tenants share one DB, so the WHERE on
+      // businesses.id is NOT sufficient on its own — confirm the business
+      // belongs to the caller's tenant before returning it (treat a foreign
+      // business as not-found, matching the null-on-miss contract).
       //
       // logoData excluded — fetched via dedicated /api/businesses/:id/logo.
       const { logoData: _logoData, ...cols } = getTableColumns(businesses);
@@ -66,6 +87,7 @@ export const businessRouter = router({
         .where(eq(businesses.id, input.id))
         .limit(1);
       if (!biz) return null;
+      if (!(await businessBelongsToTenant(biz.createdByUserId, ctx.tenantId))) return null;
       // Decrypt carrier credentials if present
       return {
         ...biz,
@@ -275,6 +297,19 @@ export const businessRouter = router({
   ensureWalkInParty: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      // Ownership: input.id is a businessId. On the shared self-hosted DB this
+      // handler must confirm the business belongs to the caller's tenant before
+      // reading or writing its parties — otherwise a foreign businessId would
+      // seed/leak a walk-in row in another tenant's business.
+      const [biz] = await ctx.db
+        .select({ createdByUserId: businesses.createdByUserId })
+        .from(businesses)
+        .where(eq(businesses.id, input.id))
+        .limit(1);
+      if (!biz || !(await businessBelongsToTenant(biz.createdByUserId, ctx.tenantId))) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+      }
+
       const [existing] = await ctx.db
         .select({ id: parties.id })
         .from(parties)

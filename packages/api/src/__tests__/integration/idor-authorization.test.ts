@@ -25,7 +25,7 @@
  *
  * COVERAGE MAP (checklist → tests):
  *   Bucket A — direct fetch by id:
- *     invoice.getById, party.getById, item.getById,
+ *     invoice.getById, party.getById, item.getById, business.getById,
  *     item.priceHistory, item.stockMovements, item.salesStats
  *   Bucket B — relational *Id (high priority):
  *     shipment.list(invoiceId), payment.list(invoiceId), party.ledger(partyId),
@@ -35,7 +35,7 @@
  *     invoice.update, invoice.updateStatus (markSent), invoice.delete,
  *     party.update, party.delete, item.update, item.delete,
  *     payment.create, payment.update, payment.delete,
- *     tenant.removeMember, tenant.updateMemberRole
+ *     business.ensureWalkInParty, tenant.removeMember, tenant.updateMemberRole
  *   Role-based authorization (Staff/Viewer attempting privileged actions):
  *     seller cannot delete invoice/party/item, cannot update item,
  *     cannot manage team membership.
@@ -186,6 +186,17 @@ describe("Bucket A — direct fetch by id is scoped to the caller's business", (
     const own = await callerB.item.salesStats({ id: world.item2.id });
     expect(own.saleInvoiceCount).toBeGreaterThan(0);
   });
+
+  it("business.getById: A cannot read B's business (and B can)", async () => {
+    // business.getById runs under tenantProcedure (no hasBusinessAccess), so the
+    // handler itself must confirm the business belongs to the caller's tenant —
+    // on the shared self-hosted DB the businesses.id WHERE alone would leak B's
+    // business (incl. decrypted carrier credentials).
+    expect(await callerA.business.getById({ id: world.business2.id })).toBeNull();
+    expect(await callerB.business.getById({ id: world.business1.id })).toBeNull(); // reverse direction
+    const own = await callerB.business.getById({ id: world.business2.id });
+    expect(own?.id).toBe(world.business2.id); // positive control
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,7 +301,7 @@ describe("Bucket C — mutations cannot tamper with another business's records",
   it("party.update: A cannot edit B's party", async () => {
     await expect(
       callerA.party.update({ id: world.party2.id, data: { name: "HACKED" } }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     const after = await callerB.party.getById({ id: world.party2.id });
     expect(after?.name).toBe("Shree Traders");
@@ -369,6 +380,18 @@ describe("Bucket C — mutations cannot tamper with another business's records",
 
     const list = await callerB.payment.list({ partyId: world.party2.id, page: 1, limit: 100 });
     expect(list.data.some((p) => p.id === victim.id)).toBe(true);
+  });
+
+  it("business.ensureWalkInParty: A cannot seed a walk-in party in B's business", async () => {
+    // input.id is a businessId; A must not be able to read or create a walk-in
+    // party inside B's business via the shared self-hosted DB.
+    await expect(
+      callerA.business.ensureWalkInParty({ id: world.business2.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // B can seed its own — positive control.
+    const own = await callerB.business.ensureWalkInParty({ id: world.business2.id });
+    expect(own.id).toBeDefined();
   });
 });
 
