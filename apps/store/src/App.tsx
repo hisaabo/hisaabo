@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import type { StoreConfig, CartItem, OrderResult } from "./types";
+import type { StoreConfig, CartItem, OrderResult, StoreItem } from "./types";
 import { cartItemKey } from "./types";
 import { fetchCatalog, assetUrl } from "./api";
 import { Header } from "./components/Header";
 import { ItemGrid } from "./components/ItemGrid";
+import { ItemDetail } from "./components/ItemDetail";
 import { Cart } from "./components/Cart";
 import { Checkout } from "./components/Checkout";
 import { PhoneVerify } from "./components/PhoneVerify";
@@ -113,6 +114,9 @@ export function App() {
 
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
+
+  // Item the customer is viewing in the detail modal (null = grid only).
+  const [detailItem, setDetailItem] = useState<StoreItem | null>(null);
 
   // Persist cart
   useEffect(() => {
@@ -364,6 +368,7 @@ export function App() {
               accentColor={catalog.business.accentColor}
               search={search}
               activeCategory={activeCategory}
+              onOpenDetail={setDetailItem}
             />
           </main>
 
@@ -502,6 +507,19 @@ export function App() {
             </span>
           </button>
         </div>
+      )}
+
+      {/* Item detail modal — full gallery + variant-aware images */}
+      {detailItem && (
+        <ItemDetail
+          item={detailItem}
+          cart={cart}
+          onAddToCart={addToCart}
+          onRemoveFromCart={removeFromCart}
+          currency={catalog.business.currency}
+          accentColor={catalog.business.accentColor}
+          onClose={() => setDetailItem(null)}
+        />
       )}
     </div>
   );
