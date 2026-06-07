@@ -1,4 +1,5 @@
 import type { StoreConfig, CartItem } from "../types";
+import { assetUrl } from "../api";
 
 interface HeaderProps {
   config: StoreConfig;
@@ -37,7 +38,7 @@ export function Header({
         <div className="flex items-start justify-between gap-4 mb-4">
           {business.logoUrl && (
             <img
-              src={business.logoUrl}
+              src={assetUrl(business.logoUrl)}
               alt={`${business.name} logo`}
               className="flex-shrink-0 rounded"
               style={{

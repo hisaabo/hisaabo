@@ -16,6 +16,11 @@ export default defineConfig({
       // Proxy API calls to the backend — store runs on its own subdomain,
       // so the slug is at the root: /<slug>/catalog.json (not /store/<slug>/...)
       // But the API endpoints still use /store/ prefix on the backend
+      // Store asset endpoints carry the /store prefix exactly as the catalog
+      // returns them (logo, item images). Forward untouched so
+      // <img src="/store/<slug>/..."> works in dev just like production. This
+      // must come before the slug-rooted rules so it wins for /store/* paths.
+      "^/store/": { target: "http://localhost:3000", changeOrigin: true },
       "^/[^/]+/catalog\\.json": { target: "http://localhost:3000", changeOrigin: true, rewrite: (path) => `/store${path}` },
       "^/[^/]+/order$": { target: "http://localhost:3000", changeOrigin: true, rewrite: (path) => `/store${path}` },
       "^/[^/]+/identify$": { target: "http://localhost:3000", changeOrigin: true, rewrite: (path) => `/store${path}` },
