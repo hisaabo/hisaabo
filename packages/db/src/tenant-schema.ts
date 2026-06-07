@@ -224,6 +224,51 @@ export const itemVariants = pgTable("item_variants", {
   index("item_variants_active_idx").on(t.itemId).where(sql`deleted_at IS NULL`),
 ]);
 
+// ── Item Images ────────────────────────────────────────────────
+// A gallery of photos per item. Unlike the business logo (stored inline as
+// bytea), item images live in the configured object-storage backend (local
+// disk or S3/R2) and only their metadata + storage key are kept here. A store
+// can have many items with many photos each, so keeping the bytes out of the
+// row keeps the table — and pg_dump — lean.
+//
+// Variant alignment: each image may optionally be tagged to a single variant
+// via `variantId`. A NULL tag means the image is shared across all variants
+// (the default gallery). On the storefront, selecting a variant filters the
+// gallery to that variant's images plus the shared ones.
+export const itemImages = pgTable("item_images", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Denormalized so the public store-image route can authorize ownership with
+  // one indexed lookup and a per-business image cap can be checked cheaply.
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  // Optional per-image variant tag. ON DELETE SET NULL: removing a variant
+  // must never destroy the photo — it simply reverts to a shared image.
+  variantId: uuid("variant_id").references(() => itemVariants.id, { onDelete: "set null" }),
+  // Key into the storage backend, e.g. "items/<itemId>/<uuid>". Bytes never
+  // touch the database.
+  storageKey: text("storage_key").notNull(),
+  mimeType: text("mime_type").notNull(), // image/png | image/jpeg | image/webp
+  width: integer("width"),
+  height: integer("height"),
+  sizeBytes: integer("size_bytes"),
+  alt: text("alt"), // accessibility + SEO description
+  sortOrder: integer("sort_order").default(0).notNull(),
+  // Exactly one image per item should carry the primary flag; it's the
+  // thumbnail shown on the catalog grid and used as the OG/share fallback.
+  // Enforced in application code (set-primary clears siblings) rather than a
+  // partial unique constraint, to keep reordering/cleanup simple.
+  isPrimary: boolean("is_primary").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [
+  index("item_images_item_idx").on(t.itemId),
+  index("item_images_variant_idx").on(t.variantId),
+  index("item_images_business_idx").on(t.businessId),
+  // Active-read hot path: gallery fetch for an item ordered by sortOrder.
+  index("item_images_active_idx").on(t.itemId, t.sortOrder).where(sql`deleted_at IS NULL`),
+]);
+
 // ── Invoices ───────────────────────────────────────────────────
 
 export const invoices = pgTable("invoices", {

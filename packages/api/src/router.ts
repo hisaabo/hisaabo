@@ -4,6 +4,7 @@ import { tenantRouter } from "./routers/tenant.js";
 import { businessRouter } from "./routers/business.js";
 import { partyRouter } from "./routers/party.js";
 import { itemRouter } from "./routers/item.js";
+import { itemImageRouter } from "./routers/item-image.js";
 import { invoiceRouter } from "./routers/invoice.js";
 import { paymentRouter } from "./routers/payment.js";
 import { expenseRouter } from "./routers/expense.js";
@@ -46,6 +47,7 @@ export const appRouter = router({
   business: businessRouter,
   party: partyRouter,
   item: itemRouter,
+  itemImage: itemImageRouter,
   invoice: invoiceRouter,
   payment: paymentRouter,
   expense: expenseRouter,

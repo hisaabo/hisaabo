@@ -18,7 +18,7 @@ import { appRouter } from "./router.js";
 import { createContext, getSessionIdFromRequest } from "./context.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -28,6 +28,7 @@ import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
+import { getStorage } from "./lib/storage/index.js";
 
 // ── Process crash handlers ────────────────────────────────────
 process.on("unhandledRejection", (reason) => {
@@ -663,6 +664,67 @@ app.get("/api/businesses/:id/logo", async (c) => {
   });
 });
 
+// GET /api/items/:itemId/images/:imageId — authenticated item-image bytes for
+// the admin app. Mirrors the business-logo route: session → tenant → business
+// access check. Bytes come from the configured object-storage backend; the
+// MIME type recorded in the DB is the authoritative Content-Type (it was
+// magic-byte validated at upload).
+app.get("/api/items/:itemId/images/:imageId", async (c) => {
+  const itemId = c.req.param("itemId");
+  const imageId = c.req.param("imageId");
+
+  const sessionId = getSessionIdFromRequest(c.req.raw);
+  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
+
+  const [sessionRow] = await controlDb
+    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
+    .limit(1);
+  if (!sessionRow || !sessionRow.tenantId) return c.json({ error: "Unauthorized" }, 401);
+
+  const [tenant] = await controlDb.select({ status: tenants.status })
+    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
+  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+
+  const db = await getTenantDb(sessionRow.tenantId);
+
+  const [row] = await db.select({
+    storageKey: itemImages.storageKey,
+    mimeType: itemImages.mimeType,
+    businessId: itemImages.businessId,
+    updatedAt: itemImages.updatedAt,
+  }).from(itemImages)
+    .where(and(
+      eq(itemImages.id, imageId),
+      eq(itemImages.itemId, itemId),
+      isNull(itemImages.deletedAt),
+    ))
+    .limit(1);
+  if (!row) return c.json({ error: "Image not found" }, 404);
+
+  const bizAccess = await verifyBusinessAccess(db, row.businessId, sessionRow.tenantId);
+  if (!bizAccess.ok) return c.json({ error: bizAccess.error }, 403);
+
+  const etag = `"${row.updatedAt?.getTime() ?? 0}"`;
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+  }
+
+  const bytes = await getStorage().get(row.storageKey);
+  if (!bytes) return c.json({ error: "Image not found" }, 404);
+
+  return new Response(new Uint8Array(bytes), {
+    status: 200,
+    headers: {
+      ...LOGO_SAFE_HEADERS,
+      "Content-Type": row.mimeType,
+      "Cache-Control": "private, max-age=300",
+      ETag: etag,
+    },
+  });
+});
+
 // ── Party Ledger PDF endpoint ─────────────────────────────────
 // GET /api/parties/:id/ledger.pdf?from=...&to=...
 app.get("/api/parties/:id/ledger.pdf", async (c) => {
@@ -962,6 +1024,60 @@ app.get("/store/:slug/logo", async (c) => {
   });
 });
 
+// GET /store/:slug/items/:itemId/images/:imageId — public item-image bytes for
+// the storefront. Gated to images of store-enabled, non-deleted items on a
+// store-enabled business (the slug already resolved an enabled store). Same
+// image-safe headers as the logo route; we only ever serve magic-byte-validated
+// PNG/JPEG/WebP bytes.
+app.get("/store/:slug/items/:itemId/images/:imageId", async (c) => {
+  const slug = c.req.param("slug");
+  const itemId = c.req.param("itemId");
+  const imageId = c.req.param("imageId");
+
+  if (!checkStoreIpRateLimit(getClientIp(c), "/store/item-image")) {
+    return c.json({ error: "Too many requests" }, 429);
+  }
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return c.json({ error: "Store not found" }, 404);
+
+  const db = await getStoreDb(resolved.tenantId);
+  const [row] = await db.select({
+    storageKey: itemImages.storageKey,
+    mimeType: itemImages.mimeType,
+    updatedAt: itemImages.updatedAt,
+  }).from(itemImages)
+    .innerJoin(items, eq(items.id, itemImages.itemId))
+    .where(and(
+      eq(itemImages.id, imageId),
+      eq(itemImages.itemId, itemId),
+      eq(items.businessId, resolved.businessId),
+      eq(items.storeEnabled, true),
+      isNull(items.deletedAt),
+      isNull(itemImages.deletedAt),
+    ))
+    .limit(1);
+
+  if (!row) return c.json({ error: "Image not found" }, 404);
+
+  const etag = `"${row.updatedAt?.getTime() ?? 0}"`;
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+  }
+
+  const bytes = await getStorage().get(row.storageKey);
+  if (!bytes) return c.json({ error: "Image not found" }, 404);
+
+  return new Response(new Uint8Array(bytes), {
+    status: 200,
+    headers: {
+      ...LOGO_SAFE_HEADERS,
+      "Content-Type": row.mimeType,
+      "Cache-Control": "public, max-age=3600",
+      ETag: etag,
+    },
+  });
+});
+
 // GET /store/:slug/catalog.json — public item catalog
 app.get("/store/:slug/catalog.json", async (c) => {
   const slug = c.req.param("slug");
@@ -1067,6 +1183,51 @@ app.get("/store/:slug/catalog.json", async (c) => {
     variantsByItem.set(v.itemId, arr);
   }
 
+  // Fetch the image gallery for every item on this page. Each image carries an
+  // optional variantId tag so the storefront can show variant-specific photos
+  // (NULL = shared across variants). Bytes are served lazily through the
+  // /store/:slug/items/.../images/:id route; here we emit only the URLs.
+  const pageItemIds = catalog.map((i) => i.id);
+  const imageRows = pageItemIds.length > 0
+    ? await db.select({
+        id: itemImages.id,
+        itemId: itemImages.itemId,
+        variantId: itemImages.variantId,
+        isPrimary: itemImages.isPrimary,
+        sortOrder: itemImages.sortOrder,
+        alt: itemImages.alt,
+        updatedAt: itemImages.updatedAt,
+      }).from(itemImages)
+        .where(and(
+          inArray(itemImages.itemId, pageItemIds),
+          isNull(itemImages.deletedAt),
+        ))
+        .orderBy(itemImages.sortOrder)
+    : [];
+
+  type StoreImage = {
+    id: string;
+    variantId: string | null;
+    isPrimary: boolean;
+    sortOrder: number;
+    alt: string | null;
+    url: string;
+  };
+  const imagesByItem = new Map<string, StoreImage[]>();
+  for (const img of imageRows) {
+    const arr = imagesByItem.get(img.itemId) || [];
+    arr.push({
+      id: img.id,
+      variantId: img.variantId,
+      isPrimary: img.isPrimary,
+      sortOrder: img.sortOrder,
+      alt: img.alt,
+      // Cache-busted on the image's own updatedAt so re-tag/reorder refreshes.
+      url: `/store/${slug}/items/${img.itemId}/images/${img.id}?v=${img.updatedAt?.getTime() ?? 0}`,
+    });
+    imagesByItem.set(img.itemId, arr);
+  }
+
   const categories = [...new Set(
     catalog.map((i) => i.category).filter(Boolean) as string[]
   )];
@@ -1083,10 +1244,15 @@ app.get("/store/:slug/catalog.json", async (c) => {
       return true;
     })
     .map(({ stockQty: _stockQty, unitVariants: rawUnitVariants, variantAttributes: rawVarAttrs, ...rest }) => {
+      const images = imagesByItem.get(rest.id) ?? [];
+      const primary = images.find((im) => im.isPrimary) ?? images[0];
       const base = {
         ...rest,
         inStock: rest.inStock || allowNeg,
         lowStock: allowNeg && !rest.inStock,
+        images,
+        // Convenience thumbnail for the catalog grid + share/OG fallback.
+        primaryImageUrl: primary?.url ?? null,
       };
 
       if (rest.itemMode === "alt_units" && rawUnitVariants) {
