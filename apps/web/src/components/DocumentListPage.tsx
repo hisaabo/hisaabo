@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -467,7 +467,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                             <p className="text-[11px] italic text-text-secondary mt-0.5">{li.description}</p>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatQuantity(li.quantity)}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
                         <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(li.totalAmount)}</td>

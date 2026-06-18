@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
@@ -1183,7 +1183,7 @@ function TemplateDetailSlideOver({
                               </p>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatQuantity(li.quantity)}</td>
                           <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
                           <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
                           <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(total.toFixed(2))}</td>

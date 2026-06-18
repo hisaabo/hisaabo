@@ -11,7 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDate } from "../../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
@@ -199,7 +199,7 @@ export default function DeliveryChallanDetailScreen() {
                       <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
                     )}
                     <Text style={styles.lineItemMeta}>
-                      {li.quantity} x {formatCurrency(li.unitPrice)}
+                      {formatQuantity(li.quantity)} x {formatCurrency(li.unitPrice)}
                       {parseFloat(li.taxPercent ?? "0") > 0 ? ` + ${li.taxPercent}% GST` : ""}
                     </Text>
                   </View>
