@@ -19,6 +19,7 @@ import {
   formatDateInput,
   formatDateShort,
   formatMonthYearShort,
+  formatQuantity,
   getDocumentTypeLabel,
   getDocumentTypeColor,
   downloadCSV,
@@ -26,6 +27,37 @@ import {
   toISOStringEndOfDay,
   todayISODate,
 } from "@/lib/utils";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// formatQuantity() — dynamic line-item quantity display
+// ─────────────────────────────────────────────────────────────────────────────
+describe("formatQuantity() — dynamic line-item quantity", () => {
+  /**
+   * Quantities are stored as fixed-precision strings ("2.000") but every
+   * invoice/list/cart surface renders them through this helper, which is
+   * re-exported from @hisaabo/shared so web, mobile and the PDF layer agree.
+   * Whole numbers must lose their decimals and fractional values must trim
+   * trailing zeros (up to 3 places) — otherwise the UI shows "2.000 kg".
+   */
+
+  it("drops decimals for whole numbers", () => {
+    expect(formatQuantity("2.000")).toBe("2");
+    expect(formatQuantity("2")).toBe("2");
+  });
+
+  it("trims trailing zeros and keeps up to three decimals", () => {
+    expect(formatQuantity("2.500")).toBe("2.5");
+    expect(formatQuantity("0.125")).toBe("0.125");
+  });
+
+  it("rounds beyond three decimals to three", () => {
+    expect(formatQuantity("2.1256")).toBe("2.126");
+  });
+
+  it("falls back to '0' for malformed input", () => {
+    expect(formatQuantity("abc")).toBe("0");
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // cn() — Tailwind class name merger

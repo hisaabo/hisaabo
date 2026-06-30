@@ -1,5 +1,11 @@
 import dayjs from "dayjs";
 
+// Dynamic quantity formatting (no trailing zeros, up to 3 decimals) lives in
+// @hisaabo/shared so web, mobile and the PDF layer format quantities
+// identically. Re-exported here so call sites pull it from the same module as
+// formatCurrency / formatDate.
+export { formatQuantity } from "@hisaabo/shared";
+
 export function formatCurrency(amount: string | number, currency = "INR"): string {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;
   return new Intl.NumberFormat("en-IN", {
