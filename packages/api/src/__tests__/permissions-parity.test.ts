@@ -5,8 +5,6 @@ import {
   mapDbRole as mapSharedDbRole,
   ALL_ACTIONS,
   ALL_RESOURCES,
-  type Action,
-  type Resource,
 } from "@hisaabo/shared";
 
 // The API enforces permissions via CASL (server-side authority). The shared
