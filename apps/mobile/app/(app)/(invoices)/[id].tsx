@@ -821,8 +821,11 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
-        {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered) */}
-        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+        {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered).
+            Drafts are intentionally allowed: receiving a payment auto-promotes the invoice
+            to partial/paid status (see payment.create in packages/api), so the user no
+            longer needs to "Mark as Sent" first. */}
+        {balance > 0 && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={[styles.actionBtn, { borderColor: colors.success + "60" }]}

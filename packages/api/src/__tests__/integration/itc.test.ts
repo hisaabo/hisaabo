@@ -779,6 +779,22 @@ describe("GSTR-3B Table 4", () => {
 
   it("populates Table 4 with correct ITC breakdown", async () => {
     const caller = callerForRamesh();
+    const db = getTenantTestDb();
+    const t4Period = `${T4_YEAR}-${String(T4_MONTH).padStart(2, "0")}`;
+
+    // Defensive isolation against calendar drift: the "ITC dashboard > defaults
+    // to current period" test above creates a purchase invoice with no
+    // invoiceDate, so its auto-generated ITC entry lands in the calendar month
+    // CI is running in. When that month happens to equal T4_MONTH, the stray
+    // entry pollutes the 4A5 ("all other") bucket and breaks the assertion
+    // below. Strip any pre-existing ITC entries for this period so the test
+    // only sees the rows it seeds itself.
+    await db.delete(itcLedgerEntries).where(
+      and(
+        eq(itcLedgerEntries.businessId, world.business1.id),
+        eq(itcLedgerEntries.returnPeriod, t4Period),
+      ),
+    );
 
     // 1. Normal purchase invoice -> 4A5 (all other ITC)
     // 10 x 500 = 5,000 subtotal, 18% tax = 900

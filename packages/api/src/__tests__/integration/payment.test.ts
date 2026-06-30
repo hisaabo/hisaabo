@@ -22,8 +22,10 @@
  *   - Multi-invoice allocation: payment.create accepts `allocations[]`. Each
  *     allocation is guarded by the overpayment check independently.
  *   - Bank transactions: deposit for sale invoices, withdrawal for purchase.
- *   - payment.unpaidInvoices excludes status IN ('paid', 'cancelled', 'draft').
- *     The query uses notInArray — "unfulfilled", "sent", "partial" are returned.
+ *   - payment.unpaidInvoices excludes status IN ('paid', 'cancelled'). Drafts
+ *     are intentionally INCLUDED so a user can record a payment directly from
+ *     a draft invoice — the atomic UPDATE in payment.create transitions the
+ *     invoice to partial/paid as the balance is allocated.
  *
  * RUNNING:
  *   pnpm --filter @hisaabo/api test -- --testPathPattern integration
@@ -134,6 +136,68 @@ describe("payment.create", () => {
 
     expect(inv!.amountPaid).toBe("500.00");
     expect(inv!.status).toBe("partial");
+  });
+
+  it("recording a partial payment on a DRAFT invoice transitions it to partial — no Mark-as-Sent required", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    // Create the invoice but DO NOT call invoice.updateStatus — status stays "draft".
+    const draftInvoice = await caller.invoice.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        { itemName: "Draft pay item", quantity: "1", unitPrice: "600.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+      ],
+    });
+
+    const [before] = await db.select({ status: invoices.status })
+      .from(invoices)
+      .where(eq(invoices.id, draftInvoice.id));
+    expect(before!.status).toBe("draft");
+
+    await caller.payment.create({
+      partyId: world.party1.id,
+      invoiceId: draftInvoice.id,
+      amount: "250.00",
+      mode: "cash",
+    });
+
+    const [after] = await db.select({ amountPaid: invoices.amountPaid, status: invoices.status })
+      .from(invoices)
+      .where(eq(invoices.id, draftInvoice.id));
+
+    expect(after!.amountPaid).toBe("250.00");
+    expect(after!.status).toBe("partial");
+  });
+
+  it("recording a full payment on a DRAFT invoice transitions it directly to paid", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+
+    const draftInvoice = await caller.invoice.create({
+      partyId: world.party1.id,
+      type: "sale" as const,
+      invoiceDate: new Date().toISOString(),
+      lineItems: [
+        { itemName: "Draft full pay item", quantity: "1", unitPrice: "400.00", taxPercent: "0", discountPercent: "0", conversionFactor: null, variantId: null },
+      ],
+    });
+
+    await caller.payment.create({
+      partyId: world.party1.id,
+      invoiceId: draftInvoice.id,
+      amount: "400.00",
+      mode: "cash",
+    });
+
+    const [after] = await db.select({ amountPaid: invoices.amountPaid, status: invoices.status })
+      .from(invoices)
+      .where(eq(invoices.id, draftInvoice.id));
+
+    expect(after!.amountPaid).toBe("400.00");
+    expect(after!.status).toBe("paid");
   });
 
   it("transitions invoice to paid when payment fully covers totalAmount", async () => {
@@ -672,7 +736,7 @@ describe("payment.delete", () => {
 // =============================================================================
 
 describe("payment.unpaidInvoices", () => {
-  it("returns only invoices with outstanding balance — excludes paid, cancelled, draft", async () => {
+  it("returns invoices with outstanding balance (including drafts) — excludes only paid and cancelled", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();
 
@@ -682,7 +746,8 @@ describe("payment.unpaidInvoices", () => {
       type: "customer",
     });
 
-    // Draft invoice (should be excluded)
+    // Draft invoice — INCLUDED. Drafts are payable directly; the user no
+    // longer needs to "Mark as Sent" before recording a payment.
     const draftInv = await caller.invoice.create({
       partyId: testParty.id,
       type: "sale" as const,
@@ -753,14 +818,20 @@ describe("payment.unpaidInvoices", () => {
 
     const unpaidIds = unpaid.map((i) => i.id);
 
-    // Sent and partial must appear
+    // Draft, sent and partial must appear
+    expect(unpaidIds).toContain(draftInv.id);
     expect(unpaidIds).toContain(sentInv.id);
     expect(unpaidIds).toContain(partialInv.id);
 
-    // Draft, paid, cancelled must NOT appear
-    expect(unpaidIds).not.toContain(draftInv.id);
+    // Paid and cancelled must NOT appear
     expect(unpaidIds).not.toContain(paidInv.id);
     expect(unpaidIds).not.toContain(cancelledInv.id);
+
+    // The draft invoice still has full balance — totalAmount - amountPaid
+    const draftRow = unpaid.find((i) => i.id === draftInv.id);
+    expect(draftRow).toBeDefined();
+    expect(draftRow!.status).toBe("draft");
+    expect(draftRow!.balance).toBe("100.00");
   });
 
   it("each returned invoice has a computed balance = totalAmount - amountPaid", async () => {
