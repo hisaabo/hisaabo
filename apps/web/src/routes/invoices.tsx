@@ -24,6 +24,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan, useCanModify } from "@/hooks/useCan";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
@@ -526,6 +527,11 @@ function InvoiceDetailPanel({
 
   const isDraftLike = invoice?.status === "draft" || invoice?.status === "unfulfilled";
 
+  // Edit affordance respects both role permission AND the 2-hour seller window.
+  // The API enforces both; we surface them so sellers see the disabled state
+  // and tooltip immediately rather than discovering it on submit.
+  const editAffordance = useCanModify("update", "Invoice", invoice ? { createdAt: invoice.createdAt as any } : undefined);
+
   return (
     <SlideOver
       open={!!invoiceId}
@@ -536,13 +542,23 @@ function InvoiceDetailPanel({
         invoice ? (
           <div className="flex items-center justify-between gap-3">
             <div className="flex gap-2">
-              {invoice.status !== "paid" && (
+              {invoice.status !== "paid" && editAffordance.allowed && (
                 <button
                   onClick={() => {
                     onClose();
                     onEdit(invoice.id, invoice.type as "sale" | "purchase");
                   }}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+                >
+                  Edit
+                </button>
+              )}
+              {invoice.status !== "paid" && !editAffordance.allowed && editAffordance.reason === "window-expired" && (
+                <button
+                  type="button"
+                  disabled
+                  title="The 2-hour edit window for this invoice has expired"
+                  className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-tertiary border border-border-light opacity-60 cursor-not-allowed"
                 >
                   Edit
                 </button>
@@ -884,6 +900,8 @@ function InvoicesPage() {
   const [srSource, setSrSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
+  const canCreate = useCan("create", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
 
   // Open the invoice detail panel when navigated here with ?id=<invoiceId>
   // or open the create slider when navigated here with ?create=1 (used by
@@ -1029,6 +1047,7 @@ function InvoicesPage() {
                 Switch to POS
               </a>
             )}
+            {canCreate && (
             <button
               className="btn-primary inline-flex items-center gap-2"
               onClick={() => setShowCreate(true)}
@@ -1036,6 +1055,7 @@ function InvoicesPage() {
               + New Invoice
               <KbdShortcut keys={["N"]} className="opacity-60" />
             </button>
+            )}
           </div>
         }
       />
@@ -1097,12 +1117,14 @@ function InvoicesPage() {
           description={`No ${type === "sale" ? "sales" : "purchase"} invoices${status ? ` with status "${status}"` : ""}.`}
           encouragement={!search && !status ? "Create your first invoice — it only takes a minute." : undefined}
           action={
-            <button
-              className="btn-primary"
-              onClick={() => setShowCreate(true)}
-            >
-              + New Invoice
-            </button>
+            canCreate ? (
+              <button
+                className="btn-primary"
+                onClick={() => setShowCreate(true)}
+              >
+                + New Invoice
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -1218,7 +1240,7 @@ function InvoicesPage() {
                                   </svg>
                                 </button>
                               )}
-                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
+                            {canDelete && (inv.status === "draft" || inv.status === "unfulfilled") && (
                               <button
                                 onClick={() =>
                                   confirmDelete(inv.id, inv.invoiceNumber)

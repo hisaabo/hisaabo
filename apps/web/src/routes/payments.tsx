@@ -9,6 +9,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -266,6 +267,8 @@ function PaymentsPage() {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("payments", "this-month");
+  const canCreate = useCan("create", "Payment");
+  const canDelete = useCan("delete", "Payment");
 
   // Open the payment detail panel when navigated here with ?id=<paymentId>
   const { id: idFromSearch } = useSearch({ from: "/payments" });
@@ -366,13 +369,15 @@ function PaymentsPage() {
         title="Payments"
         description="Track money in and out"
         actions={
-          <button
-            className="btn-primary"
-            onClick={() => setShowPanel(true)}
-          >
-            + Record Payment
-            <KbdShortcut keys={["N"]} className="ml-2 opacity-70" />
-          </button>
+          canCreate ? (
+            <button
+              className="btn-primary"
+              onClick={() => setShowPanel(true)}
+            >
+              + Record Payment
+              <KbdShortcut keys={["N"]} className="ml-2 opacity-70" />
+            </button>
+          ) : null
         }
       />
 
@@ -457,6 +462,7 @@ function PaymentsPage() {
                         >
                           Edit
                         </button>
+                        {canDelete && (
                         <button
                           className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                           onClick={() => deleteConfirm.requestDelete(p.id, p.paymentNumber || p.partyName)}
@@ -477,6 +483,7 @@ function PaymentsPage() {
                             />
                           </svg>
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>

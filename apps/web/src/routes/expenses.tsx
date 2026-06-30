@@ -19,6 +19,7 @@ import { DeleteConfirmDialog } from "@/components/ui/DeleteConfirmDialog";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 
 export const Route = createFileRoute("/expenses")({
   component: ExpensesPage,
@@ -80,6 +81,9 @@ function ExpensesPage() {
   const [form, setForm] = useState<ExpenseFormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof ExpenseFormState, string>>>({});
   const [exporting, setExporting] = useState(false);
+  const canCreate = useCan("create", "Expense");
+  const canUpdate = useCan("update", "Expense");
+  const canDelete = useCan("delete", "Expense");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -265,9 +269,11 @@ function ExpensesPage() {
         title="Expenses"
         description="Track business expenses and outflows"
         actions={
-          <button className="btn-primary" onClick={openAdd}>
-            + New Expense
-          </button>
+          canCreate ? (
+            <button className="btn-primary" onClick={openAdd}>
+              + New Expense
+            </button>
+          ) : null
         }
       />
 
@@ -360,6 +366,7 @@ function ExpensesPage() {
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {canUpdate && (
                           <button
                             onClick={() => openEdit(exp)}
                             className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors"
@@ -369,6 +376,8 @@ function ExpensesPage() {
                               <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
                           </button>
+                          )}
+                          {canDelete && (
                           <button
                             onClick={() => deleteConfirm.requestDelete(exp.id, exp.description || exp.category)}
                             className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
@@ -378,6 +387,7 @@ function ExpensesPage() {
                               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
+                          )}
                         </div>
                       </td>
                     </tr>

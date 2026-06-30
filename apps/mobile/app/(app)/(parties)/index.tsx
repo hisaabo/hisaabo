@@ -15,6 +15,7 @@ import { formatCurrency } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 type PartyType = "customer" | "supplier";
 
@@ -28,6 +29,7 @@ export default function PartiesScreen() {
   const [page, setPage] = useState(1);
   const [allParties, setAllParties] = useState<NonNullable<typeof data>["data"]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const canCreate = useCan("create", "Party");
 
   const { data, isLoading, isFetching, refetch } =
     trpc.party.list.useQuery(
@@ -228,7 +230,7 @@ export default function PartiesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(app)/(parties)/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(app)/(parties)/create" as never)} />}
     </SafeAreaView>
   );
 }

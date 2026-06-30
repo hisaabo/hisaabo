@@ -22,6 +22,7 @@ import {
   EmptyState,
   QueryError,
 } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 type InvoiceType = "sale" | "purchase";
 type StatusFilter = "all" | "unpaid" | "draft" | "sent" | "partial" | "overdue" | "paid" | "cancelled";
@@ -52,6 +53,7 @@ export default function InvoicesScreen() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [allInvoices, setAllInvoices] = useState<NonNullable<typeof data>["data"]>([]);
+  const canCreate = useCan("create", "Invoice");
 
   // Sync route params to state when navigating from other screens (e.g. home dashboard)
   useEffect(() => {
@@ -237,7 +239,7 @@ export default function InvoicesScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      <FAB onPress={() => router.push("/(invoices)/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(invoices)/create" as never)} />}
     </SafeAreaView>
   );
 }

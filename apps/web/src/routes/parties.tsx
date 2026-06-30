@@ -7,6 +7,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 import type { PartyType } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -54,6 +55,8 @@ function PartiesPage() {
   const deleteConfirm = useDeleteConfirmation();
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const canCreate = useCan("create", "Party");
+  const canDelete = useCan("delete", "Party");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -141,13 +144,15 @@ function PartiesPage() {
         title="Parties"
         description="Manage your customers and suppliers"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowAddModal(true)}
-          >
-            + Add Party
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          canCreate ? (
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowAddModal(true)}
+            >
+              + Add Party
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          ) : null
         }
       />
 
@@ -203,9 +208,11 @@ function PartiesPage() {
           description="Add your first customer or supplier to get started."
           encouragement="No customers yet? Add your first customer to create an invoice."
           action={
-            <button className="btn-primary" onClick={() => setShowAddModal(true)}>
-              + Add Party
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowAddModal(true)}>
+                + Add Party
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -259,6 +266,7 @@ function PartiesPage() {
                       : "—"}
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                    {canDelete && (
                     <button
                       className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                       onClick={() => confirmDelete(party.id, party.name)}
@@ -279,6 +287,7 @@ function PartiesPage() {
                         />
                       </svg>
                     </button>
+                    )}
                   </td>
                 </tr>
               ))}

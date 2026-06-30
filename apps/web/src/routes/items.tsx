@@ -7,6 +7,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 import type { ItemType, ItemMode } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -121,6 +122,8 @@ function ItemsPage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const canCreate = useCan("create", "Item");
+  const canDelete = useCan("delete", "Item");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -270,13 +273,15 @@ function ItemsPage() {
         title="Items"
         description="Products and services inventory"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowAddModal(true)}
-          >
-            + Add Item
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          canCreate ? (
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowAddModal(true)}
+            >
+              + Add Item
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          ) : null
         }
       />
 
@@ -351,9 +356,11 @@ function ItemsPage() {
           description="Add products or services to start creating invoices."
           encouragement="Your inventory is empty. Add your first product to start billing."
           action={
-            <button className="btn-primary" onClick={() => setShowAddModal(true)}>
-              + Add Item
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowAddModal(true)}>
+                + Add Item
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -416,6 +423,7 @@ function ItemsPage() {
                     </td>
                     <td className="text-text-secondary text-xs">{item.unit}</td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                      {canDelete && (
                       <button
                         className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                         onClick={() => deleteConfirm.requestDelete(item.id, item.name)}
@@ -436,6 +444,7 @@ function ItemsPage() {
                           />
                         </svg>
                       </button>
+                      )}
                     </td>
                   </tr>
                 );

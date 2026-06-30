@@ -20,6 +20,7 @@ import { accumulatePages } from "../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../src/components/ui";
+import { useCan } from "../../../src/hooks/useCan";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -133,6 +134,7 @@ export default function PaymentsScreen() {
   const [page, setPage] = useState(1);
   const [allPayments, setAllPayments] = useState<NonNullable<typeof data>["data"]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const canCreate = useCan("create", "Payment");
 
   const { data, isLoading, isFetching, refetch } = trpc.payment.list.useQuery(
     {
@@ -255,7 +257,7 @@ export default function PaymentsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(payments)/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(payments)/create" as never)} />}
     </SafeAreaView>
   );
 }

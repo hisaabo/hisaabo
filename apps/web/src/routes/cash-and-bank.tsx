@@ -19,6 +19,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "@/hooks/useToast";
 import { getDatePreset } from "@/hooks/useDateRange";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
+import { useCan } from "@/hooks/useCan";
 
 export const Route = createFileRoute("/cash-and-bank")({
   component: CashAndBankPage,
@@ -32,6 +33,8 @@ function CashAndBankPage() {
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const canCreateAccount = useCan("create", "BankAccount");
+  const canCreateTxn = useCan("create", "BankTransaction");
   const [selectedUntracked, setSelectedUntracked] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false); // true = all across ALL pages
   const [assignAccountId, setAssignAccountId] = useState<string | null>(null);
@@ -247,12 +250,16 @@ function CashAndBankPage() {
         description="Manage your bank accounts and track transactions"
         actions={
           <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setShowTransfer(true)}>
-              Transfer
-            </button>
-            <button className="btn-primary" onClick={() => setShowAddAccount(true)}>
-              + Add Account
-            </button>
+            {canCreateTxn && (
+              <button className="btn-secondary" onClick={() => setShowTransfer(true)}>
+                Transfer
+              </button>
+            )}
+            {canCreateAccount && (
+              <button className="btn-primary" onClick={() => setShowAddAccount(true)}>
+                + Add Account
+              </button>
+            )}
           </div>
         }
       />
@@ -286,12 +293,14 @@ function CashAndBankPage() {
               className="px-4 py-3 flex items-center justify-between border-b border-border-light"
             >
               <h3 className="text-sm font-semibold text-text-primary">Accounts</h3>
-              <button
-                className="btn-ghost text-xs"
-                onClick={() => setShowAddAccount(true)}
-              >
-                + Add
-              </button>
+              {canCreateAccount && (
+                <button
+                  className="btn-ghost text-xs"
+                  onClick={() => setShowAddAccount(true)}
+                >
+                  + Add
+                </button>
+              )}
             </div>
 
             {isLoading ? (
