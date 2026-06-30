@@ -22,7 +22,7 @@ import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, pa
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
-import { logger } from "./lib/logger.js";
+import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
@@ -181,6 +181,7 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
   } else if (entry.count >= limit) {
     c.header("Retry-After", "60");
+    logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: tier });
     return c.json({ error: "Too many requests" }, 429);
   } else {
     entry.count++;
@@ -233,7 +234,12 @@ setInterval(() => {
 // narrow this exemption to an explicit allow-list of paths BEFORE
 // merging — leaving the blanket `/store/` skip in place would expose
 // that new endpoint to CSRF.
-app.use("*", createCsrfMiddleware({ skipPathPrefixes: ["/api/trpc/", "/store/"] }));
+app.use("*", createCsrfMiddleware({
+  skipPathPrefixes: ["/api/trpc/", "/store/"],
+  onReject: (kind, c) => {
+    logSecurityEvent(kind, { ip: getClientIp(c), path: c.req.path });
+  },
+}));
 
 // ── Health check ───────────────────────────────────────────────
 // ── UPI payment redirect ──────────────────────────────────────
@@ -437,7 +443,9 @@ setInterval(() => {
 
 // ── PDF Download endpoint ──────────────────────────────────────
 app.get("/api/invoices/:id/pdf", async (c) => {
-  if (!checkPdfRateLimit(getClientIp(c))) {
+  const pdfIp = getClientIp(c);
+  if (!checkPdfRateLimit(pdfIp)) {
+    logSecurityEvent("rate_limit_pdf", { ip: pdfIp, path: c.req.path });
     return c.json({ error: "Too many PDF requests. Try again later." }, 429);
   }
 
@@ -666,7 +674,9 @@ app.get("/api/businesses/:id/logo", async (c) => {
 // ── Party Ledger PDF endpoint ─────────────────────────────────
 // GET /api/parties/:id/ledger.pdf?from=...&to=...
 app.get("/api/parties/:id/ledger.pdf", async (c) => {
-  if (!checkPdfRateLimit(getClientIp(c))) {
+  const pdfIp = getClientIp(c);
+  if (!checkPdfRateLimit(pdfIp)) {
+    logSecurityEvent("rate_limit_pdf", { ip: pdfIp, path: c.req.path });
     return c.json({ error: "Too many PDF requests. Try again later." }, 429);
   }
 
@@ -920,7 +930,9 @@ async function getStoreDb(tenantId: string) {
 // were magic-byte validated at upload time — PNG or JPEG, never SVG.
 app.get("/store/:slug/logo", async (c) => {
   const slug = c.req.param("slug");
-  if (!checkStoreIpRateLimit(getClientIp(c), "/store/logo")) {
+  const storeIp = getClientIp(c);
+  if (!checkStoreIpRateLimit(storeIp, "/store/logo")) {
+    logSecurityEvent("rate_limit_store", { ip: storeIp, path: c.req.path });
     return c.json({ error: "Too many requests" }, 429);
   }
   const resolved = await resolveStoreSlug(slug);
@@ -1169,6 +1181,7 @@ app.post("/store/:slug/identify", async (c) => {
   // lookup so abusive traffic can't exhaust those resources.
   const ip = getClientIp(c);
   if (!checkStoreIpRateLimit(ip, "/store/identify")) {
+    logSecurityEvent("rate_limit_store_post", { ip, path: c.req.path });
     return c.json({ error: "Too many requests. Please wait a moment." }, 429);
   }
 
@@ -1176,6 +1189,7 @@ app.post("/store/:slug/identify", async (c) => {
   // exemption. See `lib/store-origin.ts` for the residual-risk notes.
   const originCheck = assertAllowedStoreOrigin(c, ip);
   if (!originCheck.ok) {
+    logSecurityEvent("origin_block", { ip, path: c.req.path });
     return c.json({ error: "Origin not allowed" }, 403);
   }
 
@@ -1235,6 +1249,7 @@ app.post("/store/:slug/order", async (c) => {
   // resources. This is orthogonal to the per-phone 5/min cap below.
   const clientIp = getClientIp(c);
   if (!checkStoreIpRateLimit(clientIp, "/store/order")) {
+    logSecurityEvent("rate_limit_store_post", { ip: clientIp, path: c.req.path });
     return c.json({ error: "Too many requests. Please wait a moment." }, 429);
   }
 
@@ -1242,6 +1257,7 @@ app.post("/store/:slug/order", async (c) => {
   // exemption. See `lib/store-origin.ts` for the residual-risk notes.
   const originCheck = assertAllowedStoreOrigin(c, clientIp);
   if (!originCheck.ok) {
+    logSecurityEvent("origin_block", { ip: clientIp, path: c.req.path });
     return c.json({ error: "Origin not allowed" }, 403);
   }
 
@@ -1308,6 +1324,7 @@ app.post("/store/:slug/order", async (c) => {
   if (!rateEntry || now > rateEntry.reset) {
     orderRateMap.set(rateKey, { count: 1, reset: now + 60_000 });
   } else if (rateEntry.count >= 5) {
+    logSecurityEvent("rate_limit_order", { ip: clientIp, path: c.req.path, reason: "phone" });
     return c.json({ error: "Too many orders. Please wait a moment before trying again." }, 429);
   } else {
     rateEntry.count++;

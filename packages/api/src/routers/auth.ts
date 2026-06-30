@@ -11,6 +11,7 @@ import { emailService } from "../lib/email.js";
 import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions } from "../context.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
+import { logSecurityEvent } from "../lib/logger.js";
 
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -415,8 +416,10 @@ export const authRouter = router({
   login: publicProcedure.input(loginSchema).mutation(async ({ input, ctx }) => {
     // Per-email rate limiting: block after too many failed attempts
     const emailKey = input.email.toLowerCase();
+    const loginIp = getClientIpFromRequest(ctx.req);
     const attempts = failedLoginAttempts.get(emailKey);
     if (attempts && attempts.count >= LOGIN_MAX_ATTEMPTS && Date.now() - attempts.firstAttempt < LOGIN_WINDOW_MS) {
+      logSecurityEvent("login_lockout", { ip: loginIp, reason: "email_threshold" });
       throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many failed login attempts. Please try again later." });
     }
 
@@ -430,6 +433,7 @@ export const authRouter = router({
       const prev = failedLoginAttempts.get(emailKey);
       if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
       else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
+      logSecurityEvent("login_fail", { ip: loginIp, reason: "no_user" });
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
 
@@ -437,6 +441,7 @@ export const authRouter = router({
       const prev = failedLoginAttempts.get(emailKey);
       if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
       else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
+      logSecurityEvent("login_fail", { ip: loginIp, reason: "no_password" });
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
 
@@ -445,6 +450,7 @@ export const authRouter = router({
       const prev = failedLoginAttempts.get(emailKey);
       if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
       else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
+      logSecurityEvent("login_fail", { ip: loginIp, reason: "bad_password" });
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
     }
 

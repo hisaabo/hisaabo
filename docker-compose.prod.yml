@@ -1,6 +1,23 @@
 # Usage:
 #   cp .env.prod.example .env.prod   # fill in your values
 #   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+#
+# Logging:
+#   All services ship their stdout/stderr to systemd-journald via the
+#   `journald` Docker driver. journald applies its own rotation (configure
+#   /etc/systemd/journald.conf — SystemMaxUse=, SystemMaxFileSize=,
+#   MaxRetentionSec=) so logs cannot fill the disk and historical entries
+#   are kept until the retention window expires.
+#
+#   The `tag` option labels each line with CONTAINER_TAG=... so fail2ban
+#   (and `journalctl -t hisaabo-api`) can filter by service. See
+#   docs/fail2ban/README.md for the host-side install steps.
+#
+#   Host must be running systemd (Debian/Ubuntu/RHEL/etc. default — true).
+#   If your host has no systemd, replace each `logging:` block with:
+#       driver: json-file
+#       options: { max-size: "10m", max-file: "5", compress: "true" }
+#   That gives the same disk-cap protection minus the journald features.
 
 services:
   api:
@@ -23,6 +40,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging:
+      driver: journald
+      options:
+        tag: "hisaabo-api"
 
   postgres:
     image: postgres:16-alpine
@@ -35,6 +56,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: journald
+      options:
+        tag: "hisaabo-postgres"
 
   backup:
     build:
@@ -59,6 +84,10 @@ services:
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
     volumes:
       - backup_data:/var/backups/hisaabo
+    logging:
+      driver: journald
+      options:
+        tag: "hisaabo-backup"
 
 volumes:
   pgdata:

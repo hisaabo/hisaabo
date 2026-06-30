@@ -15,7 +15,7 @@
  * side effects — so they run in a few ms and can gate every push.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import { createCsrfMiddleware, isOriginAllowedForBearer, CSRF_TAURI_ORIGINS } from "../lib/csrf-middleware.js";
 
@@ -460,5 +460,184 @@ describe("SECURITY — CSRF middleware Bearer-auth Origin allowlist (P1 #7 defen
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe("CSRF validation failed");
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// onReject callback — fail2ban integration hook
+// ─────────────────────────────────────────────────────────────────────────────
+describe("CSRF middleware — onReject callback (fail2ban integration)", () => {
+  /**
+   * WHY THIS BLOCK EXISTS:
+   * server.ts wires onReject to logSecurityEvent so fail2ban can ban
+   * IPs that repeatedly trip CSRF or origin rejection. The middleware
+   * must NOT call onReject on the allowed paths, and must call it
+   * with the right kind on each rejection branch. The test asserts the
+   * contract without depending on the logger module — we pass a vi.fn().
+   */
+  it("calls onReject(\"csrf_fail\", c) when a cookie-authed POST is missing the X-Requested-With header — fail2ban needs the IP from c at this exact moment", async () => {
+    const onReject = vi.fn();
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: [],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        onReject,
+      }),
+    );
+    app.all("/api/store/order", (c) => c.json({ ok: true }));
+
+    await app.request("/api/store/order", {
+      method: "POST",
+      headers: {
+        "cookie": "session_id=real-browser-session",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(onReject).toHaveBeenCalledTimes(1);
+    expect(onReject.mock.calls[0][0]).toBe("csrf_fail");
+    // Second argument is the Hono Context — narrow check, just confirm it carries the path.
+    expect((onReject.mock.calls[0][1] as { req: { path: string } }).req.path).toBe("/api/store/order");
+  });
+
+  it("calls onReject(\"origin_block\", c) when a Bearer request comes from a non-allowlisted Origin — distinct event type so the operator can tune fail2ban thresholds separately", async () => {
+    const onReject = vi.fn();
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: [],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        onReject,
+      }),
+    );
+    app.all("/api/store/order", (c) => c.json({ ok: true }));
+
+    await app.request("/api/store/order", {
+      method: "POST",
+      headers: {
+        "authorization": "Bearer stolen-token",
+        "origin": "https://evil.com",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(onReject).toHaveBeenCalledTimes(1);
+    expect(onReject.mock.calls[0][0]).toBe("origin_block");
+  });
+
+  it("does NOT call onReject when the request is allowed — mobile Bearer POST with no Origin (the highest-traffic path) must not generate spurious fail2ban events", async () => {
+    const onReject = vi.fn();
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: [],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        onReject,
+      }),
+    );
+    app.all("/api/store/order", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/api/store/order", {
+      method: "POST",
+      headers: {
+        "authorization": "Bearer mobile-token",
+        "cookie": "session_id=stale-from-native-jar",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(200);
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call onReject for side-effect-free GET — even when a cookie is present without X-Requested-With, the middleware must not log the request as a CSRF failure", async () => {
+    const onReject = vi.fn();
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: [],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        onReject,
+      }),
+    );
+    app.all("/api/store/order", (c) => c.json({ ok: true }));
+
+    await app.request("/api/store/order", {
+      method: "GET",
+      headers: { "cookie": "session_id=real-browser-session" },
+    });
+
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call onReject for requests on a skipped path — /api/trpc/* and /store/* are gated by different layers and must not double-log", async () => {
+    const onReject = vi.fn();
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: ["/api/trpc/", "/store/"],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        onReject,
+      }),
+    );
+    app.all("/api/trpc/auth.login", (c) => c.json({ ok: true }));
+    app.all("/store/foo/order", (c) => c.json({ ok: true }));
+
+    // Cookie POST without X-Requested-With would otherwise trip csrf_fail.
+    await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "cookie": "session_id=real-browser-session" },
+      body: "{}",
+    });
+    // Bearer POST from a hostile origin would otherwise trip origin_block.
+    await app.request("/store/foo/order", {
+      method: "POST",
+      headers: {
+        "authorization": "Bearer stolen-token",
+        "origin": "https://evil.com",
+      },
+      body: "{}",
+    });
+
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it("is optional — middleware works without onReject provided (no crash, default rejection paths still return 403)", async () => {
+    const app = new Hono();
+    app.use(
+      "*",
+      createCsrfMiddleware({
+        skipPathPrefixes: [],
+        allowedBearerOrigins: TEST_CORS_ORIGINS,
+        // onReject deliberately omitted
+      }),
+    );
+    app.all("/api/store/order", (c) => c.json({ ok: true }));
+
+    const csrfRes = await app.request("/api/store/order", {
+      method: "POST",
+      headers: { "cookie": "session_id=real-browser-session" },
+      body: "{}",
+    });
+    expect(csrfRes.status).toBe(403);
+
+    const originRes = await app.request("/api/store/order", {
+      method: "POST",
+      headers: {
+        "authorization": "Bearer stolen-token",
+        "origin": "https://evil.com",
+      },
+      body: "{}",
+    });
+    expect(originRes.status).toBe(403);
   });
 });
