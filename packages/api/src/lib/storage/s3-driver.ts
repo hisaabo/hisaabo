@@ -24,7 +24,7 @@ function sha256hex(data: Buffer | string): string {
 function encodeSegment(segment: string): string {
   return encodeURIComponent(segment).replace(
     /[!'()*]/g,
-    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
 
