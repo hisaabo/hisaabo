@@ -99,6 +99,19 @@ exceptions:
       - store.updateItemStoreSettings
       - store.updateVariantStoreSettings
 
+      # --- Item Images ---
+      # Item photo gallery management (upload, reorder, primary selection,
+      # alt-text editing) is a web-admin workflow built on a file picker and
+      # canvas-based client-side downscaling — the same reasoning as
+      # business.uploadLogo/deleteLogo above. The storefront and mobile render
+      # item images via direct asset URLs, not these tRPC procedures.
+      - itemImage.upload
+      - itemImage.list
+      - itemImage.update
+      - itemImage.reorder
+      - itemImage.setPrimary
+      - itemImage.delete
+
       # --- Data Import ---
       # Bulk CSV import is a desktop/power-user workflow.
       - import.importParties
@@ -330,6 +343,17 @@ exceptions:
       - gstr2b.upload
       - gstr2b.ignoreRecord
 
+      # --- Item Images ---
+      # Item photo gallery management is an interactive web-admin workflow
+      # (file picker + canvas downscaling + drag-to-reorder). The CLI has no
+      # binary-upload command surface for item media.
+      - itemImage.upload
+      - itemImage.list
+      - itemImage.update
+      - itemImage.reorder
+      - itemImage.setPrimary
+      - itemImage.delete
+
   mcp:
     not-applicable:
       # --- Auth ---
@@ -432,3 +456,14 @@ exceptions:
       # CSV upload and per-record ignore are interactive UI workflows.
       - gstr2b.upload
       - gstr2b.ignoreRecord
+
+      # --- Item Images ---
+      # Item photo gallery management is a human-facing web-admin workflow
+      # (file picker, canvas downscaling, drag-to-reorder). MCP agents operate
+      # on structured data, not binary media uploads.
+      - itemImage.upload
+      - itemImage.list
+      - itemImage.update
+      - itemImage.reorder
+      - itemImage.setPrimary
+      - itemImage.delete
