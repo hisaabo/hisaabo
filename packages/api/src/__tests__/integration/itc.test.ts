@@ -773,9 +773,17 @@ describe("ITC dashboard", () => {
 // ── 5. GSTR-3B Table 4 ─────────────────────────────────────────────────────
 
 describe("GSTR-3B Table 4", () => {
-  // Use a dedicated month for table 4 tests
-  const T4_YEAR = 2026;
-  const T4_MONTH = 5; // May 2026
+  // Use a dedicated period for table 4 tests.
+  // YEAR must NOT match `new Date().getFullYear()` at CI time — the
+  // "defaults to current period" test in `ITC dashboard` above inserts
+  // an unblocked purchase on `new Date()`, and its ITC ledger entry
+  // would be aggregated into row4A5 for whatever month happens to be
+  // current, breaking the "all-other ITC = 0 after blocking" assertion
+  // below if year+month happen to collide. Locking the test period to
+  // a past year (the API schema accepts ≥2017) guarantees isolation
+  // regardless of when CI runs.
+  const T4_YEAR = 2025;
+  const T4_MONTH = 5; // May 2025
 
   it("populates Table 4 with correct ITC breakdown", async () => {
     const caller = callerForRamesh();
@@ -852,9 +860,13 @@ describe("GSTR-3B Table 4", () => {
 // ── 6. ITC Utilization ──────────────────────────────────────────────────────
 
 describe("ITC utilization", () => {
-  // Use a dedicated month for utilization tests
-  const UTIL_YEAR = 2026;
-  const UTIL_MONTH = 6; // June 2026
+  // Use a dedicated period for utilization tests.
+  // YEAR locked to a past year for the same reason as T4_YEAR above —
+  // the dashboard "defaults to current period" test inserts an invoice
+  // dated `new Date()`, so any current-year period is vulnerable to
+  // contamination at CI time.
+  const UTIL_YEAR = 2025;
+  const UTIL_MONTH = 6; // June 2025
   const UTIL_PERIOD = `${UTIL_YEAR}-${String(UTIL_MONTH).padStart(2, "0")}`;
 
   it("records utilization for a period", async () => {
