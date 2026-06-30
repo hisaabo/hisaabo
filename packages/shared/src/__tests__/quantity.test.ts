@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { formatQuantity } from "../quantity.js";
+import * as packageRoot from "../index.js";
 
 describe("formatQuantity", () => {
   it("drops decimals for whole numbers", () => {
@@ -44,5 +45,14 @@ describe("formatQuantity", () => {
     expect(formatQuantity("")).toBe("0");
     expect(formatQuantity("abc")).toBe("0");
     expect(formatQuantity(NaN)).toBe("0");
+  });
+
+  // The whole point of the helper is to be the one place every surface
+  // (web, mobile, PDF) formats quantities, so the public package entry point
+  // must re-export it. Importing through the barrel guards against a dropped
+  // export in index.ts.
+  it("is exported from the package entry point", () => {
+    expect(packageRoot.formatQuantity).toBe(formatQuantity);
+    expect(packageRoot.formatQuantity("2.000")).toBe("2");
   });
 });

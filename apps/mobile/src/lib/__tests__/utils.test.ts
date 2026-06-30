@@ -26,12 +26,39 @@
 
 import {
   formatCurrency,
+  formatQuantity,
   formatDate,
   formatDateShort,
   formatDateTime,
   formatDateInput,
   todayISODate,
 } from "../utils";
+
+// ---------------------------------------------------------------------------
+describe("formatQuantity — dynamic line-item quantity display", () => {
+  // WHY: quantities arrive as fixed-precision strings ("2.000") but the mobile
+  // invoice/document screens render them through this helper (re-exported from
+  // @hisaabo/shared) so a round quantity reads "2", not "2.000 KG". It shares
+  // the Hermes-safe Intl.NumberFormat path used by formatCurrency above.
+
+  it("drops decimals for whole numbers", () => {
+    expect(formatQuantity("2.000")).toBe("2");
+    expect(formatQuantity("2")).toBe("2");
+  });
+
+  it("trims trailing zeros and keeps up to three decimals", () => {
+    expect(formatQuantity("2.500")).toBe("2.5");
+    expect(formatQuantity("0.125")).toBe("0.125");
+  });
+
+  it("rounds beyond three decimals to three", () => {
+    expect(formatQuantity("2.1256")).toBe("2.126");
+  });
+
+  it("falls back to '0' for malformed input", () => {
+    expect(formatQuantity("abc")).toBe("0");
+  });
+});
 
 // ---------------------------------------------------------------------------
 describe("formatCurrency — INR formatting for Indian business context", () => {
