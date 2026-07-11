@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
@@ -22,6 +23,7 @@ export default function PartiesScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const { businessId } = useBusinessStore();
   const [activeTab, setActiveTab] = useState<PartyType>("customer");
   const [search, setSearch] = useState("");
@@ -228,7 +230,9 @@ export default function PartiesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(app)/(parties)/create" as never)} />
+      {can("create", "Party") && (
+        <FAB onPress={() => router.push("/(app)/(parties)/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

@@ -12,6 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -36,6 +37,7 @@ export default function ExpensesScreen() {
     colors.brand, "#22c55e", "#f59e0b", colors.danger, "#a855f7", "#3b82f6", "#ec4899", "#14b8a6",
   ], [colors]);
   const router = useRouter();
+  const { can } = usePermissions();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -193,7 +195,9 @@ export default function ExpensesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/expenses/create" as never)} />
+      {can("create", "Expense") && (
+        <FAB onPress={() => router.push("/(more)/expenses/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

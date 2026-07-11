@@ -11,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatDateShort } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -53,6 +54,7 @@ export default function AutomatedInvoicesScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const [selectedStatus, setSelectedStatus] = useState<TemplateStatus | null>(null);
   const [page, setPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -221,7 +223,9 @@ export default function AutomatedInvoicesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/automated-invoices/create" as never)} />
+      {can("create", "RecurringInvoice") && (
+        <FAB onPress={() => router.push("/(more)/automated-invoices/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

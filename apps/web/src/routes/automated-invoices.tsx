@@ -8,6 +8,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { usePermissions } from "@/hooks/usePermissions";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { InputField, TextareaField } from "@/components/ui/FormField";
@@ -144,6 +145,7 @@ function AutomatedInvoicesPage() {
   const [showFormSlideOver, setShowFormSlideOver] = useState(false);
   const [editTemplateId, setEditTemplateId] = useState<string | null>(null);
   const deleteConfirm = useDeleteConfirmation();
+  const { can } = usePermissions();
   const [detailTemplateId, setDetailTemplateId] = useState<string | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(true);
 
@@ -435,9 +437,11 @@ function AutomatedInvoicesPage() {
         title="Recurring Invoices"
         description="Manage recurring invoice templates"
         actions={
-          <button className="btn-primary" onClick={openAdd}>
-            + New Template
-          </button>
+          can("create", "RecurringInvoice") ? (
+            <button className="btn-primary" onClick={openAdd}>
+              + New Template
+            </button>
+          ) : undefined
         }
       />
 
@@ -518,12 +522,14 @@ function AutomatedInvoicesPage() {
                       {s.invoiceCount} invoices &middot; ~{frequencyLabel(s.suggestedFrequency)} &middot; Median {formatCurrency(s.medianAmount)}
                     </p>
                   </div>
-                  <button
-                    className="btn-primary text-xs px-3 py-1.5 shrink-0"
-                    onClick={() => createFromSuggestion(s)}
-                  >
-                    Create Template
-                  </button>
+                  {can("create", "RecurringInvoice") && (
+                    <button
+                      className="btn-primary text-xs px-3 py-1.5 shrink-0"
+                      onClick={() => createFromSuggestion(s)}
+                    >
+                      Create Template
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -562,7 +568,7 @@ function AutomatedInvoicesPage() {
                 : "Create your first recurring invoice template to automate billing"
             }
             action={
-              !search && !statusFilter ? (
+              !search && !statusFilter && can("create", "RecurringInvoice") ? (
                 <button className="btn-primary text-sm" onClick={openAdd}>
                   + Create Template
                 </button>
@@ -614,7 +620,7 @@ function AutomatedInvoicesPage() {
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {template.status === "active" && (
+                          {can("update", "RecurringInvoice") && template.status === "active" && (
                             <button
                               onClick={() => pauseMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-amber-600 hover:bg-amber-600/[0.08] transition-colors"
@@ -625,7 +631,7 @@ function AutomatedInvoicesPage() {
                               <PauseIcon />
                             </button>
                           )}
-                          {template.status === "paused" && (
+                          {can("update", "RecurringInvoice") && template.status === "paused" && (
                             <button
                               onClick={() => resumeMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-emerald-600 hover:bg-emerald-600/[0.08] transition-colors"
@@ -636,7 +642,7 @@ function AutomatedInvoicesPage() {
                               <PlayIcon />
                             </button>
                           )}
-                          {(template.status === "active" || template.status === "paused") && (
+                          {can("update", "RecurringInvoice") && (template.status === "active" || template.status === "paused") && (
                             <button
                               onClick={() => runNowMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors"
@@ -647,22 +653,26 @@ function AutomatedInvoicesPage() {
                               <RunNowIcon />
                             </button>
                           )}
-                          <button
-                            onClick={() => openEdit(template)}
-                            className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors"
-                            aria-label="Edit template"
-                            title="Edit"
-                          >
-                            <EditIcon />
-                          </button>
-                          <button
-                            onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
-                            className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
-                            aria-label="Delete template"
-                            title="Delete"
-                          >
-                            <DeleteIcon />
-                          </button>
+                          {can("update", "RecurringInvoice") && (
+                            <button
+                              onClick={() => openEdit(template)}
+                              className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors"
+                              aria-label="Edit template"
+                              title="Edit"
+                            >
+                              <EditIcon />
+                            </button>
+                          )}
+                          {can("delete", "RecurringInvoice") && (
+                            <button
+                              onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
+                              className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors"
+                              aria-label="Delete template"
+                              title="Delete"
+                            >
+                              <DeleteIcon />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1044,6 +1054,8 @@ function TemplateDetailSlideOver({
   onResume: (id: string) => void;
   onRunNow: (id: string) => void;
 }) {
+  const { can } = usePermissions();
+  const canUpdate = can("update", "RecurringInvoice");
   const [activeTab, setActiveTab] = useState<"details" | "history">("details");
   const [historyPage, setHistoryPage] = useState(1);
 
@@ -1079,7 +1091,7 @@ function TemplateDetailSlideOver({
       title={template?.name || "Template Details"}
       description={template ? `${frequencyLabel(template.frequency, template.customIntervalDays)} ${template.type} invoice` : undefined}
       footer={
-        template ? (
+        template && canUpdate ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {template.status === "active" && (

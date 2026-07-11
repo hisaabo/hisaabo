@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
@@ -468,6 +469,7 @@ export default function InvoiceDetailScreen() {
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { can } = usePermissions();
   const businessId = useBusinessStore((s) => s.businessId);
   const [sharingPDF, setSharingPDF] = useState(false);
 
@@ -861,7 +863,7 @@ export default function InvoiceDetailScreen() {
         )}
 
         {/* Edit Invoice (only for draft/sent) */}
-        {(invoice.status === "draft" || invoice.status === "sent") && (
+        {can("update", "Invoice") && (invoice.status === "draft" || invoice.status === "sent") && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}
@@ -914,7 +916,7 @@ export default function InvoiceDetailScreen() {
         </View>
 
         {/* Delete — hidden when any payment has been recorded */}
-        {amountPaid <= 0 && (
+        {can("delete", "Invoice") && amountPaid <= 0 && (
           <View style={[styles.actionGroup, styles.dangerGroup]}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.dangerBtn]}

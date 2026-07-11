@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
@@ -41,6 +42,7 @@ export default function ItemDetailScreen() {
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
 
   const [activeTab, setActiveTab] = useState<DetailTab>("stats");
@@ -332,13 +334,15 @@ export default function ItemDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.topNavActions}>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => router.push({ pathname: "/(app)/(items)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={22} color={colors.brand} />
-          </TouchableOpacity>
+          {can("update", "Item") && (
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => router.push({ pathname: "/(app)/(items)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.brand} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.actionMenuButton}
             onPress={() => setActionMenuVisible(true)}
@@ -346,13 +350,15 @@ export default function ItemDetailScreen() {
           >
             <Ionicons name="ellipsis-vertical" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.danger} />
-          </TouchableOpacity>
+          {can("delete", "Item") && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -501,14 +507,16 @@ export default function ItemDetailScreen() {
                   </Text>
                 )}
               </View>
-              <TouchableOpacity
-                style={styles.adjustButton}
-                onPress={() => setAdjustModalVisible(true)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="swap-vertical-outline" size={18} color={colors.textPrimary} />
-                <Text style={styles.adjustButtonText}>Adjust</Text>
-              </TouchableOpacity>
+              {can("update", "Item") && (
+                <TouchableOpacity
+                  style={styles.adjustButton}
+                  onPress={() => setAdjustModalVisible(true)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="swap-vertical-outline" size={18} color={colors.textPrimary} />
+                  <Text style={styles.adjustButtonText}>Adjust</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         )}
@@ -520,14 +528,16 @@ export default function ItemDetailScreen() {
               <Text style={styles.sectionLabel}>
                 Variants ({item.variants?.length ?? 0})
               </Text>
-              <TouchableOpacity
-                style={styles.addVariantButton}
-                onPress={openCreateVariant}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="add" size={15} color={colors.brand} />
-                <Text style={styles.addVariantButtonText}>Add</Text>
-              </TouchableOpacity>
+              {can("update", "Item") && (
+                <TouchableOpacity
+                  style={styles.addVariantButton}
+                  onPress={openCreateVariant}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="add" size={15} color={colors.brand} />
+                  <Text style={styles.addVariantButtonText}>Add</Text>
+                </TouchableOpacity>
+              )}
             </View>
             {item.variants && item.variants.length > 0 ? (
               <>
@@ -574,20 +584,24 @@ export default function ItemDetailScreen() {
                           {vStock % 1 === 0 ? vStock.toFixed(0) : vStock.toFixed(2)} {item.unit}
                         </Text>
                         <View style={styles.variantActions}>
-                          <TouchableOpacity
-                            onPress={() => openEditVariant(v)}
-                            style={styles.variantActionBtn}
-                            activeOpacity={0.7}
-                          >
-                            <Ionicons name="pencil-outline" size={14} color={colors.brand} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            onPress={() => handleDeleteVariant(v.id, attrLabel)}
-                            style={[styles.variantActionBtn, styles.variantActionBtnDanger]}
-                            activeOpacity={0.7}
-                          >
-                            <Ionicons name="trash-outline" size={14} color={colors.danger} />
-                          </TouchableOpacity>
+                          {can("update", "Item") && (
+                            <TouchableOpacity
+                              onPress={() => openEditVariant(v)}
+                              style={styles.variantActionBtn}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="pencil-outline" size={14} color={colors.brand} />
+                            </TouchableOpacity>
+                          )}
+                          {can("delete", "Item") && (
+                            <TouchableOpacity
+                              onPress={() => handleDeleteVariant(v.id, attrLabel)}
+                              style={[styles.variantActionBtn, styles.variantActionBtnDanger]}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="trash-outline" size={14} color={colors.danger} />
+                            </TouchableOpacity>
+                          )}
                         </View>
                       </View>
                     </View>

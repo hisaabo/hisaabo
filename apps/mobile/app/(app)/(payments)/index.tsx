@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDateShort } from "../../../src/lib/utils";
 import { accumulatePages } from "../../../src/lib/accumulate-pages";
@@ -128,6 +129,7 @@ export default function PaymentsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const { businessId } = useBusinessStore();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -255,7 +257,9 @@ export default function PaymentsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(payments)/create" as never)} />
+      {can("create", "Payment") && (
+        <FAB onPress={() => router.push("/(payments)/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

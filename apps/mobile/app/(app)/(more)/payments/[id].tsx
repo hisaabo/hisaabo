@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -42,6 +43,7 @@ export default function PaymentDetailScreen() {
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -169,12 +171,16 @@ export default function PaymentDetailScreen() {
         <View style={styles.headerActions}>
           {!isEditing && (
             <>
-              <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
-                <Ionicons name="create-outline" size={20} color={colors.brand} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={20} color={colors.danger} />
-              </TouchableOpacity>
+              {can("update", "Payment") && (
+                <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
+                  <Ionicons name="create-outline" size={20} color={colors.brand} />
+                </TouchableOpacity>
+              )}
+              {can("delete", "Payment") && (
+                <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+                  <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {isEditing && (
@@ -352,7 +358,7 @@ export default function PaymentDetailScreen() {
         )}
 
         {/* Delete Button */}
-        {!isEditing && (
+        {!isEditing && can("delete", "Payment") && (
           <TouchableOpacity
             style={styles.deleteBtnFull}
             onPress={handleDelete}

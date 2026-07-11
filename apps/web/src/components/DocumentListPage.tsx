@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
+import { usePermissions } from "@/hooks/usePermissions";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -121,6 +122,13 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
     convert,
   } = config;
 
+  // These document types (quotations, proforma, challans, sales returns,
+  // credit notes) are all gated by the Invoice resource server-side.
+  const { can } = usePermissions();
+  const canCreate = can("create", "Invoice");
+  const canUpdate = can("update", "Invoice");
+  const canDelete = can("delete", "Invoice");
+
   const [type, setType] = useState<"sale" | "purchase">(
     hasTypeFilter ? "sale" : defaultInvoiceType
   );
@@ -197,9 +205,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
         title={title}
         description={description}
         actions={
-          <button className="btn-primary" onClick={() => setShowCreate(true)}>
-            {buttonLabel}
-          </button>
+          canCreate ? (
+            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+              {buttonLabel}
+            </button>
+          ) : undefined
         }
       />
 
@@ -251,9 +261,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           title={emptyTitle}
           description={emptyDescription(type, status)}
           action={
-            <button className="btn-primary" onClick={() => setShowCreate(true)}>
-              {buttonLabel}
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowCreate(true)}>
+                {buttonLabel}
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -304,7 +316,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {markSent && doc.status === "draft" && (
+                      {markSent && canUpdate && doc.status === "draft" && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "sent" })
@@ -314,7 +326,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                           Mark Sent
                         </button>
                       )}
-                      {markPaid && doc.status === "sent" && (
+                      {markPaid && canUpdate && doc.status === "sent" && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "paid" })
@@ -324,7 +336,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                           Mark Paid
                         </button>
                       )}
-                      {convert && (
+                      {convert && canCreate && (
                         <button
                           onClick={() => convert.onConvert(doc.id)}
                           disabled={convert.convertingId === doc.id}
@@ -335,7 +347,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                             : "Convert to Invoice"}
                         </button>
                       )}
-                      {doc.status === "draft" && (
+                      {canDelete && doc.status === "draft" && (
                         <button
                           onClick={() =>
                             confirmDelete(doc.id, doc.invoiceNumber)
@@ -364,7 +376,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           selectedDoc ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
-                {selectedDoc.status === "draft" && (
+                {canDelete && selectedDoc.status === "draft" && (
                   <button
                     onClick={() => {
                       setSelectedId(null);
@@ -377,7 +389,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                 )}
               </div>
               <div className="flex gap-2">
-                {selectedDoc.status === "draft" && (
+                {canUpdate && selectedDoc.status === "draft" && (
                   <button
                     onClick={() => {
                       setSelectedId(null);

@@ -24,6 +24,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { usePermissions } from "@/hooks/usePermissions";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
@@ -295,6 +296,8 @@ function CreateShipmentForm({ invoiceId, partyId, onCreated }: { invoiceId: stri
 // ── Shipment card inside invoice detail ───────────────────────────
 
 function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId: string; partyId: string; invoiceStatus: string }) {
+  const { can } = usePermissions();
+  const canManageShipment = can("update", "Invoice");
   const [showCreate, setShowCreate] = useState(false);
   const [showTrackingForm, setShowTrackingForm] = useState(false);
   const [trackingInput, setTrackingInput] = useState("");
@@ -342,6 +345,8 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
             <p className="text-xs text-text-tertiary">
               {invoiceStatus === "adjusted" ? "Invoice is adjusted — shipment cannot be added." : "Invoice is paid — shipment cannot be added."}
             </p>
+          ) : !canManageShipment ? (
+            <p className="text-xs text-text-tertiary">No shipment.</p>
           ) : !showCreate ? (
             <button
               onClick={() => setShowCreate(true)}
@@ -366,7 +371,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
           <div className="flex items-center justify-between">
             <InvoiceShipmentStatusBadge status={shipment.status as ShipmentStatus} />
             <div className="flex gap-1.5">
-              {shipment.status === "pending" && (
+              {canManageShipment && shipment.status === "pending" && (
                 <button
                   onClick={() => markStatus("shipped")}
                   disabled={updateMutation.isPending}
@@ -375,7 +380,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
                   Mark Shipped
                 </button>
               )}
-              {(shipment.status === "shipped" || shipment.status === "in_transit") && (
+              {canManageShipment && (shipment.status === "shipped" || shipment.status === "in_transit") && (
                 <button
                   onClick={() => markStatus("delivered")}
                   disabled={updateMutation.isPending}
@@ -413,6 +418,8 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
               </a>
             ) : shipment.trackingNumber ? (
               <span className="font-mono text-text-primary">{shipment.trackingNumber}</span>
+            ) : !canManageShipment ? (
+              <span className="text-text-tertiary">—</span>
             ) : showTrackingForm ? (
               <div className="flex gap-1.5 mt-1">
                 <input
@@ -474,6 +481,7 @@ function InvoiceDetailPanel({
   onCreateSR,
 }: InvoiceDetailPanelProps) {
   const navigate = useNavigate();
+  const { can } = usePermissions();
   const { data: invoice, isLoading } = trpc.invoice.getById.useQuery(
     { id: invoiceId! },
     { enabled: !!invoiceId }
@@ -536,7 +544,7 @@ function InvoiceDetailPanel({
         invoice ? (
           <div className="flex items-center justify-between gap-3">
             <div className="flex gap-2">
-              {invoice.status !== "paid" && (
+              {invoice.status !== "paid" && can("update", "Invoice") && (
                 <button
                   onClick={() => {
                     onClose();
@@ -547,7 +555,7 @@ function InvoiceDetailPanel({
                   Edit
                 </button>
               )}
-              {isDraftLike && (
+              {isDraftLike && can("update", "Invoice") && (
                 <button
                   onClick={() => updateStatus.mutate({ id: invoice.id, status: "sent" })}
                   disabled={updateStatus.isPending}
@@ -576,7 +584,7 @@ function InvoiceDetailPanel({
                 </a>
               ))}
               {/* Create buttons — only when not fully adjusted */}
-              {canConvert && (
+              {canConvert && can("create", "Invoice") && (
                 <>
                   <button
                     onClick={() => { onClose(); onIssueCN?.(invoice.id, invoice.type as "sale" | "purchase"); }}
@@ -600,7 +608,7 @@ function InvoiceDetailPanel({
                 invoiceStatus={invoice.status}
                 onShared={() => onStatusChange(invoice.id, "sent")}
               />
-              {canRecordPayment && (
+              {canRecordPayment && can("create", "Payment") && (
                 <button
                   onClick={() =>
                     onRecordPayment(
@@ -877,6 +885,8 @@ function InvoicesPage() {
   // Tracks the partyId of the last-created invoice so "Create another" can pre-fill it
   const [lastCreatedPartyId, setLastCreatedPartyId] = useState<string | undefined>(undefined);
   const deleteConfirm = useDeleteConfirmation();
+  const { can } = usePermissions();
+  const canCreateInvoice = can("create", "Invoice");
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
@@ -905,7 +915,7 @@ function InvoicesPage() {
 
   // Keyboard shortcut: N to create new invoice
   useHotkeys([
-    { key: "n", handler: () => setShowCreate(true), description: "New invoice", scope: "invoices" },
+    { key: "n", handler: () => { if (canCreateInvoice) setShowCreate(true); }, description: "New invoice", scope: "invoices" },
   ]);
 
   // Reset to page 1 whenever filters or sort change
@@ -1019,7 +1029,7 @@ function InvoicesPage() {
         description="Manage sales and purchase invoices"
         actions={
           <div className="flex items-center gap-2">
-            {posEnabled && (
+            {posEnabled && canCreateInvoice && (
               <a
                 href="/pos"
                 className="btn-secondary inline-flex items-center gap-2"
@@ -1029,13 +1039,15 @@ function InvoicesPage() {
                 Switch to POS
               </a>
             )}
-            <button
-              className="btn-primary inline-flex items-center gap-2"
-              onClick={() => setShowCreate(true)}
-            >
-              + New Invoice
-              <KbdShortcut keys={["N"]} className="opacity-60" />
-            </button>
+            {canCreateInvoice && (
+              <button
+                className="btn-primary inline-flex items-center gap-2"
+                onClick={() => setShowCreate(true)}
+              >
+                + New Invoice
+                <KbdShortcut keys={["N"]} className="opacity-60" />
+              </button>
+            )}
           </div>
         }
       />
@@ -1097,12 +1109,14 @@ function InvoicesPage() {
           description={`No ${type === "sale" ? "sales" : "purchase"} invoices${status ? ` with status "${status}"` : ""}.`}
           encouragement={!search && !status ? "Create your first invoice — it only takes a minute." : undefined}
           action={
-            <button
-              className="btn-primary"
-              onClick={() => setShowCreate(true)}
-            >
-              + New Invoice
-            </button>
+            canCreateInvoice ? (
+              <button
+                className="btn-primary"
+                onClick={() => setShowCreate(true)}
+              >
+                + New Invoice
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -1184,7 +1198,7 @@ function InvoicesPage() {
                           />
                           {/* Context actions — always visible at reduced opacity, full on hover */}
                           <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
-                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && can("update", "Invoice") && (
                               <button
                                 onClick={() =>
                                   updateStatus.mutate({ id: inv.id, status: "sent" })
@@ -1201,6 +1215,7 @@ function InvoicesPage() {
                               inv.status !== "cancelled" &&
                               inv.status !== "paid" &&
                               inv.status !== "adjusted" &&
+                              can("create", "Payment") &&
                               (parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - parseFloat(inv.totalAdjusted || "0")) > 0.01 && (
                                 <button
                                   onClick={() =>
@@ -1218,7 +1233,7 @@ function InvoicesPage() {
                                   </svg>
                                 </button>
                               )}
-                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && can("delete", "Invoice") && (
                               <button
                                 onClick={() =>
                                   confirmDelete(inv.id, inv.invoiceNumber)

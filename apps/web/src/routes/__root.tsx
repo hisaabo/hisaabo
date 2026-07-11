@@ -12,6 +12,7 @@ import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
+import { canAccess, type Resource, type Action } from "@/lib/permissions";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { clearDesktopToken } from "@/lib/desktop-session";
 
@@ -45,32 +46,9 @@ function RootError({ error }: { error: Error }) {
 }
 
 // ── Role-based access control ──────────────────────────────────
-
-const ROLE_ABILITIES: Record<string, Set<string>> = {
-  owner: new Set(["*"]),
-  admin: new Set(["*"]),
-  seller_manager: new Set([
-    "Invoice:read", "Invoice:create", "Party:read", "Item:read",
-    "Payment:read", "Store:read", "RecurringInvoice:read", "Business:read",
-  ]),
-  seller: new Set([
-    "Invoice:read", "Invoice:create", "Party:read", "Item:read",
-    "Payment:read", "Store:read", "Business:read", "RecurringInvoice:read",
-  ]),
-  accountant: new Set([
-    "Payment:read", "Expense:read", "BankAccount:read", "Invoice:read",
-    "Party:read", "Item:read", "Store:read", "RecurringInvoice:read",
-    "Report:read", "GstReport:read", "Business:read",
-  ]),
-};
-
-function canAccess(role: string | null | undefined, resource: string, action: string): boolean {
-  if (!role) return true; // graceful degradation while loading
-  const abilities = ROLE_ABILITIES[role];
-  if (!abilities) return true; // unknown role — show all
-  if (abilities.has("*")) return true;
-  return abilities.has(`${resource}:${action}`);
-}
+// `canAccess` and the underlying role→ability mapping live in
+// @/lib/permissions (a faithful mirror of the server's CASL rules) so nav
+// gating and in-page action-button gating share one source of truth.
 
 // ── Sidebar nav structure ──────────────────────────────────────
 
@@ -633,7 +611,7 @@ function RootLayout() {
           {navSections.map((section) => {
             const visibleItems = section.items
               .filter((item) =>
-                canAccess(session?.role, item.resource, item.action) &&
+                canAccess(session?.role, item.resource as Resource, item.action as Action) &&
                 (!("gstOnly" in item && item.gstOnly) || isGstRegistered)
               )
               .map((item) => {

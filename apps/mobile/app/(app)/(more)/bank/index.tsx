@@ -9,6 +9,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatCurrency } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -40,6 +41,7 @@ export default function BankAccountsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
 
   const { data: accounts, isLoading: accountsLoading } = trpc.bankAccount.list.useQuery();
   const { data: summary, isLoading: summaryLoading } = trpc.bankAccount.summary.useQuery();
@@ -54,13 +56,17 @@ export default function BankAccountsScreen() {
           <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Cash & Bank</Text>
-        <TouchableOpacity
-          style={styles.transferBtn}
-          onPress={() => router.push("/(more)/bank/transfer" as never)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="swap-horizontal-outline" size={22} color={colors.brand} />
-        </TouchableOpacity>
+        {can("create", "BankTransaction") ? (
+          <TouchableOpacity
+            style={styles.transferBtn}
+            onPress={() => router.push("/(more)/bank/transfer" as never)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="swap-horizontal-outline" size={22} color={colors.brand} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.transferBtn} />
+        )}
       </View>
 
       {isLoading ? (
@@ -133,14 +139,16 @@ export default function BankAccountsScreen() {
                     {formatCurrency(Math.abs(balance))}
                     {isNegative ? " Dr" : ""}
                   </Text>
-                  <TouchableOpacity
-                    style={styles.editBtn}
-                    onPress={() => router.push(`/(more)/bank/edit?id=${item.id}` as never)}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="create-outline" size={16} color={colors.textMuted} />
-                  </TouchableOpacity>
+                  {can("update", "BankAccount") && (
+                    <TouchableOpacity
+                      style={styles.editBtn}
+                      onPress={() => router.push(`/(more)/bank/edit?id=${item.id}` as never)}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="create-outline" size={16} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  )}
                 </View>
               </PressableRow>
             );
@@ -148,7 +156,9 @@ export default function BankAccountsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/bank/create" as never)} />
+      {can("create", "BankAccount") && (
+        <FAB onPress={() => router.push("/(more)/bank/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

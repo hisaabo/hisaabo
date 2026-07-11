@@ -9,6 +9,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { accumulatePages } from "../../../src/lib/accumulate-pages";
@@ -46,6 +47,7 @@ export default function InvoicesScreen() {
   const colors = useColors();
   const router = useRouter();
   const params = useLocalSearchParams<{ type?: string; status?: string }>();
+  const { can } = usePermissions();
   const { businessId } = useBusinessStore();
   const [invoiceType, setInvoiceType] = useState<InvoiceType>((params.type as InvoiceType) || "sale");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>((params.status as StatusFilter) || "all");
@@ -237,7 +239,9 @@ export default function InvoicesScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      <FAB onPress={() => router.push("/(invoices)/create" as never)} />
+      {can("create", "Invoice") && (
+        <FAB onPress={() => router.push("/(invoices)/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

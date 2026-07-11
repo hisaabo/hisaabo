@@ -9,6 +9,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { usePermissions } from "@/hooks/usePermissions";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -266,6 +267,7 @@ function PaymentsPage() {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("payments", "this-month");
+  const { can } = usePermissions();
 
   // Open the payment detail panel when navigated here with ?id=<paymentId>
   const { id: idFromSearch } = useSearch({ from: "/payments" });
@@ -366,13 +368,15 @@ function PaymentsPage() {
         title="Payments"
         description="Track money in and out"
         actions={
-          <button
-            className="btn-primary"
-            onClick={() => setShowPanel(true)}
-          >
-            + Record Payment
-            <KbdShortcut keys={["N"]} className="ml-2 opacity-70" />
-          </button>
+          can("create", "Payment") ? (
+            <button
+              className="btn-primary"
+              onClick={() => setShowPanel(true)}
+            >
+              + Record Payment
+              <KbdShortcut keys={["N"]} className="ml-2 opacity-70" />
+            </button>
+          ) : undefined
         }
       />
 
@@ -408,9 +412,11 @@ function PaymentsPage() {
           description="Record your first payment to start tracking cash flow."
           encouragement="Once you start invoicing, payments will show here."
           action={
-            <button className="btn-primary" onClick={() => setShowPanel(true)}>
-              + Record Payment
-            </button>
+            can("create", "Payment") ? (
+              <button className="btn-primary" onClick={() => setShowPanel(true)}>
+                + Record Payment
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -451,12 +457,15 @@ function PaymentsPage() {
                     </td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {can("update", "Payment") && (
                         <button
                           className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
                           onClick={() => setEditPaymentId(p.id)}
                         >
                           Edit
                         </button>
+                        )}
+                        {can("delete", "Payment") && (
                         <button
                           className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                           onClick={() => deleteConfirm.requestDelete(p.id, p.paymentNumber || p.partyName)}
@@ -477,6 +486,7 @@ function PaymentsPage() {
                             />
                           </svg>
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -562,6 +572,7 @@ function PaymentDetailPanel({
   onEdit: (id: string) => void;
 }) {
   const navigate = useNavigate();
+  const { can } = usePermissions();
   const { data: payment, isLoading } = trpc.payment.getById.useQuery(
     { id: paymentId },
   );
@@ -575,12 +586,14 @@ function PaymentDetailPanel({
       footer={
         payment ? (
           <div className="flex justify-end gap-2">
+            {can("update", "Payment") && (
             <button
               onClick={() => onEdit(payment.id)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
             >
               Edit Payment
             </button>
+            )}
           </div>
         ) : null
       }

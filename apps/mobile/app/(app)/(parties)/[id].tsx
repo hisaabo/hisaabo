@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { formatCurrency, formatDate } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
@@ -37,6 +38,7 @@ export default function PartyDetailScreen() {
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { can } = usePermissions();
   const [activeTab, setActiveTab] = useState<LedgerTab>("ledger");
   const [ledgerPage, _setLedgerPage] = useState(1);
   const [ledgerFrom, setLedgerFrom] = useState<Date | null>(null);
@@ -233,13 +235,15 @@ export default function PartyDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <View style={styles.topNavActions}>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={22} color={colors.brand} />
-          </TouchableOpacity>
+          {can("update", "Party") && (
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.brand} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.mergeButton}
             onPress={handleOpenMerge}
@@ -247,13 +251,15 @@ export default function PartyDetailScreen() {
           >
             <Ionicons name="git-merge-outline" size={20} color={colors.info} />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDelete}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.danger} />
-          </TouchableOpacity>
+          {can("delete", "Party") && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDelete}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -363,25 +369,29 @@ export default function PartyDetailScreen() {
               </Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={20} color={colors.brand} />
-            <Text style={[styles.actionButtonText, { color: colors.brand }]}>
-              Edit
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.actionButtonPrimary]}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="receipt-outline" size={20} color={colors.textPrimary} />
-            <Text style={[styles.actionButtonText, { color: colors.textPrimary }]}>
-              New Invoice
-            </Text>
-          </TouchableOpacity>
+          {can("update", "Party") && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => router.push({ pathname: "/(app)/(parties)/edit", params: { id } } as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={20} color={colors.brand} />
+              <Text style={[styles.actionButtonText, { color: colors.brand }]}>
+                Edit
+              </Text>
+            </TouchableOpacity>
+          )}
+          {can("create", "Invoice") && (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.actionButtonPrimary]}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="receipt-outline" size={20} color={colors.textPrimary} />
+              <Text style={[styles.actionButtonText, { color: colors.textPrimary }]}>
+                New Invoice
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Tab Headers (sticky) */}

@@ -7,6 +7,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { usePermissions } from "@/hooks/usePermissions";
 import type { ItemType, ItemMode } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -121,6 +122,7 @@ function ItemsPage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const { can } = usePermissions();
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -270,13 +272,15 @@ function ItemsPage() {
         title="Items"
         description="Products and services inventory"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowAddModal(true)}
-          >
-            + Add Item
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          can("create", "Item") ? (
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowAddModal(true)}
+            >
+              + Add Item
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          ) : undefined
         }
       />
 
@@ -351,9 +355,11 @@ function ItemsPage() {
           description="Add products or services to start creating invoices."
           encouragement="Your inventory is empty. Add your first product to start billing."
           action={
-            <button className="btn-primary" onClick={() => setShowAddModal(true)}>
-              + Add Item
-            </button>
+            can("create", "Item") ? (
+              <button className="btn-primary" onClick={() => setShowAddModal(true)}>
+                + Add Item
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -416,6 +422,7 @@ function ItemsPage() {
                     </td>
                     <td className="text-text-secondary text-xs">{item.unit}</td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                      {can("delete", "Item") && (
                       <button
                         className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                         onClick={() => deleteConfirm.requestDelete(item.id, item.name)}
@@ -436,6 +443,7 @@ function ItemsPage() {
                           />
                         </svg>
                       </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -1049,6 +1057,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
 function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
   const utils = trpc.useUtils();
+  const { can } = usePermissions();
 
   const [itemType, setItemType] = useState<ItemType>("product");
   const [name, setName] = useState("");
@@ -1479,6 +1488,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                                 <td className="p-1 text-right tabular-nums">{v.salePrice ? formatCurrency(v.salePrice) : "—"}</td>
                                 <td className="p-1 text-right tabular-nums">{parseFloat(v.stockQuantity).toLocaleString()}</td>
                                 <td className="p-1 flex gap-1">
+                                  {can("update", "Item") && (
                                   <button
                                     onClick={() => {
                                       setEditingVariantId(v.id);
@@ -1493,6 +1503,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                                   >
                                     Edit
                                   </button>
+                                  )}
                                   <button
                                     onClick={() => deleteVariantMutation.mutate({ variantId: v.id })}
                                     className="text-red-500 text-xs"
@@ -1532,6 +1543,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                       <InputField label="Stock" type="number" value={newVariantStock} onChange={(e) => setNewVariantStock(e.target.value)} placeholder="0" />
                     </div>
                     <div className="flex gap-2">
+                      {can("update", "Item") && (
                       <button
                         onClick={() => createVariantMutation.mutate({
                           itemId,
@@ -1547,10 +1559,11 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                       >
                         {createVariantMutation.isPending ? "Adding..." : "Add Variant"}
                       </button>
+                      )}
                       <button onClick={() => setShowAddVariant(false)} className="text-xs text-text-tertiary">Cancel</button>
                     </div>
                   </div>
-                ) : (
+                ) : can("update", "Item") ? (
                   <button
                     type="button"
                     onClick={() => setShowAddVariant(true)}
@@ -1558,7 +1571,7 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                   >
                     + Add variant
                   </button>
-                )}
+                ) : null}
               </div>
             </Disclosure>
           )}
@@ -1972,6 +1985,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
   const [showAdjustStock, setShowAdjustStock] = useState(false);
   const [pricePeriod, setPricePeriod] = useState<PeriodFilter>("all");
   const [stockPeriod, setStockPeriod] = useState<PeriodFilter>("all");
+  const { can } = usePermissions();
 
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
   const { data: priceHistory } = trpc.item.priceHistory.useQuery(
@@ -2029,6 +2043,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
               </button>
             )}
           </div>
+          {can("update", "Item") && (
           <button
             onClick={() => {
               onClose();
@@ -2038,6 +2053,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
           >
             Edit Item
           </button>
+          )}
         </div>
       }
     >

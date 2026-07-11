@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -162,6 +163,7 @@ export default function BankAccountDetailScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [page, setPage] = useState(1);
   const [showAddTx, setShowAddTx] = useState(false);
@@ -264,25 +266,29 @@ export default function BankAccountDetailScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{account.accountName}</Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.headerIconBtn}
-            onPress={() => router.push(`/(more)/bank/edit?id=${id}` as never)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={20} color={colors.textPrimary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.headerIconBtn, styles.headerIconBtnDanger]}
-            onPress={handleDelete}
-            disabled={deleteMutation.isPending}
-            activeOpacity={0.7}
-          >
-            {deleteMutation.isPending ? (
-              <ActivityIndicator size={16} color={colors.danger} />
-            ) : (
-              <Ionicons name="trash-outline" size={20} color={colors.danger} />
-            )}
-          </TouchableOpacity>
+          {can("update", "BankAccount") && (
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => router.push(`/(more)/bank/edit?id=${id}` as never)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="create-outline" size={20} color={colors.textPrimary} />
+            </TouchableOpacity>
+          )}
+          {can("delete", "BankAccount") && (
+            <TouchableOpacity
+              style={[styles.headerIconBtn, styles.headerIconBtnDanger]}
+              onPress={handleDelete}
+              disabled={deleteMutation.isPending}
+              activeOpacity={0.7}
+            >
+              {deleteMutation.isPending ? (
+                <ActivityIndicator size={16} color={colors.danger} />
+              ) : (
+                <Ionicons name="trash-outline" size={20} color={colors.danger} />
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -327,7 +333,7 @@ export default function BankAccountDetailScreen() {
             </View>
 
             {/* Set as Default (only when not already default) */}
-            {!account.isDefault && (
+            {can("update", "BankAccount") && !account.isDefault && (
               <TouchableOpacity
                 style={styles.setDefaultBtn}
                 onPress={handleSetDefault}
@@ -344,14 +350,16 @@ export default function BankAccountDetailScreen() {
             )}
 
             {/* Add Transaction Button */}
-            <TouchableOpacity
-              style={styles.addTxBtn}
-              onPress={() => setShowAddTx(true)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={colors.textPrimary} />
-              <Text style={styles.addTxBtnText}>Add Transaction</Text>
-            </TouchableOpacity>
+            {can("create", "BankTransaction") && (
+              <TouchableOpacity
+                style={styles.addTxBtn}
+                onPress={() => setShowAddTx(true)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={colors.textPrimary} />
+                <Text style={styles.addTxBtnText}>Add Transaction</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Transactions Header */}
             <View style={styles.txHeader}>

@@ -11,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../src/lib/trpc";
+import { usePermissions } from "../../../src/hooks/usePermissions";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
@@ -23,6 +24,7 @@ export default function ItemsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const { businessId } = useBusinessStore();
   const [search, setSearch] = useState("");
   const [itemType, setItemType] = useState<ItemTypeFilter>(null);
@@ -333,7 +335,9 @@ export default function ItemsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(app)/(items)/create" as never)} />
+      {can("create", "Item") && (
+        <FAB onPress={() => router.push("/(app)/(items)/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

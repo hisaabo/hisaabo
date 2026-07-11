@@ -18,6 +18,7 @@ import { SearchInput } from "@/components/ui/SearchInput";
 import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "@/hooks/useToast";
 import { getDatePreset } from "@/hooks/useDateRange";
+import { usePermissions } from "@/hooks/usePermissions";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 export const Route = createFileRoute("/cash-and-bank")({
@@ -26,6 +27,7 @@ export const Route = createFileRoute("/cash-and-bank")({
 
 function CashAndBankPage() {
   const navigate = useNavigate();
+  const { can } = usePermissions();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [editAccountId, setEditAccountId] = useState<string | null>(null);
   const [showAddAccount, setShowAddAccount] = useState(false);
@@ -247,12 +249,16 @@ function CashAndBankPage() {
         description="Manage your bank accounts and track transactions"
         actions={
           <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setShowTransfer(true)}>
-              Transfer
-            </button>
-            <button className="btn-primary" onClick={() => setShowAddAccount(true)}>
-              + Add Account
-            </button>
+            {can("create", "BankTransaction") && (
+              <button className="btn-secondary" onClick={() => setShowTransfer(true)}>
+                Transfer
+              </button>
+            )}
+            {can("create", "BankAccount") && (
+              <button className="btn-primary" onClick={() => setShowAddAccount(true)}>
+                + Add Account
+              </button>
+            )}
           </div>
         }
       />
@@ -286,12 +292,14 @@ function CashAndBankPage() {
               className="px-4 py-3 flex items-center justify-between border-b border-border-light"
             >
               <h3 className="text-sm font-semibold text-text-primary">Accounts</h3>
-              <button
-                className="btn-ghost text-xs"
-                onClick={() => setShowAddAccount(true)}
-              >
-                + Add
-              </button>
+              {can("create", "BankAccount") && (
+                <button
+                  className="btn-ghost text-xs"
+                  onClick={() => setShowAddAccount(true)}
+                >
+                  + Add
+                </button>
+              )}
             </div>
 
             {isLoading ? (
@@ -340,19 +348,21 @@ function CashAndBankPage() {
                         </p>
                       </div>
                     </button>
-                    {/* Edit button — always available on hover */}
-                    <button
-                      className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-all"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditAccountId(account.id);
-                      }}
-                      aria-label="Edit account"
-                    >
-                      <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
+                    {/* Edit button — available on hover for users who can update */}
+                    {can("update", "BankAccount") && (
+                      <button
+                        className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-all"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditAccountId(account.id);
+                        }}
+                        aria-label="Edit account"
+                      >
+                        <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -369,18 +379,22 @@ function CashAndBankPage() {
               >
                 <h3 className="text-sm font-semibold text-text-primary">Transactions</h3>
                 <div className="flex gap-2">
-                  <button
-                    className="btn-ghost text-xs"
-                    onClick={() => setShowTransfer(true)}
-                  >
-                    Transfer
-                  </button>
-                  <button
-                    className="btn-primary text-xs py-1.5 px-3"
-                    onClick={() => setShowAddTransaction(true)}
-                  >
-                    + Add Transaction
-                  </button>
+                  {can("create", "BankTransaction") && (
+                    <button
+                      className="btn-ghost text-xs"
+                      onClick={() => setShowTransfer(true)}
+                    >
+                      Transfer
+                    </button>
+                  )}
+                  {can("create", "BankTransaction") && (
+                    <button
+                      className="btn-primary text-xs py-1.5 px-3"
+                      onClick={() => setShowAddTransaction(true)}
+                    >
+                      + Add Transaction
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -563,8 +577,9 @@ function CashAndBankPage() {
         </div>
       </div>
 
-      {/* Untracked Payments — stays visible during refetch after assignment */}
-      {(hadUntracked || (untrackedData && untrackedData.total > 0)) && (
+      {/* Untracked Payments — bulk-assign to accounts (a reconciliation
+          action); only shown to roles that can write bank transactions. */}
+      {can("update", "BankTransaction") && (hadUntracked || (untrackedData && untrackedData.total > 0)) && (
         <div className="mt-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-3">
@@ -847,6 +862,7 @@ function EditAccountSlideOver({
   onDeleteRequest: (id: string) => void;
 }) {
   const utils = trpc.useUtils();
+  const { can } = usePermissions();
 
   // Fetch the account details
   const { data: accountData, isLoading } = trpc.bankAccount.getById.useQuery(
@@ -1000,13 +1016,17 @@ function EditAccountSlideOver({
       description={account?.accountName}
       footer={
         <div className="flex items-center justify-between">
-          <button
-            type="button"
-            className="btn-ghost text-sm text-red-600 hover:text-red-700 hover:bg-red-600/[0.08] px-3 py-2"
-            onClick={() => onDeleteRequest(accountId)}
-          >
-            Delete Account
-          </button>
+          {can("delete", "BankAccount") ? (
+            <button
+              type="button"
+              className="btn-ghost text-sm text-red-600 hover:text-red-700 hover:bg-red-600/[0.08] px-3 py-2"
+              onClick={() => onDeleteRequest(accountId)}
+            >
+              Delete Account
+            </button>
+          ) : (
+            <span />
+          )}
           <div className="flex gap-3">
             <button type="button" className="btn-secondary" onClick={onClose}>
               Cancel

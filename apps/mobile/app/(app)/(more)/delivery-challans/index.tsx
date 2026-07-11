@@ -10,6 +10,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
+import { usePermissions } from "../../../../src/hooks/usePermissions";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
@@ -38,6 +39,7 @@ export default function DeliveryChallansScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const { can } = usePermissions();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -217,7 +219,9 @@ export default function DeliveryChallansScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      <FAB onPress={() => router.push("/(more)/delivery-challans/create" as never)} />
+      {can("create", "Invoice") && (
+        <FAB onPress={() => router.push("/(more)/delivery-challans/create" as never)} />
+      )}
     </SafeAreaView>
   );
 }

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
+import { usePermissions } from "@/hooks/usePermissions";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -222,6 +223,7 @@ interface OrderDetailPanelProps {
 }
 
 function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps) {
+  const { can } = usePermissions();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
@@ -301,7 +303,7 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
         title={isLoading ? "Loading…" : o ? `Order ${o.orderNumber}` : "Order"}
         description={o ? `${o.customerName}${o.customerPhone ? ` · ${o.customerPhone}` : ""}` : undefined}
         footer={
-          o && o.status !== "delivered" && o.status !== "cancelled" ? (
+          can("update", "Store") && o && o.status !== "delivered" && o.status !== "cancelled" ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
                 <button
@@ -527,6 +529,7 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
 const PAGE_SIZE = 30;
 
 function StoreOrdersPage() {
+  const { can } = usePermissions();
   const [status, setStatus] = useState<OrderStatus | "">("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -687,6 +690,8 @@ function StoreOrdersPage() {
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {can("update", "Store") && (
+                        <>
                       {order.status === "pending" && (
                         <button
                           onClick={() => setInlineConfirmId(order.id)}
@@ -746,6 +751,8 @@ function StoreOrdersPage() {
                             Cancel
                           </button>
                         )}
+                        </>
+                      )}
                       <button
                         onClick={() => setSelectedId(order.id)}
                         className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
