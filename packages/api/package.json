@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "maintenance": "tsx src/bin/maintenance.ts"
+    "maintenance": "tsx src/bin/maintenance.ts",
+    "admin": "tsx src/bin/admin.ts"
   },
   "dependencies": {
     "@casl/ability": "^6.8.0",

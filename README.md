@@ -505,6 +505,27 @@ hisaabo/
 | `pnpm db:migrate` | Run pending migrations |
 | `pnpm db:studio` | Open Drizzle Studio |
 
+### Admin dashboard (TUI)
+
+A full-screen terminal dashboard with platform-level statistics: tenants by plan and status, users, businesses, invoices, amount managed, collections, receivables, a 12-month sales chart, per-tenant table and Postgres health. Read-only, zero extra dependencies, refreshes every 30 seconds.
+
+```bash
+# Inside the running API container (uses the container's DATABASE_URL)
+docker exec -it hisaabo-api node packages/api/dist/bin/admin.js
+scripts/admin.sh                              # same thing, wrapped
+
+# From the host with only Docker — shells out to psql in the postgres container
+node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-compose.yml
+
+# Dev checkout
+pnpm --filter @hisaabo/api admin              # live dashboard
+pnpm --filter @hisaabo/api admin -- --once    # one static snapshot
+pnpm --filter @hisaabo/api admin -- --json    # raw numbers
+pnpm --filter @hisaabo/api admin -- --demo    # synthetic data, no database
+```
+
+Keys: `1`/`2` switch Overview and Tenants, `↑`/`↓` select a tenant, `r` refresh, `q` quit. See `--help` for all flags.
+
 ### Run a single package
 
 ```bash

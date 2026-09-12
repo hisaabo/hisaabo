@@ -129,6 +129,31 @@ docker compose -f docker-compose.prod.yml up -d api
 
 The entrypoint script runs pending migrations automatically before starting the server.
 
+### Admin dashboard
+
+The API image ships a read-only terminal dashboard with platform statistics (tenants, users, businesses, invoices, amount managed, collections, receivables, a 12-month sales chart, per-tenant table, Postgres health). It runs with the plain `node` binary in the image and needs nothing else:
+
+```bash
+# Live dashboard inside the API container
+docker exec -it hisaabo-api node packages/api/dist/bin/admin.js
+# or, with compose
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/admin.js
+
+# One static snapshot (no TTY needed — handy for logs, cron, or pasting into chat)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js --once --width 140
+
+# Raw numbers as JSON
+docker exec hisaabo-api node packages/api/dist/bin/admin.js --json
+```
+
+If you would rather not enter the API container, the same tool can run on the host and query Postgres through `docker compose exec postgres psql`, the way you would by hand:
+
+```bash
+node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-compose.yml
+```
+
+In multi-tenant deployments it queries each tenant database once (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+
 ## Kamal / Once.com Compatibility
 
 The `docker-compose.prod.yml` is compatible with Kamal's deploy model:
