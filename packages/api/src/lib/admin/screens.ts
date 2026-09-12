@@ -29,6 +29,8 @@ export interface ViewState {
   runnerLabel: string;
   version: string;
   now: Date;
+  /** True when PII in `stats` is masked (the default). */
+  masked: boolean;
 }
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -44,7 +46,8 @@ function header(s: ViewState, cols: number): string {
     parts.push(s.stats.mode === "multi-db" ? `multi-db · ${dbs} db${dbs === 1 ? "" : "s"}` : "shared-db");
   }
   parts.push(s.runnerLabel);
-  const left = brand + " " + parts.map((p) => c.muted(p)).join(c.faint(" │ "));
+  const privacy = s.masked ? c.muted("PII masked") : c.warn("PII visible");
+  const left = brand + " " + [...parts.map((p) => c.muted(p)), privacy].join(c.faint(" │ "));
 
   let status: string;
   if (!s.interactive) {
@@ -69,6 +72,7 @@ function footer(s: ViewState, cols: number): string {
       key("2", "Tenants"),
       key("r", "Refresh"),
       ...(s.view === "tenants" ? [key("↑↓", "Select")] : []),
+      key("p", s.masked ? "Reveal PII" : "Mask PII"),
       key("q", "Quit"),
     ];
     left = keys.join("  ");

@@ -31,9 +31,10 @@ export interface DockerRunnerOptions {
 export class DockerPsqlRunner implements SqlRunner {
   constructor(private readonly o: DockerRunnerOptions) {}
 
-  describe(): string {
-    if (this.o.command) return `${this.o.command.join(" ")} · psql -U ${this.o.user}`;
-    return `docker compose exec ${this.o.service} · psql -U ${this.o.user}`;
+  describe(reveal = false): string {
+    const user = reveal ? this.o.user : "•••";
+    if (this.o.command) return `${this.o.command.join(" ")} · psql -U ${user}`;
+    return `docker compose exec ${this.o.service} · psql -U ${user}`;
   }
 
   private prefix(): string[] {
@@ -135,7 +136,8 @@ export class DirectRunner implements SqlRunner {
     this.control = new URL(controlUrl);
   }
 
-  describe(): string {
+  describe(reveal = false): string {
+    if (!reveal) return "direct · postgres";
     const host = this.control.hostname || "localhost";
     const port = this.control.port || "5432";
     return `direct · ${this.control.username || "postgres"}@${host}:${port}`;

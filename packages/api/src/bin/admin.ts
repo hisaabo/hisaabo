@@ -26,6 +26,7 @@ import { renderFrame, frameToString, type ViewState, type View } from "../lib/ad
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { setColorEnabled, c } from "../lib/admin/tui.js";
 import { splitKeys } from "../lib/admin/keys.js";
+import { maskStats } from "../lib/admin/privacy.js";
 
 // ── CLI args ────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ interface Args {
   width: number | null;
   color: boolean;
   forceColor: boolean;
+  reveal: boolean;
   view: View;
   databaseUrl: string | null;
   envFile: string | null;
@@ -70,6 +72,9 @@ OPTIONS
   --interval <seconds>             Auto-refresh period (default: 30, 0 = manual only)
   --concurrency <n>                Tenant databases queried in parallel (default: 4)
   --view <overview|tenants>        Initial view (default: overview)
+  --reveal                         Show real tenant names, slugs, emails and hosts. By default all
+                                   PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
+                                   and --json output are safe to share.
   --once                           Print one snapshot and exit (implied when stdout is not a TTY)
   --json                           Print the raw statistics as JSON and exit
   --width <cols>                   Column width for --once output (default: terminal width or 120)
@@ -79,13 +84,14 @@ OPTIONS
 
 KEYS (interactive)
   1 / 2       switch Overview / Tenants        r        refresh now
+  p           toggle PII masking
   ↑ ↓ j k     move selection (Tenants view)    g / G    jump to first / last
   q, Esc      quit                              Ctrl-C   quit
 `;
 
 function parseArgs(argv: string[]): Args {
   const a: Args = {
-    via: "auto", once: false, json: false, interval: 30, width: null, color: true, forceColor: false, view: "overview",
+    via: "auto", once: false, json: false, interval: 30, width: null, color: true, forceColor: false, reveal: false, view: "overview",
     databaseUrl: null, envFile: null, composeFiles: [], service: "postgres", user: null, database: null,
     command: null, concurrency: 4, help: false,
   };
@@ -105,6 +111,7 @@ function parseArgs(argv: string[]): Args {
       case "--width": a.width = Math.max(60, Number(next(i++, arg)) || 0); break;
       case "--no-color": a.color = false; break;
       case "--color": a.forceColor = true; break;
+      case "--reveal": case "--show-pii": a.reveal = true; break;
       case "--view": a.view = next(i++, arg) === "tenants" ? "tenants" : "overview"; break;
       case "--database-url": a.databaseUrl = next(i++, arg); break;
       case "--env-file": a.envFile = next(i++, arg); break;
@@ -173,12 +180,18 @@ const CURSOR_SHOW = "\x1b[?25h";
 const HOME = "\x1b[H";
 const CLEAR = "\x1b[2J";
 
-async function runInteractive(collect: () => Promise<PlatformStats>, close: () => Promise<void>, a: Args, runnerLabel: string, version: string): Promise<void> {
+async function runInteractive(collect: () => Promise<PlatformStats>, close: () => Promise<void>, a: Args, runnerLabel: (masked: boolean) => string, version: string): Promise<void> {
   const out = process.stdout;
   const inp = process.stdin;
   const state: ViewState = {
     view: a.view, stats: null, loading: true, refreshing: false, error: null, selected: 0,
-    interactive: true, intervalSec: a.interval, nextRefreshAt: null, runnerLabel, version, now: new Date(),
+    interactive: true, intervalSec: a.interval, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, now: new Date(),
+    masked: !a.reveal,
+  };
+  let raw: PlatformStats | null = null;
+  const applyMask = () => {
+    state.stats = raw ? (state.masked ? maskStats(raw) : raw) : null;
+    state.runnerLabel = runnerLabel(state.masked);
   };
   let lastSize = `${out.columns}x${out.rows}`;
   let exiting = false;
@@ -210,8 +223,9 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
     state.refreshing = true;
     draw();
     try {
-      state.stats = await collect();
-      state.error = state.stats.errors.length ? state.stats.errors[0] : null;
+      raw = await collect();
+      applyMask();
+      state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
     } catch (e) {
       state.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -254,6 +268,7 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "r": case "R": void refresh(); break;
         case "1": state.view = "overview"; break;
         case "2": state.view = "tenants"; break;
+        case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
         case "\t": state.view = state.view === "overview" ? "tenants" : "overview"; break;
         case "j": case "\x1b[B": move(1); break;
         case "k": case "\x1b[A": move(-1); break;
@@ -301,15 +316,15 @@ async function main(): Promise<void> {
   const version = readVersion();
   let runner: SqlRunner | null = null;
   let collect: () => Promise<PlatformStats>;
-  let runnerLabel: string;
+  let runnerLabel: (masked: boolean) => string;
   if (a.via === "demo") {
     collect = async () => buildDemoStats(new Date());
-    runnerLabel = "demo data";
+    runnerLabel = () => "demo data";
   } else {
     runner = buildRunner(a);
     const r = runner;
     collect = () => collectPlatformStats({ runner: r, concurrency: a.concurrency });
-    runnerLabel = r.describe();
+    runnerLabel = (masked) => r.describe(!masked);
   }
   const close = async () => { if (runner) await runner.close(); };
 
@@ -320,14 +335,15 @@ async function main(): Promise<void> {
   }
 
   try {
-    const stats = await collect();
+    const stats = a.reveal ? await collect() : maskStats(await collect());
     if (a.json) {
       process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
     } else {
       const cols = a.width ?? process.stdout.columns ?? 120;
       const state: ViewState = {
         view: a.view, stats, loading: false, refreshing: false, error: stats.errors[0] ?? null, selected: 0,
-        interactive: false, intervalSec: 0, nextRefreshAt: null, runnerLabel, version, now: new Date(),
+        interactive: false, intervalSec: 0, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, now: new Date(),
+        masked: !a.reveal,
       };
       process.stdout.write(frameToString(renderFrame(state, cols)));
     }

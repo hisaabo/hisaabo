@@ -524,7 +524,9 @@ pnpm --filter @hisaabo/api admin -- --json    # raw numbers
 pnpm --filter @hisaabo/api admin -- --demo    # synthetic data, no database
 ```
 
-Keys: `1`/`2` switch Overview and Tenants, `↑`/`↓` select a tenant, `r` refresh, `q` quit. See `--help` for all flags.
+Keys: `1`/`2` switch Overview and Tenants, `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
+
+PII is masked by default: tenants appear as `Tenant 3f9a2c`, emails as `pr•••@sh••••.in`, and database hosts are hidden, so screenshots and `--json` output are safe to share. Pass `--reveal` (or press `p`) to see real values.
 
 ### Run a single package
 

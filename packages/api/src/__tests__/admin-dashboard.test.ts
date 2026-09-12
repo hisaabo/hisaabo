@@ -20,6 +20,7 @@ import {
 import { renderFrame, sortTenants, type ViewState } from "../lib/admin/screens.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { parseEnvFile, pickPsqlError, DirectRunner } from "../lib/admin/runners.js";
+import { maskEmail, maskName, maskWord, maskDbName, tenantHandle, maskStats } from "../lib/admin/privacy.js";
 import { splitKeys } from "../lib/admin/keys.js";
 
 beforeAll(() => setColorEnabled(false));
@@ -401,7 +402,7 @@ describe("collectPlatformStats", () => {
 function stateFor(view: ViewState["view"], interactive = false): ViewState {
   return {
     view, stats: buildDemoStats(NOW), loading: false, refreshing: false, error: null, selected: 0,
-    interactive, intervalSec: 30, nextRefreshAt: null, runnerLabel: "demo", version: "0.9.0", now: NOW,
+    interactive, intervalSec: 30, nextRefreshAt: null, runnerLabel: "demo", version: "0.9.0", now: NOW, masked: true,
   };
 }
 
@@ -498,7 +499,8 @@ describe("DirectRunner.urlFor", () => {
     expect(r.urlFor({ name: null })).toBe("postgresql://admin:pw@db.internal:5432/hisaabo");
     expect(r.urlFor({ name: "tenant_acme" })).toBe("postgresql://admin:pw@db.internal:5432/tenant_acme");
     expect(r.urlFor({ name: "tenant_acme", host: "other", port: "6543" })).toBe("postgresql://admin:pw@other:6543/tenant_acme");
-    expect(r.describe()).toBe("direct · admin@db.internal:5432");
+    expect(r.describe()).toBe("direct · postgres"); // masked by default
+    expect(r.describe(true)).toBe("direct · admin@db.internal:5432");
   });
 });
 
@@ -509,5 +511,68 @@ describe("splitKeys", () => {
     expect(splitKeys("\x1b[5~j")).toEqual(["\x1b[5~", "j"]);
     expect(splitKeys("\x1bOA")).toEqual(["\x1b[A"]);
     expect(splitKeys("\x1b")).toEqual(["\x1b"]);
+  });
+});
+
+// =============================================================================
+// PII masking
+// =============================================================================
+
+describe("privacy masking", () => {
+  it("masks words, names and emails while keeping a recognisable shape", () => {
+    expect(maskWord("sharma")).toBe("s•••••");
+    expect(maskWord("ab")).toBe("a••"); // never fewer than two bullets
+    expect(maskName("Verma Electricals")).toBe("V•••• E••••••");
+    expect(maskEmail("priya@sharmatraders.in")).toBe("pr•••@sh••••••.in");
+    expect(maskEmail("a@b.co.uk")).toBe("a••@b.••.uk");
+    expect(maskEmail("not-an-email")).toBe("no••••••");
+    expect(maskDbName("tenant_sharma_traders")).toBe("tenant_••••••");
+    expect(maskDbName("acme")).toBe("a•••");
+    expect(maskDbName(null)).toBeNull();
+    const h1 = tenantHandle("00000000-0000-4000-8000-000000000001");
+    const h2 = tenantHandle("00000000-0000-4000-8000-000000000002");
+    expect(h1).toMatch(/^[0-9a-f]{6}$/);
+    expect(h1).not.toBe(h2); // sequential ids still get distinct handles
+    expect(tenantHandle("00000000-0000-4000-8000-000000000001")).toBe(h1); // stable
+  });
+
+  it("maskStats leaves no tenant name, slug, db name or email anywhere in the output", () => {
+    const raw = buildDemoStats(NOW);
+    const masked = maskStats(raw);
+    const json = JSON.stringify(masked);
+    for (const t of raw.tenants) {
+      expect(json).not.toContain(t.name);
+      expect(json).not.toContain(`"${t.slug}"`);
+      if (t.dbName) expect(json).not.toContain(t.dbName);
+    }
+    for (const u of raw.control.recentUsers) {
+      expect(json).not.toContain(u.email);
+      if (u.name) expect(json).not.toContain(u.name);
+    }
+    // Structure and numbers are untouched.
+    expect(masked.totals).toEqual(raw.totals);
+    expect(masked.tenants).toHaveLength(raw.tenants.length);
+    expect(masked.tenants[0].metrics).toBe(raw.tenants[0].metrics);
+    expect(masked.tenants[0].name).toMatch(/^Tenant [0-9a-f]{6}$/);
+    expect(masked.control.tenants[0].name).toBe(masked.tenants[0].name);
+    // The unreachable tenant's error message is scrubbed too.
+    const broken = masked.tenants.find((t) => t.error)!;
+    expect(broken.error).toContain("tenant_••••••");
+    expect(masked.errors[0]).not.toContain("aarav");
+    // Input is not mutated.
+    expect(raw.tenants[0].name).toBe("Sharma Traders");
+  });
+
+  it("renders a masked frame with the privacy indicator and no raw names", () => {
+    const state = stateFor("tenants", true);
+    state.stats = maskStats(state.stats!);
+    const text = renderFrame(state, 150, 40).join("\n");
+    expect(text).toContain("PII masked");
+    expect(text).toContain("Reveal PII");
+    expect(text).not.toContain("Verma");
+    expect(text).toMatch(/Tenant [0-9a-f]{6}/);
+    const revealed = renderFrame({ ...stateFor("overview", true), masked: false }, 150, 40).join("\n");
+    expect(revealed).toContain("PII visible");
+    expect(revealed).toContain("Verma Electricals");
   });
 });

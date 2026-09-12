@@ -152,6 +152,8 @@ If you would rather not enter the API container, the same tool can run on the ho
 node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-compose.yml
 ```
 
+All personally identifiable data (tenant names and slugs, database names, user emails and names, connection hosts) is masked by default so output can be shared freely; add `--reveal` or press `p` in the live view to see real values.
+
 In multi-tenant deployments it queries each tenant database once (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
 
 ## Kamal / Once.com Compatibility

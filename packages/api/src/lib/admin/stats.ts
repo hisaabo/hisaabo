@@ -23,8 +23,8 @@ export interface DbTarget {
 }
 
 export interface SqlRunner {
-  /** Human-readable description shown in the header, e.g. "docker compose · postgres". */
-  describe(): string;
+  /** Human-readable description shown in the header. Credentials/hosts only when `reveal` is true. */
+  describe(reveal?: boolean): string;
   /** Execute `sql` (a single SELECT yielding one row/one json column) and return the parsed JSON. */
   queryJson(target: DbTarget, sql: string): Promise<unknown>;
   close(): Promise<void>;
