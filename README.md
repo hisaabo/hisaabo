@@ -524,7 +524,7 @@ pnpm --filter @hisaabo/api admin -- --json    # raw numbers
 pnpm --filter @hisaabo/api admin -- --demo    # synthetic data, no database
 ```
 
-Keys: `1`/`2` switch Overview and Tenants, `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
+Screens: `1` Overview, `2` Tenants, `3` Ops Health (e-invoicing, recurring runs, bank and GSTR-2B reconciliation, e-way bills, store orders and shipments, plus a cross-tenant feed of recent failures). An alerts strip under the header flags what needs attention on every screen. Keys: `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
 
 PII is masked by default: tenants appear as `Tenant 3f9a2c`, emails as `pr•••@sh••••.in`, and database hosts are hidden, so screenshots and `--json` output are safe to share. Pass `--reveal` (or press `p`) to see real values.
 

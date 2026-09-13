@@ -71,7 +71,7 @@ OPTIONS
   --command "<prefix>"             Replace the docker compose prefix, e.g. "docker exec -i hisaabo-db"
   --interval <seconds>             Auto-refresh period (default: 30, 0 = manual only)
   --concurrency <n>                Tenant databases queried in parallel (default: 4)
-  --view <overview|tenants>        Initial view (default: overview)
+  --view <overview|tenants|ops>    Initial view (default: overview)
   --reveal                         Show real tenant names, slugs, emails and hosts. By default all
                                    PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
                                    and --json output are safe to share.
@@ -83,7 +83,7 @@ OPTIONS
   -h, --help                       Show this help
 
 KEYS (interactive)
-  1 / 2       switch Overview / Tenants        r        refresh now
+  1 / 2 / 3   Overview / Tenants / Ops health  r        refresh now
   p           toggle PII masking
   ↑ ↓ j k     move selection (Tenants view)    g / G    jump to first / last
   q, Esc      quit                              Ctrl-C   quit
@@ -112,7 +112,11 @@ function parseArgs(argv: string[]): Args {
       case "--no-color": a.color = false; break;
       case "--color": a.forceColor = true; break;
       case "--reveal": case "--show-pii": a.reveal = true; break;
-      case "--view": a.view = next(i++, arg) === "tenants" ? "tenants" : "overview"; break;
+      case "--view": {
+        const v = next(i++, arg);
+        a.view = v === "tenants" || v === "ops" ? v : "overview";
+        break;
+      }
       case "--database-url": a.databaseUrl = next(i++, arg); break;
       case "--env-file": a.envFile = next(i++, arg); break;
       case "--compose-file": case "-f": a.composeFiles.push(next(i++, arg)); break;
@@ -268,8 +272,9 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "r": case "R": void refresh(); break;
         case "1": state.view = "overview"; break;
         case "2": state.view = "tenants"; break;
+        case "3": state.view = "ops"; break;
         case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
-        case "\t": state.view = state.view === "overview" ? "tenants" : "overview"; break;
+        case "\t": state.view = state.view === "overview" ? "tenants" : state.view === "tenants" ? "ops" : "overview"; break;
         case "j": case "\x1b[B": move(1); break;
         case "k": case "\x1b[A": move(-1); break;
         case "\x1b[6~": move(10); break;   // PgDn

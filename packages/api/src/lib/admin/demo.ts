@@ -5,8 +5,8 @@
  * Uses a seeded PRNG so every run looks the same.
  */
 
-import type { PlatformStats, TenantMetrics, TenantWithMetrics } from "./stats.js";
-import { lastTwelveMonths, sumMetrics } from "./stats.js";
+import type { PlatformStats, TenantMetrics, TenantOps, TenantWithMetrics } from "./stats.js";
+import { lastTwelveMonths, sumMetrics, mergeFailures, emptyOps } from "./stats.js";
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -32,6 +32,72 @@ function iso(d: Date): string {
   return d.toISOString();
 }
 
+const EINVOICE_ERRORS = [
+  "2150: Duplicate IRN",
+  "3028: GSTIN of recipient is not active",
+  "2172: For intra-state transaction IGST amounts are not applicable",
+  "IRP gateway timeout after 30s",
+];
+
+function demoOps(rnd: () => number, i: number, invoices: number, now: Date): TenantOps {
+  const ops = emptyOps();
+  const hoursAgo = (h: number) => iso(new Date(now.getTime() - h * 3_600_000));
+  const usesEinvoice = i % 3 === 0;
+  if (usesEinvoice) {
+    ops.eInvoice.generated = Math.round(invoices * 0.3);
+    ops.eInvoice.pending = Math.round(rnd() * 4);
+    ops.eInvoice.cancelled = Math.round(rnd() * 5);
+    if (i === 3 || i === 9) {
+      ops.eInvoice.failed = 1 + Math.round(rnd() * 2);
+      ops.eInvoice.exhausted = i === 9 ? 1 : 0;
+      ops.eInvoice.stalePending = i === 3 ? 2 : 0;
+      for (let k = 0; k < ops.eInvoice.failed; k++) {
+        ops.failures.push({ kind: "einvoice", ref: `INV-${1040 + k}`, message: EINVOICE_ERRORS[(i + k) % EINVOICE_ERRORS.length], at: hoursAgo(1 + k * 5 + i) });
+      }
+    }
+  }
+  ops.recurring.activeTemplates = Math.round(rnd() * 6);
+  ops.recurring.pausedTemplates = rnd() < 0.3 ? 1 : 0;
+  ops.recurring.ok7d = ops.recurring.activeTemplates * Math.round(rnd() * 2);
+  ops.recurring.ok30d = ops.recurring.ok7d * 4;
+  if (i === 6) {
+    ops.recurring.failed7d = 1;
+    ops.recurring.failed30d = 2;
+    ops.recurring.overdueTemplates = 1;
+    ops.failures.push({ kind: "recurring", ref: "Monthly retainer", message: "party has exceeded credit limit", at: hoursAgo(14) });
+  }
+  if (i === 12) ops.recurring.skipped7d = 3;
+  ops.bank.imports = Math.round(rnd() * 12);
+  ops.bank.completed = Math.round(ops.bank.imports * 0.8);
+  ops.bank.review = ops.bank.imports - ops.bank.completed;
+  ops.bank.matched30d = Math.round(rnd() * 400);
+  ops.bank.unmatched30d = Math.round(ops.bank.matched30d * (0.05 + rnd() * 0.2));
+  if (i === 15) {
+    ops.bank.stale = 1;
+    ops.failures.push({ kind: "bank_import", ref: "HDFC_Aug2026.csv", message: "stalled in review", at: hoursAgo(90) });
+  }
+  ops.gstr2b.uploads = Math.round(rnd() * 8);
+  ops.gstr2b.uploads30d = ops.gstr2b.uploads > 0 ? 1 : 0;
+  ops.gstr2b.unmatched30d = Math.round(rnd() * 20);
+  ops.gstr2b.new30d = Math.round(rnd() * 6);
+  ops.gstr2b.lastUploadAt = ops.gstr2b.uploads ? hoursAgo(24 * (1 + rnd() * 20)) : null;
+  if (i % 4 === 0) {
+    const orders = 20 + Math.round(rnd() * 80);
+    ops.store.byStatus = { delivered: Math.round(orders * 0.7), confirmed: Math.round(orders * 0.15), pending: Math.round(orders * 0.1), cancelled: Math.round(orders * 0.05) };
+    ops.shipments.byStatus = { delivered: Math.round(orders * 0.6), in_transit: Math.round(orders * 0.1), shipped: Math.round(orders * 0.05) };
+    if (i === 8) {
+      ops.store.stalePending = 2;
+      ops.failures.push({ kind: "store_order", ref: "ORD-0231", message: "unconfirmed for 2d", at: hoursAgo(50) });
+    }
+    if (i === 20) ops.shipments.stuck = 1;
+  }
+  ops.ewb.active = usesEinvoice ? Math.round(rnd() * 15) : 0;
+  ops.ewb.expired = usesEinvoice ? Math.round(rnd() * 30) : 0;
+  ops.ewb.cancelled = usesEinvoice ? Math.round(rnd() * 4) : 0;
+  if (i === 0) ops.ewb.expiring24h = 2;
+  return ops;
+}
+
 export function buildDemoStats(now: Date = new Date()): PlatformStats {
   const rnd = mulberry32(20260912);
   const months = lastTwelveMonths(now);
@@ -47,7 +113,9 @@ export function buildDemoStats(now: Date = new Date()): PlatformStats {
     const salesTotal = monthly.reduce((a, p) => a + p.amount, 0) * (1 + rnd() * 0.3);
     const purchaseTotal = salesTotal * (0.3 + rnd() * 0.4);
     const paid = 0.55 + rnd() * 0.35;
+    const ops = demoOps(rnd, i, invoices, now);
     const metrics: TenantMetrics = {
+      ops,
       businesses: 1 + (rnd() < 0.3 ? 1 : 0),
       gstBusinesses: rnd() < 0.7 ? 1 : 0,
       storesEnabled: rnd() < 0.25 ? 1 : 0,
@@ -114,6 +182,7 @@ export function buildDemoStats(now: Date = new Date()): PlatformStats {
   }));
 
   return {
+    failures: mergeFailures(tenants),
     collectedAt: iso(now),
     durationMs: 412,
     mode: "multi-db",

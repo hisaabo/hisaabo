@@ -20,7 +20,8 @@ import {
 import { renderFrame, sortTenants, type ViewState } from "../lib/admin/screens.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { parseEnvFile, pickPsqlError, DirectRunner } from "../lib/admin/runners.js";
-import { maskEmail, maskName, maskWord, maskDbName, tenantHandle, maskStats } from "../lib/admin/privacy.js";
+import { maskEmail, maskName, maskWord, maskDbName, tenantHandle, maskStats, maskFreeText } from "../lib/admin/privacy.js";
+import { deriveAlerts } from "../lib/admin/alerts.js";
 import { splitKeys } from "../lib/admin/keys.js";
 
 beforeAll(() => setColorEnabled(false));
@@ -574,5 +575,107 @@ describe("privacy masking", () => {
     const revealed = renderFrame({ ...stateFor("overview", true), masked: false }, 150, 40).join("\n");
     expect(revealed).toContain("PII visible");
     expect(revealed).toContain("Verma Electricals");
+  });
+});
+
+// =============================================================================
+// Ops health & alerts
+// =============================================================================
+
+describe("ops metrics", () => {
+  const opsJson = {
+    einvoice: { pending: 2, generated: 40, cancelled: 1, failed: 3, stale_pending: 1, exhausted: 1 },
+    recurring: { active_templates: 4, paused_templates: 1, overdue_templates: 1, ok_7d: 6, failed_7d: 1, skipped_7d: 0, ok_30d: 24, failed_30d: 2 },
+    bank: { imports: 5, completed: 4, in_progress: 0, review: 1, stale: 1, matched_30d: 300, unmatched_30d: 20 },
+    gstr2b: { uploads: 3, uploads_30d: 1, unmatched_30d: 7, new_30d: 2, last_upload_at: "2026-09-01T00:00:00Z" },
+    store: [{ status: "pending", n: 3, stale: 2 }, { status: "delivered", n: 30, stale: 0 }],
+    shipments: [{ status: "in_transit", n: 4, stuck: 1 }],
+    ewb: { active: 5, cancelled: 1, expired: 9, expiring_24h: 1, overdue_expiry: 0 },
+    failures: [{ kind: "einvoice", ref: "INV-7", message: "2150: Duplicate IRN", at: "2026-09-11T10:00:00Z" }],
+  };
+
+  it("parses the ops blob and fills missing sections with zeros", () => {
+    const m = parseTenantMetrics({ ...tenantJson(1), ops: opsJson }, NOW);
+    expect(m.ops.eInvoice).toEqual({ pending: 2, generated: 40, cancelled: 1, failed: 3, stalePending: 1, exhausted: 1 });
+    expect(m.ops.store.byStatus).toEqual({ pending: 3, delivered: 30 });
+    expect(m.ops.store.stalePending).toBe(2);
+    expect(m.ops.shipments.stuck).toBe(1);
+    expect(m.ops.failures).toHaveLength(1);
+    const empty = parseTenantMetrics(tenantJson(1), NOW);
+    expect(empty.ops).toEqual(emptyMetrics(NOW).ops);
+  });
+
+  it("sums ops across tenants", () => {
+    const a = parseTenantMetrics({ ...tenantJson(1), ops: opsJson }, NOW);
+    const t = sumMetrics([a, a], NOW);
+    expect(t.ops.eInvoice.failed).toBe(6);
+    expect(t.ops.recurring.ok30d).toBe(48);
+    expect(t.ops.store.byStatus.pending).toBe(6);
+    expect(t.ops.gstr2b.lastUploadAt).toBe("2026-09-01T00:00:00Z");
+  });
+
+  it("collect merges per-tenant failures newest first with tenant attribution", async () => {
+    class OpsRunner extends FakeRunner {
+      async queryJson(target: DbTarget, sql: string) {
+        if (sql === CONTROL_SQL) return controlJson;
+        const at = target.name === "tenant_acme" ? "2026-09-11T10:00:00Z" : "2026-09-12T08:00:00Z";
+        return { ...tenantJson(1), ops: { ...opsJson, failures: [{ kind: "einvoice", ref: "INV-1", message: "x", at }] } };
+      }
+    }
+    const st = await collectPlatformStats({ runner: new OpsRunner(), now: () => NOW });
+    expect(st.failures.map((f) => f.tenantName)).toEqual(["Beta", "Acme"]);
+  });
+
+  it("derives red and yellow alerts from the totals", () => {
+    const st = buildDemoStats(NOW);
+    const alerts = deriveAlerts(st);
+    const texts = alerts.map((a) => `${a.level}:${a.text}`);
+    expect(texts).toContain("red:1 tenant db unreachable");
+    expect(texts.some((t) => /^red:\d+ e-invoices? failed/.test(t))).toBe(true);
+    expect(texts.some((t) => /^yellow:\d+ store orders? unconfirmed > 24h/.test(t))).toBe(true);
+    // Reds come first.
+    const firstYellow = alerts.findIndex((a) => a.level === "yellow");
+    expect(alerts.slice(0, firstYellow).every((a) => a.level === "red")).toBe(true);
+    // A clean platform has no alerts.
+    const clean = { ...st, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW) };
+    expect(deriveAlerts(clean)).toEqual([]);
+  });
+
+  it("renders the ops view and the alerts strip at several sizes", () => {
+    for (const [cols, rows] of [[80, 30], [100, 40], [120, 40], [160, 50], [200, 60]] as const) {
+      const frame = renderFrame({ ...stateFor("ops", true) }, cols, rows);
+      expect(frame).toHaveLength(rows);
+      for (const row of frame) expect(width(row)).toBe(cols);
+      const text = frame.join("\n");
+      expect(text).toContain("E-invoicing");
+      if (cols >= 120) expect(text).toContain("Recent failures"); // narrower layouts stack panels and may run out of rows
+      expect(frame[1]).toContain("●"); // alerts strip has at least one red chip
+    }
+    const natural = renderFrame(stateFor("ops"), 150).join("\n");
+    expect(natural).toContain("Duplicate IRN");
+    // An empty failure feed still says so.
+    const quiet = stateFor("ops");
+    quiet.stats = { ...quiet.stats!, failures: [] };
+    expect(renderFrame(quiet, 150).join("\n")).toContain("no recent failures");
+    // All-clear strip.
+    const calm = stateFor("overview", true);
+    calm.stats = { ...calm.stats!, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW) };
+    expect(renderFrame(calm, 120, 30)[1]).toContain("all systems nominal");
+  });
+
+  it("truncates the alerts strip with a +N more marker when narrow", () => {
+    const frame = renderFrame(stateFor("overview", true), 60, 30);
+    expect(frame[1]).toMatch(/\+\d+ more/);
+    expect(width(frame[1])).toBe(60);
+  });
+
+  it("masks GSTINs, emails and phone numbers inside failure messages", () => {
+    expect(maskFreeText("GSTIN 27AAPFU0939F1ZV inactive")).toBe(`GSTIN 27${"•".repeat(11)}ZV inactive`);
+    expect(maskFreeText("call 9876543210 or a@b.in")).toBe("call 98•••••••• or a••@b••.in");
+    expect(maskFreeText("+91 9876543210")).toBe("+9••••••••••••");
+    const masked = maskStats(buildDemoStats(NOW));
+    const rec = masked.failures.find((f) => f.kind === "recurring")!;
+    expect(rec.ref).toBe("Mon••••••");
+    expect(masked.failures.every((f) => !f.tenantName || /^Tenant [0-9a-f]{6}$/.test(f.tenantName))).toBe(true);
   });
 });

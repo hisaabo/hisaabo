@@ -11,9 +11,10 @@ import {
   fmtInt, fmtINRCompact, fmtMonth, fmtRelative, fmtClock, fmtDuration, fmtUptime, fmtDate, fmtPct,
   PLAN_STYLE, STATUS_STYLE, type Style,
 } from "./tui.js";
-import type { PlatformStats, TenantWithMetrics, TenantMetrics } from "./stats.js";
+import type { PlatformStats, TenantWithMetrics, TenantMetrics, PlatformFailure } from "./stats.js";
+import { deriveAlerts, type Alert } from "./alerts.js";
 
-export type View = "overview" | "tenants";
+export type View = "overview" | "tenants" | "ops";
 
 export interface ViewState {
   view: View;
@@ -70,6 +71,7 @@ function footer(s: ViewState, cols: number): string {
     const keys = [
       key("1", "Overview"),
       key("2", "Tenants"),
+      key("3", "Ops"),
       key("r", "Refresh"),
       ...(s.view === "tenants" ? [key("↑↓", "Select")] : []),
       key("p", s.masked ? "Reveal PII" : "Mask PII"),
@@ -314,7 +316,7 @@ function overviewBody(s: ViewState, st: PlatformStats, cols: number, rows?: numb
     middleH = 15;
     bottomH = twoCol ? 14 : 12;
   } else {
-    const avail = rows - 2 - tiles.length - 1; // header/footer + tiles + spacer
+    const avail = rows - 2 - tiles.length; // header/footer + tiles
     if (avail < 9) {
       middleH = Math.max(0, avail);
       bottomH = 0;
@@ -339,7 +341,7 @@ function overviewBody(s: ViewState, st: PlatformStats, cols: number, rows?: numb
   if (rows === undefined && !twoCol) {
     bands.push(breakdownPanel(st, cols, 14), topTenantsPanel(st, cols, 12, s.now));
   }
-  return vstack([[" ".repeat(cols)], ...bands], cols, 0);
+  return vstack(bands, cols, 0);
 }
 
 // ── Tenants view ────────────────────────────────────────────────
@@ -426,6 +428,205 @@ function tenantsBody(s: ViewState, st: PlatformStats, cols: number, rows?: numbe
   return vstack(bands, cols, 0);
 }
 
+// ── Alerts strip ────────────────────────────────────────────────
+
+function alertChip(a: Alert): string {
+  const paint = a.level === "red" ? (t: string) => c.bold(c.bad(t)) : c.warn;
+  return paint((a.level === "red" ? "● " : "◐ ") + a.text);
+}
+
+/** One line under the header: red/yellow chips, or a green all-clear. */
+export function alertsStrip(st: PlatformStats, cols: number): string {
+  const alerts = deriveAlerts(st);
+  if (alerts.length === 0) return fit(" " + c.ok("✓ all systems nominal"), cols);
+  const sep = c.faint("  │  ");
+  let line = " ";
+  let shown = 0;
+  for (const a of alerts) {
+    const chip = alertChip(a);
+    const candidate = line + (shown ? sep : "") + chip;
+    const remaining = alerts.length - shown - 1;
+    const reserve = remaining > 0 ? width(sep) + 6 : 0; // room for "+N more"
+    if (width(candidate) + reserve > cols) break;
+    line = candidate;
+    shown++;
+  }
+  if (shown < alerts.length) line += sep + c.muted(`+${alerts.length - shown} more`);
+  return fit(line, cols);
+}
+
+// ── Ops health ──────────────────────────────────────────────────
+
+const KIND_LABEL: Record<string, string> = {
+  einvoice: "e-invoice",
+  recurring: "recurring",
+  bank_import: "bank import",
+  store_order: "store order",
+};
+
+function stat(label: string, value: number, style: Style = c.white, suffix = ""): string {
+  return c.muted(label + " ") + (value > 0 ? style(fmtInt(value)) : c.faint("0")) + (suffix ? c.muted(suffix) : "");
+}
+
+function eInvoicePanel(st: PlatformStats, w: number, h: number): string[] {
+  const e = st.totals.ops.eInvoice;
+  const innerW = w - 4;
+  const lines = breakdown(
+    [
+      { label: "generated", value: e.generated, style: c.ok },
+      { label: "pending", value: e.pending, style: e.stalePending ? c.warn : c.info },
+      { label: "failed", value: e.failed, style: c.bad },
+      { label: "cancelled", value: e.cancelled, style: c.faint },
+    ],
+    innerW,
+  );
+  lines.push("");
+  lines.push(stat("stale pending", e.stalePending, c.warn, " · > 1h") + "   " + stat("out of retries", e.exhausted, c.bad));
+  return box({ title: "E-invoicing (IRP)", hint: `${fmtInt(e.generated + e.pending + e.failed + e.cancelled)} total`, width: w, height: h, lines });
+}
+
+function recurringPanel(st: PlatformStats, w: number, h: number): string[] {
+  const r = st.totals.ops.recurring;
+  const innerW = w - 4;
+  const lines = [
+    stat("templates", r.activeTemplates, c.white, " active") + "  " + stat("paused", r.pausedTemplates, c.muted) + "  " + stat("overdue", r.overdueTemplates, c.warn),
+    "",
+    c.bold(c.muted("RUNS · LAST 7 DAYS")),
+    ...breakdown(
+      [
+        { label: "succeeded", value: r.ok7d, style: c.ok },
+        { label: "failed", value: r.failed7d, style: c.bad },
+        { label: "skipped", value: r.skipped7d, style: c.warn },
+      ],
+      innerW,
+    ),
+    "",
+    c.muted("30 days  ") + c.ok(fmtInt(r.ok30d)) + c.muted(" ok · ") + (r.failed30d ? c.bad(fmtInt(r.failed30d)) : c.faint("0")) + c.muted(" failed"),
+  ];
+  return box({ title: "Recurring invoices", width: w, height: h, lines });
+}
+
+function ewbPanel(st: PlatformStats, w: number, h: number): string[] {
+  const e = st.totals.ops.ewb;
+  const innerW = w - 4;
+  const lines = breakdown(
+    [
+      { label: "active", value: e.active, style: c.ok },
+      { label: "expired", value: e.expired, style: c.muted },
+      { label: "cancelled", value: e.cancelled, style: c.faint },
+    ],
+    innerW,
+  );
+  lines.push("");
+  lines.push(stat("expiring 24h", e.expiring24h, c.warn) + "   " + stat("past validity", e.overdueExpiry, c.bad));
+  return box({ title: "E-way bills", width: w, height: h, lines });
+}
+
+function bankPanel(st: PlatformStats, w: number, h: number): string[] {
+  const b = st.totals.ops.bank;
+  const innerW = w - 4;
+  const matchedTotal = b.matched30d + b.unmatched30d;
+  const lines = [
+    stat("imports", b.imports, c.white) + "  " + stat("completed", b.completed, c.ok),
+    stat("in progress", b.inProgress, c.info) + "  " + stat("review", b.review, c.warn) + "  " + stat("stalled > 3d", b.stale, c.bad),
+    "",
+    c.bold(c.muted("LINES · LAST 30 DAYS")),
+    ...breakdown(
+      [
+        { label: "matched", value: b.matched30d, style: c.ok },
+        { label: "unmatched", value: b.unmatched30d, style: c.warn },
+      ],
+      innerW,
+    ),
+    c.muted(matchedTotal > 0 ? `${fmtPct(b.matched30d, matchedTotal)} auto-match rate` : "no statements imported in 30 days"),
+  ];
+  return box({ title: "Bank reconciliation", width: w, height: h, lines });
+}
+
+function gstr2bPanel(st: PlatformStats, w: number, h: number, now: Date): string[] {
+  const g = st.totals.ops.gstr2b;
+  const lines = [
+    stat("uploads", g.uploads, c.white, " all time") + "  " + stat("last 30d", g.uploads30d, c.info),
+    stat("unmatched", g.unmatched30d, c.warn, " · 30d") + "  " + stat("new in 2B", g.new30d, c.info, " · 30d"),
+    "",
+    c.muted("last upload  ") + c.white(fmtRelative(g.lastUploadAt, now)),
+  ];
+  return box({ title: "GSTR-2B reconciliation", width: w, height: h, lines });
+}
+
+function storePanel(st: PlatformStats, w: number, h: number): string[] {
+  const o = st.totals.ops;
+  const innerW = w - 4;
+  const order = ["pending", "confirmed", "preparing", "ready", "delivered", "cancelled"];
+  const orderStyle: Record<string, Style> = { pending: c.warn, confirmed: c.info, preparing: c.violet, ready: c.teal, delivered: c.ok, cancelled: c.faint };
+  const orders = order.filter((k) => (o.store.byStatus[k] ?? 0) > 0).map((k) => ({ label: k, value: o.store.byStatus[k], style: orderStyle[k] }));
+  const shipOrder = ["pending", "shipped", "in_transit", "delivered", "returned"];
+  const shipStyle: Record<string, Style> = { pending: c.muted, shipped: c.info, in_transit: c.violet, delivered: c.ok, returned: c.bad };
+  const ships = shipOrder.filter((k) => (o.shipments.byStatus[k] ?? 0) > 0).map((k) => ({ label: k.replace("_", " "), value: o.shipments.byStatus[k], style: shipStyle[k] }));
+  const lines = [
+    c.bold(c.muted("STORE ORDERS")) + "  " + (o.store.stalePending ? c.warn(`${fmtInt(o.store.stalePending)} unconfirmed > 24h`) : ""),
+    ...(orders.length ? breakdown(orders, innerW, { showPct: false }) : [c.muted("no orders")]),
+    "",
+    c.bold(c.muted("SHIPMENTS")) + "  " + (o.shipments.stuck ? c.warn(`${fmtInt(o.shipments.stuck)} in transit > 7d`) : ""),
+    ...(ships.length ? breakdown(ships, innerW, { showPct: false }) : [c.muted("no shipments")]),
+  ];
+  return box({ title: "Store & fulfilment", width: w, height: h, lines });
+}
+
+function failuresPanel(st: PlatformStats, w: number, h: number, now: Date, natural: boolean): string[] {
+  const innerW = w - 4;
+  const maxRows = natural ? Math.min(st.failures.length, 12) : Math.max(1, h - 4);
+  const rows = st.failures.slice(0, maxRows);
+  const multi = st.mode === "multi-db";
+  const columns = [
+    { key: "at", label: "When", align: "right" as const, render: (f: PlatformFailure) => c.muted(fmtRelative(f.at, now)) },
+    ...(multi ? [{ key: "tenant", label: "Tenant", render: (f: PlatformFailure) => c.white(truncate(f.tenantName, 22)) }] : []),
+    { key: "kind", label: "Kind", render: (f: PlatformFailure) => (f.kind === "einvoice" || f.kind === "recurring" ? c.bad : c.warn)(KIND_LABEL[f.kind] ?? f.kind) },
+    { key: "ref", label: "Ref", render: (f: PlatformFailure) => c.muted(truncate(f.ref, 18)) },
+    { key: "message", label: "Message", flex: true, render: (f: PlatformFailure) => f.message },
+  ];
+  const lines = table({ columns, rows, width: innerW, emptyText: "no recent failures — nice" });
+  return box({
+    title: "Recent failures",
+    hint: st.failures.length ? `${rows.length} of ${st.failures.length}` : "",
+    width: w,
+    height: natural ? Math.max(rows.length, 1) + 4 : h,
+    lines,
+    titleStyle: (t: string) => c.bold(st.failures.length ? c.bad(t) : c.white(t)),
+  });
+}
+
+function opsBody(s: ViewState, st: PlatformStats, cols: number, rows?: number): string[] {
+  const threeCol = cols >= 120;
+  const twoCol = !threeCol && cols >= 90;
+  const panelH = 10;
+  const bands: string[][] = [];
+
+  const panels1 = [eInvoicePanel, recurringPanel, ewbPanel];
+  const panels2 = [bankPanel, (a: PlatformStats, w: number, h: number) => gstr2bPanel(a, w, h, s.now), storePanel];
+  const layout = (fns: ((a: PlatformStats, w: number, h: number) => string[])[]) => {
+    if (threeCol) {
+      const ws = splitWidth(cols, 3, 1);
+      return [hstack(fns.map((f, i) => f(st, ws[i], panelH)), 1)];
+    }
+    if (twoCol) {
+      const ws = splitWidth(cols, 2, 1);
+      return [hstack([fns[0](st, ws[0], panelH), fns[1](st, ws[1], panelH)], 1), fns[2](st, cols, panelH)];
+    }
+    return fns.map((f) => f(st, cols, panelH));
+  };
+  bands.push(...layout(panels1), ...layout(panels2));
+
+  if (rows === undefined) {
+    bands.push(failuresPanel(st, cols, 0, s.now, true));
+    return vstack(bands, cols, 0);
+  }
+  const used = bands.reduce((a, b) => a + b.length, 0);
+  const left = rows - 3 - used; // header + alerts + footer
+  if (left >= 6) bands.push(failuresPanel(st, cols, left, s.now, false));
+  return vstack(bands, cols, 0);
+}
+
 // ── Entry ───────────────────────────────────────────────────────
 
 export function renderFrame(s: ViewState, colsIn: number, rows?: number): string[] {
@@ -442,8 +643,13 @@ export function renderFrame(s: ViewState, colsIn: number, rows?: number): string
     return finish(head, body, foot, cols, rows);
   }
 
-  const body = s.view === "tenants" ? tenantsBody(s, s.stats, cols, rows) : overviewBody(s, s.stats, cols, rows);
-  return finish(head, body, foot, cols, rows);
+  const strip = alertsStrip(s.stats, cols);
+  const innerRows = rows === undefined ? undefined : rows - 1;
+  const body =
+    s.view === "tenants" ? tenantsBody(s, s.stats, cols, innerRows)
+    : s.view === "ops" ? opsBody(s, s.stats, cols, innerRows)
+    : overviewBody(s, s.stats, cols, innerRows);
+  return finish(head, [strip, ...body], foot, cols, rows);
 }
 
 /** Convenience for --once / non-TTY output: strip trailing spaces per line. */

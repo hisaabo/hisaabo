@@ -115,6 +115,29 @@ export function maskStats(stats: PlatformStats): PlatformStats {
       maintenance: stats.control.maintenance,
     },
     tenants,
+    failures: stats.failures.map((f) => {
+      const idx = stats.tenants.findIndex((t) => t.id === f.tenantId);
+      return {
+        ...f,
+        tenantName: f.tenantName ? (idx >= 0 ? tenants[idx].name : `Tenant ${tenantHandle(f.tenantId)}`) : "",
+        // Invoice and order numbers are business references, not PII; template
+        // names and statement file names can carry party names, so mask those.
+        ref: f.kind === "recurring" || f.kind === "bank_import" ? maskWord(f.ref, 3) : f.ref,
+        message: maskFreeText(scrub(f.message, pairs) ?? f.message),
+      };
+    }),
     errors: stats.errors.map((e) => scrub(e, pairs) ?? e),
   };
+}
+
+const GSTIN_RE = /\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/g;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const PHONE_RE = /(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)/g;
+
+/** Mask identifiers that tend to show up inside error messages: GSTINs, emails, Indian mobile numbers. */
+export function maskFreeText(text: string): string {
+  return text
+    .replace(GSTIN_RE, (g) => g.slice(0, 2) + DOT.repeat(11) + g.slice(-2))
+    .replace(EMAIL_RE, (e) => maskEmail(e))
+    .replace(PHONE_RE, (ph) => ph.slice(0, 2) + DOT.repeat(ph.length - 2));
 }
