@@ -34,6 +34,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await runner.close();
+  await truncateAllTables(); // leave the shared test DB clean for the next file
   await closeTestDb();
 });
 
