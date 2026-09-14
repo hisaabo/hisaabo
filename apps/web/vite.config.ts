@@ -49,6 +49,35 @@ function cspPlugin(): Plugin {
   };
 }
 
+/**
+ * Injects the Chrome/Edge origin-trial token that turns on the WebMCP API
+ * (`document.modelContext`) for this origin.
+ *
+ * Tokens are bound to a single origin, so self-hosters register their own at
+ * https://developer.chrome.com/origintrials. Unset in dev and for anyone
+ * testing behind chrome://flags/#enable-webmcp-testing — the meta tag is
+ * simply omitted then, and the app falls back to feature detection.
+ */
+function originTrialPlugin(): Plugin {
+  return {
+    name: "origin-trial-meta-tag",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html) {
+        const token = process.env.VITE_WEBMCP_ORIGIN_TRIAL_TOKEN;
+        if (!token) return html;
+
+        // Tokens are base64 — strip anything that could break out of the attribute.
+        const safeToken = token.trim().replace(/["'<>]/g, "");
+        if (!safeToken) return html;
+
+        const metaTag = `<meta http-equiv="origin-trial" content="${safeToken}">`;
+        return html.replace("<head>", `<head>\n    ${metaTag}`);
+      },
+    },
+  };
+}
+
 function getVersion(): string {
   // CI sets this from the git tag; fallback to git describe, then package.json
   // Always strip leading "v" — the display template adds its own "v" prefix
@@ -66,6 +95,7 @@ export default defineConfig({
   },
   plugins: [
     cspPlugin(),
+    originTrialPlugin(),
     TanStackRouterVite(),
     react(),
   ],

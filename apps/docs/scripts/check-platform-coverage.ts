@@ -42,6 +42,7 @@ const WEB_ONLY: Set<string> = new Set([
   // AI & automation (developer tooling)
   "ai/index.mdx",
   "ai/mcp-server.mdx",
+  "ai/webmcp.mdx",
   "ai/cli.mdx",
   "ai/integrations.mdx",
 

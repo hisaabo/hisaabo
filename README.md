@@ -87,13 +87,14 @@ The entire Hisaabo API is a set of typed, validated procedures. Every capability
                  |   procedures     |
                  +--------+---------+
                           |
-          +------+--------+--------+--------+
-          |      |        |        |        |
-        Web    Mobile   Desktop   CLI     MCP
-       React   Expo     Tauri    npm     Claude
+    +--------+--------+---+----+--------+--------+
+    |        |        |        |        |        |
+   Web    Mobile   Desktop    CLI      MCP    WebMCP
+  React    Expo     Tauri     npm    Claude  Gemini /
+                                              Copilot
 ```
 
-All five clients call the same procedures, with the same `x-business-id` header, the same role-based permissions, the same audit logging. An invoice created by Claude Desktop through MCP is byte-for-byte identical to one created through the web dashboard.
+All six clients call the same procedures, with the same `x-business-id` header, the same role-based permissions, the same audit logging. An invoice created by Claude Desktop through MCP -- or by the browser's own AI agent through WebMCP -- is byte-for-byte identical to one created through the web dashboard.
 
 **What this enables today:**
 
@@ -153,6 +154,10 @@ Add to Claude Desktop's `claude_desktop_config.json`:
   }
 }
 ```
+
+**Browser AI agents (WebMCP)**
+
+[WebMCP](https://github.com/webmachinelearning/webmcp) is a W3C Web Machine Learning CG draft that lets a page register tools with the browser's own AI agent through `document.modelContext.registerTool(...)`. Once you are signed in and have selected a business, the web app registers about 20 tools -- the same names as the MCP server -- so Gemini in Chrome or Copilot in Edge can read your books and create invoices, parties, items, payments and expenses without any install, token or config file. Tools execute in your logged-in tab over the existing cookie session and `x-business-id` header, so role permissions, validation and the audit trail are identical to clicking in the UI; no delete tools are exposed and every write asks for your confirmation. The agent runs on the user's own browser AI subscription, so this adds zero inference cost to a Hisaabo instance. Web only -- the desktop and mobile apps have no browser agent and keep using MCP or the CLI. Full details in [docs/ai/webmcp](https://docs.hisaabo.in/ai/webmcp/).
 
 **CLI**
 
