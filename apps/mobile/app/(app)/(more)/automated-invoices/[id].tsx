@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDate } from "../../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
@@ -524,9 +524,9 @@ export default function RecurringInvoiceDetailScreen() {
                         <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
                       )}
                       <Text style={styles.lineItemMeta}>
-                        {li.quantity} x {formatCurrency(li.unitPrice)}
-                        {li.taxPercent && li.taxPercent !== "0" ? ` (GST ${li.taxPercent}%)` : ""}
-                        {li.discountPercent && li.discountPercent !== "0" ? ` (-${li.discountPercent}%)` : ""}
+                        {formatQuantity(li.quantity)} x {formatCurrency(li.unitPrice)}
+                        {li.taxPercent && li.taxPercent !== "0" ? ` (GST ${formatQuantity(li.taxPercent)}%)` : ""}
+                        {li.discountPercent && li.discountPercent !== "0" ? ` (-${formatQuantity(li.discountPercent)}%)` : ""}
                       </Text>
                     </View>
                     <Text style={styles.lineItemTotal}>{formatCurrency(total)}</Text>

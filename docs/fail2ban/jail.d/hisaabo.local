@@ -1,0 +1,48 @@
+# /etc/fail2ban/jail.d/hisaabo.local
+#
+# Hisaabo API jails. All read from systemd-journald (CONTAINER_TAG=hisaabo-api).
+# Tune `findtime`, `maxretry`, `bantime` to your traffic profile.
+#
+# Recommended starting points are below; they're conservative so a
+# legitimate user fat-fingering their password 4 times in a row is NOT
+# banned, but a script trying 30 in a minute IS.
+
+[DEFAULT]
+backend  = systemd
+banaction = iptables-multiport
+# Tell fail2ban what action to take. Use `nftables-multiport` if the host
+# uses nftables natively (most modern Debian/Ubuntu hosts do).
+
+# ── Brute-force auth jail ────────────────────────────────────────
+# Catches password-stuffing against /api/trpc/auth.login.
+# Threshold: 8 login_fail events in 5 minutes → ban for 1 hour.
+[hisaabo-api-login]
+enabled  = true
+filter   = hisaabo-api
+journalmatch = CONTAINER_TAG=hisaabo-api + MESSAGE=+"event":"login_fail"
+maxretry = 8
+findtime = 300
+bantime  = 3600
+port     = http,https
+
+# ── Abusive traffic jail ─────────────────────────────────────────
+# Catches IPs that repeatedly trip rate limits, CSRF, or origin blocks.
+# Threshold: 30 events in 2 minutes → ban for 6 hours.
+# A single user hitting the in-app rate limit once is fine; an IP that
+# trips it 30 times in 120 seconds is a bot.
+[hisaabo-api-abuse]
+enabled  = true
+filter   = hisaabo-api
+journalmatch = CONTAINER_TAG=hisaabo-api
+maxretry = 30
+findtime = 120
+bantime  = 21600
+port     = http,https
+# This jail matches ALL event types from the filter (including login_fail),
+# but a single bad login can't trip 30 in 2 minutes, so legitimate users
+# are unaffected. Adjust if you raise per-email lockout thresholds.
+
+# ── Recidive (repeat offender escalation) ────────────────────────
+# fail2ban ships a `recidive` jail out of the box that bans IPs banned
+# by other jails 5+ times. Enable it in /etc/fail2ban/jail.d/recidive.local
+# (not shipped here, see the upstream fail2ban docs).

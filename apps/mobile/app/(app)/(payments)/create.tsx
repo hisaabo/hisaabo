@@ -116,10 +116,25 @@ export default function CreatePaymentScreen() {
   const params = useLocalSearchParams<{ partyId?: string; partyName?: string; invoiceId?: string }>();
   const utils = trpc.useUtils();
 
-  // Form state
+  // Form state. We only require partyId for the prefill — partyName is just for display
+  // and may legitimately arrive empty if the upstream party row has no name. The display
+  // name is back-filled below via party.getById when needed.
   const [selectedParty, setSelectedParty] = useState<SelectedParty | null>(
-    params.partyId && params.partyName ? { id: params.partyId, name: params.partyName } : null
+    params.partyId ? { id: params.partyId, name: params.partyName || "" } : null
   );
+
+  // Back-fill the party name if we were navigated in with only an id (or with an empty name).
+  // Without this, the selector would render an empty label and the user might think nothing
+  // was pre-filled.
+  const { data: prefillParty } = trpc.party.getById.useQuery(
+    { id: selectedParty?.id ?? "" },
+    { enabled: !!selectedParty && !selectedParty.name },
+  );
+  useEffect(() => {
+    if (prefillParty && selectedParty && !selectedParty.name && prefillParty.name) {
+      setSelectedParty({ id: selectedParty.id, name: prefillParty.name });
+    }
+  }, [prefillParty, selectedParty]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");

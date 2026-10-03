@@ -10,6 +10,7 @@ interface ItemGridProps {
   accentColor?: string;
   search: string;
   activeCategory: string;
+  onOpenDetail?: (item: StoreItem) => void;
 }
 
 export function ItemGrid({
@@ -21,6 +22,7 @@ export function ItemGrid({
   accentColor,
   search,
   activeCategory,
+  onOpenDetail,
 }: ItemGridProps) {
   const filtered = items.filter((item) => {
     const matchesCategory =
@@ -98,6 +100,7 @@ export function ItemGrid({
             onRemoveFromCart={onRemoveFromCart}
             currency={currency}
             accentColor={accentColor}
+            onOpenDetail={onOpenDetail}
           />
         ))}
       </div>
