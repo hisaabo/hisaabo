@@ -11,7 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDate } from "../../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
@@ -248,7 +248,7 @@ export default function CreditNoteDetailScreen() {
                   )}
                 </View>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
-                  {li.quantity}
+                  {formatQuantity(li.quantity)}
                 </Text>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
                   {formatCurrency(li.unitPrice ?? "0")}

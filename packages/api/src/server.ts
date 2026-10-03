@@ -581,6 +581,26 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   };
 
   const pdfBuffer = await generatePDFInWorker(pdfData, format);
+
+  // Generating a PDF is an implicit "send" — the user now has a finished
+  // document to hand to the customer — so a sale invoice still sitting in
+  // "draft" is promoted to "sent". Done here (server-side) rather than in each
+  // client so web, mobile, desktop and POS all behave identically and the
+  // transition can't be lost if a client download/share is interrupted.
+  // Guards keep it to outgoing sale invoices: purchase bills and credit
+  // notes / returns are never "sent" this way, and any already-progressed
+  // status (sent/paid/…) is left untouched. Mirrors the draft → sent flip the
+  // online store performs on order confirmation.
+  if (
+    invoice.status === "draft" &&
+    invoice.type === "sale" &&
+    invoice.documentType === "invoice"
+  ) {
+    await db.update(invoices)
+      .set({ status: "sent", updatedAt: new Date() })
+      .where(and(eq(invoices.id, invoiceId), eq(invoices.businessId, businessId)));
+  }
+
   return new Response(new Uint8Array(pdfBuffer), {
     headers: {
       "Content-Type": "application/pdf",

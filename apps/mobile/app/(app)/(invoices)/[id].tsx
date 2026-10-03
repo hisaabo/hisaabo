@@ -21,7 +21,7 @@ import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
-import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -556,6 +556,13 @@ export default function InvoiceDetailScreen() {
     setSharingPDF(true);
     try {
       await sharePDF(invoice.id, invoice.invoiceNumber, businessId, format);
+      // Generating the PDF promotes a draft sale invoice to "sent"
+      // server-side, so refetch to surface the new status badge.
+      if (invoice.status === "draft") {
+        refetch();
+        utils.invoice.list.invalidate();
+        utils.dashboard.summary.invalidate();
+      }
     } catch {
       Alert.alert("Error", "Failed to generate or share PDF. Please try again.");
     } finally {
@@ -702,12 +709,22 @@ export default function InvoiceDetailScreen() {
                       {li.description}
                     </Text>
                   )}
-                  {parseFloat(li.taxPercent ?? "0") > 0 && (
-                    <Text style={styles.lineTax}>GST {li.taxPercent}%</Text>
+                  {/* Per-line meta mirrors the web "Tax%/Disc%" columns, but
+                      as compact sub-lines so the narrow mobile table stays
+                      readable. The row only appears when a chip has value. */}
+                  {(parseFloat(li.taxPercent ?? "0") > 0 || parseFloat(li.discountPercent ?? "0") > 0) && (
+                    <View style={styles.lineMetaRow}>
+                      {parseFloat(li.taxPercent ?? "0") > 0 && (
+                        <Text style={styles.lineTax}>GST {formatQuantity(li.taxPercent ?? "0")}%</Text>
+                      )}
+                      {parseFloat(li.discountPercent ?? "0") > 0 && (
+                        <Text style={styles.lineDiscount}>Disc {formatQuantity(li.discountPercent ?? "0")}%</Text>
+                      )}
+                    </View>
                   )}
                 </View>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
-                  {li.quantity}{(li.selectedUnit || li.itemUnit) ? ` ${(li.selectedUnit || li.itemUnit)?.toUpperCase()}` : ""}
+                  {formatQuantity(li.quantity)}{(li.selectedUnit || li.itemUnit) ? ` ${(li.selectedUnit || li.itemUnit)?.toUpperCase()}` : ""}
                 </Text>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
                   {formatCurrency(li.unitPrice ?? "0")}
@@ -1103,10 +1120,21 @@ const useStyles = makeStyles((colors) => ({
     marginTop: 2,
     lineHeight: 14,
   },
+  lineMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 2,
+  },
   lineTax: {
     fontSize: 10,
     color: colors.textMuted,
-    marginTop: 2,
+  },
+  lineDiscount: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.success,
   },
   lineNum: {
     fontSize: 13,

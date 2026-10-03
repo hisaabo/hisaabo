@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -432,7 +432,7 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
                           )}
                         </td>
                         <td className="px-4 py-3 text-center text-text-secondary tabular-nums">
-                          {item.quantity}
+                          {formatQuantity(item.quantity)}
                           {(item.selectedUnit || item.unit) ? (
                             <span className="text-text-tertiary ml-0.5 text-[11px]">
                               {item.selectedUnit || item.unit}
