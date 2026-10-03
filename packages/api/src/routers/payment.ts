@@ -83,7 +83,10 @@ export const paymentRouter = router({
             eq(invoices.businessId, ctx.businessId),
             eq(invoices.partyId, input.partyId),
             eq(invoices.documentType, "invoice"),
-            notInArray(invoices.status, ["paid", "cancelled", "draft"]),
+            // Include drafts so payments can be recorded against them directly.
+            // The atomic UPDATE in `create` will transition the invoice to
+            // partial/paid as the balance is allocated.
+            notInArray(invoices.status, ["paid", "cancelled"]),
           )
         )
         .orderBy(invoices.invoiceDate);
