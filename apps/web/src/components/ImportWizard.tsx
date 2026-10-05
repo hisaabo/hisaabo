@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1035,6 +1036,9 @@ function ImportStepRow({
 const ENTITY_ORDER: EntityKey[] = ["parties", "items", "invoices", "payments", "cashBank"];
 
 export function ImportWizard({ open, onClose }: ImportWizardProps) {
+  // Every import.* procedure requires manage:Import; the wizard has no other
+  // purpose, so roles without it never get it opened (from any entry point).
+  const canImport = useCan("manage", "Import");
   const [state, setState] = useState<StepState>({
     source: "mybillbook",
     files: {},
@@ -2930,7 +2934,7 @@ export function ImportWizard({ open, onClose }: ImportWizardProps) {
 
   return (
     <SlideOver
-      open={open}
+      open={open && canImport}
       onClose={handleClose}
       title="Import Data"
       description="Migrate from myBillBook, Tally, or any CSV source"

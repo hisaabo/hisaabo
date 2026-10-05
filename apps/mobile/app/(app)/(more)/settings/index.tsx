@@ -18,6 +18,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { PressableRow } from "../../../../src/components/ui";
 import { OrgSwitcherSheet } from "../../../../src/components/OrgSwitcherSheet";
 import { queryClient } from "../../../../src/lib/query-client";
+import { useCan } from "../../../../src/hooks/useCan";
 
 interface SettingItem {
   label: string;
@@ -25,13 +26,15 @@ interface SettingItem {
   description: string;
   danger?: boolean;
   route?: string;
+  /** Hide the row from roles that couldn't change anything on its screen. */
+  requires?: "manage:Business" | "update:Store";
 }
 
 const SETTINGS: SettingItem[] = [
-  { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business" },
-  { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents" },
+  { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business", requires: "manage:Business" },
+  { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents", requires: "manage:Business" },
   { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
-  { label: "Online Store", icon: "storefront-outline", description: "Store settings and items", route: "/(more)/settings/store" },
+  { label: "Online Store", icon: "storefront-outline", description: "Store settings and items", route: "/(more)/settings/store", requires: "update:Store" },
   { label: "Appearance", icon: "color-palette-outline", description: "Light, dark, or system", route: "/(more)/settings/appearance" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
   { label: "Account", icon: "shield-checkmark-outline", description: "Sessions and activity log", route: "/(more)/settings/account" },
@@ -46,6 +49,15 @@ export default function SettingsScreen() {
   const logout = useAuthStore((s) => s.logout);
   const utils = trpc.useUtils();
   const [showOrgSwitcher, setShowOrgSwitcher] = useState(false);
+  const canManageBusiness = useCan("manage", "Business");
+  const canUpdateStore = useCan("update", "Store");
+  const visibleSettings = SETTINGS.filter((item) =>
+    item.requires === "manage:Business"
+      ? canManageBusiness
+      : item.requires === "update:Store"
+        ? canUpdateStore
+        : true,
+  );
 
   const { data: session } = trpc.auth.me.useQuery();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, { enabled: !!session?.user });
@@ -137,8 +149,8 @@ export default function SettingsScreen() {
 
         {/* Settings List */}
         <View style={styles.settingsList}>
-          {SETTINGS.map((item, index) => {
-            const isLast = index === SETTINGS.length - 1;
+          {visibleSettings.map((item, index) => {
+            const isLast = index === visibleSettings.length - 1;
             const isSignOut = item.danger;
             return (
               <PressableRow

@@ -199,6 +199,47 @@ export const createItemSchema = createItemBaseSchema.refine((d) => {
 
 export const updateItemSchema = createItemBaseSchema.partial();
 
+// ── Item Images ────────────────────────────────────────────────
+// Max images kept per item. Enough for a rich gallery without letting a
+// single item balloon storage/catalog payloads.
+export const MAX_IMAGES_PER_ITEM = 12;
+
+// Item-image upload: base64 data URL, PNG/JPEG/WebP. The encoded cap (~4.1MB)
+// is a loose upper bound; the server re-checks the decoded size (≤3MB) and
+// proves the file type from magic bytes — never trust the declared MIME.
+export const uploadItemImageSchema = z.object({
+  itemId: z.string().uuid(),
+  // Optional per-image variant tag. null/omitted = shared across variants.
+  variantId: z.string().uuid().nullish(),
+  dataUrl: z.string()
+    .regex(
+      /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/,
+      "must be a base64 data URL for PNG, JPEG, or WebP",
+    )
+    .max(4_200_000, "image too large (max ~3MB)"),
+  width: z.number().int().positive().max(8000).optional(),
+  height: z.number().int().positive().max(8000).optional(),
+  alt: z.string().max(300).optional(),
+});
+
+export const updateItemImageSchema = z.object({
+  imageId: z.string().uuid(),
+  // `variantId: null` explicitly clears the tag (makes the image shared);
+  // omitting it leaves the tag unchanged.
+  variantId: z.string().uuid().nullish(),
+  alt: z.string().max(300).nullish(),
+});
+
+export const reorderItemImagesSchema = z.object({
+  itemId: z.string().uuid(),
+  // Full ordered list of this item's image ids; index becomes sortOrder.
+  orderedImageIds: z.array(z.string().uuid()).min(1).max(MAX_IMAGES_PER_ITEM),
+});
+
+export const setPrimaryItemImageSchema = z.object({
+  imageId: z.string().uuid(),
+});
+
 // ── Invoice ────────────────────────────────────────────────────
 
 export const invoiceTypes = ["sale", "purchase"] as const;

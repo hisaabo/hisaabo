@@ -15,6 +15,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -32,6 +33,14 @@ const COMMON_CATEGORIES = [
 ];
 
 export default function CreateExpenseScreen() {
+  return (
+    <PermissionGate action="create" resource="Expense">
+      <CreateExpenseScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreateExpenseScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

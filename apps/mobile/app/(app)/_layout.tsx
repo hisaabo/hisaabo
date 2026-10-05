@@ -10,6 +10,7 @@ import { useColors } from "../../src/contexts/ThemeContext";
 import { queryClient } from "../../src/lib/query-client";
 import { BusinessSwitcherProvider } from "../../src/contexts/BusinessSwitcherContext";
 import { MaintenanceBanner } from "../../src/components/MaintenanceBanner";
+import { useCan } from "../../src/hooks/useCan";
 
 export default function AppLayout() {
   const styles = useStyles();
@@ -124,14 +125,7 @@ export default function AppLayout() {
             <Text style={styles.emptyBizSubtitle}>
               Create your first business to get started.
             </Text>
-            <TouchableOpacity
-              style={styles.createBizBtn}
-              onPress={() => router.push("/(app)/create-business")}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="add" size={18} color={colors.textPrimary} />
-              <Text style={styles.createBizBtnText}>Create Business</Text>
-            </TouchableOpacity>
+            <CreateFirstBusinessButton onPress={() => router.push("/(app)/create-business")} />
           </View>
         </View>
       );
@@ -217,6 +211,22 @@ export default function AppLayout() {
         </Tabs>
       </BusinessSwitcherProvider>
     </View>
+  );
+}
+
+// business.create requires a tenant admin (manage:Business). This lives in its
+// own component so useCan's auth.me query only runs once the session (with a
+// tenant) has loaded — never while AppLayout is mounted without a token.
+function CreateFirstBusinessButton({ onPress }: { onPress: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const canManageBusiness = useCan("manage", "Business");
+  if (!canManageBusiness) return null;
+  return (
+    <TouchableOpacity style={styles.createBizBtn} onPress={onPress} activeOpacity={0.8}>
+      <Ionicons name="add" size={18} color={colors.textPrimary} />
+      <Text style={styles.createBizBtnText}>Create Business</Text>
+    </TouchableOpacity>
   );
 }
 

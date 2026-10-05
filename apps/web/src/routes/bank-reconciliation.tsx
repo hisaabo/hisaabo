@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { formatCurrency, formatDate, cn, toISOString } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
@@ -104,6 +105,8 @@ function BankReconciliationPage() {
   const [activeTab, setActiveTab] = useState<Tab>("hub");
   const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const canImport = useCan("create", "BankReconciliation");
+  const tabs = canImport ? TABS : TABS.filter((t) => t.value !== "upload");
 
   function openReview(importId: string) {
     setSelectedImportId(importId);
@@ -124,7 +127,7 @@ function BankReconciliationPage() {
 
       <div className="mb-5">
         <PillTabs
-          tabs={TABS}
+          tabs={tabs}
           value={activeTab}
           onChange={(v) => setActiveTab(v as Tab)}
         />
@@ -173,6 +176,7 @@ function HubTab({
   onUpload: () => void;
 }) {
   const [page, setPage] = useState(1);
+  const canImport = useCan("create", "BankReconciliation");
   const { data: accounts } = trpc.bankAccount.list.useQuery();
   const { data: imports, isLoading } = trpc.bankRecon.importList.useQuery({
     page,
@@ -207,12 +211,14 @@ function HubTab({
                   </p>
                 </div>
                 <div className="mt-3 flex gap-2">
-                  <button
-                    className="btn-secondary text-xs py-1"
-                    onClick={onUpload}
-                  >
-                    Import Statement
-                  </button>
+                  {canImport && (
+                    <button
+                      className="btn-secondary text-xs py-1"
+                      onClick={onUpload}
+                    >
+                      Import Statement
+                    </button>
+                  )}
                   <button
                     className="btn-secondary text-xs py-1"
                     onClick={() => onOpenSummary(acc.id)}
@@ -296,9 +302,11 @@ function HubTab({
             title="No imports yet"
             description="Upload a bank statement CSV to get started"
             action={
-              <button className="btn-primary" onClick={onUpload}>
-                Import Statement
-              </button>
+              canImport ? (
+                <button className="btn-primary" onClick={onUpload}>
+                  Import Statement
+                </button>
+              ) : undefined
             }
           />
         )}
@@ -821,6 +829,8 @@ function ReviewTab({ importId }: { importId: string | null }) {
   const [createExpenseLine, setCreateExpenseLine] = useState<any | null>(null);
   const [confirmUnmatchId, setConfirmUnmatchId] = useState<string | null>(null);
   const utils = trpc.useUtils();
+  const canUpdate = useCan("update", "BankReconciliation");
+  const canCreateExpense = useCan("create", "Expense");
 
   const { data: importDetail } = trpc.bankRecon.importDetail.useQuery(
     { importId: importId! },
@@ -973,7 +983,7 @@ function ReviewTab({ importId }: { importId: string | null }) {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
-                          {line.matchStatus === "auto_matched" && (
+                          {canUpdate && line.matchStatus === "auto_matched" && (
                             <>
                               <button
                                 className="text-emerald-600 hover:text-emerald-700 text-xs font-medium"
@@ -990,7 +1000,7 @@ function ReviewTab({ importId }: { importId: string | null }) {
                               </button>
                             </>
                           )}
-                          {line.matchStatus === "manual_matched" && (
+                          {canUpdate && line.matchStatus === "manual_matched" && (
                             <button
                               className="text-red-500 hover:text-red-600 text-xs font-medium"
                               onClick={() => setConfirmUnmatchId(line.id)}
@@ -1000,13 +1010,15 @@ function ReviewTab({ importId }: { importId: string | null }) {
                           )}
                           {line.matchStatus === "unmatched" && (
                             <>
-                              <button
-                                className="text-brand-600 hover:text-brand-700 text-xs font-medium"
-                                onClick={() => setManualMatchLine(line)}
-                              >
-                                Match
-                              </button>
-                              {parseFloat(line.debit) > 0 && (
+                              {canUpdate && (
+                                <button
+                                  className="text-brand-600 hover:text-brand-700 text-xs font-medium"
+                                  onClick={() => setManualMatchLine(line)}
+                                >
+                                  Match
+                                </button>
+                              )}
+                              {canCreateExpense && parseFloat(line.debit) > 0 && (
                                 <button
                                   className="text-amber-600 hover:text-amber-700 text-xs font-medium"
                                   onClick={() => setCreateExpenseLine(line)}
@@ -1014,13 +1026,15 @@ function ReviewTab({ importId }: { importId: string | null }) {
                                   + Expense
                                 </button>
                               )}
-                              <button
-                                className="text-text-secondary hover:text-text-primary text-xs font-medium"
-                                onClick={() => ignoreMutation.mutate({ lineId: line.id })}
-                                disabled={ignoreMutation.isPending}
-                              >
-                                Ignore
-                              </button>
+                              {canUpdate && (
+                                <button
+                                  className="text-text-secondary hover:text-text-primary text-xs font-medium"
+                                  onClick={() => ignoreMutation.mutate({ lineId: line.id })}
+                                  disabled={ignoreMutation.isPending}
+                                >
+                                  Ignore
+                                </button>
+                              )}
                             </>
                           )}
                         </div>
@@ -1385,6 +1399,9 @@ function RulesTab() {
   const [form, setForm] = useState<RuleForm>(EMPTY_RULE_FORM);
   const deleteConfirm = useDeleteConfirmation();
   const utils = trpc.useUtils();
+  const canCreate = useCan("create", "BankReconciliation");
+  const canUpdate = useCan("update", "BankReconciliation");
+  const canDelete = useCan("delete", "BankReconciliation");
 
   const { data: rules, isLoading } = trpc.bankRecon.ruleList.useQuery();
 
@@ -1464,12 +1481,14 @@ function RulesTab() {
             Automatically categorize unmatched statement lines based on narration patterns.
           </p>
         </div>
-        <button
-          className="btn-primary"
-          onClick={() => { setEditId(null); setForm(EMPTY_RULE_FORM); setShowForm(true); }}
-        >
-          + New Rule
-        </button>
+        {canCreate && (
+          <button
+            className="btn-primary"
+            onClick={() => { setEditId(null); setForm(EMPTY_RULE_FORM); setShowForm(true); }}
+          >
+            + New Rule
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -1527,18 +1546,22 @@ function RulesTab() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-3 justify-end">
-                      <button
-                        className="text-brand-600 hover:text-brand-700 text-xs font-medium"
-                        onClick={() => openEdit(rule)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="text-red-500 hover:text-red-600 text-xs font-medium"
-                        onClick={() => deleteConfirm.requestDelete(rule.id, rule.matchValue)}
-                      >
-                        Delete
-                      </button>
+                      {canUpdate && (
+                        <button
+                          className="text-brand-600 hover:text-brand-700 text-xs font-medium"
+                          onClick={() => openEdit(rule)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => deleteConfirm.requestDelete(rule.id, rule.matchValue)}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1551,9 +1574,11 @@ function RulesTab() {
           title="No rules yet"
           description="Create rules to auto-categorize recurring bank transactions"
           action={
-            <button className="btn-primary" onClick={() => { setForm(EMPTY_RULE_FORM); setShowForm(true); }}>
-              + New Rule
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => { setForm(EMPTY_RULE_FORM); setShowForm(true); }}>
+                + New Rule
+              </button>
+            ) : undefined
           }
         />
       )}
@@ -1672,6 +1697,8 @@ function TemplatesTab() {
   const deleteConfirm = useDeleteConfirmation();
   const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
+  const canCreate = useCan("create", "BankReconciliation");
+  const canDelete = useCan("delete", "BankReconciliation");
 
   const { data: templates, isLoading } = trpc.bankRecon.templateList.useQuery(
     search ? { search } : undefined,
@@ -1753,20 +1780,24 @@ function TemplatesTab() {
                     <td className="px-4 py-3">
                       <div className="flex gap-3 justify-end">
                         {t.isSeeded ? (
-                          <button
-                            className="text-brand-600 hover:text-brand-700 text-xs font-medium"
-                            onClick={() => forkMutation.mutate({ templateId: t.id })}
-                            disabled={forkMutation.isPending}
-                          >
-                            Fork
-                          </button>
+                          canCreate && (
+                            <button
+                              className="text-brand-600 hover:text-brand-700 text-xs font-medium"
+                              onClick={() => forkMutation.mutate({ templateId: t.id })}
+                              disabled={forkMutation.isPending}
+                            >
+                              Fork
+                            </button>
+                          )
                         ) : (
-                          <button
-                            className="text-red-500 hover:text-red-600 text-xs font-medium"
-                            onClick={() => deleteConfirm.requestDelete(t.id, t.bankDisplayName)}
-                          >
-                            Delete
-                          </button>
+                          canDelete && (
+                            <button
+                              className="text-red-500 hover:text-red-600 text-xs font-medium"
+                              onClick={() => deleteConfirm.requestDelete(t.id, t.bankDisplayName)}
+                            >
+                              Delete
+                            </button>
+                          )
                         )}
                       </div>
                     </td>

@@ -11,17 +11,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatCurrency, formatDate } from "../../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 export default function CreditNoteDetailScreen() {
   const styles = useStyles();
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const canUpdate = useCan("update", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
   const { data: doc, isLoading, refetch, isRefetching } = trpc.invoice.getById.useQuery(
@@ -248,7 +251,7 @@ export default function CreditNoteDetailScreen() {
                   )}
                 </View>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
-                  {li.quantity}
+                  {formatQuantity(li.quantity)}
                 </Text>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
                   {formatCurrency(li.unitPrice ?? "0")}
@@ -305,7 +308,7 @@ export default function CreditNoteDetailScreen() {
         {/* Actions */}
         <Text style={styles.sectionTitle}>Actions</Text>
 
-        {doc.status === "draft" && (
+        {doc.status === "draft" && canUpdate && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={[styles.actionBtn, { borderColor: colors.info + "60" }]}
@@ -319,7 +322,7 @@ export default function CreditNoteDetailScreen() {
           </View>
         )}
 
-        {doc.status === "draft" && (
+        {doc.status === "draft" && canDelete && (
           <View style={[styles.actionGroup, styles.dangerGroup]}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.dangerBtn]}

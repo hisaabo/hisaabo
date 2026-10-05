@@ -23,6 +23,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 interface LineItem {
   itemId?: string;
@@ -266,6 +267,14 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
 // ── Main Screen ────────────────────────────────────────────────
 
 export default function QuotationCreateScreen() {
+  return (
+    <PermissionGate action="create" resource="Invoice">
+      <QuotationCreateScreenContent />
+    </PermissionGate>
+  );
+}
+
+function QuotationCreateScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

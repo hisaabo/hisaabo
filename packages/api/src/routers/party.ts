@@ -202,6 +202,13 @@ export const partyRouter = router({
         .where(and(eq(parties.id, input.id), eq(parties.businessId, ctx.businessId)))
         .returning();
 
+      // A cross-tenant id matches no row here, so `.returning()` is empty.
+      // Surface that as NOT_FOUND rather than letting the audit log below
+      // dereference `party.id` on undefined (which would surface as a 500).
+      if (!party) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Party not found" });
+      }
+
       logAudit(ctx.db, {
         businessId: ctx.businessId,
         userId: ctx.user.id,

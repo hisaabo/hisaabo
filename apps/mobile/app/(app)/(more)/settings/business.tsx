@@ -18,6 +18,7 @@ import { useBusinessStore } from "../../../../src/stores/business";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 interface FormState {
   name: string;
@@ -40,6 +41,14 @@ const GST_TYPES: Array<{ key: "regular" | "composition" | "unregistered"; label:
 ];
 
 export default function BusinessSettingsScreen() {
+  return (
+    <PermissionGate action="manage" resource="Business">
+      <BusinessSettingsScreenContent />
+    </PermissionGate>
+  );
+}
+
+function BusinessSettingsScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

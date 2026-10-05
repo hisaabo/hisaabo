@@ -7,6 +7,7 @@ import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
+import { useCan } from "@/hooks/useCan";
 import type { ItemType, ItemMode } from "@hisaabo/shared";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Modal } from "@/components/ui/Modal";
@@ -23,6 +24,7 @@ import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
 import { UnitVariantEditor } from "@/components/UnitVariantEditor";
+import { ItemImageManager } from "@/components/items/ItemImageManager";
 import {
   type UiUnitVariant,
   recomputeOnBasePriceChange,
@@ -121,6 +123,8 @@ function ItemsPage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const canCreate = useCan("create", "Item");
+  const canDelete = useCan("delete", "Item");
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -248,14 +252,14 @@ function ItemsPage() {
     },
   });
 
-  useHotkeys([
+  useHotkeys(canCreate ? [
     {
       key: "n",
       handler: () => setShowAddModal(true),
       description: "New item",
       scope: "items",
     },
-  ]);
+  ] : []);
 
   // Client-side filter by item type (the query doesn't have itemType filter)
   const filteredItems =
@@ -270,13 +274,15 @@ function ItemsPage() {
         title="Items"
         description="Products and services inventory"
         actions={
-          <button
-            className="btn-primary inline-flex items-center gap-2"
-            onClick={() => setShowAddModal(true)}
-          >
-            + Add Item
-            <KbdShortcut keys={["N"]} className="opacity-60" />
-          </button>
+          canCreate ? (
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              onClick={() => setShowAddModal(true)}
+            >
+              + Add Item
+              <KbdShortcut keys={["N"]} className="opacity-60" />
+            </button>
+          ) : null
         }
       />
 
@@ -351,9 +357,11 @@ function ItemsPage() {
           description="Add products or services to start creating invoices."
           encouragement="Your inventory is empty. Add your first product to start billing."
           action={
-            <button className="btn-primary" onClick={() => setShowAddModal(true)}>
-              + Add Item
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowAddModal(true)}>
+                + Add Item
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -416,6 +424,7 @@ function ItemsPage() {
                     </td>
                     <td className="text-text-secondary text-xs">{item.unit}</td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                      {canDelete && (
                       <button
                         className="btn-icon opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                         onClick={() => deleteConfirm.requestDelete(item.id, item.name)}
@@ -436,6 +445,7 @@ function ItemsPage() {
                           />
                         </svg>
                       </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -1049,6 +1059,7 @@ function AddItemModal({ open, onClose }: { open: boolean; onClose: () => void })
 function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
   const utils = trpc.useUtils();
+  const canDeleteVariant = useCan("delete", "Item");
 
   const [itemType, setItemType] = useState<ItemType>("product");
   const [name, setName] = useState("");
@@ -1493,13 +1504,15 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
                                   >
                                     Edit
                                   </button>
-                                  <button
-                                    onClick={() => deleteVariantMutation.mutate({ variantId: v.id })}
-                                    className="text-red-500 text-xs"
-                                    disabled={deleteVariantMutation.isPending}
-                                  >
-                                    &times;
-                                  </button>
+                                  {canDeleteVariant && (
+                                    <button
+                                      onClick={() => deleteVariantMutation.mutate({ variantId: v.id })}
+                                      className="text-red-500 text-xs"
+                                      disabled={deleteVariantMutation.isPending}
+                                    >
+                                      &times;
+                                    </button>
+                                  )}
                                 </td>
                               </>
                             )}
@@ -1562,6 +1575,22 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
               </div>
             </Disclosure>
           )}
+
+          {/* Image gallery — available for every item type. For variants-mode
+              items, each image can be tagged to a specific variant. */}
+          <Disclosure label="Images">
+            <ItemImageManager
+              itemId={itemId}
+              variants={
+                itemMode === "variants" && item?.variants
+                  ? item.variants.map((v) => ({
+                      id: v.id,
+                      attributeValues: v.attributeValues as Record<string, string>,
+                    }))
+                  : []
+              }
+            />
+          </Disclosure>
         </div>
 
       </div>
@@ -1984,6 +2013,8 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
   );
   // Sales stats are aggregated server-side (no row-limit truncation)
   const { data: salesStats } = trpc.item.salesStats.useQuery({ id: itemId });
+  const canUpdate = useCan("update", "Item");
+  const canDelete = useCan("delete", "Item");
 
   if (!item) return null;
 
@@ -2006,13 +2037,15 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
       footer={
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowMerge(true)}
-              className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-600/[0.08] border border-amber-200 dark:border-amber-800 transition-colors"
-            >
-              Merge
-            </button>
-            {item.itemType === "product" && (
+            {canDelete && (
+              <button
+                onClick={() => setShowMerge(true)}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-600/[0.08] border border-amber-200 dark:border-amber-800 transition-colors"
+              >
+                Merge
+              </button>
+            )}
+            {canUpdate && item.itemType === "product" && (
               <button
                 onClick={() => setShowAdjustStock(true)}
                 className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -2020,7 +2053,7 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
                 Adjust Stock
               </button>
             )}
-            {item.itemType === "product" && item.itemMode !== "variants" && (
+            {canUpdate && item.itemType === "product" && item.itemMode !== "variants" && (
               <button
                 onClick={() => setShowSwitchUnit(true)}
                 className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -2029,15 +2062,17 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
               </button>
             )}
           </div>
-          <button
-            onClick={() => {
-              onClose();
-              onEdit(item.id);
-            }}
-            className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
-          >
-            Edit Item
-          </button>
+          {canUpdate && (
+            <button
+              onClick={() => {
+                onClose();
+                onEdit(item.id);
+              }}
+              className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
+            >
+              Edit Item
+            </button>
+          )}
         </div>
       }
     >

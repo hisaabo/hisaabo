@@ -18,6 +18,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card" | "payment_gateway";
 
@@ -39,6 +40,14 @@ function normaliseType(raw: string): AccountType {
 }
 
 export default function BankAccountEditScreen() {
+  return (
+    <PermissionGate action="update" resource="BankAccount">
+      <BankAccountEditScreenContent />
+    </PermissionGate>
+  );
+}
+
+function BankAccountEditScreenContent() {
   const s = useS();
   const colors = useColors();
   const router = useRouter();

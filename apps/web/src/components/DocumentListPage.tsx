@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -126,6 +127,12 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   );
   const [status, setStatus] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  // All these document types are Invoice-backed on the server, so the role
+  // permission they require is "create:Invoice" / "update:Invoice" /
+  // "delete:Invoice" (document.convert also needs create:Invoice).
+  const canCreate = useCan("create", "Invoice");
+  const canUpdate = useCan("update", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
@@ -197,9 +204,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
         title={title}
         description={description}
         actions={
-          <button className="btn-primary" onClick={() => setShowCreate(true)}>
-            {buttonLabel}
-          </button>
+          canCreate ? (
+            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+              {buttonLabel}
+            </button>
+          ) : null
         }
       />
 
@@ -251,9 +260,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           title={emptyTitle}
           description={emptyDescription(type, status)}
           action={
-            <button className="btn-primary" onClick={() => setShowCreate(true)}>
-              {buttonLabel}
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowCreate(true)}>
+                {buttonLabel}
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -304,7 +315,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {markSent && doc.status === "draft" && (
+                      {markSent && doc.status === "draft" && canUpdate && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "sent" })
@@ -314,7 +325,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                           Mark Sent
                         </button>
                       )}
-                      {markPaid && doc.status === "sent" && (
+                      {markPaid && doc.status === "sent" && canUpdate && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "paid" })
@@ -324,7 +335,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                           Mark Paid
                         </button>
                       )}
-                      {convert && (
+                      {convert && canCreate && (
                         <button
                           onClick={() => convert.onConvert(doc.id)}
                           disabled={convert.convertingId === doc.id}
@@ -335,7 +346,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                             : "Convert to Invoice"}
                         </button>
                       )}
-                      {doc.status === "draft" && (
+                      {doc.status === "draft" && canDelete && (
                         <button
                           onClick={() =>
                             confirmDelete(doc.id, doc.invoiceNumber)
@@ -364,7 +375,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           selectedDoc ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
-                {selectedDoc.status === "draft" && (
+                {selectedDoc.status === "draft" && canDelete && (
                   <button
                     onClick={() => {
                       setSelectedId(null);
@@ -377,7 +388,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                 )}
               </div>
               <div className="flex gap-2">
-                {selectedDoc.status === "draft" && (
+                {selectedDoc.status === "draft" && canUpdate && (
                   <button
                     onClick={() => {
                       setSelectedId(null);
@@ -467,7 +478,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                             <p className="text-[11px] italic text-text-secondary mt-0.5">{li.description}</p>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.quantity}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatQuantity(li.quantity)}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{formatCurrency(li.unitPrice)}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{li.taxPercent}%</td>
                         <td className="px-3 py-2 text-right tabular-nums font-medium text-text-primary">{formatCurrency(li.totalAmount)}</td>

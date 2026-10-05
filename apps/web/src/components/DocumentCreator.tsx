@@ -7,6 +7,7 @@ import { Combobox } from "@/components/ui/Combobox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useCan } from "@/hooks/useCan";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { QuickPartyCreate } from "@/components/QuickPartyCreate";
 import { QuickItemCreate, type QuickItemCreateResult } from "@/components/QuickItemCreate";
@@ -180,6 +181,11 @@ export function DocumentCreator({
     page: 1,
     limit: 50,
   });
+
+  // Inline "create party / item" options call party.create / item.create,
+  // which need their own permissions (a seller can invoice but not add items).
+  const canCreateParty = useCan("create", "Party");
+  const canCreateItem = useCan("create", "Item");
 
   // Quick-create dialog state
   const [quickPartyOpen, setQuickPartyOpen] = useState(false);
@@ -693,10 +699,10 @@ export function DocumentCreator({
             emptyMessage={`No ${partyLabel.toLowerCase()}s found`}
             onQueryChange={setPartySearch}
             isLoading={partiesFetching && !!debouncedPartySearch}
-            onCreateNew={(q) => {
+            onCreateNew={canCreateParty ? (q) => {
               setQuickPartyName(q);
               setQuickPartyOpen(true);
-            }}
+            } : undefined}
             createNewLabel={`Create ${partyLabel.toLowerCase()}`}
             autoFocus={!isEditing && !partyId}
           />
@@ -742,11 +748,11 @@ export function DocumentCreator({
                       emptyMessage="No products found"
                       onQueryChange={setItemSearch}
                       isLoading={itemsFetching && !!debouncedItemSearch}
-                      onCreateNew={(q) => {
+                      onCreateNew={canCreateItem ? (q) => {
                         setQuickItemName(q);
                         setQuickItemLineId(li.id);
                         setQuickItemOpen(true);
-                      }}
+                      } : undefined}
                       createNewLabel="Create item"
                     />
                   </div>

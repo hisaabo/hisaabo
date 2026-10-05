@@ -33,9 +33,11 @@ import { eq, and } from "drizzle-orm";
 import { businesses, itcLedgerEntries, itcUtilizations } from "@hisaabo/db";
 import {
   createTestWorld,
+  createBusiness,
   createParty,
   createInvoiceWithItems,
   type TestWorld,
+  type TestBusiness,
   type TestParty,
 } from "../helpers/fixtures.js";
 import { createTestCaller } from "../helpers/create-test-caller.js";
@@ -519,6 +521,44 @@ describe("ITC blocking", () => {
 // ── 3. Aging Alerts ─────────────────────────────────────────────────────────
 
 describe("ITC aging alerts", () => {
+  // These tests date invoices relative to today (160 / 185 days back), so their
+  // ITC entries land in whichever return period that happens to be. Keep them in
+  // a business of their own so they can never add to the fixed-period totals
+  // other suites assert on (e.g. the ITC dashboard's April 2026 summary, which
+  // broke once "today − 160..185 days" fell in April 2026).
+  let agingBusiness: TestBusiness;
+  let agingSupplier: TestParty;
+
+  function agingCaller() {
+    return createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name ?? null,
+      tenantId: world.tenant1.id,
+      businessId: agingBusiness.id,
+    });
+  }
+
+  beforeAll(async () => {
+    const db = getTenantTestDb();
+    agingBusiness = await createBusiness(db, world.ramesh.id, {
+      name: "Aging Alerts Test Co",
+      gstin: "27AABCA1111R1ZM",
+      city: "Mumbai",
+      state: "Maharashtra",
+      stateCode: "27",
+    });
+    agingSupplier = await createParty(db, agingBusiness.id, {
+      name: "Aging Supplies Pvt Ltd",
+      type: "supplier",
+      gstin: "27AABCS0000R1ZM",
+      city: "Mumbai",
+      state: "Maharashtra",
+      stateCode: "27",
+      openingBalance: "0.00",
+    });
+  });
+
   it("returns invoices approaching 180-day limit", async () => {
     const db = getTenantTestDb();
 
@@ -529,8 +569,8 @@ describe("ITC aging alerts", () => {
 
     const { invoice } = await createInvoiceWithItems(
       db,
-      world.business1.id,
-      supplierParty.id,
+      agingBusiness.id,
+      agingSupplier.id,
       [
         {
           itemName: "Old Purchase - Warning",
@@ -554,7 +594,7 @@ describe("ITC aging alerts", () => {
     const remainderPaise = taxPaise - halfPaise;
 
     await db.insert(itcLedgerEntries).values({
-      businessId: world.business1.id,
+      businessId: agingBusiness.id,
       invoiceId: invoice.id,
       returnPeriod: `${pastDate.getFullYear()}-${String(pastDate.getMonth() + 1).padStart(2, "0")}`,
       status: "available",
@@ -565,7 +605,7 @@ describe("ITC aging alerts", () => {
       isReverseCharge: false,
     });
 
-    const caller = callerForRamesh();
+    const caller = agingCaller();
     const alerts = await caller.itc.agingAlerts();
 
     const alert = alerts.find((a) => a.invoiceId === invoice.id);
@@ -582,8 +622,8 @@ describe("ITC aging alerts", () => {
 
     const { invoice } = await createInvoiceWithItems(
       db,
-      world.business1.id,
-      supplierParty.id,
+      agingBusiness.id,
+      agingSupplier.id,
       [
         {
           itemName: "Old Purchase - Critical",
@@ -602,7 +642,7 @@ describe("ITC aging alerts", () => {
 
     // Manually insert ITC entry
     await db.insert(itcLedgerEntries).values({
-      businessId: world.business1.id,
+      businessId: agingBusiness.id,
       invoiceId: invoice.id,
       returnPeriod: `${pastDate.getFullYear()}-${String(pastDate.getMonth() + 1).padStart(2, "0")}`,
       status: "available",
@@ -613,7 +653,7 @@ describe("ITC aging alerts", () => {
       isReverseCharge: false,
     });
 
-    const caller = callerForRamesh();
+    const caller = agingCaller();
     const alerts = await caller.itc.agingAlerts();
 
     const alert = alerts.find((a) => a.invoiceId === invoice.id);
@@ -630,8 +670,8 @@ describe("ITC aging alerts", () => {
 
     const { invoice } = await createInvoiceWithItems(
       db,
-      world.business1.id,
-      supplierParty.id,
+      agingBusiness.id,
+      agingSupplier.id,
       [
         {
           itemName: "Paid Old Purchase",
@@ -652,7 +692,7 @@ describe("ITC aging alerts", () => {
 
     // Insert ITC entry
     await db.insert(itcLedgerEntries).values({
-      businessId: world.business1.id,
+      businessId: agingBusiness.id,
       invoiceId: invoice.id,
       returnPeriod: `${pastDate.getFullYear()}-${String(pastDate.getMonth() + 1).padStart(2, "0")}`,
       status: "available",
@@ -663,7 +703,7 @@ describe("ITC aging alerts", () => {
       isReverseCharge: false,
     });
 
-    const caller = callerForRamesh();
+    const caller = agingCaller();
     const alerts = await caller.itc.agingAlerts();
 
     // Fully paid invoice should NOT appear in aging alerts
@@ -773,12 +813,36 @@ describe("ITC dashboard", () => {
 // ── 5. GSTR-3B Table 4 ─────────────────────────────────────────────────────
 
 describe("GSTR-3B Table 4", () => {
-  // Use a dedicated month for table 4 tests
-  const T4_YEAR = 2026;
-  const T4_MONTH = 5; // May 2026
+  // Use a dedicated period for table 4 tests.
+  // YEAR must NOT match `new Date().getFullYear()` at CI time — the
+  // "defaults to current period" test in `ITC dashboard` above inserts
+  // an unblocked purchase on `new Date()`, and its ITC ledger entry
+  // would be aggregated into row4A5 for whatever month happens to be
+  // current, breaking the "all-other ITC = 0 after blocking" assertion
+  // below if year+month happen to collide. Locking the test period to
+  // a past year (the API schema accepts ≥2017) guarantees isolation
+  // regardless of when CI runs.
+  const T4_YEAR = 2025;
+  const T4_MONTH = 5; // May 2025
 
   it("populates Table 4 with correct ITC breakdown", async () => {
     const caller = callerForRamesh();
+    const db = getTenantTestDb();
+    const t4Period = `${T4_YEAR}-${String(T4_MONTH).padStart(2, "0")}`;
+
+    // Defensive isolation against calendar drift: the "ITC dashboard > defaults
+    // to current period" test above creates a purchase invoice with no
+    // invoiceDate, so its auto-generated ITC entry lands in the calendar month
+    // CI is running in. When that month happens to equal T4_MONTH, the stray
+    // entry pollutes the 4A5 ("all other") bucket and breaks the assertion
+    // below. Strip any pre-existing ITC entries for this period so the test
+    // only sees the rows it seeds itself.
+    await db.delete(itcLedgerEntries).where(
+      and(
+        eq(itcLedgerEntries.businessId, world.business1.id),
+        eq(itcLedgerEntries.returnPeriod, t4Period),
+      ),
+    );
 
     // 1. Normal purchase invoice -> 4A5 (all other ITC)
     // 10 x 500 = 5,000 subtotal, 18% tax = 900
@@ -852,9 +916,13 @@ describe("GSTR-3B Table 4", () => {
 // ── 6. ITC Utilization ──────────────────────────────────────────────────────
 
 describe("ITC utilization", () => {
-  // Use a dedicated month for utilization tests
-  const UTIL_YEAR = 2026;
-  const UTIL_MONTH = 6; // June 2026
+  // Use a dedicated period for utilization tests.
+  // YEAR locked to a past year for the same reason as T4_YEAR above —
+  // the dashboard "defaults to current period" test inserts an invoice
+  // dated `new Date()`, so any current-year period is vulnerable to
+  // contamination at CI time.
+  const UTIL_YEAR = 2025;
+  const UTIL_MONTH = 6; // June 2025
   const UTIL_PERIOD = `${UTIL_YEAR}-${String(UTIL_MONTH).padStart(2, "0")}`;
 
   it("records utilization for a period", async () => {

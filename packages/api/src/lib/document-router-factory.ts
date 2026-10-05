@@ -17,6 +17,7 @@ import {
   calcInvoiceTotals,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { requireCan } from "./permissions.js";
 import { logAudit } from "./audit.js";
 import { buildBusinessDateFilter } from "./business-date.js";
 
@@ -182,6 +183,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     create: memberProcedure
       .input(createInvoiceSchema)
       .mutation(async ({ input, ctx }) => {
+        // Documents are Invoice-backed; same permission as the invoice router.
+        requireCan(ctx.ability, "create", "Invoice");
         const doc = await ctx.db.transaction(async (tx) => {
           // Security: validate that partyId belongs to the current business.
           const [partyCheck] = await tx.select({ id: parties.id })
@@ -454,6 +457,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         })
       )
       .mutation(async ({ input, ctx }) => {
+        // Documents are Invoice-backed; same permission as the invoice router.
+        requireCan(ctx.ability, "update", "Invoice");
         const [doc] = await ctx.db
           .update(invoices)
           .set({
@@ -489,6 +494,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     delete: adminProcedure
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
+        // Documents are Invoice-backed; same permission as the invoice router.
+        requireCan(ctx.ability, "delete", "Invoice");
         const deleteResult = await ctx.db.transaction(async (tx) => {
           const [doc] = await tx
             .select()

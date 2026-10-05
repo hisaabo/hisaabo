@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { toast } from "@/hooks/useToast";
 
 interface Props {
@@ -23,6 +24,7 @@ export function CustomerPicker({ open, onClose, onPick, walkIn }: Props) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const canCreateParty = useCan("create", "Party");
 
   const { data } = trpc.party.list.useQuery(
     { search: search || null, type: "customer", page: 1, limit: 20 },
@@ -139,15 +141,17 @@ export function CustomerPicker({ open, onClose, onPick, walkIn }: Props) {
             </ul>
             <div className="flex gap-2 justify-between items-center">
               <button className="btn-secondary" onClick={reset}>Cancel</button>
-              <button
-                className="btn-primary"
-                onClick={() => {
-                  setCreating(true);
-                  setNewName(search);
-                }}
-              >
-                + New customer
-              </button>
+              {canCreateParty && (
+                <button
+                  className="btn-primary"
+                  onClick={() => {
+                    setCreating(true);
+                    setNewName(search);
+                  }}
+                >
+                  + New customer
+                </button>
+              )}
             </div>
           </div>
         )}

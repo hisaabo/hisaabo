@@ -105,6 +105,14 @@ export interface CsrfMiddlewareOptions {
    * Pass an explicit list in tests to avoid depending on env vars.
    */
   allowedBearerOrigins?: readonly string[];
+
+  /**
+   * Called when a request is rejected. Server wires this to the
+   * security-event logger so fail2ban can ban repeat offenders.
+   * Kept as an injected callback so this middleware does not depend
+   * on the logger module (keeps the unit tests fast and isolated).
+   */
+  onReject?: (kind: "csrf_fail" | "origin_block", c: Context) => void;
 }
 
 /**
@@ -168,6 +176,7 @@ export function createCsrfMiddleware(options: CsrfMiddlewareOptions = {}) {
       // must NOT require it — this check fires ONLY when Origin IS present.
       const origin = c.req.header("origin") ?? "";
       if (!isOriginAllowedForBearer(origin, corsOrigins, CSRF_TAURI_ORIGINS)) {
+        options.onReject?.("origin_block", c);
         return c.json(
           { error: "Origin not permitted for Bearer-authenticated request" },
           403,
@@ -186,6 +195,7 @@ export function createCsrfMiddleware(options: CsrfMiddlewareOptions = {}) {
     // Cookie-authenticated state-changing request → require CSRF header.
     const xrw = c.req.header("x-requested-with");
     if (xrw !== "hisaabo") {
+      options.onReject?.("csrf_fail", c);
       return c.json({ error: "CSRF validation failed" }, 403);
     }
 

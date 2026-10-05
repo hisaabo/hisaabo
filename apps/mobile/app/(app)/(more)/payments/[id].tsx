@@ -18,6 +18,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -43,6 +44,8 @@ export default function PaymentDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const utils = trpc.useUtils();
+  const canUpdate = useCan("update", "Payment");
+  const canDelete = useCan("delete", "Payment");
 
   const [isEditing, setIsEditing] = useState(false);
   const [editAmount, setEditAmount] = useState("");
@@ -169,12 +172,16 @@ export default function PaymentDetailScreen() {
         <View style={styles.headerActions}>
           {!isEditing && (
             <>
-              <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
-                <Ionicons name="create-outline" size={20} color={colors.brand} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={20} color={colors.danger} />
-              </TouchableOpacity>
+              {canUpdate && (
+                <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
+                  <Ionicons name="create-outline" size={20} color={colors.brand} />
+                </TouchableOpacity>
+              )}
+              {canDelete && (
+                <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+                  <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {isEditing && (
@@ -352,7 +359,7 @@ export default function PaymentDetailScreen() {
         )}
 
         {/* Delete Button */}
-        {!isEditing && (
+        {!isEditing && canDelete && (
           <TouchableOpacity
             style={styles.deleteBtnFull}
             onPress={handleDelete}

@@ -21,11 +21,12 @@ import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
-import { formatCurrency, formatDate } from "../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
+import { useCan, useCanModify } from "../../../src/hooks/useCan";
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
 
@@ -236,6 +237,8 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const colors = useColors();
   const SHIPMENT_STATUS_CONFIG = useShipmentStatusConfig();
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
+  // shipment.update requires update:Invoice
+  const canUpdateShipment = useCan("update", "Invoice");
   const utils = trpc.useUtils();
 
   const { data, isLoading, refetch } = trpc.shipment.list.useQuery(
@@ -389,8 +392,8 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
           </View>
         ) : null}
 
-        {/* Action buttons — hidden when invoice is paid */}
-        {!isPaid && (shipment.status === "pending" ||
+        {/* Action buttons — hidden when invoice is paid or the role can't update */}
+        {canUpdateShipment && (!isPaid && (shipment.status === "pending" ||
           shipment.status === "shipped" ||
           shipment.status === "in_transit") ? (
           <View style={shipmentStyles.actionRow}>
@@ -441,7 +444,7 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
               </TouchableOpacity>
             </View>
           )
-        )}
+        ))}
       </View>
 
       {trackingSheetOpen && (
@@ -475,6 +478,14 @@ export default function InvoiceDetailScreen() {
     { id: id ?? "" },
     { enabled: !!id }
   );
+
+  const canEdit = useCan("update", "Invoice");
+  const canRecordPayment = useCan("create", "Payment");
+  // Credit notes and sales returns are documents → create:Invoice
+  const canCreateDocument = useCan("create", "Invoice");
+  // Role permission plus the API's rule: a seller_manager may delete only
+  // unpaid invoices up to 2 hours old.
+  const canDelete = useCanModify("delete", "Invoice", invoice ? { createdAt: invoice.createdAt as any, status: invoice.status } : undefined).allowed;
 
   const utils = trpc.useUtils();
 
@@ -556,6 +567,13 @@ export default function InvoiceDetailScreen() {
     setSharingPDF(true);
     try {
       await sharePDF(invoice.id, invoice.invoiceNumber, businessId, format);
+      // Generating the PDF promotes a draft sale invoice to "sent"
+      // server-side, so refetch to surface the new status badge.
+      if (invoice.status === "draft") {
+        refetch();
+        utils.invoice.list.invalidate();
+        utils.dashboard.summary.invalidate();
+      }
     } catch {
       Alert.alert("Error", "Failed to generate or share PDF. Please try again.");
     } finally {
@@ -702,12 +720,22 @@ export default function InvoiceDetailScreen() {
                       {li.description}
                     </Text>
                   )}
-                  {parseFloat(li.taxPercent ?? "0") > 0 && (
-                    <Text style={styles.lineTax}>GST {li.taxPercent}%</Text>
+                  {/* Per-line meta mirrors the web "Tax%/Disc%" columns, but
+                      as compact sub-lines so the narrow mobile table stays
+                      readable. The row only appears when a chip has value. */}
+                  {(parseFloat(li.taxPercent ?? "0") > 0 || parseFloat(li.discountPercent ?? "0") > 0) && (
+                    <View style={styles.lineMetaRow}>
+                      {parseFloat(li.taxPercent ?? "0") > 0 && (
+                        <Text style={styles.lineTax}>GST {formatQuantity(li.taxPercent ?? "0")}%</Text>
+                      )}
+                      {parseFloat(li.discountPercent ?? "0") > 0 && (
+                        <Text style={styles.lineDiscount}>Disc {formatQuantity(li.discountPercent ?? "0")}%</Text>
+                      )}
+                    </View>
                   )}
                 </View>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
-                  {li.quantity}{(li.selectedUnit || li.itemUnit) ? ` ${(li.selectedUnit || li.itemUnit)?.toUpperCase()}` : ""}
+                  {formatQuantity(li.quantity)}{(li.selectedUnit || li.itemUnit) ? ` ${(li.selectedUnit || li.itemUnit)?.toUpperCase()}` : ""}
                 </Text>
                 <Text style={[styles.tableCell, styles.tableNumCol, styles.textRight, styles.lineNum]}>
                   {formatCurrency(li.unitPrice ?? "0")}
@@ -799,7 +827,7 @@ export default function InvoiceDetailScreen() {
         <Text style={styles.sectionTitle}>Actions</Text>
 
         {/* Status change buttons */}
-        {nextStatuses.length > 0 && (
+        {nextStatuses.length > 0 && canEdit && (
           <View style={styles.actionGroup}>
             {nextStatuses.map((ns) => (
               <TouchableOpacity
@@ -821,8 +849,11 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
-        {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered) */}
-        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+        {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered).
+            Drafts are intentionally allowed: receiving a payment auto-promotes the invoice
+            to partial/paid status (see payment.create in packages/api), so the user no
+            longer needs to "Mark as Sent" first. */}
+        {balance > 0 && invoice.status !== "cancelled" && invoice.status !== "adjusted" && canRecordPayment && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={[styles.actionBtn, { borderColor: colors.success + "60" }]}
@@ -839,7 +870,7 @@ export default function InvoiceDetailScreen() {
         )}
 
         {/* Credit Note / Sales Return conversions — hidden when fully adjusted */}
-        {invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+        {invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && canCreateDocument && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}
@@ -861,7 +892,7 @@ export default function InvoiceDetailScreen() {
         )}
 
         {/* Edit Invoice (only for draft/sent) */}
-        {(invoice.status === "draft" || invoice.status === "sent") && (
+        {(invoice.status === "draft" || invoice.status === "sent") && canEdit && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}
@@ -914,7 +945,7 @@ export default function InvoiceDetailScreen() {
         </View>
 
         {/* Delete — hidden when any payment has been recorded */}
-        {amountPaid <= 0 && (
+        {amountPaid <= 0 && canDelete && (
           <View style={[styles.actionGroup, styles.dangerGroup]}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.dangerBtn]}
@@ -1103,10 +1134,21 @@ const useStyles = makeStyles((colors) => ({
     marginTop: 2,
     lineHeight: 14,
   },
+  lineMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 2,
+  },
   lineTax: {
     fontSize: 10,
     color: colors.textMuted,
-    marginTop: 2,
+  },
+  lineDiscount: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.success,
   },
   lineNum: {
     fontSize: 13,

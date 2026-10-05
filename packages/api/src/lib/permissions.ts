@@ -36,11 +36,12 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       break;
 
     case "seller_manager":
-      // Invoices: full CRUD, delete only unpaid <2hrs (time check done at endpoint level)
+      // Invoices: full CRUD. routers/invoice.ts `delete` additionally requires the
+      // invoice to be unpaid and created no more than 2 hours ago.
       can("create", "Invoice");
       can("read", "Invoice");
       can("update", "Invoice");
-      can("delete", "Invoice"); // API enforces: unpaid + <2hrs
+      can("delete", "Invoice");
       // Parties & Items
       can("create", "Party");
       can("read", "Party");
@@ -48,10 +49,10 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       can("create", "Item");
       can("read", "Item");
       can("update", "Item");
-      // Payments: create for own invoices, edit within 2hrs
+      // Payments
       can("create", "Payment");
       can("read", "Payment");
-      can("update", "Payment"); // API enforces: own + <2hrs
+      can("update", "Payment");
       // View only
       can("read", "Expense");
       can("read", "BankAccount");
@@ -74,19 +75,19 @@ export function defineAbilityFor(ctx: PermissionContext): AppAbility {
       break;
 
     case "seller":
-      // Invoices: create, edit own only within 2hrs
+      // Invoices: create, read, update (no delete)
       can("create", "Invoice");
       can("read", "Invoice");
-      can("update", "Invoice"); // API enforces: own + <2hrs
+      can("update", "Invoice");
       // Parties: create + read
       can("create", "Party");
       can("read", "Party");
       // Items: read only
       can("read", "Item");
-      // Payments: create for own invoices, edit within 2hrs
+      // Payments: create, read, update (no delete)
       can("create", "Payment");
       can("read", "Payment");
-      can("update", "Payment"); // API enforces: own + <2hrs
+      can("update", "Payment");
       // View basics
       can("read", "Business");
       // Store: read only (view orders)

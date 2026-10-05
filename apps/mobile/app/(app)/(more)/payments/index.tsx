@@ -15,6 +15,7 @@ import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -44,6 +45,7 @@ export default function PaymentsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const canCreate = useCan("create", "Payment");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -143,7 +145,7 @@ export default function PaymentsScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/payments/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(more)/payments/create" as never)} />}
     </SafeAreaView>
   );
 }

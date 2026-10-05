@@ -22,6 +22,7 @@ import {
   EmptyState,
   QueryError,
 } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type StatusFilter = "all" | "draft" | "sent" | "cancelled";
 
@@ -38,6 +39,9 @@ export default function DeliveryChallansScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const canCreate = useCan("create", "Invoice");
+  const canUpdate = useCan("update", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -149,41 +153,50 @@ export default function DeliveryChallansScreen() {
     </View>
   );
 
-  const renderItem = ({ item }: { item: typeof docs[0] }) => (
-    <View style={styles.docCard}>
-      <PressableRow style={styles.docRow} onPress={() => router.push(`/(more)/delivery-challans/${item.id}` as never)}>
-        <View style={styles.docLeft}>
-          <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
-          <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>
-          <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
-        </View>
-        <View style={styles.docRight}>
-          <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
-          <StatusBadge status={item.status} />
-        </View>
-      </PressableRow>
-      {item.status === "draft" && (
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => handleMarkSent(item.id)}>
-            <Ionicons name="send-outline" size={13} color={colors.info || "#3b82f6"} />
-            <Text style={[styles.actionBtnText, { color: colors.info || "#3b82f6" }]}>Mark Sent</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item.id, item.invoiceNumber)}>
-            <Ionicons name="trash-outline" size={13} color={colors.danger} />
-            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {item.status === "sent" && (
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => handleCancel(item.id, item.invoiceNumber)}>
-            <Ionicons name="close-circle-outline" size={13} color={colors.danger} />
-            <Text style={[styles.actionBtnText, { color: colors.danger }]}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
-  );
+  const renderItem = ({ item }: { item: typeof docs[0] }) => {
+    // Only the actions this role may perform; the row is omitted when empty.
+    const draftActions = [
+      canUpdate && (
+        <TouchableOpacity key="sent" style={styles.actionBtn} onPress={() => handleMarkSent(item.id)}>
+          <Ionicons name="send-outline" size={13} color={colors.info || "#3b82f6"} />
+          <Text style={[styles.actionBtnText, { color: colors.info || "#3b82f6" }]}>Mark Sent</Text>
+        </TouchableOpacity>
+      ),
+      canDelete && (
+        <TouchableOpacity key="delete" style={styles.actionBtn} onPress={() => handleDelete(item.id, item.invoiceNumber)}>
+          <Ionicons name="trash-outline" size={13} color={colors.danger} />
+          <Text style={[styles.actionBtnText, { color: colors.danger }]}>Delete</Text>
+        </TouchableOpacity>
+      ),
+    ].filter(Boolean);
+
+    return (
+      <View style={styles.docCard}>
+        <PressableRow style={styles.docRow} onPress={() => router.push(`/(more)/delivery-challans/${item.id}` as never)}>
+          <View style={styles.docLeft}>
+            <Text style={styles.docNumber}>{item.invoiceNumber}</Text>
+            <Text style={styles.partyName} numberOfLines={1}>{item.partyName}</Text>
+            <Text style={styles.docDate}>{formatDate(item.invoiceDate)}</Text>
+          </View>
+          <View style={styles.docRight}>
+            <Text style={styles.docAmount}>{formatCurrency(item.totalAmount)}</Text>
+            <StatusBadge status={item.status} />
+          </View>
+        </PressableRow>
+        {item.status === "draft" && draftActions.length > 0 && (
+          <View style={styles.actionRow}>{draftActions}</View>
+        )}
+        {item.status === "sent" && canUpdate && (
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => handleCancel(item.id, item.invoiceNumber)}>
+              <Ionicons name="close-circle-outline" size={13} color={colors.danger} />
+              <Text style={[styles.actionBtnText, { color: colors.danger }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   const ListEmpty = isError ? (
     <QueryError message="Failed to load delivery challans" onRetry={refetch} />
@@ -217,7 +230,7 @@ export default function DeliveryChallansScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      <FAB onPress={() => router.push("/(more)/delivery-challans/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(more)/delivery-challans/create" as never)} />}
     </SafeAreaView>
   );
 }

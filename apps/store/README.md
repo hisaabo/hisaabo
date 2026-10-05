@@ -68,8 +68,22 @@ Set this environment variable in Cloudflare Pages:
 |---|---|
 | `VITE_API_URL` | Base URL of the API server (e.g., `https://api.yourdomain.com`) |
 | `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for order form bot protection |
+| `API_URL` | Base URL of the API server, read at runtime by the Pages Function for per-store share metadata (e.g., `https://api.yourdomain.com`) |
 
 The store runs on its own subdomain (e.g., `store.hisaabo.in`). Customer-facing URLs are clean: `store.hisaabo.in/my-bakery` — no `/store/` prefix.
+
+### Per-store share metadata (Open Graph)
+
+The SPA ships with generic default `<meta>` tags. Social crawlers (WhatsApp, X,
+Facebook, LinkedIn) don't run JS, so they'd never see a per-store title or
+image. The Pages Function in `functions/_middleware.ts` intercepts each store
+document request, fetches the store's identity from the API
+(`GET /store/<slug>/meta.json`), and rewrites the `<title>` + `og:`/`twitter:`
+tags — pointing `og:image` at the API's dynamic, top-sellers share card
+(`GET /store/<slug>/og.png`). It reads the `API_URL` env var (above).
+
+For self-host, the API serves the equivalent shell at `GET /store/<slug>`, so
+no Pages Function is needed.
 
 The backend API endpoints still use the `/store/` prefix internally (`/store/<slug>/catalog.json`, `/store/<slug>/order`). In dev, the Vite proxy rewrites `/<slug>/catalog.json` → `/store/<slug>/catalog.json`. In production, `VITE_API_URL` points to the API server directly.
 

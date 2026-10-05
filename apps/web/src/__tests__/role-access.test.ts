@@ -39,142 +39,17 @@
  */
 
 import { describe, it, expect } from "vitest";
+import {
+  defineAbilityFor,
+  ALL_ACTIONS,
+  ALL_RESOURCES,
+  type Action,
+  type Resource,
+} from "@hisaabo/shared";
 
-// ─── Duplicated Permission Logic ─────────────────────────────────────────────
-// Mirrors defineAbilityFor from @hisaabo/api without CASL dependency.
-// We use a simple Set-based approach since we only need can/cannot checks.
-
-type Action = "create" | "read" | "update" | "delete" | "manage";
-
-type Resource =
-  | "Invoice" | "Payment" | "Party" | "Item" | "Expense"
-  | "BankAccount" | "BankTransaction"
-  | "Business" | "Team" | "Import" | "Report" | "GstReport"
-  | "Store" | "SalesTarget" | "RecurringInvoice"
-  | "all";
-
-const ALL_ACTIONS: Action[] = ["create", "read", "update", "delete", "manage"];
-const ALL_RESOURCES: Resource[] = [
-  "Invoice", "Payment", "Party", "Item", "Expense",
-  "BankAccount", "BankTransaction", "Business", "Team",
-  "Import", "Report", "GstReport", "Store", "SalesTarget",
-  "RecurringInvoice",
-];
-
-interface SimpleAbility {
-  can(action: Action, resource: Resource): boolean;
-}
-
-/**
- * Pure-data mirror of defineAbilityFor from packages/api/src/lib/permissions.ts.
- * Any change to the API permissions.ts MUST be reflected here, and vice versa.
- * If these tests fail after an API change, update this function to match.
- */
-function defineAbilityFor(role: string): SimpleAbility {
-  const grants = new Set<string>();
-
-  function can(action: Action, resource: Resource | "all") {
-    if (resource === "all" && action === "manage") {
-      // "manage all" = every action on every resource
-      for (const a of ALL_ACTIONS) {
-        for (const r of ALL_RESOURCES) {
-          grants.add(`${a}:${r}`);
-        }
-      }
-    } else if (action === "manage") {
-      // "manage <Resource>" = every action on that resource
-      for (const a of ALL_ACTIONS) {
-        grants.add(`${a}:${resource}`);
-      }
-    } else {
-      grants.add(`${action}:${resource}`);
-    }
-  }
-
-  switch (role) {
-    case "superadmin":
-      can("manage", "all");
-      break;
-
-    case "admin":
-      can("manage", "all");
-      break;
-
-    case "seller_manager":
-      can("create", "Invoice");
-      can("read", "Invoice");
-      can("update", "Invoice");
-      can("delete", "Invoice");
-      can("create", "Party");
-      can("read", "Party");
-      can("update", "Party");
-      can("create", "Item");
-      can("read", "Item");
-      can("update", "Item");
-      can("create", "Payment");
-      can("read", "Payment");
-      can("update", "Payment");
-      can("read", "Expense");
-      can("read", "BankAccount");
-      can("read", "BankTransaction");
-      can("read", "Business");
-      can("read", "Report");
-      can("create", "Store");
-      can("read", "Store");
-      can("update", "Store");
-      can("read", "SalesTarget");
-      can("manage", "SalesTarget");
-      can("create", "RecurringInvoice");
-      can("read", "RecurringInvoice");
-      can("update", "RecurringInvoice");
-      can("delete", "RecurringInvoice");
-      break;
-
-    case "seller":
-      can("create", "Invoice");
-      can("read", "Invoice");
-      can("update", "Invoice");
-      can("create", "Party");
-      can("read", "Party");
-      can("read", "Item");
-      can("create", "Payment");
-      can("read", "Payment");
-      can("update", "Payment");
-      can("read", "Business");
-      can("read", "Store");
-      can("read", "SalesTarget");
-      can("read", "RecurringInvoice");
-      break;
-
-    case "accountant":
-      can("create", "Payment");
-      can("read", "Payment");
-      can("update", "Payment");
-      can("create", "Expense");
-      can("read", "Expense");
-      can("update", "Expense");
-      can("delete", "Expense");
-      can("manage", "BankAccount");
-      can("manage", "BankTransaction");
-      can("read", "Report");
-      can("read", "GstReport");
-      can("read", "Invoice");
-      can("read", "Party");
-      can("read", "Item");
-      can("read", "Business");
-      can("read", "Store");
-      can("read", "RecurringInvoice");
-      break;
-
-    default:
-      // Unknown role gets nothing
-      break;
-  }
-
-  return {
-    can: (action: Action, resource: Resource) => grants.has(`${action}:${resource}`),
-  };
-}
+// ─── Permission logic comes from the shared package ──────────────────────────
+// The shared module mirrors packages/api/src/lib/permissions.ts; cross-package
+// parity is enforced by packages/api/src/__tests__/permissions-parity.test.ts.
 
 // ─── Navigation Items (mirrors __root.tsx navSections) ───────────────────────
 

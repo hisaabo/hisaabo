@@ -53,6 +53,8 @@ const { invoiceCreateMutate, quotationCreateMutate, invalidateStub, businessList
 vi.mock("@/lib/trpc", () => ({
   getBusinessId: () => "biz-1",
   trpc: {
+    // No session → useCan's default (show) — these tests predate role gating.
+    auth: { me: { useQuery: () => ({ data: undefined, isLoading: false }) } },
     business: {
       list: {
         useQuery: () => businessListQuery(),
