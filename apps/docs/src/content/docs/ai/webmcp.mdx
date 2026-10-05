@@ -1,0 +1,170 @@
+---
+title: Browser AI Agents (WebMCP)
+description: Hisaabo registers its tools with the AI agent built into your browser. Gemini in Chrome and Copilot in Edge can read your books and create invoices, parties, items, payments and expenses — through your own session, with your own permissions.
+sidebar:
+  order: 3
+---
+
+The [MCP server](/ai/mcp-server/) connects Hisaabo to AI assistants that run outside the browser — Claude Desktop, OpenClaw, a cron job on your server. WebMCP does the opposite: it lets the AI agent that is already built into your browser use Hisaabo directly, with no install, no token, and no config file.
+
+[WebMCP](https://github.com/webmachinelearning/webmcp) is a draft standard from the W3C Web Machine Learning Community Group. A web page calls `document.modelContext.registerTool({...})` to describe what it can do, and the browser's agent — Gemini in Chrome, Copilot in Edge — discovers those tools and calls them while you are on the page. Once you are signed in to Hisaabo and have picked a business, the web app registers about 20 tools, named exactly the same as their MCP server counterparts. You then talk to the browser's agent the way you would talk to Claude, and it operates your books in the tab you already have open.
+
+The important part is where the work happens. The tools run inside your logged-in tab, through your existing session cookie and `x-business-id` header. There is no separate API key to mint, nothing to paste into a config file, and nothing for Hisaabo to bill you for — the agent runs on your own browser AI subscription, so a self-hosted instance costs exactly as much to run whether you use this or not.
+
+:::note
+This is a web-only feature. The desktop app (Tauri) and the mobile app (Expo) do not ship a browser agent — use the [MCP server](/ai/mcp-server/) or the [CLI](/ai/cli/) there.
+:::
+
+---
+
+## How to Enable It
+
+### 1. Turn on WebMCP in your browser
+
+As of September 2026 the API is still shipping behind a trial.
+
+| Browser | Status | How to turn it on |
+|---|---|---|
+| **Chrome 149+** | Origin trial (through roughly Chrome 156) | Works automatically on an origin with a valid trial token. For local testing: `chrome://flags/#enable-webmcp-testing` (older builds call it `#enable-webmcp`) |
+| **Edge 150+** | Origin trial | Works automatically on an origin with a valid trial token |
+| **Firefox / Safari** | Evaluating the spec | Not available yet |
+| **Brave** | Experimental, via Leo | Enable in Leo's settings |
+
+If your browser does not expose the API, Hisaabo's Settings page says so and nothing else changes — the app works exactly as before.
+
+### 2. Register an origin trial token (production)
+
+Origin trial tokens are issued per origin. If you self-host Hisaabo, register your own for the origin you serve the app from:
+
+1. Go to [developer.chrome.com/origintrials](https://developer.chrome.com/origintrials) and register **WebMCP** for your origin (for example `https://app.yourdomain.com`).
+2. Put the token in your web build environment:
+
+   ```bash
+   VITE_WEBMCP_ORIGIN_TRIAL_TOKEN=Az4f...
+   ```
+
+3. Rebuild the web app. The build injects `<meta http-equiv="origin-trial" content="...">` into `index.html`. When the variable is unset, no tag is emitted.
+
+You do not need a token if you are testing with the Chrome flag, and you will not need one once the API ships in stable.
+
+### 3. Switch it on in Hisaabo
+
+Open **Settings → Account → Browser AI agents** and turn on *Allow this browser's AI agent to use Hisaabo*. It is on by default and stored per browser, so turning it off on your office machine does not affect your laptop.
+
+---
+
+## What the Agent Can Do
+
+The web app registers the tools below. They are the same names, and the same behaviour, as the corresponding [MCP server](/ai/mcp-server/) tools — a request that works in Claude Desktop reads the same way to Gemini in Chrome.
+
+| Tool | Type | Asks for confirmation | What it does |
+|---|---|---|---|
+| `hisaabo_context` | Read | No | Who you are, which business is selected, your role |
+| `app_navigate` | Read | No | Opens a page in the app (invoices, parties, reports, …) |
+| `dashboard_summary` | Read | No | Sales, cash position, receivables for a period |
+| `invoice_list` | Read | No | Invoices, filterable by status, party and date |
+| `invoice_get` | Read | No | One invoice with its line items and tax breakdown |
+| `invoice_create` | Write | **Yes** | Creates an invoice |
+| `invoice_update_status` | Write | **Yes** | Moves an invoice between draft, sent, paid, cancelled |
+| `party_list` | Read | No | Customers and suppliers, with outstanding balances |
+| `party_get` | Read | No | One party with contact details and balance |
+| `party_create` | Write | **Yes** | Creates a customer or supplier |
+| `item_list` | Read | No | Catalogue items with stock levels |
+| `item_get` | Read | No | One item with units, price and HSN |
+| `item_create` | Write | **Yes** | Creates a catalogue item |
+| `payment_list` | Read | No | Recorded payments |
+| `payment_unpaid_invoices` | Read | No | Invoices still awaiting payment |
+| `payment_create` | Write | **Yes** | Records a payment against an invoice |
+| `expense_list` | Read | No | Recorded expenses |
+| `expense_categories` | Read | No | Your expense categories |
+| `expense_create` | Write | **Yes** | Records an expense |
+
+Read tools are annotated `untrustedContentHint`, which tells the agent that the returned text is your business data and not instructions to follow. Write tools are annotated `consequentialHint`, which is what makes the browser stop and ask you before running them.
+
+---
+
+## Safety and Permissions
+
+The design goal is that an agent can do nothing through WebMCP that you could not do yourself by clicking, and nothing at all that you did not approve.
+
+- **Your session, not a new one.** Tools run in your logged-in tab, over the same cookie session and `x-business-id` header the dashboard uses. There is no separate key to leak, and closing the tab or signing out ends the agent's access immediately.
+- **Your role applies.** If your role cannot create invoices in the UI, `invoice_create` fails for the agent too. Permission checks live on the server and are identical for both paths. See [Team & Roles](/team/).
+- **Same validation.** Inputs go through the same schemas as the dashboard. A GSTIN that the form would reject is rejected here too.
+- **Everything is in the audit trail.** Every write is logged exactly as a manual one is, visible under **Settings → Account → Activity**. You can always see what the agent did.
+- **No delete tools.** Nothing destructive is exposed. The agent cannot delete an invoice, a party, an item, a payment or an expense — deletions stay a deliberate human action in the UI.
+- **Writes ask first.** Every tool that changes data is marked consequential, so the browser shows you what is about to happen and waits for your approval.
+- **Prompt injection.** Anything an agent reads can try to instruct it — a party name, an invoice note, a product description typed by someone else. Read results carry `untrustedContentHint` so the agent treats them as data, but the confirmation prompt on every write is the real backstop. Read what you are approving, especially for amounts and party names.
+- **Turn it off.** Settings → Account → Browser AI agents. The tools are unregistered immediately, per browser.
+
+---
+
+## Which Agents Work Today
+
+| Agent | Status |
+|---|---|
+| **Gemini in Chrome** | Works — Chrome 149+ with the origin trial or the testing flag |
+| **Copilot in Edge** | Works — Edge 150+ with the origin trial |
+| **ChatGPT Desktop** | Consumes WebMCP tools from the browser |
+| **Claude in Chrome** | Does not consume WebMCP today ([claude-code#30645](https://github.com/anthropics/claude-code/issues/30645), closed as not planned) |
+
+If you use Claude, nothing changes: keep using the [MCP server](/ai/mcp-server/) with `@hisaabo/mcp`. It covers considerably more ground than the browser tools — about 50 tools including GST reports, banking, shipments and bulk import — and it works from Claude Desktop without a browser tab open at all.
+
+---
+
+## Example Prompts
+
+With Hisaabo open and the browser agent enabled, these all work in one turn.
+
+```
+You: "Create an invoice for Montu Arora — 7.3 kg spinach at Rs. 65/kg"
+
+Gemini: [calls party_list to resolve "Montu Arora", item_list to resolve "spinach"]
+        [calls invoice_create — Chrome asks you to confirm before it runs]
+        "Invoice BB-12948 created for Montu Arora — Rs. 474.50
+         (7.3 kg x Rs. 65, exempt from GST as fresh vegetables)."
+```
+
+```
+You: "Which customers owe me more than Rs. 10,000, oldest first?"
+
+Gemini: [calls party_list with an outstanding balance filter]
+        "Three: Vinod & Sons Rs. 11,400 (63 days), Sharma Traders
+         Rs. 34,200 (47 days), Gupta Enterprises Rs. 18,750 (12 days).
+         Want me to open Vinod & Sons' ledger?"
+```
+
+```
+You: "Record the Rs. 15,000 UPI payment Sharma Traders sent this morning"
+
+Gemini: [calls payment_unpaid_invoices for Sharma Traders]
+        [calls payment_create — Chrome asks you to confirm before it runs]
+        "Recorded Rs. 15,000 by UPI against BB-12903. That invoice is now
+         fully paid; Sharma Traders' balance is Rs. 19,200."
+```
+
+---
+
+## Verify with Lighthouse
+
+Chrome's Lighthouse has a **Registered WebMCP tools** audit under the *Agentic browsing* category. It is the quickest way to confirm that registration actually happened on your instance.
+
+1. Sign in to Hisaabo and select a business — tools are registered only after that.
+2. Open DevTools → **Lighthouse**, tick **Agentic browsing**, and run the audit on the page.
+3. The **Registered WebMCP tools** audit lists every tool the page registered, with its description and annotations.
+
+If the audit reports no tools:
+
+- Check that the browser exposes the API at all — **Settings → Account → Browser AI agents** shows a note when it does not.
+- Check that the switch is on.
+- On a self-hosted instance, check that `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` was set at build time and matches the origin you are browsing, or enable `chrome://flags/#enable-webmcp-testing` for a quick local check.
+- Confirm you have selected a business — tools are not registered on the login or business-picker screens.
+
+---
+
+## Related Documentation
+
+- [MCP Server](/ai/mcp-server/) — the full ~50-tool surface for Claude Desktop, OpenClaw and any MCP client
+- [CLI Tool](/ai/cli/) — scripting and automation from the shell
+- [AI & Automation Overview](/ai/) — how the pieces fit together
+- [Team & Roles](/team/) — the permissions the agent inherits
+- [Self-Hosting Reference](/self-hosting/) — environment variables, including the origin trial token

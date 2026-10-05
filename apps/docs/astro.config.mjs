@@ -89,6 +89,7 @@ export default defineConfig({
               items: [
                 { label: "Overview", slug: "ai" },
                 { label: "MCP Server", slug: "ai/mcp-server" },
+                { label: "Browser AI Agents (WebMCP)", slug: "ai/webmcp" },
                 { label: "CLI", slug: "ai/cli" },
                 { label: "Integrations", slug: "ai/integrations" },
               ],

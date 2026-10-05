@@ -8,6 +8,7 @@ import { cn, todayISODate } from "@/lib/utils";
 import dayjs from "dayjs";
 import { parseUserAgent } from "@/lib/parse-user-agent";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
+import { BrowserAgentSection } from "./BrowserAgentSection";
 
 // ── Action label map ──────────────────────────────────────────────────────────
 
@@ -737,6 +738,7 @@ export function AccountTab() {
   return (
     <div className="space-y-6">
       <ProfileCard />
+      <BrowserAgentSection />
       <div>
         <PillTabs tabs={ACCOUNT_TABS} value={tab} onChange={setTab} className="mb-4" />
         {tab === "sessions" && <SessionsContent />}

@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { clearDesktopToken } from "@/lib/desktop-session";
+import { useWebMcp } from "@/lib/webmcp/useWebMcp";
 import { defineAbilityFor, type Action, type Resource } from "@hisaabo/shared";
 
 export const Route = createRootRoute({
@@ -480,6 +481,29 @@ function RootLayout() {
       selectTenantMutation.mutate({ tenantId: tenantList[0].tenantId });
     }
   }, [shouldAutoSelectTenant]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── WebMCP — expose Hisaabo tools to the browser's AI agent ──
+  //
+  // Registered here because the root layout is the only place that holds the
+  // session, role and active business at once. The business lookup is repeated
+  // rather than hoisted: the render path below reads `activeBusiness` after
+  // several early returns, and hooks must run before those.
+  const webMcpBusinessId = currentBusinessId ?? businesses?.[0]?.id ?? null;
+  const webMcpBusiness = businesses?.find((b) => b.id === webMcpBusinessId) ?? null;
+  useWebMcp({
+    enabled:
+      !!session?.user &&
+      !!session?.tenantId &&
+      !(Array.isArray(businesses) && businesses.length === 0), // still onboarding
+    client: utils.client,
+    role: session?.role ?? null,
+    businessId: webMcpBusinessId,
+    businessName: webMcpBusiness?.name ?? null,
+    userName: session?.user?.name ?? null,
+    pathname,
+    navigate: (to, search) => navigate({ to, search } as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+    invalidate: () => queryClient.invalidateQueries(),
+  });
 
   // ── Render logic (NO early returns before here — all hooks are above) ──
 
