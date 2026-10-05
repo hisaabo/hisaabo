@@ -6,8 +6,9 @@
  *   1. The hooks return the correct decision for each canonical role.
  *   2. While the session is loading we open buttons by default so the UI
  *      doesn't flash hidden affordances (the API still enforces the rule).
- *   3. The 2-hour edit window for sellers on Invoice/Payment is reflected in
- *      useCanModify and surfaces a "window-expired" reason after the window.
+ *   3. useCanModify applies the API's one record-level rule: a seller_manager
+ *      may delete only unpaid invoices up to 2 hours old. Edits are never
+ *      time-limited.
  *
  * We exercise the hooks via a tiny harness component rather than rendering
  * real screens (which would pull in expo-router + native modules).
@@ -28,7 +29,7 @@ jest.mock("../lib/trpc", () => ({
 }));
 
 import { useCan, useAbility, useCanModify } from "../hooks/useCan";
-import { EDIT_WINDOW_MS } from "@hisaabo/shared";
+import { INVOICE_DELETE_WINDOW_MS } from "@hisaabo/shared";
 
 function withSession(role: string | null | undefined, opts: { isLoading?: boolean } = {}) {
   mockUseQuery.mockReturnValue({
@@ -80,6 +81,13 @@ describe("mobile useCan", () => {
 describe("mobile useAbility", () => {
   beforeEach(() => mockUseQuery.mockReset());
 
+  it("returns a no-permission ability before the session has loaded", () => {
+    withSession(undefined);
+    const { result } = renderHook(() => useAbility());
+    expect(result.current.role).toBe("");
+    expect(result.current.can("read", "Invoice")).toBe(false);
+  });
+
   it("returns an ability whose role matches the canonical mapping", () => {
     withSession("member");
     const { result } = renderHook(() => useAbility());
@@ -89,39 +97,63 @@ describe("mobile useAbility", () => {
   });
 });
 
-describe("mobile useCanModify — 2-hour edit window", () => {
+describe("mobile useCanModify — record-level rule", () => {
   beforeEach(() => mockUseQuery.mockReset());
 
-  it("admin can always edit, regardless of age", () => {
-    withSession("admin");
-    const old = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: old }));
-    expect(result.current.allowed).toBe(true);
-    expect(result.current.reason).toBeUndefined();
-  });
+  const stale = () => new Date(Date.now() - INVOICE_DELETE_WINDOW_MS - 60_000);
 
-  it("seller cannot delete an invoice (no permission)", () => {
-    withSession("seller");
+  it("seller_manager can delete a fresh unpaid invoice", () => {
+    withSession("seller_manager");
     const { result } = renderHook(() =>
-      useCanModify("delete", "Invoice", { createdAt: new Date() })
+      useCanModify("delete", "Invoice", { createdAt: new Date(), status: "draft" }),
     );
-    expect(result.current.allowed).toBe(false);
-    expect(result.current.reason).toBe("no-permission");
+    expect(result.current).toEqual({ allowed: true });
   });
 
-  it("seller can update a fresh invoice within the window", () => {
+  it("seller_manager cannot delete an invoice older than 2 hours", () => {
+    withSession("seller_manager");
+    const { result } = renderHook(() => useCanModify("delete", "Invoice", { createdAt: stale(), status: "draft" }));
+    expect(result.current).toEqual({ allowed: false, reason: "window-expired" });
+  });
+
+  it("seller_manager cannot delete a paid invoice", () => {
+    withSession("seller_manager");
+    const { result } = renderHook(() => useCanModify("delete", "Invoice", { createdAt: new Date(), status: "paid" }));
+    expect(result.current).toEqual({ allowed: false, reason: "invoice-paid" });
+  });
+
+  it("admin can delete an old invoice", () => {
+    withSession("admin");
+    const { result } = renderHook(() => useCanModify("delete", "Invoice", { createdAt: stale(), status: "draft" }));
+    expect(result.current).toEqual({ allowed: true });
+  });
+
+  it("seller cannot delete at all (no permission)", () => {
     withSession("seller");
-    const fresh = new Date(Date.now() - 30 * 60 * 1000); // 30 min ago
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: fresh }));
+    const { result } = renderHook(() => useCanModify("delete", "Invoice", { createdAt: new Date() }));
+    expect(result.current).toEqual({ allowed: false, reason: "no-permission" });
+  });
+
+  it("seller can update an old invoice — edits are never time-limited", () => {
+    withSession("seller");
+    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: stale() }));
+    expect(result.current).toEqual({ allowed: true });
+  });
+
+  it("does not block when the record is not loaded yet", () => {
+    withSession("seller_manager");
+    const { result } = renderHook(() => useCanModify("delete", "Invoice", undefined));
+    expect(result.current).toEqual({ allowed: true });
+  });
+
+  it("recomputes when the record changes", () => {
+    withSession("seller_manager");
+    const { result, rerender } = renderHook(
+      ({ status }: { status: string }) => useCanModify("delete", "Invoice", { createdAt: new Date(), status }),
+      { initialProps: { status: "draft" } },
+    );
     expect(result.current.allowed).toBe(true);
-    expect(result.current.remainingMs).toBeGreaterThan(0);
-  });
-
-  it("seller is locked out after the 2-hour window elapses", () => {
-    withSession("seller");
-    const stale = new Date(Date.now() - EDIT_WINDOW_MS - 1);
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: stale }));
-    expect(result.current.allowed).toBe(false);
-    expect(result.current.reason).toBe("window-expired");
+    rerender({ status: "paid" });
+    expect(result.current).toEqual({ allowed: false, reason: "invoice-paid" });
   });
 });

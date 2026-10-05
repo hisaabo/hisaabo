@@ -3,8 +3,7 @@ import {
   defineAbilityFor,
   mapDbRole,
   canModify,
-  isWithinEditWindow,
-  EDIT_WINDOW_MS,
+  INVOICE_DELETE_WINDOW_MS,
   ALL_RESOURCES,
   ALL_ACTIONS,
   type Resource,
@@ -126,119 +125,164 @@ describe("defineAbilityFor", () => {
   }
 });
 
-describe("isWithinEditWindow", () => {
-  const NOW = new Date("2025-05-25T12:00:00.000Z").getTime();
 
-  it("is true for roles without time restrictions regardless of age", () => {
-    expect(
-      isWithinEditWindow({
-        role: "admin",
-        resource: "Invoice",
-        createdAt: new Date("2020-01-01"),
-        now: NOW,
-      }),
-    ).toBe(true);
-    expect(
-      isWithinEditWindow({
-        role: "accountant",
-        resource: "Payment",
-        createdAt: new Date("2020-01-01"),
-        now: NOW,
-      }),
-    ).toBe(true);
+describe("defineAbilityFor — 'manage' semantics", () => {
+  it("is true only when every concrete action is granted on the resource", () => {
+    // seller_manager is granted manage on SalesTarget …
+    expect(defineAbilityFor("seller_manager").can("manage", "SalesTarget")).toBe(true);
+    // … whereas seller has create/read/update on Invoice but not delete, so not manage.
+    expect(defineAbilityFor("seller").can("manage", "Invoice")).toBe(false);
+    // accountant manages BankAccount but is read-only on Invoice.
+    expect(defineAbilityFor("accountant").can("manage", "BankAccount")).toBe(true);
+    expect(defineAbilityFor("accountant").can("manage", "Invoice")).toBe(false);
   });
 
-  it("is true for time-restricted role on non-restricted resource", () => {
-    expect(
-      isWithinEditWindow({
-        role: "seller",
-        resource: "Party",
-        createdAt: new Date("2020-01-01"),
-        now: NOW,
-      }),
-    ).toBe(true);
+  it("admin and superadmin manage every resource", () => {
+    for (const role of ["admin", "superadmin"]) {
+      for (const r of ALL_RESOURCES) {
+        expect(defineAbilityFor(role).can("manage", r)).toBe(true);
+      }
+    }
   });
 
-  it("is true for time-restricted role when within window", () => {
-    const createdAt = new Date(NOW - 60 * 60 * 1000); // 1 hour ago
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt, now: NOW }),
-    ).toBe(true);
-    expect(
-      isWithinEditWindow({ role: "seller_manager", resource: "Payment", createdAt, now: NOW }),
-    ).toBe(true);
+  it("unknown roles manage nothing", () => {
+    expect(defineAbilityFor("nope").can("manage", "Invoice")).toBe(false);
   });
 
-  it("is false for time-restricted role when window has elapsed", () => {
-    const createdAt = new Date(NOW - EDIT_WINDOW_MS - 1);
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt, now: NOW }),
-    ).toBe(false);
-    expect(
-      isWithinEditWindow({ role: "seller_manager", resource: "Payment", createdAt, now: NOW }),
-    ).toBe(false);
-  });
-
-  it("accepts string and number createdAt inputs", () => {
-    const createdAtIso = new Date(NOW - 30 * 60 * 1000).toISOString();
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt: createdAtIso, now: NOW }),
-    ).toBe(true);
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt: NOW - 30 * 60 * 1000, now: NOW }),
-    ).toBe(true);
-  });
-
-  it("does not block when createdAt is unknown", () => {
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt: null, now: NOW }),
-    ).toBe(true);
-    expect(
-      isWithinEditWindow({ role: "seller", resource: "Invoice", createdAt: "not-a-date", now: NOW }),
-    ).toBe(true);
+  it("exposes the canonical (mapped) role name", () => {
+    expect(defineAbilityFor("owner").role).toBe("superadmin");
+    expect(defineAbilityFor("viewer").role).toBe("accountant");
+    expect(defineAbilityFor("nope").role).toBe("");
   });
 });
 
-describe("canModify", () => {
+
+// ── canModify: role permission + the API's one record-level rule ────────────
+// Mirrors packages/api/src/routers/invoice.ts `delete`: a seller_manager may
+// delete an invoice only if it is not paid and createdAt >= now - 2h. Nothing
+// else in the API is time- or status-restricted beyond the CASL matrix.
+
+describe("canModify — role permission", () => {
   const NOW = new Date("2025-05-25T12:00:00.000Z").getTime();
 
-  it("denies when role lacks permission", () => {
-    const ability = defineAbilityFor("seller");
-    const result = canModify(ability, "delete", "Invoice", { createdAt: new Date(NOW) }, NOW);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toBe("no-permission");
+  it("denies with no-permission when the role lacks the action", () => {
+    expect(canModify(defineAbilityFor("seller"), "delete", "Invoice", { createdAt: NOW }, NOW)).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+    expect(canModify(defineAbilityFor("accountant"), "update", "Invoice", undefined, NOW)).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
   });
 
-  it("allows when role has permission and is not time-restricted", () => {
-    const ability = defineAbilityFor("admin");
-    const result = canModify(ability, "update", "Invoice", { createdAt: new Date(2020, 0, 1) }, NOW);
-    expect(result.allowed).toBe(true);
-    expect(result.reason).toBeUndefined();
-  });
-
-  it("denies when within permission but past edit window", () => {
-    const ability = defineAbilityFor("seller");
-    const result = canModify(
-      ability,
-      "update",
-      "Invoice",
-      { createdAt: new Date(NOW - EDIT_WINDOW_MS - 1) },
-      NOW,
+  it("checks permission before any record rule (no-permission wins)", () => {
+    expect(canModify(defineAbilityFor("seller"), "delete", "Invoice", { status: "paid", createdAt: 0 }, NOW).reason).toBe(
+      "no-permission",
     );
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toBe("window-expired");
   });
 
-  it("returns remainingMs while within window", () => {
-    const ability = defineAbilityFor("seller_manager");
-    const result = canModify(
-      ability,
-      "update",
-      "Payment",
-      { createdAt: new Date(NOW - 30 * 60 * 1000) },
-      NOW,
-    );
-    expect(result.allowed).toBe(true);
-    expect(result.remainingMs).toBeCloseTo(EDIT_WINDOW_MS - 30 * 60 * 1000, -3);
+  it("denies everything for unknown roles", () => {
+    expect(canModify(defineAbilityFor("nope"), "update", "Party", undefined, NOW).allowed).toBe(false);
+  });
+});
+
+describe("canModify — edits are never time-limited (matches invoice.update / payment.update)", () => {
+  const NOW = new Date("2025-05-25T12:00:00.000Z").getTime();
+  const longAgo = { createdAt: NOW - 365 * 24 * 60 * 60 * 1000 };
+
+  it.each([
+    ["seller", "Invoice"],
+    ["seller", "Payment"],
+    ["seller_manager", "Invoice"],
+    ["seller_manager", "Payment"],
+    ["accountant", "Payment"],
+    ["admin", "Invoice"],
+  ] as const)("%s may update a year-old %s", (role, resource) => {
+    expect(canModify(defineAbilityFor(role), "update", resource, longAgo, NOW)).toEqual({ allowed: true });
+  });
+});
+
+describe("canModify — seller_manager invoice delete (unpaid and ≤ 2 hours old)", () => {
+  const NOW = new Date("2025-05-25T12:00:00.000Z").getTime();
+  const sm = defineAbilityFor("seller_manager");
+
+  it("allows a fresh unpaid invoice", () => {
+    expect(canModify(sm, "delete", "Invoice", { status: "draft", createdAt: NOW - 60_000 }, NOW)).toEqual({ allowed: true });
+  });
+
+  it("denies a paid invoice regardless of age", () => {
+    expect(canModify(sm, "delete", "Invoice", { status: "paid", createdAt: NOW }, NOW)).toEqual({
+      allowed: false,
+      reason: "invoice-paid",
+    });
+  });
+
+  it("allows exactly at the window boundary and denies 1ms after (server uses createdAt < now - 2h)", () => {
+    expect(canModify(sm, "delete", "Invoice", { createdAt: NOW - INVOICE_DELETE_WINDOW_MS }, NOW)).toEqual({ allowed: true });
+    expect(canModify(sm, "delete", "Invoice", { createdAt: NOW - INVOICE_DELETE_WINDOW_MS - 1 }, NOW)).toEqual({
+      allowed: false,
+      reason: "window-expired",
+    });
+  });
+
+  it("is a 2-hour window", () => {
+    expect(INVOICE_DELETE_WINDOW_MS).toBe(2 * 60 * 60 * 1000);
+  });
+
+  it("only applies to Invoice deletes — other resources and actions are unaffected", () => {
+    const old = { status: "paid", createdAt: 0 };
+    expect(canModify(sm, "update", "Invoice", old, NOW)).toEqual({ allowed: true });
+    expect(canModify(sm, "delete", "RecurringInvoice", old, NOW)).toEqual({ allowed: true });
+  });
+
+  it("does not apply to admin or superadmin (including the legacy 'owner' role)", () => {
+    for (const role of ["admin", "superadmin", "owner"]) {
+      expect(canModify(defineAbilityFor(role), "delete", "Invoice", { status: "paid", createdAt: 0 }, NOW)).toEqual({
+        allowed: true,
+      });
+    }
+  });
+
+  it("defaults `now` to the current time when omitted", () => {
+    expect(canModify(sm, "delete", "Invoice", { createdAt: new Date() }).allowed).toBe(true);
+    expect(
+      canModify(sm, "delete", "Invoice", { createdAt: new Date(Date.now() - INVOICE_DELETE_WINDOW_MS - 1000) }).reason,
+    ).toBe("window-expired");
+  });
+
+  describe("createdAt input shapes", () => {
+    it("accepts Date objects, epoch-ms numbers and ISO strings", () => {
+      const stale = NOW - INVOICE_DELETE_WINDOW_MS - 1;
+      for (const createdAt of [new Date(stale), stale, new Date(stale).toISOString()]) {
+        expect(canModify(sm, "delete", "Invoice", { createdAt }, NOW).reason).toBe("window-expired");
+      }
+    });
+
+    it("treats a numeric 0 as a real (very old) timestamp, not as missing", () => {
+      expect(canModify(sm, "delete", "Invoice", { createdAt: 0 }, NOW).reason).toBe("window-expired");
+    });
+
+    it("does not block when the record or its createdAt is missing or unparseable (API stays authoritative)", () => {
+      for (const record of [undefined, {}, { createdAt: null }, { createdAt: "not-a-date" }, { createdAt: new Date("garbage") }]) {
+        expect(canModify(sm, "delete", "Invoice", record, NOW)).toEqual({ allowed: true });
+      }
+    });
+
+    it("still applies the paid rule when createdAt is unknown", () => {
+      expect(canModify(sm, "delete", "Invoice", { status: "paid" }, NOW).reason).toBe("invoice-paid");
+    });
+  });
+});
+
+describe("package entry point", () => {
+  it("re-exports the permission API that web, desktop and mobile import from @hisaabo/shared", async () => {
+    const pkg = await import("../index.js");
+    expect(pkg.defineAbilityFor).toBe(defineAbilityFor);
+    expect(pkg.mapDbRole).toBe(mapDbRole);
+    expect(pkg.canModify).toBe(canModify);
+    expect(pkg.ALL_ACTIONS).toBe(ALL_ACTIONS);
+    expect(pkg.ALL_RESOURCES).toBe(ALL_RESOURCES);
+    expect(pkg.INVOICE_DELETE_WINDOW_MS).toBe(INVOICE_DELETE_WINDOW_MS);
   });
 });

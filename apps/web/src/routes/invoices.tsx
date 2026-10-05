@@ -24,7 +24,8 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
-import { useCan, useCanModify } from "@/hooks/useCan";
+import { useCan, useAbility } from "@/hooks/useCan";
+import { canModify } from "@hisaabo/shared";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
 
@@ -497,6 +498,9 @@ function InvoiceDetailPanel({
     onError: (err) => toast.error("Failed to update status", err.message),
   });
 
+  // Must stay above the early return below — it is a hook.
+  const canEdit = useCan("update", "Invoice");
+
   if (!invoiceId) return null;
 
   // Compute how much has been credited/returned against this invoice (combined limit)
@@ -527,11 +531,6 @@ function InvoiceDetailPanel({
 
   const isDraftLike = invoice?.status === "draft" || invoice?.status === "unfulfilled";
 
-  // Edit affordance respects both role permission AND the 2-hour seller window.
-  // The API enforces both; we surface them so sellers see the disabled state
-  // and tooltip immediately rather than discovering it on submit.
-  const editAffordance = useCanModify("update", "Invoice", invoice ? { createdAt: invoice.createdAt as any } : undefined);
-
   return (
     <SlideOver
       open={!!invoiceId}
@@ -542,23 +541,13 @@ function InvoiceDetailPanel({
         invoice ? (
           <div className="flex items-center justify-between gap-3">
             <div className="flex gap-2">
-              {invoice.status !== "paid" && editAffordance.allowed && (
+              {invoice.status !== "paid" && canEdit && (
                 <button
                   onClick={() => {
                     onClose();
                     onEdit(invoice.id, invoice.type as "sale" | "purchase");
                   }}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
-                >
-                  Edit
-                </button>
-              )}
-              {invoice.status !== "paid" && !editAffordance.allowed && editAffordance.reason === "window-expired" && (
-                <button
-                  type="button"
-                  disabled
-                  title="The 2-hour edit window for this invoice has expired"
-                  className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-tertiary border border-border-light opacity-60 cursor-not-allowed"
                 >
                   Edit
                 </button>
@@ -901,7 +890,9 @@ function InvoicesPage() {
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
   const canCreate = useCan("create", "Invoice");
-  const canDelete = useCan("delete", "Invoice");
+  // Delete is decided per row: role permission plus the API's rule that a
+  // seller_manager may only delete unpaid invoices up to 2 hours old.
+  const ability = useAbility();
 
   // Open the invoice detail panel when navigated here with ?id=<invoiceId>
   // or open the create slider when navigated here with ?create=1 (used by
@@ -1240,7 +1231,7 @@ function InvoicesPage() {
                                   </svg>
                                 </button>
                               )}
-                            {canDelete && (inv.status === "draft" || inv.status === "unfulfilled") && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && canModify(ability, "delete", "Invoice", inv).allowed && (
                               <button
                                 onClick={() =>
                                   confirmDelete(inv.id, inv.invoiceNumber)

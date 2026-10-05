@@ -1,5 +1,5 @@
 /**
- * Tests for useCan / useAbility / useCanModify hooks (apps/web/src/hooks/useCan.ts).
+ * Tests for the useCan / useAbility hooks (apps/web/src/hooks/useCan.ts).
  *
  * These hooks gate every Create/Edit/Delete button in the web UI. The same
  * matrix is enforced server-side by packages/api CASL — the parity test in
@@ -7,7 +7,8 @@
  * cannot drift. These tests cover the hook-level behaviour:
  *   • role mapping (legacy DB names)
  *   • graceful degradation while session is loading or missing
- *   • the 2-hour edit window for seller / seller_manager on Invoice / Payment
+ * Per-record rules (canModify) are covered in packages/shared and, as used
+ * by the invoice list, in src/__tests__/role-gating-pages.test.tsx.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -25,8 +26,7 @@ vi.mock("@/lib/trpc", () => ({
   },
 }));
 
-import { useCan, useAbility, useCanModify } from "@/hooks/useCan";
-import { EDIT_WINDOW_MS } from "@hisaabo/shared";
+import { useCan, useAbility } from "@/hooks/useCan";
 
 function withSession(role: string | null | undefined, opts: { isLoading?: boolean } = {}) {
   mockUseQuery.mockReturnValue({
@@ -88,6 +88,13 @@ describe("web useCan", () => {
 describe("web useAbility", () => {
   beforeEach(() => mockUseQuery.mockReset());
 
+  it("returns a no-permission ability before the session has loaded", () => {
+    withSession(undefined);
+    const { result } = renderHook(() => useAbility());
+    expect(result.current.role).toBe("");
+    expect(result.current.can("read", "Invoice")).toBe(false);
+  });
+
   it("returns an ability whose role matches the canonical mapping", () => {
     withSession("member");
     const { result } = renderHook(() => useAbility());
@@ -108,64 +115,5 @@ describe("web useAbility", () => {
     const { result } = renderHook(() => useAbility());
     expect(result.current.can("read", "Invoice")).toBe(false);
     expect(result.current.can("read", "Party")).toBe(false);
-  });
-});
-
-describe("web useCanModify — 2-hour edit window", () => {
-  beforeEach(() => mockUseQuery.mockReset());
-
-  it("admin can always edit, regardless of age", () => {
-    withSession("admin");
-    const old = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: old }));
-    expect(result.current.allowed).toBe(true);
-    expect(result.current.reason).toBeUndefined();
-  });
-
-  it("seller cannot delete an invoice (no permission)", () => {
-    withSession("seller");
-    const { result } = renderHook(() =>
-      useCanModify("delete", "Invoice", { createdAt: new Date() })
-    );
-    expect(result.current.allowed).toBe(false);
-    expect(result.current.reason).toBe("no-permission");
-  });
-
-  it("seller can update a fresh invoice within the window", () => {
-    withSession("seller");
-    const fresh = new Date(Date.now() - 30 * 60 * 1000); // 30 min ago
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: fresh }));
-    expect(result.current.allowed).toBe(true);
-    expect(result.current.reason).toBeUndefined();
-    expect(result.current.remainingMs).toBeGreaterThan(0);
-  });
-
-  it("seller is locked out after the 2-hour window elapses", () => {
-    withSession("seller");
-    const stale = new Date(Date.now() - EDIT_WINDOW_MS - 1);
-    const { result } = renderHook(() => useCanModify("update", "Invoice", { createdAt: stale }));
-    expect(result.current.allowed).toBe(false);
-    expect(result.current.reason).toBe("window-expired");
-  });
-
-  it("seller_manager Payment edit also respects the window", () => {
-    withSession("seller_manager");
-    const stale = new Date(Date.now() - EDIT_WINDOW_MS - 1);
-    const { result } = renderHook(() => useCanModify("update", "Payment", { createdAt: stale }));
-    expect(result.current.allowed).toBe(false);
-    expect(result.current.reason).toBe("window-expired");
-  });
-
-  it("admin is never time-restricted on Payment", () => {
-    withSession("admin");
-    const stale = new Date(Date.now() - 10 * EDIT_WINDOW_MS);
-    const { result } = renderHook(() => useCanModify("update", "Payment", { createdAt: stale }));
-    expect(result.current.allowed).toBe(true);
-  });
-
-  it("does not block when record is missing (e.g. still loading)", () => {
-    withSession("seller");
-    const { result } = renderHook(() => useCanModify("update", "Invoice", undefined));
-    expect(result.current.allowed).toBe(true);
   });
 });

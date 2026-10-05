@@ -477,8 +477,10 @@ export default function InvoiceDetailScreen() {
     { enabled: !!id }
   );
 
-  const canDelete = useCan("delete", "Invoice");
-  const editAffordance = useCanModify("update", "Invoice", invoice ? { createdAt: invoice.createdAt as any } : undefined);
+  const canEdit = useCan("update", "Invoice");
+  // Role permission plus the API's rule: a seller_manager may delete only
+  // unpaid invoices up to 2 hours old.
+  const canDelete = useCanModify("delete", "Invoice", invoice ? { createdAt: invoice.createdAt as any, status: invoice.status } : undefined).allowed;
 
   const utils = trpc.useUtils();
 
@@ -864,8 +866,8 @@ export default function InvoiceDetailScreen() {
           </View>
         )}
 
-        {/* Edit Invoice — gated by role permission and 2-hour seller window */}
-        {(invoice.status === "draft" || invoice.status === "sent") && editAffordance.allowed && (
+        {/* Edit Invoice (only for draft/sent) */}
+        {(invoice.status === "draft" || invoice.status === "sent") && canEdit && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}
@@ -879,23 +881,6 @@ export default function InvoiceDetailScreen() {
                 style={styles.actionIcon}
               />
               <Text style={[styles.actionBtnText, { color: colors.brand }]}>Edit Invoice</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        {(invoice.status === "draft" || invoice.status === "sent") && !editAffordance.allowed && editAffordance.reason === "window-expired" && (
-          <View style={styles.actionGroup}>
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={() => Alert.alert("Edit window expired", "The 2-hour edit window for this invoice has expired. Ask a manager to make changes.")}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="lock-closed-outline"
-                size={18}
-                color={colors.textMuted}
-                style={styles.actionIcon}
-              />
-              <Text style={[styles.actionBtnText, { color: colors.textMuted }]}>Edit window expired</Text>
             </TouchableOpacity>
           </View>
         )}

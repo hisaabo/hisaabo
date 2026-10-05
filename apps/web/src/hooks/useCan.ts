@@ -2,15 +2,14 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import {
   defineAbilityFor,
-  canModify,
   type Action,
   type Resource,
   type Ability,
-  type EditAffordance,
 } from "@hisaabo/shared";
 
 // useAbility — returns the CASL-equivalent ability for the current session.
-// Wraps trpc.auth.me with a stable, memoised Ability instance.
+// Wraps trpc.auth.me with a stable, memoised Ability instance. Pair it with
+// `canModify` from @hisaabo/shared for per-record decisions (e.g. list rows).
 export function useAbility(): Ability {
   const { data: session } = trpc.auth.me.useQuery(undefined);
   const role = session?.role ?? "";
@@ -24,19 +23,4 @@ export function useCan(action: Action, resource: Resource): boolean {
   const { data: session, isLoading } = trpc.auth.me.useQuery(undefined);
   if (isLoading || !session?.role) return true;
   return defineAbilityFor(session.role).can(action, resource);
-}
-
-// useCanModify — combined permission + edit-window check for Edit/Delete
-// buttons on Invoices and Payments. Returns an EditAffordance describing why
-// the action is disabled so callers can render an explanatory tooltip.
-export function useCanModify(
-  action: "update" | "delete",
-  resource: Resource,
-  record?: { createdAt?: Date | string | number | null },
-): EditAffordance {
-  const ability = useAbility();
-  return useMemo(
-    () => canModify(ability, action, resource, record),
-    [ability, action, resource, record?.createdAt],
-  );
 }

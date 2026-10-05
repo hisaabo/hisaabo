@@ -7,17 +7,16 @@ export type { GatewayChargeConfig, GatewayChargeRate, GatewayChargeResult } from
 export {
   defineAbilityFor,
   mapDbRole,
-  isWithinEditWindow,
   canModify,
   ALL_ACTIONS,
   ALL_RESOURCES,
-  EDIT_WINDOW_MS,
+  INVOICE_DELETE_WINDOW_MS,
 } from "./permissions.js";
 export type {
   Action,
   Resource,
   RoleName,
   Ability,
-  EditAffordance,
-  EditWindowInput,
+  ModifyAffordance,
+  ModifiableRecord,
 } from "./permissions.js";

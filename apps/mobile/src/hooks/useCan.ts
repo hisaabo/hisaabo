@@ -6,7 +6,8 @@ import {
   type Action,
   type Resource,
   type Ability,
-  type EditAffordance,
+  type ModifyAffordance,
+  type ModifiableRecord,
 } from "@hisaabo/shared";
 
 // useAbility — returns the ability for the current session, mirroring the
@@ -26,15 +27,18 @@ export function useCan(action: Action, resource: Resource): boolean {
   return defineAbilityFor(session.role).can(action, resource);
 }
 
-// useCanModify — permission + 2-hour edit window check for Invoice/Payment.
+// useCanModify — role permission plus the API's record-level rule for one
+// record (a seller_manager may delete only unpaid invoices up to 2 hours old).
 export function useCanModify(
   action: "update" | "delete",
   resource: Resource,
-  record?: { createdAt?: Date | string | number | null },
-): EditAffordance {
+  record?: ModifiableRecord,
+): ModifyAffordance {
   const ability = useAbility();
+  const createdAt = record?.createdAt;
+  const status = record?.status;
   return useMemo(
-    () => canModify(ability, action, resource, record),
-    [ability, action, resource, record?.createdAt],
+    () => canModify(ability, action, resource, { createdAt, status }),
+    [ability, action, resource, createdAt, status],
   );
 }

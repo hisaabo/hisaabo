@@ -146,69 +146,60 @@ export function defineAbilityFor(rawRole: string | null | undefined): Ability {
   };
 }
 
-// ── Time-based edit window ───────────────────────────────────────────────────
-// The API enforces a 2-hour window on update/delete of Invoice and Payment for
-// seller and seller_manager roles. The UI surfaces this so the action button
-// is disabled with an explanation rather than failing at the network layer.
+// ── Record-level rules beyond the role matrix ────────────────────────────────
+// The API enforces exactly one rule on top of CASL
+// (packages/api/src/routers/invoice.ts → `delete`): a seller_manager may delete
+// an invoice only if it is not paid AND was created no more than 2 hours ago.
+// Edits (`update`) carry no time limit for any role. canModify mirrors that so
+// the UI hides the Delete action instead of letting it fail at the network.
 
-export const EDIT_WINDOW_MS = 2 * 60 * 60 * 1000;
+export const INVOICE_DELETE_WINDOW_MS = 2 * 60 * 60 * 1000;
 
-const TIME_RESTRICTED_ROLES = new Set<string>(["seller", "seller_manager"]);
-const TIME_RESTRICTED_RESOURCES = new Set<Resource>(["Invoice", "Payment"]);
-
-export interface EditWindowInput {
-  resource: Resource;
-  role: string | null | undefined;
-  createdAt: Date | string | number | null | undefined;
-  now?: number;
+// Normalise a createdAt value to epoch ms. Returns null when the value is
+// missing or unparseable — callers treat that as "unknown, don't block"
+// because the API remains the authority.
+function toEpochMs(value: Date | string | number | null | undefined): number | null {
+  if (value == null) return null;
+  const ms = value instanceof Date
+    ? value.getTime()
+    : typeof value === "number"
+      ? value
+      : Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
 }
 
-export function isWithinEditWindow(input: EditWindowInput): boolean {
-  const role = mapDbRole(input.role);
-  if (!TIME_RESTRICTED_ROLES.has(role)) return true;
-  if (!TIME_RESTRICTED_RESOURCES.has(input.resource)) return true;
-  if (input.createdAt == null) return true; // unknown → don't block client-side
-  const createdMs = input.createdAt instanceof Date
-    ? input.createdAt.getTime()
-    : typeof input.createdAt === "number"
-      ? input.createdAt
-      : Date.parse(input.createdAt);
-  if (!Number.isFinite(createdMs)) return true;
-  const now = input.now ?? Date.now();
-  return now - createdMs < EDIT_WINDOW_MS;
-}
-
-export interface EditAffordance {
+export interface ModifyAffordance {
   allowed: boolean;
-  reason?: "no-permission" | "window-expired";
-  remainingMs?: number;
+  reason?: "no-permission" | "invoice-paid" | "window-expired";
 }
 
-// Combined helper: ability check + edit-window check. Used by UI to decide
-// whether to enable an Edit/Delete button and what tooltip to show.
+export interface ModifiableRecord {
+  createdAt?: Date | string | number | null;
+  status?: string | null;
+}
+
+// Role permission + the record-level rule above, for a specific record.
 export function canModify(
   ability: Ability,
   action: "update" | "delete",
   resource: Resource,
-  record?: { createdAt?: Date | string | number | null },
+  record?: ModifiableRecord,
   now: number = Date.now(),
-): EditAffordance {
+): ModifyAffordance {
   if (!ability.can(action, resource)) {
     return { allowed: false, reason: "no-permission" };
   }
-  if (!TIME_RESTRICTED_ROLES.has(ability.role) || !TIME_RESTRICTED_RESOURCES.has(resource)) {
+  if (ability.role !== "seller_manager" || action !== "delete" || resource !== "Invoice") {
     return { allowed: true };
   }
-  if (!record?.createdAt) return { allowed: true };
-  const createdMs = record.createdAt instanceof Date
-    ? record.createdAt.getTime()
-    : typeof record.createdAt === "number"
-      ? record.createdAt
-      : Date.parse(record.createdAt);
-  if (!Number.isFinite(createdMs)) return { allowed: true };
-  const elapsed = now - createdMs;
-  if (elapsed >= EDIT_WINDOW_MS) {
-    return { allowed: false, reason: "window-expired", remainingMs: 0 };
+  if (record?.status === "paid") {
+    return { allowed: false, reason: "invoice-paid" };
   }
-  return { allowed: true, remainingMs: EDIT_WINDOW_MS - elapsed };
+  const createdMs = toEpochMs(record?.createdAt);
+  if (createdMs == null) return { allowed: true };
+  // Server rejects when createdAt < now - window, so exactly-at-window is allowed.
+  if (now - createdMs > INVOICE_DELETE_WINDOW_MS) {
+    return { allowed: false, reason: "window-expired" };
+  }
+  return { allowed: true };
 }
