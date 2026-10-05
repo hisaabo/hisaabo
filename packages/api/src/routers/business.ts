@@ -61,9 +61,9 @@ export const businessRouter = router({
   getById: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      // Security: scope by tenant ownership (creator ∈ tenant members) in addition
-      // to the id. In self-hosted shared-DB mode a bare `WHERE id = :id` would
-      // return any tenant's business; cross-tenant ids resolve to null here.
+      // Security: in self-hosted mode all tenants share one DB, so the WHERE on
+      // businesses.id alone is NOT sufficient — scope by tenant ownership (a
+      // foreign business resolves to null, matching the null-on-miss contract).
       //
       // logoData excluded — fetched via dedicated /api/businesses/:id/logo.
       const memberIds = await getTenantMemberUserIds(ctx.tenantId);
