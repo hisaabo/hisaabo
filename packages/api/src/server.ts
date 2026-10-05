@@ -21,6 +21,7 @@ import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
+import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
@@ -601,12 +602,9 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   // Guards keep it to outgoing sale invoices: purchase bills and credit
   // notes / returns are never "sent" this way, and any already-progressed
   // status (sent/paid/…) is left untouched. Mirrors the draft → sent flip the
-  // online store performs on order confirmation.
-  if (
-    invoice.status === "draft" &&
-    invoice.type === "sale" &&
-    invoice.documentType === "invoice"
-  ) {
+  // online store performs on order confirmation. It is a status change, so it
+  // also needs update:Invoice: read-only roles get the PDF, the draft stays.
+  if (await shouldPromoteDraftOnPdf({ invoice, userId: sessionRow.userId, tenantId: sessionRow.tenantId })) {
     await db.update(invoices)
       .set({ status: "sent", updatedAt: new Date() })
       .where(and(eq(invoices.id, invoiceId), eq(invoices.businessId, businessId)));
