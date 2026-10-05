@@ -21,6 +21,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { PillTabs } from "@/components/ui/Tabs";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
 import { useDateRange, getGranularity } from "@/hooks/useDateRange";
+import { useCan } from "@/hooks/useCan";
 
 // ─── Milestone banner ─────────────────────────────────────────────────────────
 
@@ -1192,6 +1193,10 @@ function DashboardPage() {
   const isSellerRole =
     session?.role === "seller" || session?.role === "seller_manager";
 
+  // "+ New Invoice" opens the invoice creator (invoice.create). Must stay
+  // above the early returns below — it is a hook.
+  const canCreateInvoice = useCan("create", "Invoice");
+
   // Sales targets — only fetched for sellers and seller managers.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: myTargetsRaw } = (trpc as any).target.myTargets.useQuery(
@@ -1248,9 +1253,11 @@ function DashboardPage() {
               customTo={customTo}
               onCustomChange={setCustomRange}
             />
+            {canCreateInvoice && (
             <Link to="/invoices" search={{ create: "1" }} className="btn-primary">
               + New Invoice
             </Link>
+            )}
           </div>
         }
       />

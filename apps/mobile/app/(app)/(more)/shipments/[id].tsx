@@ -17,6 +17,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { fonts } from "../../../../src/lib/theme";
 import { QueryError } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -221,6 +222,8 @@ export default function ShipmentDetailScreen() {
   const STATUS_COLORS = useStatusColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const canUpdate = useCan("update", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
 
   const utils = trpc.useUtils();
 
@@ -520,7 +523,7 @@ export default function ShipmentDetailScreen() {
       {/* Bottom action bar */}
       <View style={styles.actionBar}>
         {/* Status transition buttons */}
-        {transitions.length > 0 ? (
+        {canUpdate && transitions.length > 0 ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -554,21 +557,23 @@ export default function ShipmentDetailScreen() {
         ) : null}
 
         {/* Delete button */}
-        <TouchableOpacity
-          style={[styles.deleteBtn, isMutating && { opacity: 0.5 }]}
-          onPress={handleDelete}
-          disabled={isMutating}
-          activeOpacity={0.7}
-        >
-          {deleteMutation.isPending ? (
-            <ActivityIndicator size="small" color={colors.danger} />
-          ) : (
-            <>
-              <Ionicons name="trash-outline" size={16} color={colors.danger} />
-              <Text style={styles.deleteBtnText}>Delete</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {canDelete && (
+          <TouchableOpacity
+            style={[styles.deleteBtn, isMutating && { opacity: 0.5 }]}
+            onPress={handleDelete}
+            disabled={isMutating}
+            activeOpacity={0.7}
+          >
+            {deleteMutation.isPending ? (
+              <ActivityIndicator size="small" color={colors.danger} />
+            ) : (
+              <>
+                <Ionicons name="trash-outline" size={16} color={colors.danger} />
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );

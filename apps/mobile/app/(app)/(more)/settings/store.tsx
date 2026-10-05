@@ -21,6 +21,8 @@ import { useBusinessStore } from "../../../../src/stores/business";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { Skeleton } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
+import { useCan } from "../../../../src/hooks/useCan";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,11 +42,22 @@ function useDebounce<T>(value: T, delay: number): T {
 // ---------------------------------------------------------------------------
 
 export default function StoreSettingsScreen() {
+  return (
+    <PermissionGate action="update" resource="Store">
+      <StoreSettingsScreenContent />
+    </PermissionGate>
+  );
+}
+
+function StoreSettingsScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
   const businessId = useBusinessStore((s) => s.businessId);
   const utils = trpc.useUtils();
+  // Store settings (and the toggles they include) need manage:Store; the
+  // item picker only needs update:Store, which the screen gate already checks.
+  const canManageStore = useCan("manage", "Store");
 
   // ── Local form state (null = not yet edited by user) ────────────
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -154,7 +167,7 @@ export default function StoreSettingsScreen() {
           <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Online Store</Text>
-        {isDirty ? (
+        {isDirty && canManageStore ? (
           <TouchableOpacity
             onPress={handleSave}
             style={[
@@ -200,12 +213,14 @@ export default function StoreSettingsScreen() {
                       Allow customers to browse and order online
                     </Text>
                   </View>
-                  <Switch
-                    value={effectiveEnabled}
-                    onValueChange={setEnabled}
-                    trackColor={{ false: colors.border, true: colors.brand }}
-                    thumbColor={colors.textPrimary}
-                  />
+                  {canManageStore && (
+                    <Switch
+                      value={effectiveEnabled}
+                      onValueChange={setEnabled}
+                      trackColor={{ false: colors.border, true: colors.brand }}
+                      thumbColor={colors.textPrimary}
+                    />
+                  )}
                 </View>
               </View>
 
@@ -335,12 +350,14 @@ export default function StoreSettingsScreen() {
                       Accept orders even when stock is low or zero
                     </Text>
                   </View>
-                  <Switch
-                    value={effectiveAllowNegativeStock}
-                    onValueChange={setAllowNegativeStock}
-                    trackColor={{ false: colors.border, true: colors.brand }}
-                    thumbColor={colors.textPrimary}
-                  />
+                  {canManageStore && (
+                    <Switch
+                      value={effectiveAllowNegativeStock}
+                      onValueChange={setAllowNegativeStock}
+                      trackColor={{ false: colors.border, true: colors.brand }}
+                      thumbColor={colors.textPrimary}
+                    />
+                  )}
                 </View>
               </View>
 

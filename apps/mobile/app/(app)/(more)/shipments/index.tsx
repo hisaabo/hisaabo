@@ -19,6 +19,7 @@ import {
   EmptyState,
   QueryError,
 } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type StatusFilter = "all" | "pending" | "shipped" | "in_transit" | "delivered" | "returned";
 
@@ -77,6 +78,7 @@ export default function ShipmentsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const canCreate = useCan("create", "Invoice");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -219,7 +221,7 @@ export default function ShipmentsScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      <FAB onPress={() => router.push("/(more)/shipments/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(more)/shipments/create" as never)} />}
     </SafeAreaView>
   );
 }

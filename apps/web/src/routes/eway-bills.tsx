@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { formatDate, cn } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
@@ -189,6 +190,7 @@ function EWayBillsPage() {
   const [cancelReason, setCancelReason] = useState("Data Entry Mistake");
 
   const [detailEwbId, setDetailEwbId] = useState<string | null>(null);
+  const canManage = useCan("manage", "EWayBill");
 
   const tabs: Array<{ value: EWBTab; label: string }> = [
     { value: "dashboard", label: "All E-Way Bills" },
@@ -303,16 +305,18 @@ function EWayBillsPage() {
         title="E-Way Bills"
         description="Generate and manage E-Way Bills for goods movement above ₹50,000"
         actions={
-          <button
-            className="btn-primary"
-            onClick={() => {
-              setGenerateForm(EMPTY_GENERATE_FORM);
-              setGenerateErrors({});
-              setShowGenerateModal(true);
-            }}
-          >
-            + Generate EWB
-          </button>
+          canManage ? (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setGenerateForm(EMPTY_GENERATE_FORM);
+                setGenerateErrors({});
+                setShowGenerateModal(true);
+              }}
+            >
+              + Generate EWB
+            </button>
+          ) : null
         }
       />
 
@@ -629,6 +633,7 @@ function DashboardTab({
   onCancel: (ewbId: string) => void;
   onViewDetail: (invoiceId: string) => void;
 }) {
+  const canManage = useCan("manage", "EWayBill");
   const rows = data?.data ?? [];
   const total = data?.total ?? 0;
   const limit = data?.limit ?? 20;
@@ -721,7 +726,7 @@ function DashboardTab({
                               View
                             </button>
                           )}
-                          {canUpdate && (
+                          {canManage && canUpdate && (
                             <button
                               className="p-1.5 rounded text-text-tertiary hover:text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950/20 transition-colors text-xs"
                               onClick={() => onUpdateVehicle(row.id)}
@@ -730,7 +735,7 @@ function DashboardTab({
                               Update
                             </button>
                           )}
-                          {canCancel && (
+                          {canManage && canCancel && (
                             <button
                               className="p-1.5 rounded text-text-tertiary hover:text-red-500 hover:bg-red-600/[0.08] transition-colors text-xs"
                               onClick={() => onCancel(row.id)}
@@ -795,6 +800,7 @@ function ExpiringTab({
   isLoading: boolean;
   onUpdateVehicle: (ewbId: string) => void;
 }) {
+  const canManage = useCan("manage", "EWayBill");
   if (isLoading) return <EWBTableSkeleton />;
 
   const rows = data ?? [];
@@ -859,14 +865,16 @@ function ExpiringTab({
                     ) : "—"}
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        className="px-2 py-1 rounded text-xs font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950/20 transition-colors"
-                        onClick={() => onUpdateVehicle(row.id)}
-                      >
-                        Update Vehicle
-                      </button>
-                    </div>
+                    {canManage && (
+                      <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          className="px-2 py-1 rounded text-xs font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950/20 transition-colors"
+                          onClick={() => onUpdateVehicle(row.id)}
+                        >
+                          Update Vehicle
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               );

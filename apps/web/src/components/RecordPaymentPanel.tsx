@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateInput } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Disclosure } from "@/components/ui/Disclosure";
@@ -77,6 +78,8 @@ export function RecordPaymentPanel({
   editPaymentId,
 }: RecordPaymentPanelProps) {
   const isEditMode = !!editPaymentId;
+  // payment.update needs update:Payment; payment.create needs create:Payment.
+  const canSave = useCan(isEditMode ? "update" : "create", "Payment");
   const [partyId, setPartyId] = useState(preSelectedPartyId ?? "");
   const [allocations, setAllocations] = useState<Record<string, string>>({});
   const [checkedInvoices, setCheckedInvoices] = useState<Set<string>>(new Set());
@@ -426,6 +429,7 @@ export function RecordPaymentPanel({
             <button className="btn-secondary" onClick={onClose} type="button">
               Cancel
             </button>
+            {canSave && (
             <button
               className="btn-primary"
               onClick={handleSubmit}
@@ -438,6 +442,7 @@ export function RecordPaymentPanel({
                   ? `${isEditMode ? "Save" : "Record"} ${formatCurrency(displayAmount)}`
                   : (isEditMode ? "Save Payment" : "Record Payment")}
             </button>
+            )}
           </div>
         </div>
       }

@@ -18,6 +18,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
 import { haptic } from "../../../../src/lib/haptics";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type OrderStatus = "pending" | "confirmed" | "preparing" | "ready" | "delivered" | "cancelled";
 
@@ -35,6 +36,7 @@ export default function StoreOrderDetailScreen() {
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelModal, setShowCancelModal] = useState(false);
   const utils = trpc.useUtils();
+  const canUpdateStore = useCan("update", "Store");
 
   const { data, isLoading } = trpc.store.getOrder.useQuery(
     { id: id! },
@@ -208,7 +210,7 @@ export default function StoreOrderDetailScreen() {
         {/* Actions */}
         <Text style={styles.sectionLabel}>Actions</Text>
         <View style={styles.actionsCard}>
-          {status === "pending" && (
+          {status === "pending" && canUpdateStore && (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnPrimary]}
               onPress={() => {
@@ -231,7 +233,7 @@ export default function StoreOrderDetailScreen() {
             </TouchableOpacity>
           )}
 
-          {nextAction && (
+          {nextAction && canUpdateStore && (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnPrimary]}
               onPress={() => {
@@ -254,7 +256,7 @@ export default function StoreOrderDetailScreen() {
             </TouchableOpacity>
           )}
 
-          {canCancel && (
+          {canCancel && canUpdateStore && (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnDanger]}
               onPress={() => setShowCancelModal(true)}

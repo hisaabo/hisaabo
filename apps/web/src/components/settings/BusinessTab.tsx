@@ -4,6 +4,7 @@ import { InputField } from "@/components/ui/FormField";
 import { Combobox } from "@/components/ui/Combobox";
 import { Listbox } from "@/components/ui/Listbox";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 import { GstinInput } from "./GstinInput";
 import { PanInput } from "./PanInput";
 import { PhoneInput } from "./PhoneInput";
@@ -43,6 +44,8 @@ export function BusinessTab({ biz }: BusinessTabProps) {
 }
 
 function BusinessCard({ biz, onEdit }: { biz: any; onEdit: () => void }) {
+  // business.update is tenant-admin only (manage:Business).
+  const canEdit = useCan("manage", "Business");
   const fields: [string, string | undefined | null][] = [
     ["Legal Name", biz.legalName],
     ["GSTIN", biz.gstin],
@@ -60,7 +63,7 @@ function BusinessCard({ biz, onEdit }: { biz: any; onEdit: () => void }) {
     <div className="card p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-base font-semibold text-text-primary">{biz.name}</h3>
-        <button className="btn-secondary" onClick={onEdit}>Edit</button>
+        {canEdit && <button className="btn-secondary" onClick={onEdit}>Edit</button>}
       </div>
 
       <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">

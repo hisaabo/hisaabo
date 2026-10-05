@@ -19,6 +19,7 @@ import { useBusinessStore } from "../../../../src/stores/business";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 const DOC_TYPES = [
   { key: "invoice" as const, label: "Invoice", prefixField: "invoicePrefix", counterField: "nextInvoiceNumber" },
@@ -38,6 +39,14 @@ interface SeqEditorState {
 }
 
 export default function DocumentsScreen() {
+  return (
+    <PermissionGate action="manage" resource="Business">
+      <DocumentsScreenContent />
+    </PermissionGate>
+  );
+}
+
+function DocumentsScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

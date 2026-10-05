@@ -26,6 +26,8 @@ import { haptic } from "../../../src/lib/haptics";
 import { useContacts, type PhoneContact } from "../../../src/hooks/useContacts";
 import { DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
+import { PermissionGate } from "../../../src/components/PermissionGate";
+import { useCan } from "../../../src/hooks/useCan";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -124,7 +126,9 @@ interface InlinePartyFormState {
   type: "customer" | "supplier";
 }
 
-function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
+// Exported for role-gating tests: no real role has create:Invoice without
+// create:Party, so the inline-create gate is exercised on the modal directly.
+export function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps) {
   const pickerStyles = usePickerStyles();
   const inlineCreateStyles = useInlineCreateStyles();
   const modalStyles = useModalStyles();
@@ -135,6 +139,8 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
 
   const { contacts, permission, requestAccess } = useContacts();
   const [creatingFromContact, setCreatingFromContact] = useState(false);
+  // Inline create, and phone contacts (selecting one creates a party), need create:Party
+  const canCreateParty = useCan("create", "Party");
 
   // OPT-03: inline create form
   const [showInlineCreate, setShowInlineCreate] = useState(false);
@@ -192,7 +198,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
       result.push({ title: "Your Parties", data: partyRows });
     }
 
-    if (permission === "granted" && filteredContacts.length > 0) {
+    if (canCreateParty && permission === "granted" && filteredContacts.length > 0) {
       const contactRows: PickerRow[] = filteredContacts.map((c) => ({
         kind: "contact" as const,
         contact: c,
@@ -201,7 +207,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
     }
 
     return result;
-  }, [parties, filteredContacts, permission]);
+  }, [parties, filteredContacts, permission, canCreateParty]);
 
   const handleContactSelect = useCallback(
     async (contact: PhoneContact) => {
@@ -410,7 +416,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
                 {debouncedSearch ? `No parties found for "${debouncedSearch}"` : "No parties yet"}
               </Text>
               {/* OPT-03: create button when search returns empty */}
-              {!showInlineCreate && (
+              {!showInlineCreate && canCreateParty && (
                 <TouchableOpacity
                   style={inlineCreateStyles.createFromSearchBtn}
                   onPress={() => {
@@ -438,7 +444,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
                 <Text style={pickerStyles.sectionHeader}>{section.title}</Text>
               )}
               ListFooterComponent={
-                debouncedSearch && !showInlineCreate ? (
+                debouncedSearch && !showInlineCreate && canCreateParty ? (
                   <TouchableOpacity
                     style={inlineCreateStyles.createFromSearchBtn}
                     onPress={() => {
@@ -772,6 +778,8 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
   const [inlineForm, setInlineForm] = useState<InlineItemFormState>({ name: "", price: "", taxPercent: "0", unit: "pcs" });
   const [creatingItem, setCreatingItem] = useState(false);
   const [showUnitPicker, setShowUnitPicker] = useState(false);
+  // Sellers can create invoices but not items
+  const canCreateItem = useCan("create", "Item");
 
   const { data, isLoading } = trpc.item.list.useQuery(
     { search: debouncedSearch || undefined, page: 1, limit: 50 },
@@ -827,7 +835,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
     setShowInlineCreate(true);
   }, []);
 
-  const createButton = debouncedSearch && !showInlineCreate ? (
+  const createButton = debouncedSearch && !showInlineCreate && canCreateItem ? (
     <TouchableOpacity
       style={inlineCreateStyles.createFromSearchBtn}
       onPress={() => openInlineCreate(debouncedSearch)}
@@ -1004,7 +1012,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
               <Text style={modalStyles.emptyText}>
                 {debouncedSearch ? `No items found for "${debouncedSearch}"` : "No items yet"}
               </Text>
-              {!showInlineCreate && (
+              {!showInlineCreate && canCreateItem && (
                 <TouchableOpacity
                   style={inlineCreateStyles.createFromSearchBtn}
                   onPress={() => openInlineCreate(debouncedSearch || "")}
@@ -1604,6 +1612,14 @@ function AltUnitSelector({ baseUnit, unitVariants, selectedUnit, invoiceType, on
 // ── Main Create Screen ────────────────────────────────────────
 
 export default function InvoiceCreateScreen() {
+  return (
+    <PermissionGate action="create" resource="Invoice">
+      <InvoiceCreateForm />
+    </PermissionGate>
+  );
+}
+
+function InvoiceCreateForm() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
@@ -348,6 +349,7 @@ function LedgerView({ returnPeriod }: { returnPeriod: string }) {
     invoiceId: string;
     invoiceNumber: string;
   } | null>(null);
+  const canUpdate = useCan("update", "ITC");
 
   const { data, isLoading, error } = trpc.itc.ledger.useQuery({
     returnPeriod,
@@ -483,7 +485,7 @@ function LedgerView({ returnPeriod }: { returnPeriod: string }) {
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {entry.status === "available" && entry.invoiceId && (
+                          {canUpdate && entry.status === "available" && entry.invoiceId && (
                             <button
                               onClick={() =>
                                 setBlockTarget({
@@ -497,7 +499,7 @@ function LedgerView({ returnPeriod }: { returnPeriod: string }) {
                               Block
                             </button>
                           )}
-                          {entry.status === "blocked" && entry.invoiceId && (
+                          {canUpdate && entry.status === "blocked" && entry.invoiceId && (
                             <button
                               onClick={() =>
                                 setUnblockTarget({
@@ -758,6 +760,7 @@ function UtilizationView({
   month: number;
 }) {
   const { data: dashboard } = trpc.itc.dashboard.useQuery({ returnPeriod });
+  const canUpdate = useCan("update", "ITC");
 
   const [cgstUtilized, setCgstUtilized] = useState("");
   const [sgstUtilized, setSgstUtilized] = useState("");
@@ -835,93 +838,95 @@ function UtilizationView({
       )}
 
       {/* Utilization form */}
-      <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-border-light">
-          <h3 className="text-sm font-semibold text-text-primary">Record Utilization</h3>
-        </div>
-        <div className="p-4 space-y-4">
-          {/* Info text */}
-          <div className="card px-4 py-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
-            <p className="text-xs text-blue-700 dark:text-blue-400">
-              <span className="font-semibold">Prescribed utilization order:</span>{" "}
-              IGST credit must be used first against IGST liability, then CGST, then SGST.
-            </p>
+      {canUpdate && (
+        <div className="card overflow-hidden">
+          <div className="px-4 py-3 border-b border-border-light">
+            <h3 className="text-sm font-semibold text-text-primary">Record Utilization</h3>
           </div>
+          <div className="p-4 space-y-4">
+            {/* Info text */}
+            <div className="card px-4 py-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
+              <p className="text-xs text-blue-700 dark:text-blue-400">
+                <span className="font-semibold">Prescribed utilization order:</span>{" "}
+                IGST credit must be used first against IGST liability, then CGST, then SGST.
+              </p>
+            </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            <InputField
-              label="CGST Utilized"
-              placeholder="0.00"
-              type="number"
-              min="0"
-              step="0.01"
-              value={cgstUtilized}
-              onChange={(e) => setCgstUtilized(e.target.value)}
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+              <InputField
+                label="CGST Utilized"
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                value={cgstUtilized}
+                onChange={(e) => setCgstUtilized(e.target.value)}
+              />
+              <InputField
+                label="SGST Utilized"
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                value={sgstUtilized}
+                onChange={(e) => setSgstUtilized(e.target.value)}
+              />
+              <div className="col-span-2 lg:col-span-1">
+                <p className="text-xs font-medium text-text-secondary mb-3">IGST Cross-Utilization</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <InputField
+                label="IGST → IGST"
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                value={igstVsIgst}
+                onChange={(e) => setIgstVsIgst(e.target.value)}
+              />
+              <InputField
+                label="IGST → CGST"
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                value={igstVsCgst}
+                onChange={(e) => setIgstVsCgst(e.target.value)}
+              />
+              <InputField
+                label="IGST → SGST"
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                value={igstVsSgst}
+                onChange={(e) => setIgstVsSgst(e.target.value)}
+              />
+            </div>
+
+            <TextareaField
+              label="Notes (optional)"
+              placeholder="Any notes about this utilization..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
             />
-            <InputField
-              label="SGST Utilized"
-              placeholder="0.00"
-              type="number"
-              min="0"
-              step="0.01"
-              value={sgstUtilized}
-              onChange={(e) => setSgstUtilized(e.target.value)}
-            />
-            <div className="col-span-2 lg:col-span-1">
-              <p className="text-xs font-medium text-text-secondary mb-3">IGST Cross-Utilization</p>
+
+            <div className="flex justify-end pt-2">
+              <button
+                className="btn-primary"
+                onClick={handleSave}
+                disabled={utilizationMutation.isPending}
+              >
+                {utilizationMutation.isPending && <Spinner size="sm" />}
+                Save Utilization
+              </button>
             </div>
           </div>
-
-          <div className="grid grid-cols-3 gap-4">
-            <InputField
-              label="IGST → IGST"
-              placeholder="0.00"
-              type="number"
-              min="0"
-              step="0.01"
-              value={igstVsIgst}
-              onChange={(e) => setIgstVsIgst(e.target.value)}
-            />
-            <InputField
-              label="IGST → CGST"
-              placeholder="0.00"
-              type="number"
-              min="0"
-              step="0.01"
-              value={igstVsCgst}
-              onChange={(e) => setIgstVsCgst(e.target.value)}
-            />
-            <InputField
-              label="IGST → SGST"
-              placeholder="0.00"
-              type="number"
-              min="0"
-              step="0.01"
-              value={igstVsSgst}
-              onChange={(e) => setIgstVsSgst(e.target.value)}
-            />
-          </div>
-
-          <TextareaField
-            label="Notes (optional)"
-            placeholder="Any notes about this utilization..."
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-          />
-
-          <div className="flex justify-end pt-2">
-            <button
-              className="btn-primary"
-              onClick={handleSave}
-              disabled={utilizationMutation.isPending}
-            >
-              {utilizationMutation.isPending && <Spinner size="sm" />}
-              Save Utilization
-            </button>
-          </div>
         </div>
-      </div>
+      )}
 
       {/* Past utilization display */}
       {dashboard?.utilization && (

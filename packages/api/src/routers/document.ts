@@ -5,6 +5,7 @@ import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@
 import { router, memberProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
 import { logAudit } from "../lib/audit.js";
+import { requireCan } from "../lib/permissions.js";
 
 // ── Per-document-type routers ───────────────────────────────────
 
@@ -75,6 +76,8 @@ export const documentRouter = router({
   convert: memberProcedure
     .input(convertDocumentSchema)
     .mutation(async ({ input, ctx }) => {
+      // Conversion creates a new Invoice-backed document.
+      requireCan(ctx.ability, "create", "Invoice");
       // 1. Fetch source document with line items
       const [sourceDoc] = await ctx.db
         .select()

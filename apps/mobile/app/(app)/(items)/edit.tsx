@@ -20,6 +20,7 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 const UNITS = [
   "pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box",
@@ -29,6 +30,14 @@ const UNITS = [
 type Unit = (typeof UNITS)[number];
 
 export default function EditItemScreen() {
+  return (
+    <PermissionGate action="update" resource="Item">
+      <EditItemScreenContent />
+    </PermissionGate>
+  );
+}
+
+function EditItemScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();

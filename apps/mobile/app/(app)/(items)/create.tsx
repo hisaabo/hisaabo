@@ -19,6 +19,7 @@ import { trpc } from "../../../src/lib/trpc";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 const UNITS = [
   "pcs",
@@ -46,6 +47,14 @@ const UNITS = [
 type Unit = (typeof UNITS)[number];
 
 export default function CreateItemScreen() {
+  return (
+    <PermissionGate action="create" resource="Item">
+      <CreateItemScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreateItemScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

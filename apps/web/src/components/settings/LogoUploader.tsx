@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { apiUrl } from "@/lib/api-url";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 
 // Matches the A4 invoice slot (80×56pt) visually so users see how the logo
 // will fit before they save. PDFKit preserves the original aspect ratio via
@@ -38,6 +39,8 @@ export function LogoUploader({ businessId, logoUpdatedAt, hasLogo }: Props) {
   const [processing, setProcessing] = useState(false);
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [previewDims, setPreviewDims] = useState<{ w: number; h: number } | null>(null);
+  // business.uploadLogo / deleteLogo are tenant-admin only (manage:Business).
+  const canManage = useCan("manage", "Business");
 
   const utils = trpc.useUtils();
 
@@ -162,36 +165,38 @@ export function LogoUploader({ businessId, logoUpdatedAt, hasLogo }: Props) {
             className="hidden"
             onChange={onFileChange}
           />
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isPending}
-            >
-              {previewDataUrl ? "Pick a different file" : "Choose file"}
-            </button>
-            {previewDataUrl && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={handleSave}
-                disabled={isPending}
-              >
-                {uploadMutation.isPending ? "Uploading…" : "Save Logo"}
-              </button>
-            )}
-            {hasLogo && !previewDataUrl && (
+          {canManage && (
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={handleRemove}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={isPending}
               >
-                Remove
+                {previewDataUrl ? "Pick a different file" : "Choose file"}
               </button>
-            )}
-          </div>
+              {previewDataUrl && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleSave}
+                  disabled={isPending}
+                >
+                  {uploadMutation.isPending ? "Uploading…" : "Save Logo"}
+                </button>
+              )}
+              {hasLogo && !previewDataUrl && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleRemove}
+                  disabled={isPending}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          )}
           <p className="text-xs text-text-tertiary leading-relaxed">
             Max 5 MB source file · Auto-resized to 800 px · Aspect ratio
             preserved on invoices and storefront. SVGs are rasterized in your

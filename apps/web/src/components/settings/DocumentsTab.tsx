@@ -5,6 +5,10 @@ import { toast } from "@/hooks/useToast";
 
 interface DocumentsTabProps {
   biz: any;
+  // manage:Business — business.update and business.updateSequenceNumber.
+  // Resolved by the settings page (useCan) and passed in; defaults to true to
+  // match useCan's no-session default. The API enforces the real rule.
+  canManage?: boolean;
 }
 
 const DOC_TYPES = [
@@ -16,7 +20,7 @@ const DOC_TYPES = [
   { key: "proforma", label: "Proforma Invoice", prefixField: "proformaPrefix", counterField: "nextProformaNumber" },
 ] as const;
 
-export function DocumentsTab({ biz }: DocumentsTabProps) {
+export function DocumentsTab({ biz, canManage = true }: DocumentsTabProps) {
   const [prefixes, setPrefixes] = useState<Record<string, string>>(
     Object.fromEntries(DOC_TYPES.map((d) => [d.prefixField, biz[d.prefixField] || ""]))
   );
@@ -95,7 +99,7 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
               Prefix used when generating document numbers (e.g. INV-0001)
             </p>
           </div>
-          {prefixesDirty && (
+          {canManage && prefixesDirty && (
             <button
               className="btn-primary btn-sm"
               onClick={handleSavePrefixes}
@@ -125,14 +129,16 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
                     {biz[doc.counterField] ?? 1}
                   </span>
                 </span>
-                <button
-                  className="btn-ghost text-xs px-2 py-1"
-                  onClick={() =>
-                    setEditingSeq(editingSeq === doc.counterField ? null : doc.counterField)
-                  }
-                >
-                  Change
-                </button>
+                {canManage && (
+                  <button
+                    className="btn-ghost text-xs px-2 py-1"
+                    onClick={() =>
+                      setEditingSeq(editingSeq === doc.counterField ? null : doc.counterField)
+                    }
+                  >
+                    Change
+                  </button>
+                )}
               </div>
 
               {editingSeq === doc.counterField && (
@@ -165,7 +171,7 @@ export function DocumentsTab({ biz }: DocumentsTabProps) {
               Applied to every new invoice, quotation and credit note. Always overridable per document.
             </p>
           </div>
-          {defaultsDirty && (
+          {canManage && defaultsDirty && (
             <button
               className="btn-primary btn-sm"
               onClick={handleSaveDefaults}

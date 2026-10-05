@@ -17,10 +17,19 @@ import { trpc } from "../../../src/lib/trpc";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 type PartyType = "customer" | "supplier";
 
 export default function CreatePartyScreen() {
+  return (
+    <PermissionGate action="create" resource="Party">
+      <CreatePartyScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreatePartyScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

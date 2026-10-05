@@ -17,6 +17,7 @@ import { trpc } from "../../src/lib/trpc";
 import { useBusinessStore } from "../../src/stores/business";
 import { makeStyles } from "../../src/lib/makeStyles";
 import { useColors } from "../../src/contexts/ThemeContext";
+import { PermissionGate } from "../../src/components/PermissionGate";
 
 interface FormState {
   name: string;
@@ -46,6 +47,14 @@ const GST_TYPES: Array<{ key: "regular" | "composition" | "unregistered"; label:
 ];
 
 export default function CreateBusinessScreen() {
+  return (
+    <PermissionGate action="manage" resource="Business">
+      <CreateBusinessScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreateBusinessScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

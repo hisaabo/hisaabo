@@ -18,6 +18,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { QueryError } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 /* ── Constants ────────────────────────────────────────────────── */
 
@@ -54,6 +55,9 @@ export default function RecurringInvoiceDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const utils = trpc.useUtils();
+  const canUpdate = useCan("update", "RecurringInvoice");
+  const canDelete = useCan("delete", "RecurringInvoice");
+  const canRunNow = useCan("create", "RecurringInvoice");
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -238,6 +242,61 @@ export default function RecurringInvoiceDetailScreen() {
   }>;
   const runs = historyData?.data ?? [];
   const isMutating = pauseMutation.isPending || resumeMutation.isPending || runNowMutation.isPending;
+  // Only the schedule actions this role may perform; the row is omitted when empty.
+  const scheduleActions = [
+    canUpdate && (
+      <TouchableOpacity
+        key="pause"
+        style={[
+          styles.actionBtn,
+          template.status === "active"
+            ? { backgroundColor: colors.amberBg, borderColor: colors.amber }
+            : { backgroundColor: colors.successBg, borderColor: colors.success },
+        ]}
+        onPress={handlePauseResume}
+        disabled={isMutating}
+        activeOpacity={0.8}
+      >
+        {(pauseMutation.isPending || resumeMutation.isPending) ? (
+          <ActivityIndicator size="small" color={colors.textPrimary} />
+        ) : (
+          <>
+            <Ionicons
+              name={template.status === "active" ? "pause" : "play"}
+              size={18}
+              color={template.status === "active" ? colors.amber : colors.success}
+            />
+            <Text
+              style={[
+                styles.actionBtnText,
+                { color: template.status === "active" ? colors.amber : colors.success },
+              ]}
+            >
+              {template.status === "active" ? "Pause" : "Resume"}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+    ),
+    canRunNow && (
+      <TouchableOpacity
+        key="run"
+        style={[styles.actionBtn, { backgroundColor: colors.brandLight, borderColor: colors.brand }]}
+        onPress={handleRunNow}
+        disabled={isMutating}
+        activeOpacity={0.8}
+      >
+        {runNowMutation.isPending ? (
+          <ActivityIndicator size="small" color={colors.brand} />
+        ) : (
+          <>
+            <Ionicons name="flash" size={18} color={colors.brand} />
+            <Text style={[styles.actionBtnText, { color: colors.brand }]}>Run Now</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    ),
+  ].filter(Boolean);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -254,12 +313,16 @@ export default function RecurringInvoiceDetailScreen() {
         <View style={styles.headerActions}>
           {!isEditing && (
             <>
-              <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
-                <Ionicons name="create-outline" size={20} color={colors.brand} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={20} color={colors.danger} />
-              </TouchableOpacity>
+              {canUpdate && (
+                <TouchableOpacity onPress={handleStartEdit} style={styles.editBtn}>
+                  <Ionicons name="create-outline" size={20} color={colors.brand} />
+                </TouchableOpacity>
+              )}
+              {canDelete && (
+                <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+                  <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {isEditing && (
@@ -324,56 +387,8 @@ export default function RecurringInvoiceDetailScreen() {
         </View>
 
         {/* Action Buttons */}
-        {!isEditing && (template.status === "active" || template.status === "paused") && (
-          <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={[
-                styles.actionBtn,
-                template.status === "active"
-                  ? { backgroundColor: colors.amberBg, borderColor: colors.amber }
-                  : { backgroundColor: colors.successBg, borderColor: colors.success },
-              ]}
-              onPress={handlePauseResume}
-              disabled={isMutating}
-              activeOpacity={0.8}
-            >
-              {(pauseMutation.isPending || resumeMutation.isPending) ? (
-                <ActivityIndicator size="small" color={colors.textPrimary} />
-              ) : (
-                <>
-                  <Ionicons
-                    name={template.status === "active" ? "pause" : "play"}
-                    size={18}
-                    color={template.status === "active" ? colors.amber : colors.success}
-                  />
-                  <Text
-                    style={[
-                      styles.actionBtnText,
-                      { color: template.status === "active" ? colors.amber : colors.success },
-                    ]}
-                  >
-                    {template.status === "active" ? "Pause" : "Resume"}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: colors.brandLight, borderColor: colors.brand }]}
-              onPress={handleRunNow}
-              disabled={isMutating}
-              activeOpacity={0.8}
-            >
-              {runNowMutation.isPending ? (
-                <ActivityIndicator size="small" color={colors.brand} />
-              ) : (
-                <>
-                  <Ionicons name="flash" size={18} color={colors.brand} />
-                  <Text style={[styles.actionBtnText, { color: colors.brand }]}>Run Now</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
+        {!isEditing && (template.status === "active" || template.status === "paused") && scheduleActions.length > 0 && (
+          <View style={styles.actionRow}>{scheduleActions}</View>
         )}
 
         {/* Details Card */}
@@ -575,7 +590,7 @@ export default function RecurringInvoiceDetailScreen() {
         </View>
 
         {/* Delete Button */}
-        {!isEditing && (
+        {!isEditing && canDelete && (
           <TouchableOpacity
             style={styles.deleteBtnFull}
             onPress={handleDelete}
