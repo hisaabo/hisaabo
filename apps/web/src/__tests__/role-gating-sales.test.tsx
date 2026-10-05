@@ -218,10 +218,13 @@ describe("Invoices page", () => {
       return screen.getByRole("dialog", { name: "Invoice INV-001" });
     }
 
-    it("detail panel: seller downloads and the draft is marked sent", async () => {
+    it("detail panel: seller downloads; the server (not the client) promotes the draft", async () => {
+      // Since main#41 the PDF endpoint promotes draft → sent itself (permission-
+      // checked there), so the panel only downloads and refetches.
       const panel = openDetail("seller");
       await downloadFrom(panel);
-      expect(stub.mutations["invoice.updateStatus"]).toEqual([{ id: "inv-1", status: "sent" }]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(stub.mutations["invoice.updateStatus"]).toBeUndefined();
     });
 
     it("detail panel: accountant downloads but no status change is sent", async () => {

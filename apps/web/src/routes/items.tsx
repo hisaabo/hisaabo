@@ -24,6 +24,7 @@ import { Disclosure } from "@/components/ui/Disclosure";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
 import { UnitVariantEditor } from "@/components/UnitVariantEditor";
+import { ItemImageManager } from "@/components/items/ItemImageManager";
 import {
   type UiUnitVariant,
   recomputeOnBasePriceChange,
@@ -1574,6 +1575,22 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
               </div>
             </Disclosure>
           )}
+
+          {/* Image gallery — available for every item type. For variants-mode
+              items, each image can be tagged to a specific variant. */}
+          <Disclosure label="Images">
+            <ItemImageManager
+              itemId={itemId}
+              variants={
+                itemMode === "variants" && item?.variants
+                  ? item.variants.map((v) => ({
+                      id: v.id,
+                      attributeValues: v.attributeValues as Record<string, string>,
+                    }))
+                  : []
+              }
+            />
+          </Disclosure>
         </div>
 
       </div>

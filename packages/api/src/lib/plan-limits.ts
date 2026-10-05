@@ -12,6 +12,7 @@ import { eq, and, gt, isNull, count } from "drizzle-orm";
 import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
+import { getTenantMemberUserIds, businessTenantScope } from "./tenant-businesses.js";
 
 // ── Plan limit definitions ────────────────────────────────────────────────────
 
@@ -143,9 +144,13 @@ export async function enforceBusinessLimit(tenantId: string, tenantDb: TenantDat
   const limits = getLimits(plan);
   if (limits.maxBusinesses === Infinity) return;
 
+  // Count only this tenant's businesses. In self-hosted shared-DB mode a bare
+  // count would tally every tenant's businesses and wrongly block creation.
+  const memberIds = await getTenantMemberUserIds(tenantId);
   const [{ count: bizCount }] = await tenantDb
     .select({ count: count() })
-    .from(businesses);
+    .from(businesses)
+    .where(businessTenantScope(memberIds));
 
   if (bizCount >= limits.maxBusinesses) {
     throw new TRPCError({

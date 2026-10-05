@@ -21,6 +21,18 @@ export interface StoreConfig {
   categories: string[];
 }
 
+/** One photo in an item's gallery, served from the API. */
+export interface StoreImage {
+  id: string;
+  // Variant this photo is tagged to, or null when shared across all variants.
+  variantId: string | null;
+  isPrimary: boolean;
+  sortOrder: number;
+  alt: string | null;
+  // API-relative path (prefix with assetUrl() before using as an <img> src).
+  url: string;
+}
+
 export interface StoreItem {
   id: string;
   name: string;
@@ -33,6 +45,9 @@ export interface StoreItem {
   sortOrder: number;
   taxPercent?: string;
   taxInclusive?: boolean;
+  // Full gallery (with variant tags) + a convenience thumbnail for the grid.
+  images?: StoreImage[];
+  primaryImageUrl?: string | null;
   itemMode: "simple" | "alt_units" | "variants";
   unitVariants?: Array<{
     unit: string;

@@ -1,3 +1,4 @@
+import { formatQuantity } from "@hisaabo/shared";
 import { POSStore, usePOSSelector, computeCartTotals } from "./state";
 
 interface Props {
@@ -44,7 +45,7 @@ export function Cart({ store }: Props) {
                         {li.itemName}
                       </div>
                       <div className="text-xs text-text-tertiary mt-1 tabular-nums">
-                        ₹{li.unitPrice} × {li.quantity} {li.unit}
+                        ₹{li.unitPrice} × {formatQuantity(li.quantity)} {li.unit}
                       </div>
                     </div>
                     <div className="text-right min-w-[88px]">

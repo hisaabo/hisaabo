@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import type { StoreConfig, CartItem, OrderResult } from "./types";
+import type { StoreConfig, CartItem, OrderResult, StoreItem } from "./types";
 import { cartItemKey } from "./types";
-import { fetchCatalog } from "./api";
+import { fetchCatalog, assetUrl } from "./api";
 import { Header } from "./components/Header";
 import { ItemGrid } from "./components/ItemGrid";
+import { ItemDetail } from "./components/ItemDetail";
 import { Cart } from "./components/Cart";
 import { Checkout } from "./components/Checkout";
 import { PhoneVerify } from "./components/PhoneVerify";
@@ -42,6 +43,35 @@ function applyAccentColor(hex?: string) {
   // Update the browser theme-color meta tag
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", hex);
+}
+
+/**
+ * Swap the browser-tab favicon (and apple-touch-icon) to the store's own logo.
+ *
+ * A small touch that makes every storefront feel like its own brand instead of
+ * the generic Hisaabo default. Browsers run JS, so updating the <link rel=icon>
+ * at runtime is enough for the tab/bookmark icon — no SSR needed. (Social-share
+ * crawlers are a separate concern handled by per-store OG meta.)
+ *
+ * Falls back silently to the static default when the business has no logo.
+ */
+function applyFavicon(logoUrl?: string | null) {
+  const href = assetUrl(logoUrl);
+  if (!href) return;
+
+  const ensureLink = (rel: string): HTMLLinkElement => {
+    let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = rel;
+      document.head.appendChild(link);
+    }
+    return link;
+  };
+
+  // The logo endpoint serves PNG or JPEG; let the browser sniff the type.
+  ensureLink("icon").href = href;
+  ensureLink("apple-touch-icon").href = href;
 }
 
 function darkenHex(hex: string, amount: number): string {
@@ -85,6 +115,9 @@ export function App() {
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
 
+  // Item the customer is viewing in the detail modal (null = grid only).
+  const [detailItem, setDetailItem] = useState<StoreItem | null>(null);
+
   // Persist cart
   useEffect(() => {
     saveCart(cart);
@@ -102,6 +135,7 @@ export function App() {
       .then((data) => {
         setCatalog(data);
         applyAccentColor(data.business.accentColor);
+        applyFavicon(data.business.logoUrl);
         // Update page title
         document.title = `${data.business.name} \u2014 Online Store`;
       })
@@ -334,6 +368,7 @@ export function App() {
               accentColor={catalog.business.accentColor}
               search={search}
               activeCategory={activeCategory}
+              onOpenDetail={setDetailItem}
             />
           </main>
 
@@ -472,6 +507,19 @@ export function App() {
             </span>
           </button>
         </div>
+      )}
+
+      {/* Item detail modal — full gallery + variant-aware images */}
+      {detailItem && (
+        <ItemDetail
+          item={detailItem}
+          cart={cart}
+          onAddToCart={addToCart}
+          onRemoveFromCart={removeFromCart}
+          currency={catalog.business.currency}
+          accentColor={catalog.business.accentColor}
+          onClose={() => setDetailItem(null)}
+        />
       )}
     </div>
   );

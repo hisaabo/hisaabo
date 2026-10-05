@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, downloadCSV, cn } from "@/lib/utils";
 import { apiUrl } from "@/lib/api-url";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -465,7 +465,6 @@ interface InvoiceDetailPanelProps {
   invoiceId: string | null;
   onClose: () => void;
   onRecordPayment: (partyId: string, invoiceId: string, balance: string) => void;
-  onStatusChange: (id: string, status: string) => void;
   onEdit: (invoiceId: string, type: "sale" | "purchase") => void;
   onIssueCN?: (id: string, type: "sale" | "purchase") => void;
   onCreateSR?: (id: string, type: "sale" | "purchase") => void;
@@ -475,7 +474,6 @@ function InvoiceDetailPanel({
   invoiceId,
   onClose,
   onRecordPayment,
-  onStatusChange,
   onEdit,
   onIssueCN,
   onCreateSR,
@@ -610,8 +608,14 @@ function InvoiceDetailPanel({
                 invoiceId={invoice.id}
                 invoiceNumber={invoice.invoiceNumber}
                 invoiceStatus={invoice.status}
-                // A draft is marked "sent" after download — only for roles that may update it.
-                onShared={canEdit ? () => onStatusChange(invoice.id, "sent") : undefined}
+                // The PDF endpoint promotes a draft sale invoice to "sent"
+                // server-side, so here we only refetch to surface the new
+                // status — no second status mutation.
+                onShared={() => {
+                  utils.invoice.list.invalidate();
+                  utils.dashboard.summary.invalidate();
+                  utils.invoice.getById.invalidate({ id: invoice.id });
+                }}
               />
               {canRecordPayment && canRecordPaymentRole && (
                 <button
@@ -693,7 +697,7 @@ function InvoiceDetailPanel({
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{li.quantity}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-text-secondary align-top">{formatQuantity(li.quantity)}</td>
                       <td className="px-3 py-2 text-text-secondary text-xs align-top">
                         {(li.selectedUnit || li.itemUnit)?.toUpperCase() || "—"}
                       </td>
@@ -1330,9 +1334,6 @@ function InvoicesPage() {
           setSelectedInvoiceId(null);
           setPaymentPanel({ partyId, invoiceId, balance });
         }}
-        onStatusChange={(id, status) =>
-          updateStatus.mutate({ id, status: status as any })
-        }
         onEdit={(id, invType) => setEditInvoice({ id, type: invType })}
         onIssueCN={(id, invType) => setCnSource({ id, type: invType })}
         onCreateSR={(id, invType) => setSrSource({ id, type: invType })}

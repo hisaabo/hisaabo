@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import type { StoreItem, CartItem } from "../types";
 import { cartItemKey } from "../types";
+import { assetUrl } from "../api";
 
 interface ItemCardProps {
   item: StoreItem;
@@ -9,6 +10,7 @@ interface ItemCardProps {
   onRemoveFromCart: (key: string) => void;
   currency: string;
   accentColor?: string;
+  onOpenDetail?: (item: StoreItem) => void;
 }
 
 export function ItemCard({
@@ -18,6 +20,7 @@ export function ItemCard({
   onRemoveFromCart,
   currency,
   accentColor,
+  onOpenDetail,
 }: ItemCardProps) {
   const symbol = currency === "INR" ? "\u20B9" : currency;
   const accent = accentColor || "var(--store-accent)";
@@ -127,11 +130,48 @@ export function ItemCard({
     item.variantAttributes &&
     !item.variantAttributes.every((a) => selectedAttrs[a]);
 
+  const primaryImageUrl = assetUrl(item.primaryImageUrl);
+  const imageCount = item.images?.length ?? 0;
+  const canOpenDetail = Boolean(onOpenDetail);
+  const openDetail = () => onOpenDetail?.(item);
+
   return (
     <div
-      className="product-card"
+      className="product-card overflow-hidden"
       style={{ opacity: isOutOfStock && !variantSelectionIncomplete ? 0.55 : 1 }}
     >
+      {/* Thumbnail — opens the detail view with the full gallery */}
+      {primaryImageUrl && (
+        <button
+          type="button"
+          onClick={openDetail}
+          disabled={!canOpenDetail}
+          className="relative block w-full aspect-square overflow-hidden"
+          style={{ background: "var(--store-bg-secondary)", cursor: canOpenDetail ? "pointer" : "default" }}
+          aria-label={`View ${item.name}`}
+        >
+          <img
+            src={primaryImageUrl}
+            alt={item.images?.find((im) => im.isPrimary)?.alt || item.name}
+            loading="lazy"
+            className="w-full h-full object-cover transition-transform duration-200 hover:scale-[1.03]"
+            onError={(e) => {
+              const parent = (e.currentTarget as HTMLImageElement).parentElement;
+              if (parent) parent.style.display = "none";
+            }}
+          />
+          {imageCount > 1 && (
+            <span
+              className="absolute bottom-1.5 right-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-white"
+              style={{ background: "rgba(0,0,0,0.55)" }}
+            >
+              <GalleryIcon />
+              {imageCount}
+            </span>
+          )}
+        </button>
+      )}
+
       <div className="flex flex-col p-3.5 flex-1">
         {/* Category tag */}
         {item.category && (
@@ -143,10 +183,15 @@ export function ItemCard({
           </span>
         )}
 
-        {/* Item name */}
+        {/* Item name — also opens the detail view */}
         <h3
           className="text-[13.5px] font-semibold leading-snug line-clamp-2 mb-0.5"
-          style={{ color: "var(--store-text)", letterSpacing: "-0.01em" }}
+          style={{
+            color: "var(--store-text)",
+            letterSpacing: "-0.01em",
+            cursor: canOpenDetail ? "pointer" : "default",
+          }}
+          onClick={canOpenDetail ? openDetail : undefined}
         >
           {item.name}
         </h3>
@@ -418,6 +463,26 @@ function TrashIcon({ size, color }: { size: number; color: string }) {
     >
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+    </svg>
+  );
+}
+
+function GalleryIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      width="11"
+      height="11"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <polyline points="21 15 16 10 5 21" />
     </svg>
   );
 }

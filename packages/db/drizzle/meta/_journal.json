@@ -99,6 +99,13 @@
       "when": 1776713299147,
       "tag": "0013_empty_thaddeus_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1776713300147,
+      "tag": "0014_align_self_hosted_auth",
+      "breakpoints": true
     }
   ]
 }
