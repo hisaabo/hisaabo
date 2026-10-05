@@ -125,14 +125,14 @@ function PartiesPage() {
     },
   });
 
-  useHotkeys([
+  useHotkeys(canCreate ? [
     {
       key: "n",
       handler: () => setShowAddModal(true),
       description: "New party",
       scope: "parties",
     },
-  ]);
+  ] : []);
 
   function confirmDelete(id: string, name: string) {
     deleteConfirm.requestDelete(id, name);
@@ -345,6 +345,8 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
   const [tab, setTab] = useState("overview");
   const [showMerge, setShowMerge] = useState(false);
   const navigate = useNavigate();
+  // party.merge deletes the source party, so the API requires delete:Party.
+  const canMerge = useCan("delete", "Party");
 
   const { data: party } = trpc.party.getById.useQuery({ id: partyId });
 
@@ -386,12 +388,14 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
       ].filter(Boolean).join(" · ")}
       footer={
         <div className="flex justify-end">
+          {canMerge && (
           <button
             onClick={() => setShowMerge(true)}
             className="text-xs px-3 py-1.5 rounded-lg font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800 transition-colors"
           >
             Merge
           </button>
+          )}
         </div>
       }
     >

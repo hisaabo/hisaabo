@@ -35,6 +35,8 @@ function CashAndBankPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const canCreateAccount = useCan("create", "BankAccount");
   const canCreateTxn = useCan("create", "BankTransaction");
+  const canUpdateAccount = useCan("update", "BankAccount");
+  const canAssignPayments = useCan("update", "Payment");
   const [selectedUntracked, setSelectedUntracked] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false); // true = all across ALL pages
   const [assignAccountId, setAssignAccountId] = useState<string | null>(null);
@@ -349,19 +351,21 @@ function CashAndBankPage() {
                         </p>
                       </div>
                     </button>
-                    {/* Edit button — always available on hover */}
-                    <button
-                      className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-all"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditAccountId(account.id);
-                      }}
-                      aria-label="Edit account"
-                    >
-                      <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
+                    {/* Edit button — shown on hover to roles that can update accounts */}
+                    {canUpdateAccount && (
+                      <button
+                        className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-all"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditAccountId(account.id);
+                        }}
+                        aria-label="Edit account"
+                      >
+                        <svg className="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -377,20 +381,22 @@ function CashAndBankPage() {
                 className="px-4 py-3 flex items-center justify-between border-b border-border-light"
               >
                 <h3 className="text-sm font-semibold text-text-primary">Transactions</h3>
-                <div className="flex gap-2">
-                  <button
-                    className="btn-ghost text-xs"
-                    onClick={() => setShowTransfer(true)}
-                  >
-                    Transfer
-                  </button>
-                  <button
-                    className="btn-primary text-xs py-1.5 px-3"
-                    onClick={() => setShowAddTransaction(true)}
-                  >
-                    + Add Transaction
-                  </button>
-                </div>
+                {canCreateTxn && (
+                  <div className="flex gap-2">
+                    <button
+                      className="btn-ghost text-xs"
+                      onClick={() => setShowTransfer(true)}
+                    >
+                      Transfer
+                    </button>
+                    <button
+                      className="btn-primary text-xs py-1.5 px-3"
+                      onClick={() => setShowAddTransaction(true)}
+                    >
+                      + Add Transaction
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Date range filter bar */}
@@ -613,7 +619,7 @@ function CashAndBankPage() {
           </div>
 
           {/* Bulk assign toolbar — appears when items are selected */}
-          {(selectedUntracked.size > 0 || selectAllMatching) && accounts && accounts.length > 0 && (
+          {canAssignPayments && (selectedUntracked.size > 0 || selectAllMatching) && accounts && accounts.length > 0 && (
             <div className="mb-3 rounded-xl border border-brand-200 dark:border-brand-800 bg-brand-600/[0.05]">
               {/* Selection info + "select all matching" upgrade */}
               <div className="px-4 py-2.5 flex items-center justify-between">
@@ -856,6 +862,7 @@ function EditAccountSlideOver({
   onDeleteRequest: (id: string) => void;
 }) {
   const utils = trpc.useUtils();
+  const canDeleteAccount = useCan("delete", "BankAccount");
 
   // Fetch the account details
   const { data: accountData, isLoading } = trpc.bankAccount.getById.useQuery(
@@ -1009,13 +1016,15 @@ function EditAccountSlideOver({
       description={account?.accountName}
       footer={
         <div className="flex items-center justify-between">
-          <button
-            type="button"
-            className="btn-ghost text-sm text-red-600 hover:text-red-700 hover:bg-red-600/[0.08] px-3 py-2"
-            onClick={() => onDeleteRequest(accountId)}
-          >
-            Delete Account
-          </button>
+          {canDeleteAccount && (
+            <button
+              type="button"
+              className="btn-ghost text-sm text-red-600 hover:text-red-700 hover:bg-red-600/[0.08] px-3 py-2"
+              onClick={() => onDeleteRequest(accountId)}
+            >
+              Delete Account
+            </button>
+          )}
           <div className="flex gap-3">
             <button type="button" className="btn-secondary" onClick={onClose}>
               Cancel

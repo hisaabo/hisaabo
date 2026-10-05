@@ -98,23 +98,25 @@ function SectionCard({
 
 // ── Import Section ────────────────────────────────────────────────────────────
 
-function ImportSection({ onOpen }: { onOpen: () => void }) {
+function ImportSection({ onOpen, canImport }: { onOpen: () => void; canImport: boolean }) {
   return (
     <SectionCard
       icon={<UploadIcon />}
       title="Import data"
       description="Migrate from myBillBook, Tally, or upload CSV files into the current business."
     >
-      <button className="btn-secondary" onClick={onOpen}>
-        Start import
-      </button>
+      {canImport && (
+        <button className="btn-secondary" onClick={onOpen}>
+          Start import
+        </button>
+      )}
     </SectionCard>
   );
 }
 
 // ── CSV Export Section (current business, spreadsheet-friendly) ──────────────
 
-function CsvExportSection() {
+function CsvExportSection({ canExport }: { canExport: boolean }) {
   const exportMut = trpc.business.exportData.useMutation({
     onSuccess: async (data) => {
       const zip = new JSZip();
@@ -143,13 +145,15 @@ function CsvExportSection() {
       title="Export as CSV"
       description="Download the current business as CSV files in a ZIP bundle — ideal for spreadsheets and external tools. Not used for restoring."
     >
-      <button
-        className="btn-secondary"
-        onClick={() => exportMut.mutate()}
-        disabled={exportMut.isPending}
-      >
-        {exportMut.isPending ? "Exporting…" : "Export CSV bundle"}
-      </button>
+      {canExport && (
+        <button
+          className="btn-secondary"
+          onClick={() => exportMut.mutate()}
+          disabled={exportMut.isPending}
+        >
+          {exportMut.isPending ? "Exporting…" : "Export CSV bundle"}
+        </button>
+      )}
     </SectionCard>
   );
 }
@@ -208,7 +212,15 @@ function FullBackupSection({ tenantId }: { tenantId: string }) {
 
 // ── Main DataTab ──────────────────────────────────────────────────────────────
 
-export function DataTab() {
+interface DataTabProps {
+  // manage:Import (import.*) and manage:Business (business.exportData).
+  // Resolved by the settings page (useCan) and passed in; default to true to
+  // match useCan's no-session default. The API enforces the real rule.
+  canImport?: boolean;
+  canExportCsv?: boolean;
+}
+
+export function DataTab({ canImport = true, canExportCsv = true }: DataTabProps = {}) {
   const [showImport, setShowImport] = useState(false);
   const { data: session } = trpc.auth.me.useQuery();
   const isOwner = session?.role === "owner" || session?.role === "superadmin";
@@ -216,8 +228,8 @@ export function DataTab() {
   return (
     <>
       <div className="space-y-4">
-        <ImportSection onOpen={() => setShowImport(true)} />
-        <CsvExportSection />
+        <ImportSection onOpen={() => setShowImport(true)} canImport={canImport} />
+        <CsvExportSection canExport={canExportCsv} />
         {isOwner && session?.tenantId && <FullBackupSection tenantId={session.tenantId} />}
       </div>
       <ImportWizard open={showImport} onClose={() => setShowImport(false)} />

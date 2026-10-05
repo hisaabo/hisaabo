@@ -93,7 +93,7 @@ function ExpensesPage() {
 
   const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
-  useHotkeys([
+  useHotkeys(canCreate ? [
     {
       key: "n",
       handler: () => {
@@ -105,7 +105,7 @@ function ExpensesPage() {
       description: "New expense",
       scope: "expenses",
     },
-  ]);
+  ] : []);
 
   const { data, isFetching, isLoading } = trpc.expense.list.useQuery({
     page,

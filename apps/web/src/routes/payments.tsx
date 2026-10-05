@@ -268,6 +268,7 @@ function PaymentsPage() {
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("payments", "this-month");
   const canCreate = useCan("create", "Payment");
+  const canUpdate = useCan("update", "Payment");
   const canDelete = useCan("delete", "Payment");
 
   // Open the payment detail panel when navigated here with ?id=<paymentId>
@@ -319,14 +320,14 @@ function PaymentsPage() {
   });
 
   // Keyboard shortcut: N to open panel
-  useHotkeys([
+  useHotkeys(canCreate ? [
     {
       key: "n",
       handler: () => setShowPanel(true),
       description: "Record new payment",
       scope: "payments",
     },
-  ]);
+  ] : []);
 
   async function exportPaymentsCSV() {
     setExporting(true);
@@ -382,7 +383,8 @@ function PaymentsPage() {
       />
 
       {/* Smart auto-assign banner — one-time per business, shown only when assignments fire */}
-      <SmartAssignBanner onAssigned={() => utils.payment.list.invalidate()} />
+      {/* It calls payment.assignAccount on mount, so only for roles that may update payments */}
+      {canUpdate && <SmartAssignBanner onAssigned={() => utils.payment.list.invalidate()} />}
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-3 flex-wrap">
@@ -413,9 +415,11 @@ function PaymentsPage() {
           description="Record your first payment to start tracking cash flow."
           encouragement="Once you start invoicing, payments will show here."
           action={
-            <button className="btn-primary" onClick={() => setShowPanel(true)}>
-              + Record Payment
-            </button>
+            canCreate ? (
+              <button className="btn-primary" onClick={() => setShowPanel(true)}>
+                + Record Payment
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -456,12 +460,14 @@ function PaymentsPage() {
                     </td>
                     <td className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {canUpdate && (
                         <button
                           className="text-xs px-2 py-1 rounded font-medium text-text-secondary hover:bg-surface-2 transition-colors"
                           onClick={() => setEditPaymentId(p.id)}
                         >
                           Edit
                         </button>
+                        )}
                         {canDelete && (
                         <button
                           className="btn-icon text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
@@ -572,6 +578,7 @@ function PaymentDetailPanel({
   const { data: payment, isLoading } = trpc.payment.getById.useQuery(
     { id: paymentId },
   );
+  const canEdit = useCan("update", "Payment");
 
   return (
     <SlideOver
@@ -580,7 +587,7 @@ function PaymentDetailPanel({
       title={isLoading ? "Loading…" : payment ? `Payment ${payment.paymentNumber || ""}` : "Payment"}
       description={payment ? `${payment.partyName} — ${formatDate(payment.paymentDate)}` : undefined}
       footer={
-        payment ? (
+        payment && canEdit ? (
           <div className="flex justify-end gap-2">
             <button
               onClick={() => onEdit(payment.id)}

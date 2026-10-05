@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { toast } from "@/hooks/useToast";
 import { POSStore, usePOSSelector } from "./state";
 import { useScanner } from "./useScanner";
@@ -28,6 +29,10 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [printInvoiceId, setPrintInvoiceId] = useState<string | null>(null);
+  // Checkout creates an invoice and then records its payment.
+  const canCreateInvoice = useCan("create", "Invoice");
+  const canCreatePayment = useCan("create", "Payment");
+  const canCheckout = canCreateInvoice && canCreatePayment;
 
   // Store is tied to businessId — recreate if the active business changes.
   const store = useMemo(
@@ -89,7 +94,7 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
     () => [
       { combo: "F2", handler: () => searchRef.current?.focus() },
       { combo: "F3", handler: () => setPickerOpen(true) },
-      { combo: "F9", handler: () => setPaymentOpen(true) },
+      ...(canCheckout ? [{ combo: "F9", handler: () => setPaymentOpen(true) }] : []),
       { combo: "F6", handler: () => store.parkActive(walkInPartyId, "Walk-in Customer") },
       { combo: "Escape", handler: () => {
         setPickerOpen(false);
@@ -103,7 +108,7 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
         },
       })),
     ],
-    [carts, store, walkInPartyId],
+    [carts, store, walkInPartyId, canCheckout],
   );
   useKeyboardShortcuts(shellRef, shortcuts);
 
@@ -240,14 +245,16 @@ export function POSShell({ businessId, walkInPartyId }: Props) {
           F2 search · F3 customer · F6 hold · F9 pay · Alt+1..5 switch
         </div>
         <div className="flex-1" />
-        <button
-          type="button"
-          className="btn-primary px-6 py-2.5 text-base"
-          onClick={() => setPaymentOpen(true)}
-          disabled={!activeCart || activeCart.lineItems.length === 0}
-        >
-          Pay · F9
-        </button>
+        {canCheckout && (
+          <button
+            type="button"
+            className="btn-primary px-6 py-2.5 text-base"
+            onClick={() => setPaymentOpen(true)}
+            disabled={!activeCart || activeCart.lineItems.length === 0}
+          >
+            Pay · F9
+          </button>
+        )}
       </footer>
 
       <CustomerPicker

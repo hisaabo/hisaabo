@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { badgeColor, badgeColorFallback } from "@/lib/badge-colors";
 import { Badge } from "@/components/ui/Badge";
@@ -63,6 +64,7 @@ function DashboardTab() {
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState<CancelReason>("1");
   const [cancelRemarks, setCancelRemarks] = useState("");
+  const canManage = useCan("manage", "EInvoice");
 
   const { data, isLoading } = trpc.eInvoice.dashboard.useQuery({
     status: (tab as "pending" | "generated" | "failed" | "cancelled") || undefined,
@@ -138,7 +140,7 @@ function DashboardTab() {
             placeholder="Search invoice # or party..."
             className="max-w-xs"
           />
-          {hasFailed && (
+          {canManage && hasFailed && (
             <button
               onClick={() => bulkRetryMutation.mutate()}
               disabled={bulkRetryMutation.isPending}
@@ -207,7 +209,7 @@ function DashboardTab() {
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {(inv.eInvoiceStatus === "failed" || inv.eInvoiceStatus === "pending") && (
+                        {canManage && (inv.eInvoiceStatus === "failed" || inv.eInvoiceStatus === "pending") && (
                           <button
                             onClick={() => generateMutation.mutate({ invoiceId: inv.id })}
                             disabled={generateMutation.isPending}
@@ -217,7 +219,7 @@ function DashboardTab() {
                             Retry
                           </button>
                         )}
-                        {inv.eInvoiceStatus === null && (
+                        {canManage && inv.eInvoiceStatus === null && (
                           <button
                             onClick={() => generateMutation.mutate({ invoiceId: inv.id })}
                             disabled={generateMutation.isPending}
@@ -226,7 +228,7 @@ function DashboardTab() {
                             Generate
                           </button>
                         )}
-                        {inv.eInvoiceStatus === "generated" && inv.irn && (
+                        {canManage && inv.eInvoiceStatus === "generated" && inv.irn && (
                           <button
                             onClick={() => {
                               setCancelId(inv.id);
@@ -361,6 +363,7 @@ function SettingsTab() {
   const [form, setForm] = useState<ConfigForm>(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const canManage = useCan("manage", "EInvoice");
 
   const { isLoading, data: configData } = trpc.eInvoice.getConfig.useQuery(undefined);
 
@@ -539,24 +542,26 @@ function SettingsTab() {
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-3 pt-1">
-          <button
-            onClick={handleSave}
-            disabled={saveMutation.isPending}
-            className="btn-primary flex items-center gap-1.5"
-          >
-            {saveMutation.isPending && <Spinner size="sm" />}
-            Save Settings
-          </button>
-          <button
-            onClick={() => { setTestResult(null); testMutation.mutate(); }}
-            disabled={testMutation.isPending}
-            className="btn-secondary flex items-center gap-1.5"
-          >
-            {testMutation.isPending && <Spinner size="sm" />}
-            Test Connection
-          </button>
-        </div>
+        {canManage && (
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleSave}
+              disabled={saveMutation.isPending}
+              className="btn-primary flex items-center gap-1.5"
+            >
+              {saveMutation.isPending && <Spinner size="sm" />}
+              Save Settings
+            </button>
+            <button
+              onClick={() => { setTestResult(null); testMutation.mutate(); }}
+              disabled={testMutation.isPending}
+              className="btn-secondary flex items-center gap-1.5"
+            >
+              {testMutation.isPending && <Spinner size="sm" />}
+              Test Connection
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Info box */}

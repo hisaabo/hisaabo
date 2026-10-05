@@ -309,6 +309,9 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
   );
 
   const shipment = data?.data?.[0];
+  // shipment.create needs create:Invoice; shipment.update needs update:Invoice.
+  const canCreateShipment = useCan("create", "Invoice");
+  const canUpdateShipment = useCan("update", "Invoice");
 
   const updateMutation = trpc.shipment.update.useMutation({
     onSuccess: () => {
@@ -344,7 +347,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
             <p className="text-xs text-text-tertiary">
               {invoiceStatus === "adjusted" ? "Invoice is adjusted — shipment cannot be added." : "Invoice is paid — shipment cannot be added."}
             </p>
-          ) : !showCreate ? (
+          ) : !canCreateShipment ? null : !showCreate ? (
             <button
               onClick={() => setShowCreate(true)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium text-text-secondary hover:bg-surface-2 border border-border-light transition-colors"
@@ -368,7 +371,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
           <div className="flex items-center justify-between">
             <InvoiceShipmentStatusBadge status={shipment.status as ShipmentStatus} />
             <div className="flex gap-1.5">
-              {shipment.status === "pending" && (
+              {shipment.status === "pending" && canUpdateShipment && (
                 <button
                   onClick={() => markStatus("shipped")}
                   disabled={updateMutation.isPending}
@@ -377,7 +380,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
                   Mark Shipped
                 </button>
               )}
-              {(shipment.status === "shipped" || shipment.status === "in_transit") && (
+              {(shipment.status === "shipped" || shipment.status === "in_transit") && canUpdateShipment && (
                 <button
                   onClick={() => markStatus("delivered")}
                   disabled={updateMutation.isPending}
@@ -415,6 +418,8 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
               </a>
             ) : shipment.trackingNumber ? (
               <span className="font-mono text-text-primary">{shipment.trackingNumber}</span>
+            ) : !canUpdateShipment ? (
+              <span className="text-text-tertiary">—</span>
             ) : showTrackingForm ? (
               <div className="flex gap-1.5 mt-1">
                 <input
@@ -498,8 +503,10 @@ function InvoiceDetailPanel({
     onError: (err) => toast.error("Failed to update status", err.message),
   });
 
-  // Must stay above the early return below — it is a hook.
+  // Must stay above the early return below — they are hooks.
   const canEdit = useCan("update", "Invoice");
+  const canCreateDoc = useCan("create", "Invoice");
+  const canRecordPaymentRole = useCan("create", "Payment");
 
   if (!invoiceId) return null;
 
@@ -552,7 +559,7 @@ function InvoiceDetailPanel({
                   Edit
                 </button>
               )}
-              {isDraftLike && (
+              {isDraftLike && canEdit && (
                 <button
                   onClick={() => updateStatus.mutate({ id: invoice.id, status: "sent" })}
                   disabled={updateStatus.isPending}
@@ -581,7 +588,7 @@ function InvoiceDetailPanel({
                 </a>
               ))}
               {/* Create buttons — only when not fully adjusted */}
-              {canConvert && (
+              {canConvert && canCreateDoc && (
                 <>
                   <button
                     onClick={() => { onClose(); onIssueCN?.(invoice.id, invoice.type as "sale" | "purchase"); }}
@@ -603,9 +610,10 @@ function InvoiceDetailPanel({
                 invoiceId={invoice.id}
                 invoiceNumber={invoice.invoiceNumber}
                 invoiceStatus={invoice.status}
-                onShared={() => onStatusChange(invoice.id, "sent")}
+                // A draft is marked "sent" after download — only for roles that may update it.
+                onShared={canEdit ? () => onStatusChange(invoice.id, "sent") : undefined}
               />
-              {canRecordPayment && (
+              {canRecordPayment && canRecordPaymentRole && (
                 <button
                   onClick={() =>
                     onRecordPayment(
@@ -890,6 +898,8 @@ function InvoicesPage() {
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
   const canCreate = useCan("create", "Invoice");
+  const canUpdate = useCan("update", "Invoice");
+  const canRecordPayment = useCan("create", "Payment");
   // Delete is decided per row: role permission plus the API's rule that a
   // seller_manager may only delete unpaid invoices up to 2 hours old.
   const ability = useAbility();
@@ -905,17 +915,17 @@ function InvoicesPage() {
     }
   }, [idFromSearch]);
   useEffect(() => {
-    if (createFromSearch) {
+    if (createFromSearch && canCreate) {
       setShowCreate(true);
     }
-  }, [createFromSearch]);
+  }, [createFromSearch, canCreate]);
 
   const debouncedSearch = useDebounce(search, 300);
 
   // Keyboard shortcut: N to create new invoice
-  useHotkeys([
+  useHotkeys(canCreate ? [
     { key: "n", handler: () => setShowCreate(true), description: "New invoice", scope: "invoices" },
-  ]);
+  ] : []);
 
   // Reset to page 1 whenever filters or sort change
   useEffect(() => { setPage(1); }, [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate, sortBy, sortDir]);
@@ -1191,13 +1201,13 @@ function InvoicesPage() {
                             invoiceId={inv.id}
                             invoiceNumber={inv.invoiceNumber}
                             invoiceStatus={inv.status}
-                            onShared={() =>
+                            onShared={canUpdate ? () =>
                               updateStatus.mutate({ id: inv.id, status: "sent" })
-                            }
+                            : undefined}
                           />
                           {/* Context actions — always visible at reduced opacity, full on hover */}
                           <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
-                            {(inv.status === "draft" || inv.status === "unfulfilled") && (
+                            {(inv.status === "draft" || inv.status === "unfulfilled") && canUpdate && (
                               <button
                                 onClick={() =>
                                   updateStatus.mutate({ id: inv.id, status: "sent" })
@@ -1210,7 +1220,8 @@ function InvoicesPage() {
                                 </svg>
                               </button>
                             )}
-                            {inv.status !== "draft" &&
+                            {canRecordPayment &&
+                              inv.status !== "draft" &&
                               inv.status !== "cancelled" &&
                               inv.status !== "paid" &&
                               inv.status !== "adjusted" &&

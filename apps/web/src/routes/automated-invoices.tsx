@@ -151,6 +151,7 @@ function AutomatedInvoicesPage() {
   const [form, setForm] = useState<TemplateFormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Partial<Record<string, string>>>({});
   const canCreate = useCan("create", "RecurringInvoice");
+  const canUpdate = useCan("update", "RecurringInvoice");
   const canDelete = useCan("delete", "RecurringInvoice");
 
   const debouncedSearch = useDebounce(search, 300);
@@ -159,14 +160,14 @@ function AutomatedInvoicesPage() {
     setPage(1);
   }, [debouncedSearch, statusFilter]);
 
-  useHotkeys([
+  useHotkeys(canCreate ? [
     {
       key: "n",
       handler: () => openAdd(),
       description: "New automated invoice",
       scope: "automated-invoices",
     },
-  ]);
+  ] : []);
 
   // ── Queries ────────────────────────────────────────────────────
 
@@ -523,12 +524,14 @@ function AutomatedInvoicesPage() {
                       {s.invoiceCount} invoices &middot; ~{frequencyLabel(s.suggestedFrequency)} &middot; Median {formatCurrency(s.medianAmount)}
                     </p>
                   </div>
+                  {canCreate && (
                   <button
                     className="btn-primary text-xs px-3 py-1.5 shrink-0"
                     onClick={() => createFromSuggestion(s)}
                   >
                     Create Template
                   </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -619,7 +622,7 @@ function AutomatedInvoicesPage() {
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {template.status === "active" && (
+                          {template.status === "active" && canUpdate && (
                             <button
                               onClick={() => pauseMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-amber-600 hover:bg-amber-600/[0.08] transition-colors"
@@ -630,7 +633,7 @@ function AutomatedInvoicesPage() {
                               <PauseIcon />
                             </button>
                           )}
-                          {template.status === "paused" && (
+                          {template.status === "paused" && canUpdate && (
                             <button
                               onClick={() => resumeMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-emerald-600 hover:bg-emerald-600/[0.08] transition-colors"
@@ -641,7 +644,7 @@ function AutomatedInvoicesPage() {
                               <PlayIcon />
                             </button>
                           )}
-                          {(template.status === "active" || template.status === "paused") && (
+                          {(template.status === "active" || template.status === "paused") && canCreate && (
                             <button
                               onClick={() => runNowMutation.mutate({ id: template.id })}
                               className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors"
@@ -652,6 +655,7 @@ function AutomatedInvoicesPage() {
                               <RunNowIcon />
                             </button>
                           )}
+                          {canUpdate && (
                           <button
                             onClick={() => openEdit(template)}
                             className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors"
@@ -660,6 +664,7 @@ function AutomatedInvoicesPage() {
                           >
                             <EditIcon />
                           </button>
+                          )}
                           {canDelete && (
                             <button
                               onClick={() => deleteConfirm.requestDelete(template.id, template.name || "Untitled")}
@@ -1053,6 +1058,9 @@ function TemplateDetailSlideOver({
 }) {
   const [activeTab, setActiveTab] = useState<"details" | "history">("details");
   const [historyPage, setHistoryPage] = useState(1);
+  // pause/resume/update need update:RecurringInvoice; runNow needs create.
+  const canUpdate = useCan("update", "RecurringInvoice");
+  const canRun = useCan("create", "RecurringInvoice");
 
   const { data: template } = trpc.recurringInvoice.getById.useQuery(
     { id: templateId! },
@@ -1089,7 +1097,7 @@ function TemplateDetailSlideOver({
         template ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              {template.status === "active" && (
+              {template.status === "active" && canUpdate && (
                 <button
                   className="btn-secondary text-sm"
                   onClick={() => onPause(template.id)}
@@ -1097,7 +1105,7 @@ function TemplateDetailSlideOver({
                   Pause
                 </button>
               )}
-              {template.status === "paused" && (
+              {template.status === "paused" && canUpdate && (
                 <button
                   className="btn-secondary text-sm"
                   onClick={() => onResume(template.id)}
@@ -1105,7 +1113,7 @@ function TemplateDetailSlideOver({
                   Resume
                 </button>
               )}
-              {(template.status === "active" || template.status === "paused") && (
+              {(template.status === "active" || template.status === "paused") && canRun && (
                 <button
                   className="btn-secondary text-sm"
                   onClick={() => onRunNow(template.id)}
@@ -1114,12 +1122,14 @@ function TemplateDetailSlideOver({
                 </button>
               )}
             </div>
+            {canUpdate && (
             <button
               className="btn-primary text-sm"
               onClick={() => onEdit(template)}
             >
               Edit Template
             </button>
+            )}
           </div>
         ) : undefined
       }
