@@ -22,101 +22,15 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { INVOICE_DELETE_WINDOW_MS } from "@hisaabo/shared";
 
-// ── Boundary stubs ──────────────────────────────────────────────────────────
+// ── Boundary stubs (tRPC network + router navigation) ──────────────────────
 
-const h = vi.hoisted(() => ({
-  /** Canned `useQuery` data keyed by tRPC path, e.g. "party.list". */
-  data: {} as Record<string, unknown>,
-  /** Session returned by `auth.me`. */
-  session: { role: null as string | null, isLoading: false },
-  navigate: (() => {}) as (...args: unknown[]) => void,
-  pathname: "/",
+vi.mock("@/lib/trpc", async () => (await import("@/test-utils/trpc-stub")).trpcModule);
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("@/test-utils/trpc-stub")).routerOverrides,
 }));
 
-vi.mock("@/lib/trpc", async () => {
-  // The stubbed tRPC hooks call a real React hook so that hook ordering in the
-  // components under test matches production (where they are React Query
-  // hooks). Without this, a hook called after an early return goes unnoticed.
-  const { useRef } = await import("react");
-  const noop = () => Promise.resolve(undefined);
-  const utils = (): unknown =>
-    new Proxy(noop, {
-      get: (_t, prop) => (prop === "then" ? undefined : utils()),
-      apply: () => Promise.resolve(undefined),
-    });
-
-  const node = (path: string[]): unknown =>
-    new Proxy(
-      {},
-      {
-        get(_t, prop) {
-          if (prop === "then") return undefined;
-          const key = path.join(".");
-          if (prop === "useQuery" || prop === "useInfiniteQuery") {
-            return () => {
-              useRef(null);
-              if (key === "auth.me") {
-                return {
-                  data:
-                    h.session.role === undefined
-                      ? undefined
-                      : {
-                          user: { id: "u1", name: "Test User", email: "test@example.com" },
-                          tenantId: "t1",
-                          tenantName: "Test Org",
-                          role: h.session.role,
-                          needsProfile: false,
-                        },
-                  isLoading: h.session.isLoading,
-                  isFetching: false,
-                };
-              }
-              return {
-                data: h.data[key],
-                isLoading: false,
-                isFetching: false,
-                isError: false,
-                error: null,
-                refetch: vi.fn(),
-              };
-            };
-          }
-          if (prop === "useMutation") {
-            return () => {
-              useRef(null);
-              return { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, variables: undefined };
-            };
-          }
-          if (prop === "useUtils" && path.length === 0) {
-            return () => {
-              useRef(null);
-              return utils();
-            };
-          }
-          return node([...path, String(prop)]);
-        },
-      },
-    );
-
-  return {
-    trpc: node([]),
-    getBusinessId: () => "biz-1",
-    setBusinessId: vi.fn(),
-    queryClient: { invalidateQueries: vi.fn(), clear: vi.fn() },
-  };
-});
-
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
-  return {
-    ...actual,
-    useNavigate: () => h.navigate,
-    useSearch: () => ({}),
-    useLocation: () => ({ pathname: h.pathname }),
-    Outlet: () => null,
-    Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
-  };
-});
+import { stub } from "@/test-utils/trpc-stub";
 
 // ── Real implementations under test ────────────────────────────────────────
 
@@ -133,17 +47,11 @@ import { DocumentListPage, type DocumentListPageConfig } from "@/components/Docu
 const page = (route: { options: { component?: unknown } }) => route.options.component as ComponentType;
 
 function renderAs(role: string | null, Page: ComponentType) {
-  h.session.role = role;
+  stub.session.role = role;
   return render(<Page />);
 }
 
-beforeEach(() => {
-  for (const k of Object.keys(h.data)) delete h.data[k];
-  h.session.role = null;
-  h.session.isLoading = false;
-  h.navigate = vi.fn();
-  h.pathname = "/";
-});
+beforeEach(() => stub.reset());
 
 const button = (name: string | RegExp) => screen.queryByRole("button", { name });
 const labelled = (label: string) => screen.queryByLabelText(label);
@@ -158,7 +66,7 @@ describe("Parties page", () => {
 
   describe("with rows", () => {
     beforeEach(() => {
-      h.data["party.list"] = { data: [party], total: 1 };
+      stub.data["party.list"] = { data: [party], total: 1 };
     });
 
     it("seller can add parties but not delete them", () => {
@@ -188,7 +96,7 @@ describe("Parties page", () => {
 
   describe("empty state", () => {
     beforeEach(() => {
-      h.data["party.list"] = { data: [], total: 0 };
+      stub.data["party.list"] = { data: [], total: 0 };
     });
 
     it("offers the add button to roles that can create (header + empty state)", () => {
@@ -217,7 +125,7 @@ describe("Items page", () => {
 
   describe("with rows", () => {
     beforeEach(() => {
-      h.data["item.list"] = { data: [item], total: 1 };
+      stub.data["item.list"] = { data: [item], total: 1 };
     });
 
     it("admin can add and delete items", () => {
@@ -241,7 +149,7 @@ describe("Items page", () => {
 
   describe("empty state", () => {
     beforeEach(() => {
-      h.data["item.list"] = { data: [], total: 0 };
+      stub.data["item.list"] = { data: [], total: 0 };
     });
 
     it("offers the add button to roles that can create (header + empty state)", () => {
@@ -268,8 +176,8 @@ describe("Expenses page", () => {
   };
 
   beforeEach(() => {
-    h.data["expense.list"] = { data: [expense], total: 1 };
-    h.data["expense.categories"] = [];
+    stub.data["expense.list"] = { data: [expense], total: 1 };
+    stub.data["expense.categories"] = [];
   });
 
   it("accountant can create, edit and delete expenses", () => {
@@ -311,7 +219,7 @@ describe("Invoices page", () => {
 
   describe("list", () => {
     beforeEach(() => {
-      h.data["invoice.list"] = { data: [invoice()], total: 1 };
+      stub.data["invoice.list"] = { data: [invoice()], total: 1 };
     });
 
     it("seller can create invoices but cannot delete them", () => {
@@ -328,20 +236,20 @@ describe("Invoices page", () => {
 
     it("seller_manager cannot delete a draft older than 2 hours (API rejects it)", () => {
       const old = new Date(Date.now() - INVOICE_DELETE_WINDOW_MS - 60_000).toISOString();
-      h.data["invoice.list"] = { data: [invoice({ createdAt: old })], total: 1 };
+      stub.data["invoice.list"] = { data: [invoice({ createdAt: old })], total: 1 };
       renderAs("seller_manager", Invoices);
       expect(screen.queryByTitle("Delete invoice")).not.toBeInTheDocument();
     });
 
     it("admin can delete a draft of any age", () => {
       const old = new Date(Date.now() - 30 * INVOICE_DELETE_WINDOW_MS).toISOString();
-      h.data["invoice.list"] = { data: [invoice({ createdAt: old })], total: 1 };
+      stub.data["invoice.list"] = { data: [invoice({ createdAt: old })], total: 1 };
       renderAs("admin", Invoices);
       expect(screen.getByTitle("Delete invoice")).toBeInTheDocument();
     });
 
     it("only drafts / unfulfilled invoices offer delete, even to admin", () => {
-      h.data["invoice.list"] = { data: [invoice({ status: "sent" })], total: 1 };
+      stub.data["invoice.list"] = { data: [invoice({ status: "sent" })], total: 1 };
       renderAs("admin", Invoices);
       expect(screen.queryByTitle("Delete invoice")).not.toBeInTheDocument();
     });
@@ -355,7 +263,7 @@ describe("Invoices page", () => {
 
   describe("empty state", () => {
     beforeEach(() => {
-      h.data["invoice.list"] = { data: [], total: 0 };
+      stub.data["invoice.list"] = { data: [], total: 0 };
     });
 
     it("offers the create button to roles that can create (header + empty state)", () => {
@@ -371,8 +279,8 @@ describe("Invoices page", () => {
 
   describe("detail panel", () => {
     function openPanel(role: string, inv: Record<string, unknown>) {
-      h.data["invoice.list"] = { data: [inv], total: 1 };
-      h.data["invoice.getById"] = inv;
+      stub.data["invoice.list"] = { data: [inv], total: 1 };
+      stub.data["invoice.getById"] = inv;
       renderAs(role, Invoices);
       // Real user path: the panel is mounted with no selection, then a row
       // click selects an invoice. This transition is what crashed when the
@@ -428,7 +336,7 @@ describe("Payments page", () => {
   };
 
   beforeEach(() => {
-    h.data["payment.list"] = { data: [payment], total: 1 };
+    stub.data["payment.list"] = { data: [payment], total: 1 };
   });
 
   it("admin can record and delete payments", () => {
@@ -459,8 +367,8 @@ describe("Cash & Bank page", () => {
   const CashAndBank = page(CashAndBankRoute);
 
   beforeEach(() => {
-    h.data["bankAccount.list"] = [];
-    h.data["bankAccount.summary"] = { totalBalance: "0", cashInHand: "0", bankBalance: "0" };
+    stub.data["bankAccount.list"] = [];
+    stub.data["bankAccount.summary"] = { totalBalance: "0", cashInHand: "0", bankBalance: "0" };
   });
 
   it("accountant can add accounts and transfer", () => {
@@ -492,7 +400,7 @@ describe("Recurring invoices page", () => {
 
   describe("with rows", () => {
     beforeEach(() => {
-      h.data["recurringInvoice.list"] = { data: [template], total: 1 };
+      stub.data["recurringInvoice.list"] = { data: [template], total: 1 };
     });
 
     it("seller_manager can create and delete templates", () => {
@@ -510,7 +418,7 @@ describe("Recurring invoices page", () => {
 
   describe("empty state", () => {
     beforeEach(() => {
-      h.data["recurringInvoice.list"] = { data: [], total: 0 };
+      stub.data["recurringInvoice.list"] = { data: [], total: 0 };
     });
 
     it("offers 'Create Template' to roles that can create", () => {
@@ -555,7 +463,7 @@ describe("DocumentListPage (quotations, proforma, challans, returns, credit note
 
   describe("with a draft row", () => {
     beforeEach(() => {
-      h.data["quotation.list"] = { data: [doc], total: 1 };
+      stub.data["quotation.list"] = { data: [doc], total: 1 };
     });
 
     it("seller_manager can create and delete drafts", () => {
@@ -577,14 +485,14 @@ describe("DocumentListPage (quotations, proforma, challans, returns, credit note
     });
 
     it("the detail panel's Delete follows the same rule", () => {
-      h.data["invoice.getById"] = doc;
+      stub.data["invoice.getById"] = doc;
       renderAs("seller_manager", () => <DocumentListPage config={config} initialSelectedId="q1" />);
       // One in the row, one in the open panel footer.
       expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
     });
 
     it("the detail panel hides Delete from roles without delete permission", () => {
-      h.data["invoice.getById"] = doc;
+      stub.data["invoice.getById"] = doc;
       renderAs("seller", () => <DocumentListPage config={config} initialSelectedId="q1" />);
       expect(screen.queryAllByRole("button", { name: "Delete" })).toHaveLength(0);
     });
@@ -592,7 +500,7 @@ describe("DocumentListPage (quotations, proforma, challans, returns, credit note
 
   describe("empty state", () => {
     beforeEach(() => {
-      h.data["quotation.list"] = { data: [], total: 0 };
+      stub.data["quotation.list"] = { data: [], total: 0 };
     });
 
     it("offers the create button (header + empty state) to roles that can create", () => {
@@ -624,11 +532,11 @@ describe("Root layout navigation", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
-    h.pathname = "/invoices";
-    h.data["tenant.list"] = [{ tenantId: "t1", tenantName: "Test Org", tenantSlug: "test", role: "owner" }];
-    h.data["business.list"] = [{ id: "biz-1", name: "Test Biz", gstRegistrationType: "regular", gstin: "27AABCU9603R1ZM" }];
-    h.data["business.canCreate"] = true;
-    h.data["tenant.canCreateOrg"] = false;
+    stub.pathname = "/invoices";
+    stub.data["tenant.list"] = [{ tenantId: "t1", tenantName: "Test Org", tenantSlug: "test", role: "owner" }];
+    stub.data["business.list"] = [{ id: "biz-1", name: "Test Biz", gstRegistrationType: "regular", gstin: "27AABCU9603R1ZM" }];
+    stub.data["business.canCreate"] = true;
+    stub.data["tenant.canCreateOrg"] = false;
   });
 
   const nav = () => screen.getByRole("navigation");
@@ -674,14 +582,14 @@ describe("Root layout navigation", () => {
   });
 
   it("redirects a role without Report:read away from the dashboard", () => {
-    h.pathname = "/";
+    stub.pathname = "/";
     renderAs("seller", Root);
-    expect(h.navigate).toHaveBeenCalledWith({ to: "/invoices" });
+    expect(stub.navigate).toHaveBeenCalledWith({ to: "/invoices" });
   });
 
   it("keeps a role with Report:read on the dashboard", () => {
-    h.pathname = "/";
+    stub.pathname = "/";
     renderAs("accountant", Root);
-    expect(h.navigate).not.toHaveBeenCalledWith({ to: "/invoices" });
+    expect(stub.navigate).not.toHaveBeenCalledWith({ to: "/invoices" });
   });
 });

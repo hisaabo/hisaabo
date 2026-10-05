@@ -20,84 +20,11 @@ import { fireEvent, render, screen } from "@testing-library/react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 // ── Boundary mocks ──────────────────────────────────────────────────────────
+// tRPC (network) and Expo Router (navigation) come from the shared stub; the
+// rest are native modules.
 
-// tRPC: every `x.y.useQuery` returns canned data keyed by "x.y"; `auth.me`
-// returns the session for the role under test. Names are `mock`-prefixed so
-// jest's hoisted factory may reference them.
-const mockQueryData: Record<string, unknown> = {};
-const mockSession: { role: string | null; isLoading: boolean } = { role: null, isLoading: false };
-
-jest.mock("../lib/trpc", () => {
-  // Stubbed tRPC hooks call a real React hook so hook ordering in the screens
-  // matches production (React Query hooks). Otherwise a hook called after an
-  // early return would go unnoticed.
-  const { useRef } = require("react");
-  const noopFn = () => Promise.resolve(undefined);
-  const utilsProxy = (): unknown =>
-    new Proxy(noopFn, {
-      get: (_t, prop) => (prop === "then" ? undefined : utilsProxy()),
-      apply: () => Promise.resolve(undefined),
-    });
-
-  const node = (path: string[]): unknown =>
-    new Proxy(
-      {},
-      {
-        get(_t, prop) {
-          if (prop === "then") return undefined;
-          const key = path.join(".");
-          if (prop === "useQuery" || prop === "useInfiniteQuery") {
-            return () => {
-              useRef(null);
-              if (key === "auth.me") {
-                return {
-                  data: mockSession.role == null ? undefined : { role: mockSession.role, user: { id: "u1" } },
-                  isLoading: mockSession.isLoading,
-                };
-              }
-              return {
-                data: mockQueryData[key],
-                isLoading: false,
-                isFetching: false,
-                isRefetching: false,
-                isError: false,
-                error: null,
-                refetch: jest.fn(),
-              };
-            };
-          }
-          if (prop === "useMutation") {
-            return () => {
-              useRef(null);
-              return { mutate: jest.fn(), mutateAsync: jest.fn(), isPending: false };
-            };
-          }
-          if (prop === "useUtils" && path.length === 0) {
-            return () => {
-              useRef(null);
-              return utilsProxy();
-            };
-          }
-          return node([...path, String(prop)]);
-        },
-      },
-    );
-
-  return { trpc: node([]) };
-});
-
-const mockRouter = { push: jest.fn(), back: jest.fn(), replace: jest.fn() };
-const mockParams: Record<string, string> = {};
-jest.mock("expo-router", () => {
-  const Stack = () => null;
-  Stack.Screen = () => null;
-  return {
-    useRouter: () => mockRouter,
-    useLocalSearchParams: () => mockParams,
-    Stack,
-  };
-});
-
+jest.mock("../lib/trpc", () => require("../test-utils/trpc-stub").trpcModule);
+jest.mock("expo-router", () => require("../test-utils/trpc-stub").expoRouterModule);
 jest.mock("react-native-safe-area-context", () =>
   require("react-native-safe-area-context/jest/mock").default,
 );
@@ -111,6 +38,7 @@ jest.mock("expo-constants", () => ({ default: { expoConfig: null } }));
 // ── Real implementations under test ────────────────────────────────────────
 
 import { ThemeProvider } from "../contexts/ThemeContext";
+import { stub, renderScreen } from "../test-utils/trpc-stub";
 import { useBusinessStore } from "../stores/business";
 import { FAB } from "../components/ui";
 import { INVOICE_DELETE_WINDOW_MS } from "@hisaabo/shared";
@@ -125,15 +53,7 @@ import PaymentsScreen from "../../app/(app)/(payments)/index";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function renderAs(role: string | null, Screen: React.ComponentType, opts: { loading?: boolean } = {}) {
-  mockSession.role = role;
-  mockSession.isLoading = opts.loading ?? false;
-  return render(
-    <ThemeProvider initialMode="dark">
-      <Screen />
-    </ThemeProvider>,
-  );
-}
+const renderAs = renderScreen;
 
 const fabCount = () => screen.UNSAFE_queryAllByType(FAB).length;
 // Count Ionicons elements only — querying by props alone would also match
@@ -143,10 +63,7 @@ const iconCount = (name: string) =>
 
 beforeEach(() => {
   jest.clearAllMocks();
-  for (const k of Object.keys(mockQueryData)) delete mockQueryData[k];
-  for (const k of Object.keys(mockParams)) delete mockParams[k];
-  mockSession.role = null;
-  mockSession.isLoading = false;
+  stub.reset();
   useBusinessStore.setState({ businessId: "biz-1", businessName: "Test Biz" } as never);
 });
 
@@ -184,8 +101,8 @@ describe("list screens — create FAB follows `create` permission", () => {
 
 describe("Party detail — edit / merge / delete", () => {
   beforeEach(() => {
-    mockParams.id = "party-1";
-    mockQueryData["party.getById"] = {
+    stub.params.id = "party-1";
+    stub.data["party.getById"] = {
       id: "party-1",
       name: "Acme Traders",
       type: "customer",
@@ -225,8 +142,8 @@ describe("Party detail — edit / merge / delete", () => {
 
 describe("Item detail — edit / actions menu / delete", () => {
   beforeEach(() => {
-    mockParams.id = "item-1";
-    mockQueryData["item.getById"] = {
+    stub.params.id = "item-1";
+    stub.data["item.getById"] = {
       id: "item-1",
       name: "Widget",
       itemType: "product",
@@ -291,47 +208,47 @@ describe("Invoice detail — edit and delete", () => {
   }
 
   beforeEach(() => {
-    mockParams.id = "inv-1";
+    stub.params.id = "inv-1";
   });
 
   const yearOld = () => new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
   const pastDeleteWindow = () => new Date(Date.now() - INVOICE_DELETE_WINDOW_MS - 60_000).toISOString();
 
   it("admin sees Edit Invoice and Delete Invoice", () => {
-    mockQueryData["invoice.getById"] = invoice();
+    stub.data["invoice.getById"] = invoice();
     renderAs("admin", InvoiceDetailScreen);
     expect(screen.getByText("Edit Invoice")).toBeTruthy();
     expect(screen.getByText("Delete Invoice")).toBeTruthy();
   });
 
   it("seller can edit but cannot delete", () => {
-    mockQueryData["invoice.getById"] = invoice();
+    stub.data["invoice.getById"] = invoice();
     renderAs("seller", InvoiceDetailScreen);
     expect(screen.getByText("Edit Invoice")).toBeTruthy();
     expect(screen.queryByText("Delete Invoice")).toBeNull();
   });
 
   it("seller can still edit a year-old invoice (the API has no edit time limit)", () => {
-    mockQueryData["invoice.getById"] = invoice({ status: "sent", createdAt: yearOld() });
+    stub.data["invoice.getById"] = invoice({ status: "sent", createdAt: yearOld() });
     renderAs("seller", InvoiceDetailScreen);
     expect(screen.getByText("Edit Invoice")).toBeTruthy();
   });
 
   it("accountant (read-only on invoices) sees neither edit nor delete", () => {
-    mockQueryData["invoice.getById"] = invoice();
+    stub.data["invoice.getById"] = invoice();
     renderAs("accountant", InvoiceDetailScreen);
     expect(screen.queryByText("Edit Invoice")).toBeNull();
     expect(screen.queryByText("Delete Invoice")).toBeNull();
   });
 
   it("seller_manager can delete a fresh unpaid invoice", () => {
-    mockQueryData["invoice.getById"] = invoice();
+    stub.data["invoice.getById"] = invoice();
     renderAs("seller_manager", InvoiceDetailScreen);
     expect(screen.getByText("Delete Invoice")).toBeTruthy();
   });
 
   it("seller_manager cannot delete an invoice older than 2 hours (API rejects it)", () => {
-    mockQueryData["invoice.getById"] = invoice({ createdAt: pastDeleteWindow() });
+    stub.data["invoice.getById"] = invoice({ createdAt: pastDeleteWindow() });
     renderAs("seller_manager", InvoiceDetailScreen);
     expect(screen.queryByText("Delete Invoice")).toBeNull();
     // …but can still edit it.
@@ -339,16 +256,16 @@ describe("Invoice detail — edit and delete", () => {
   });
 
   it("admin can delete an old invoice", () => {
-    mockQueryData["invoice.getById"] = invoice({ createdAt: yearOld() });
+    stub.data["invoice.getById"] = invoice({ createdAt: yearOld() });
     renderAs("admin", InvoiceDetailScreen);
     expect(screen.getByText("Delete Invoice")).toBeTruthy();
   });
 
   it("Edit Invoice opens the edit screen", () => {
-    mockQueryData["invoice.getById"] = invoice();
+    stub.data["invoice.getById"] = invoice();
     renderAs("seller", InvoiceDetailScreen);
     fireEvent.press(screen.getByText("Edit Invoice"));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: "/(app)/(invoices)/edit", params: { id: "inv-1" } });
+    expect(stub.router.push).toHaveBeenCalledWith({ pathname: "/(app)/(invoices)/edit", params: { id: "inv-1" } });
   });
 });
 
@@ -376,9 +293,9 @@ describe("detail screens survive the no-data → data transition", () => {
   ];
 
   it.each(cases)("%s detail", (_label, Screen, key, record) => {
-    mockParams.id = String(record.id);
+    stub.params.id = String(record.id);
     const view = renderAs("admin", Screen);
-    mockQueryData[key] = record;
+    stub.data[key] = record;
     expect(() =>
       view.rerender(
         <ThemeProvider initialMode="dark">
@@ -401,13 +318,13 @@ describe("gated buttons navigate correctly when shown", () => {
   ] as const)("%s FAB opens the create screen", (_label, Screen, route) => {
     renderAs("admin", Screen);
     fireEvent.press(screen.UNSAFE_getByType(FAB));
-    expect(mockRouter.push).toHaveBeenCalledWith(route);
+    expect(stub.router.push).toHaveBeenCalledWith(route);
   });
 
   describe("Party detail", () => {
     beforeEach(() => {
-      mockParams.id = "party-1";
-      mockQueryData["party.getById"] = {
+      stub.params.id = "party-1";
+      stub.data["party.getById"] = {
         id: "party-1", name: "Acme Traders", type: "customer", phone: null, email: null, gstin: null, balance: "0",
       };
     });
@@ -417,8 +334,8 @@ describe("gated buttons navigate correctly when shown", () => {
       const editIcons = screen.UNSAFE_queryAllByType(Ionicons).filter((n) => n.props.name === "create-outline");
       fireEvent.press(editIcons[0]);
       fireEvent.press(screen.getByText("Edit"));
-      expect(mockRouter.push).toHaveBeenCalledTimes(2);
-      for (const call of mockRouter.push.mock.calls) {
+      expect(stub.router.push).toHaveBeenCalledTimes(2);
+      for (const call of stub.router.push.mock.calls) {
         expect(call[0]).toEqual({ pathname: "/(app)/(parties)/edit", params: { id: "party-1" } });
       }
     });
@@ -426,8 +343,8 @@ describe("gated buttons navigate correctly when shown", () => {
 
   describe("Item detail", () => {
     beforeEach(() => {
-      mockParams.id = "item-1";
-      mockQueryData["item.getById"] = {
+      stub.params.id = "item-1";
+      stub.data["item.getById"] = {
         id: "item-1", name: "Widget", itemType: "product", itemMode: "simple", unit: "pcs", salePrice: "100.00",
         purchasePrice: "80.00", taxPercent: "18.00", stockQuantity: "10", lowStockThreshold: null, hsn: null, variants: [],
       };
@@ -437,14 +354,14 @@ describe("gated buttons navigate correctly when shown", () => {
       renderAs("admin", ItemDetailScreen);
       const edit = screen.UNSAFE_queryAllByType(Ionicons).find((n) => n.props.name === "create-outline")!;
       fireEvent.press(edit);
-      expect(mockRouter.push).toHaveBeenCalledWith({ pathname: "/(app)/(items)/edit", params: { id: "item-1" } });
+      expect(stub.router.push).toHaveBeenCalledWith({ pathname: "/(app)/(items)/edit", params: { id: "item-1" } });
     });
 
     it("actions button is pressable and does not navigate (its menu is not implemented yet — pre-existing)", () => {
       renderAs("admin", ItemDetailScreen);
       const more = screen.UNSAFE_queryAllByType(Ionicons).find((n) => n.props.name === "ellipsis-vertical")!;
       expect(() => fireEvent.press(more)).not.toThrow();
-      expect(mockRouter.push).not.toHaveBeenCalled();
+      expect(stub.router.push).not.toHaveBeenCalled();
     });
   });
 });
