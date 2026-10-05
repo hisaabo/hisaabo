@@ -16,7 +16,7 @@
  */
 
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react-native";
+import { fireEvent, screen } from "@testing-library/react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 // ── Boundary mocks ──────────────────────────────────────────────────────────
