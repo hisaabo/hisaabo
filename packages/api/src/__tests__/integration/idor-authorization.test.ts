@@ -387,7 +387,7 @@ describe("Bucket C — mutations cannot tamper with another business's records",
     // party inside B's business via the shared self-hosted DB.
     await expect(
       callerA.business.ensureWalkInParty({ id: world.business2.id }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // B can seed its own — positive control.
     const own = await callerB.business.ensureWalkInParty({ id: world.business2.id });
