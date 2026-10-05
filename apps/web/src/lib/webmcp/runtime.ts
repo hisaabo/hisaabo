@@ -14,7 +14,7 @@
  * could safely say out loud.
  */
 
-import { canAccess } from "@/lib/roles";
+import { defineAbilityFor } from "@hisaabo/shared";
 import type {
   WebMcpToolContext,
   WebMcpToolDefinition,
@@ -190,7 +190,11 @@ export function selectToolsForRole(
   defs: readonly WebMcpToolDefinition[],
   role: string | null | undefined,
 ): WebMcpToolDefinition[] {
-  return defs.filter((def) => !def.requires || canAccess(role, def.requires.resource, def.requires.action));
+  // Same rule as the sidebar's canAccess in __root.tsx: no role yet (session
+  // still loading) passes through; the API is the enforcer of record.
+  if (!role) return [...defs];
+  const ability = defineAbilityFor(role);
+  return defs.filter((def) => !def.requires || ability.can(def.requires.action, def.requires.resource));
 }
 
 export interface RegisterToolsResult {

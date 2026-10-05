@@ -11,7 +11,7 @@ import { BusinessSwitcher } from "@/components/ui/BusinessSwitcher";
 import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
-import { canAccess, formatRole } from "@/lib/roles";
+import { formatRole } from "@/lib/roles";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { clearDesktopToken } from "@/lib/desktop-session";
 import { useWebMcp } from "@/lib/webmcp/useWebMcp";

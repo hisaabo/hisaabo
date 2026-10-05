@@ -15,6 +15,7 @@
  * `@hisaabo/shared` — the server is the validator of record.
  */
 
+import type { Action, Resource } from "@hisaabo/shared";
 import type { trpc } from "@/lib/trpc";
 
 /** The vanilla (non-React) tRPC client exposed by `trpc.useUtils().client`. */
@@ -49,10 +50,10 @@ export interface WebMcpAnnotations {
   untrustedContentHint?: boolean;
 }
 
-/** Role gate — mirrors `canAccess()` in `@/lib/roles`. */
+/** Role gate — checked with `defineAbilityFor` from `@hisaabo/shared`, the same matrix the API enforces. */
 export interface WebMcpPermission {
-  resource: string;
-  action: "read" | "create" | "update" | "delete" | "manage";
+  resource: Resource;
+  action: Action;
 }
 
 /** Everything a tool's execute() may touch. Built once per registration by the hook. */
