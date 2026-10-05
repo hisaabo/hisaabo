@@ -22,4 +22,12 @@ export default defineConfig([
     outDir: "dist/lib",
     ...shared,
   },
+  // Admin dashboard TUI — runs with plain `node` inside the container
+  // (docker exec -it hisaabo-api node packages/api/dist/bin/admin.js) or
+  // from an operator shell via docker compose + psql. No ORM, no extra deps.
+  {
+    entry: ["src/bin/admin.ts"],
+    outDir: "dist/bin",
+    ...shared,
+  },
 ]);

@@ -129,6 +129,35 @@ docker compose -f docker-compose.prod.yml up -d api
 
 The entrypoint script runs pending migrations automatically before starting the server.
 
+### Admin dashboard
+
+The API image ships a read-only terminal dashboard with platform statistics (tenants, users, businesses, invoices, amount managed, collections, receivables, a 12-month sales chart, per-tenant table, Postgres health) and an Ops Health screen (e-invoicing, recurring invoice runs, bank and GSTR-2B reconciliation, e-way bills, store orders, shipments, recent failures) with an alerts strip that flags failed e-invoices, failed recurring runs, stalled imports, unreachable tenant databases and similar problems. It runs with the plain `node` binary in the image and needs nothing else:
+
+```bash
+# Live dashboard inside the API container
+docker exec -it hisaabo-api node packages/api/dist/bin/admin.js
+# or, with compose
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/admin.js
+
+# One static snapshot (no TTY needed — handy for logs, cron, or pasting into chat)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js --once --width 140
+
+# Raw numbers as JSON
+docker exec hisaabo-api node packages/api/dist/bin/admin.js --json
+```
+
+If you would rather not enter the API container, the same tool can run on the host and query Postgres through `docker compose exec postgres psql`, the way you would by hand:
+
+```bash
+node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-compose.yml
+```
+
+The Infra screen compares each database's migration tracking table (`drizzle.__drizzle_tenant_migrations`, `__drizzle_control_migrations`, or `__drizzle_migrations` for self-hosted) against the journals shipped in the image under `packages/db/drizzle*`, so a tenant that was skipped during a deploy, restored from an older backup, or created with `db:push` and never tracked shows up as behind, ahead or untracked, with the exact pending migration tags. When running from the host, the journals are read from the checkout; pass `--migrations-dir` (or set `HISAABO_MIGRATIONS_DIR`) if they live elsewhere.
+
+All personally identifiable data (tenant names and slugs, database names, user emails and names, connection hosts) is masked by default so output can be shared freely; add `--reveal` or press `p` in the live view to see real values.
+
+In multi-tenant deployments it queries each tenant database once (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+
 ## Kamal / Once.com Compatibility
 
 The `docker-compose.prod.yml` is compatible with Kamal's deploy model:

@@ -510,6 +510,29 @@ hisaabo/
 | `pnpm db:migrate` | Run pending migrations |
 | `pnpm db:studio` | Open Drizzle Studio |
 
+### Admin dashboard (TUI)
+
+A full-screen terminal dashboard with platform-level statistics: tenants by plan and status, users, businesses, invoices, amount managed, collections, receivables, a 12-month sales chart, per-tenant table and Postgres health. Read-only, zero extra dependencies, refreshes every 30 seconds.
+
+```bash
+# Inside the running API container (uses the container's DATABASE_URL)
+docker exec -it hisaabo-api node packages/api/dist/bin/admin.js
+scripts/admin.sh                              # same thing, wrapped
+
+# From the host with only Docker — shells out to psql in the postgres container
+node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-compose.yml
+
+# Dev checkout
+pnpm --filter @hisaabo/api admin              # live dashboard
+pnpm --filter @hisaabo/api admin -- --once    # one static snapshot
+pnpm --filter @hisaabo/api admin -- --json    # raw numbers
+pnpm --filter @hisaabo/api admin -- --demo    # synthetic data, no database
+```
+
+Screens: `1` Overview, `2` Tenants, `3` Ops Health (e-invoicing, recurring runs, bank and GSTR-2B reconciliation, e-way bills, store orders and shipments, plus a cross-tenant feed of recent failures), `4` Infra (Postgres health per database and migration drift: every database compared against the migrations shipped in this build, flagged as in sync, behind, ahead or untracked). An alerts strip under the header flags what needs attention on every screen. Keys: `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
+
+PII is masked by default: tenants appear as `Tenant 3f9a2c`, emails as `pr•••@sh••••.in`, and database hosts are hidden, so screenshots and `--json` output are safe to share. Pass `--reveal` (or press `p`) to see real values.
+
 ### Run a single package
 
 ```bash
