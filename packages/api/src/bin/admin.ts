@@ -27,6 +27,7 @@ import { buildDemoStats } from "../lib/admin/demo.js";
 import { setColorEnabled, c } from "../lib/admin/tui.js";
 import { splitKeys } from "../lib/admin/keys.js";
 import { maskStats } from "../lib/admin/privacy.js";
+import { loadJournals } from "../lib/admin/migrations.js";
 
 // ── CLI args ────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ interface Args {
   database: string | null;
   command: string[] | null;
   concurrency: number;
+  migrationsDir: string | null;
   help: boolean;
 }
 
@@ -71,7 +73,10 @@ OPTIONS
   --command "<prefix>"             Replace the docker compose prefix, e.g. "docker exec -i hisaabo-db"
   --interval <seconds>             Auto-refresh period (default: 30, 0 = manual only)
   --concurrency <n>                Tenant databases queried in parallel (default: 4)
-  --view <overview|tenants|ops>    Initial view (default: overview)
+  --migrations-dir <dir>           Folder holding drizzle/, drizzle-control/, drizzle-tenant/ for drift
+                                   detection (default: next to this build, then ./packages/db;
+                                   HISAABO_MIGRATIONS_DIR is honoured too)
+  --view <overview|tenants|ops|infra>  Initial view (default: overview)
   --reveal                         Show real tenant names, slugs, emails and hosts. By default all
                                    PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
                                    and --json output are safe to share.
@@ -83,7 +88,7 @@ OPTIONS
   -h, --help                       Show this help
 
 KEYS (interactive)
-  1 / 2 / 3   Overview / Tenants / Ops health  r        refresh now
+  1 2 3 4     Overview / Tenants / Ops / Infra r        refresh now
   p           toggle PII masking
   ↑ ↓ j k     move selection (Tenants view)    g / G    jump to first / last
   q, Esc      quit                              Ctrl-C   quit
@@ -93,7 +98,7 @@ function parseArgs(argv: string[]): Args {
   const a: Args = {
     via: "auto", once: false, json: false, interval: 30, width: null, color: true, forceColor: false, reveal: false, view: "overview",
     databaseUrl: null, envFile: null, composeFiles: [], service: "postgres", user: null, database: null,
-    command: null, concurrency: 4, help: false,
+    command: null, concurrency: 4, migrationsDir: null, help: false,
   };
   const next = (i: number, flag: string): string => {
     const v = argv[i + 1];
@@ -114,7 +119,7 @@ function parseArgs(argv: string[]): Args {
       case "--reveal": case "--show-pii": a.reveal = true; break;
       case "--view": {
         const v = next(i++, arg);
-        a.view = v === "tenants" || v === "ops" ? v : "overview";
+        a.view = v === "tenants" || v === "ops" || v === "infra" ? v : "overview";
         break;
       }
       case "--database-url": a.databaseUrl = next(i++, arg); break;
@@ -125,6 +130,7 @@ function parseArgs(argv: string[]): Args {
       case "--database": case "-d": a.database = next(i++, arg); break;
       case "--command": a.command = next(i++, arg).split(/\s+/).filter(Boolean); break;
       case "--concurrency": a.concurrency = Math.max(1, Number(next(i++, arg)) || 1); break;
+      case "--migrations-dir": a.migrationsDir = next(i++, arg); break;
       case "-h": case "--help": a.help = true; break;
       default:
         throw new Error(`unknown option ${arg} (try --help)`);
@@ -273,8 +279,13 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "1": state.view = "overview"; break;
         case "2": state.view = "tenants"; break;
         case "3": state.view = "ops"; break;
+        case "4": state.view = "infra"; break;
         case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
-        case "\t": state.view = state.view === "overview" ? "tenants" : state.view === "tenants" ? "ops" : "overview"; break;
+        case "\t": {
+          const order: View[] = ["overview", "tenants", "ops", "infra"];
+          state.view = order[(order.indexOf(state.view) + 1) % order.length];
+          break;
+        }
         case "j": case "\x1b[B": move(1); break;
         case "k": case "\x1b[A": move(-1); break;
         case "\x1b[6~": move(10); break;   // PgDn
@@ -328,7 +339,12 @@ async function main(): Promise<void> {
   } else {
     runner = buildRunner(a);
     const r = runner;
-    collect = () => collectPlatformStats({ runner: r, concurrency: a.concurrency });
+    const journals = loadJournals({
+      here: path.dirname(fileURLToPath(import.meta.url)),
+      cwd: process.cwd(),
+      override: a.migrationsDir ?? process.env.HISAABO_MIGRATIONS_DIR ?? null,
+    });
+    collect = () => collectPlatformStats({ runner: r, concurrency: a.concurrency, journals });
     runnerLabel = (masked) => r.describe(!masked);
   }
   const close = async () => { if (runner) await runner.close(); };

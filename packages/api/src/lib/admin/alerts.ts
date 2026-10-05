@@ -44,5 +44,23 @@ export function deriveAlerts(st: PlatformStats): Alert[] {
   const db = st.control.db;
   if (db.maxConnections > 0 && db.connections / db.maxConnections >= 0.8) yellow(`postgres at ${db.connections}/${db.maxConnections} connections`, "overview");
 
-  return out;
+  // Infra: migration drift and database health.
+  const reports = st.dbs.filter((d) => d.migrations);
+  const behind = reports.filter((d) => d.migrations!.status === "behind").length;
+  const ahead = reports.filter((d) => d.migrations!.status === "ahead").length;
+  const untracked = reports.filter((d) => d.migrations!.status === "untracked").length;
+  const noJournal = reports.length > 0 && reports.every((d) => d.migrations!.status === "no_journal");
+  if (behind > 0) red(`${plural(behind, "db")} behind on migrations`, "infra");
+  if (ahead > 0) yellow(`${plural(ahead, "db")} ahead of this build`, "infra");
+  if (untracked > 0) yellow(`${plural(untracked, "db")} with untracked migrations`, "infra");
+  if (noJournal) yellow("migration journals not found — drift unknown", "infra");
+  const lowCache = st.dbs.filter((d) => d.infra?.cacheHit !== null && d.infra !== null && d.infra.cacheHit! < 0.95 && d.infra.idxScans + d.infra.seqScans > 1000).length;
+  if (lowCache > 0) yellow(`${plural(lowCache, "db")} with cache hit < 95%`, "infra");
+  const bloated = st.dbs.filter((d) => d.infra && d.infra.liveTuples > 10_000 && d.infra.deadTuples > d.infra.liveTuples * 0.2).length;
+  if (bloated > 0) yellow(`${plural(bloated, "db")} with > 20% dead tuples`, "infra");
+  const deadlocked = st.dbs.reduce((a, d) => a + (d.infra?.deadlocks ?? 0), 0);
+  if (deadlocked > 0) yellow(`${plural(deadlocked, "deadlock")} since stats reset`, "infra");
+
+  // Reds first, then yellows, preserving insertion order within each.
+  return [...out.filter((a) => a.level === "red"), ...out.filter((a) => a.level === "yellow")];
 }

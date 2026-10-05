@@ -6,15 +6,16 @@
  */
 
 import {
-  c, box, kpiTile, hstack, vstack, fitHeight, splitWidth, columnChart, sparkline, breakdown,
+  c, box, kpiTile, hstack, vstack, fitHeight, splitWidth, columnChart, sparkline, breakdown, hbar,
   table, key, fit, pad, spread, truncate, repeat, width,
-  fmtInt, fmtINRCompact, fmtMonth, fmtRelative, fmtClock, fmtDuration, fmtUptime, fmtDate, fmtPct,
+  fmtInt, fmtINRCompact, fmtMonth, fmtRelative, fmtClock, fmtDuration, fmtUptime, fmtDate, fmtPct, fmtBytes, fmtCompact,
   PLAN_STYLE, STATUS_STYLE, type Style,
 } from "./tui.js";
-import type { PlatformStats, TenantWithMetrics, TenantMetrics, PlatformFailure } from "./stats.js";
+import type { PlatformStats, TenantWithMetrics, TenantMetrics, PlatformFailure, DbReport } from "./stats.js";
+import type { MigrationStatus } from "./migrations.js";
 import { deriveAlerts, type Alert } from "./alerts.js";
 
-export type View = "overview" | "tenants" | "ops";
+export type View = "overview" | "tenants" | "ops" | "infra";
 
 export interface ViewState {
   view: View;
@@ -72,6 +73,7 @@ function footer(s: ViewState, cols: number): string {
       key("1", "Overview"),
       key("2", "Tenants"),
       key("3", "Ops"),
+      key("4", "Infra"),
       key("r", "Refresh"),
       ...(s.view === "tenants" ? [key("↑↓", "Select")] : []),
       key("p", s.masked ? "Reveal PII" : "Mask PII"),
@@ -627,6 +629,151 @@ function opsBody(s: ViewState, st: PlatformStats, cols: number, rows?: number): 
   return vstack(bands, cols, 0);
 }
 
+// ── Infra ───────────────────────────────────────────────────────
+
+const MIGRATION_LABEL: Record<MigrationStatus, { text: string; style: Style; rank: number }> = {
+  behind: { text: "behind", style: c.bad, rank: 0 },
+  untracked: { text: "untracked", style: c.warn, rank: 1 },
+  ahead: { text: "ahead", style: c.warn, rank: 2 },
+  no_journal: { text: "no journal", style: c.muted, rank: 3 },
+  in_sync: { text: "in sync", style: c.ok, rank: 4 },
+};
+
+function migrationCell(d: DbReport): string {
+  if (!d.migrations) return c.bad(d.error ? "unreachable" : "—");
+  const m = d.migrations;
+  const l = MIGRATION_LABEL[m.status];
+  if (m.status === "behind") return l.style(`▼ behind ${m.pending.length}`);
+  if (m.status === "ahead") return l.style(`▲ ahead +${m.unknownApplied}`);
+  if (m.status === "in_sync") return l.style("✓ in sync");
+  return l.style(l.text);
+}
+
+export function sortDbs(dbs: DbReport[]): DbReport[] {
+  const rank = (d: DbReport) => (d.error && !d.infra ? -1 : d.migrations ? MIGRATION_LABEL[d.migrations.status].rank : 3);
+  return [...dbs].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "control" ? -1 : 1;
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
+    return (b.infra?.sizeBytes ?? 0) - (a.infra?.sizeBytes ?? 0);
+  });
+}
+
+function postgresPanel(st: PlatformStats, w: number, h: number): string[] {
+  const db = st.control.db;
+  const infra = st.dbs.filter((d) => d.infra).map((d) => d.infra!);
+  const totalSize = infra.reduce((a, i) => a + i.sizeBytes, 0);
+  const commits = infra.reduce((a, i) => a + i.xactCommit, 0);
+  const rollbacks = infra.reduce((a, i) => a + i.xactRollback, 0);
+  const deadlocks = infra.reduce((a, i) => a + i.deadlocks, 0);
+  const reads = infra.filter((i) => i.cacheHit !== null);
+  const cache = reads.length ? reads.reduce((a, i) => a + (i.cacheHit ?? 0), 0) / reads.length : null;
+  const connW = Math.max(6, w - 4 - 28);
+  const lines = [
+    kv("Version", c.white(db.version) + c.muted(` · up ${fmtUptime(db.uptimeSeconds)}`), 13),
+    kv("Connections", hbar(db.connections, db.maxConnections, connW, db.connections / Math.max(1, db.maxConnections) >= 0.8 ? c.warn : c.ok) + " " + c.white(`${fmtInt(db.connections)}/${fmtInt(db.maxConnections)}`), 13),
+    kv("Cache hit", cache === null ? c.muted("no reads yet") : (cache < 0.95 ? c.warn : c.ok)(`${(cache * 100).toFixed(1)}%`) + c.muted(" · avg across dbs"), 13),
+    kv("Storage", c.white(fmtBytes(totalSize)) + c.muted(` across ${fmtInt(db.databases)} databases`), 13),
+    kv("Transactions", c.white(fmtCompact(commits)) + c.muted(" commits · ") + (rollbacks > 0 ? c.warn : c.muted)(fmtCompact(rollbacks)) + c.muted(" rollbacks"), 13),
+    kv("Deadlocks", deadlocks > 0 ? c.warn(fmtInt(deadlocks)) : c.ok("none"), 13),
+    kv("Dead tuples", c.white(fmtCompact(infra.reduce((a, i) => a + i.deadTuples, 0))) + c.muted(` · ${fmtInt(infra.reduce((a, i) => a + i.unusedIndexes, 0))} unused indexes`), 13),
+  ];
+  return box({ title: "Postgres", width: w, height: h, lines });
+}
+
+function migrationsPanel(st: PlatformStats, w: number, h: number, now: Date): string[] {
+  const innerW = w - 4;
+  const reports = st.dbs.filter((d) => d.migrations).map((d) => d.migrations!);
+  const count = (s: MigrationStatus) => reports.filter((m) => m.status === s).length;
+  const expected = (kind: "control" | "tenant" | "unified") => reports.find((m) => m.kind === kind)?.expected ?? 0;
+  const shipped = st.mode === "multi-db"
+    ? `control ${expected("control")} · tenant ${expected("tenant")}`
+    : `${expected("unified")} unified`;
+  const latest = reports.map((m) => m.latestAppliedAt).filter((x): x is string => Boolean(x)).sort().pop() ?? null;
+  const pendingTags = [...new Set(reports.flatMap((m) => m.pending))];
+  const lines = [
+    kv("Shipped", c.white(shipped) + c.muted(" migrations in this build"), 13),
+    kv("Last applied", c.white(fmtRelative(latest, now)) + (latest ? c.muted(` · ${reports.find((m) => m.latestAppliedAt === latest)?.latestApplied ?? ""}`) : ""), 13),
+    "",
+    ...breakdown(
+      (["in_sync", "behind", "ahead", "untracked", "no_journal"] as MigrationStatus[])
+        .filter((s) => count(s) > 0 || s === "in_sync")
+        .map((s) => ({ label: MIGRATION_LABEL[s].text, value: count(s), style: MIGRATION_LABEL[s].style })),
+      innerW,
+    ),
+  ];
+  if (pendingTags.length) lines.push("", c.muted("pending  ") + c.bad(truncate(pendingTags.join(", "), innerW - 9)));
+  const journalsMissing = (["control", "tenant", "unified"] as const).filter((k) => !st.journals[k] && reports.some((m) => m.kind === k));
+  if (journalsMissing.length) lines.push("", c.warn(`journal not found for ${journalsMissing.join(", ")} — pass --migrations-dir`));
+  return box({ title: "Migrations", hint: `${reports.length} db${reports.length === 1 ? "" : "s"}`, width: w, height: h, lines });
+}
+
+function databasesPanel(st: PlatformStats, w: number, h: number, now: Date, natural: boolean): string[] {
+  const innerW = w - 4;
+  const sorted = sortDbs(st.dbs);
+  const maxRows = natural ? Math.min(sorted.length, 25) : Math.max(1, h - 4);
+  const rows = sorted.slice(0, maxRows);
+  const multi = st.mode === "multi-db";
+  const pct = (i: DbReport["infra"]) => (i && i.cacheHit !== null ? `${(i.cacheHit * 100).toFixed(1)}%` : "—");
+  const columns = [
+    { key: "name", label: "Database", flex: !multi, render: (d: DbReport) => (d.kind === "control" ? c.brand(d.name) : c.white(d.name)) },
+    ...(multi ? [{ key: "tenant", label: "Tenant", flex: true, render: (d: DbReport) => c.muted(truncate(d.tenantName ?? (d.kind === "control" ? "control plane" : "—"), 24)) }] : []),
+    { key: "size", label: "Size", align: "right" as const, render: (d: DbReport) => (d.infra ? fmtBytes(d.infra.sizeBytes) : c.bad("—")) },
+    { key: "conns", label: "Conns", align: "right" as const, render: (d: DbReport) => (d.infra ? fmtInt(d.infra.connections) : "—") },
+    { key: "cache", label: "Cache", align: "right" as const, render: (d: DbReport) => (d.infra ? (d.infra.cacheHit !== null && d.infra.cacheHit < 0.95 ? c.warn : c.muted)(pct(d.infra)) : "—") },
+    { key: "dead", label: "Dead tup", align: "right" as const, render: (d: DbReport) => (d.infra ? (d.infra.liveTuples > 10_000 && d.infra.deadTuples > d.infra.liveTuples * 0.2 ? c.warn : c.muted)(fmtCompact(d.infra.deadTuples)) : "—") },
+    { key: "vac", label: "Vacuumed", align: "right" as const, render: (d: DbReport) => c.muted(d.infra ? fmtRelative(d.infra.lastVacuumAt, now) : "—") },
+    { key: "mig", label: "Applied", align: "right" as const, render: (d: DbReport) => (d.migrations ? c.muted(`${d.migrations.applied}/${d.migrations.expected || "?"}`) : "—") },
+    { key: "status", label: "Migrations", render: migrationCell },
+  ];
+  const lines = table({ columns, rows, width: innerW, emptyText: "no databases" });
+  return box({
+    title: "Databases",
+    hint: `${rows.length} of ${sorted.length} · problems first`,
+    width: w,
+    height: natural ? rows.length + 4 : h,
+    lines,
+  });
+}
+
+function bloatPanel(st: PlatformStats, w: number, h: number): string[] {
+  const innerW = w - 4;
+  const rows = st.dbs
+    .flatMap((d) => (d.infra?.bloatTop ?? []).map((b) => ({ db: d.name, ...b })))
+    .sort((a, b) => b.dead - a.dead)
+    .slice(0, Math.max(1, h - 4));
+  const columns = [
+    { key: "db", label: "Database", render: (r: { db: string }) => c.white(r.db) },
+    { key: "table", label: "Table", flex: true, render: (r: { table: string }) => c.muted(r.table) },
+    { key: "dead", label: "Dead", align: "right" as const, render: (r: { dead: number }) => c.warn(fmtCompact(r.dead)) },
+    { key: "pct", label: "of live", align: "right" as const, render: (r: { dead: number; live: number }) => c.muted(r.live > 0 ? fmtPct(r.dead, r.live) : "—") },
+  ];
+  return box({ title: "Tables needing vacuum", width: w, height: h, lines: table({ columns, rows, width: innerW, emptyText: "nothing over 1,000 dead tuples" }) });
+}
+
+function infraBody(s: ViewState, st: PlatformStats, cols: number, rows?: number): string[] {
+  const twoCol = cols >= 100;
+  const topH = 11;
+  const bands: string[][] = [];
+  if (twoCol) {
+    const [lw, rw] = [Math.floor(cols * 0.45), cols - Math.floor(cols * 0.45) - 1];
+    bands.push(hstack([postgresPanel(st, lw, topH), migrationsPanel(st, rw, topH, s.now)], 1));
+  } else {
+    bands.push(postgresPanel(st, cols, topH), migrationsPanel(st, cols, topH, s.now));
+  }
+  if (rows === undefined) {
+    bands.push(databasesPanel(st, cols, 0, s.now, true), bloatPanel(st, cols, 8));
+    return vstack(bands, cols, 0);
+  }
+  const used = bands.reduce((a, b) => a + b.length, 0);
+  let left = rows - 3 - used;
+  const bloatH = left >= 20 ? 7 : 0;
+  left -= bloatH;
+  if (left >= 6) bands.push(databasesPanel(st, cols, left, s.now, false));
+  if (bloatH) bands.push(bloatPanel(st, cols, bloatH));
+  return vstack(bands, cols, 0);
+}
+
 // ── Entry ───────────────────────────────────────────────────────
 
 export function renderFrame(s: ViewState, colsIn: number, rows?: number): string[] {
@@ -648,6 +795,7 @@ export function renderFrame(s: ViewState, colsIn: number, rows?: number): string
   const body =
     s.view === "tenants" ? tenantsBody(s, s.stats, cols, innerRows)
     : s.view === "ops" ? opsBody(s, s.stats, cols, innerRows)
+    : s.view === "infra" ? infraBody(s, s.stats, cols, innerRows)
     : overviewBody(s, s.stats, cols, innerRows);
   return finish(head, [strip, ...body], foot, cols, rows);
 }

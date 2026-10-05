@@ -115,6 +115,16 @@ export function maskStats(stats: PlatformStats): PlatformStats {
       maintenance: stats.control.maintenance,
     },
     tenants,
+    dbs: stats.dbs.map((d) => {
+      const idx = d.tenantId ? stats.tenants.findIndex((t) => t.id === d.tenantId) : -1;
+      return {
+        ...d,
+        key: scrub(d.key, pairs) ?? d.key,
+        name: d.kind === "control" ? d.name : maskDbName(d.name) ?? d.name,
+        tenantName: d.tenantName ? (idx >= 0 ? tenants[idx].name : `Tenant ${tenantHandle(d.tenantId ?? "")}`) : d.tenantName,
+        error: scrub(d.error, pairs),
+      };
+    }),
     failures: stats.failures.map((f) => {
       const idx = stats.tenants.findIndex((t) => t.id === f.tenantId);
       return {

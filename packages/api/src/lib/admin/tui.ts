@@ -537,6 +537,18 @@ export function fmtCompact(n: number): string {
   return fmtInt(n);
 }
 
+/** 48 MB, 1.9 GB — binary units like pg_size_pretty. */
+export function fmtBytes(n: number): string {
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let v = Math.max(0, n);
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${u === 0 ? Math.round(v) : trimDigits(v)} ${units[u]}`;
+}
+
 export function fmtPct(part: number, total: number): string {
   if (total <= 0) return "0%";
   return `${Math.round((part / total) * 100)}%`;

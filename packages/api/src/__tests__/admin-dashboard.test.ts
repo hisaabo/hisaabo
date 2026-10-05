@@ -18,10 +18,18 @@ import {
   CONTROL_SQL, TENANT_SQL, type SqlRunner, type DbTarget,
 } from "../lib/admin/stats.js";
 import { renderFrame, sortTenants, type ViewState } from "../lib/admin/screens.js";
+import { fmtBytes } from "../lib/admin/tui.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { parseEnvFile, pickPsqlError, DirectRunner } from "../lib/admin/runners.js";
 import { maskEmail, maskName, maskWord, maskDbName, tenantHandle, maskStats, maskFreeText } from "../lib/admin/privacy.js";
 import { deriveAlerts } from "../lib/admin/alerts.js";
+import { compareMigrations, readJournal, loadJournals, journalDirCandidates, appliedMigrationsSql, MIGRATION_TABLES, type Journal } from "../lib/admin/migrations.js";
+import { parseInfra, journalKindFor } from "../lib/admin/stats.js";
+import { sortDbs } from "../lib/admin/screens.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { splitKeys } from "../lib/admin/keys.js";
 
 beforeAll(() => setColorEnabled(false));
@@ -637,7 +645,7 @@ describe("ops metrics", () => {
     const firstYellow = alerts.findIndex((a) => a.level === "yellow");
     expect(alerts.slice(0, firstYellow).every((a) => a.level === "red")).toBe(true);
     // A clean platform has no alerts.
-    const clean = { ...st, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW) };
+    const clean = { ...st, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [] };
     expect(deriveAlerts(clean)).toEqual([]);
   });
 
@@ -659,7 +667,7 @@ describe("ops metrics", () => {
     expect(renderFrame(quiet, 150).join("\n")).toContain("no recent failures");
     // All-clear strip.
     const calm = stateFor("overview", true);
-    calm.stats = { ...calm.stats!, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW) };
+    calm.stats = { ...calm.stats!, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [] };
     expect(renderFrame(calm, 120, 30)[1]).toContain("all systems nominal");
   });
 
@@ -677,5 +685,141 @@ describe("ops metrics", () => {
     const rec = masked.failures.find((f) => f.kind === "recurring")!;
     expect(rec.ref).toBe("Mon••••••");
     expect(masked.failures.every((f) => !f.tenantName || /^Tenant [0-9a-f]{6}$/.test(f.tenantName))).toBe(true);
+  });
+});
+
+// =============================================================================
+// Infra & migration drift
+// =============================================================================
+
+describe("migration drift", () => {
+  const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+  const journal: Journal = {
+    dir: "/x",
+    entries: [
+      { tag: "0000_a", when: 1000, hash: sha("a") },
+      { tag: "0001_b", when: 2000, hash: sha("b") },
+      { tag: "0002_c", when: 3000, hash: sha("c") },
+    ],
+  };
+
+  it("reports in sync when every journal entry is applied", () => {
+    const m = compareMigrations("tenant", journal, { table: "__drizzle_migrations", applied: 3, latestWhen: 3000, hashes: [sha("a"), sha("b"), sha("c")] });
+    expect(m.status).toBe("in_sync");
+    expect(m.pending).toEqual([]);
+    expect(m.latestApplied).toBe("0002_c");
+    expect(m.expected).toBe(3);
+  });
+
+  it("lists pending tags when the database is behind (drizzle's timestamp rule)", () => {
+    const m = compareMigrations("tenant", journal, { table: "__drizzle_migrations", applied: 1, latestWhen: 1000, hashes: [sha("a")] });
+    expect(m.status).toBe("behind");
+    expect(m.pending).toEqual(["0001_b", "0002_c"]);
+    expect(m.latestApplied).toBe("0000_a");
+  });
+
+  it("flags a database ahead of the build when it holds hashes the journal does not know", () => {
+    const m = compareMigrations("tenant", journal, { table: "__drizzle_migrations", applied: 4, latestWhen: 4000, hashes: [sha("a"), sha("b"), sha("c"), sha("future")] });
+    expect(m.status).toBe("ahead");
+    expect(m.unknownApplied).toBe(1);
+  });
+
+  it("distinguishes untracked databases and missing journals", () => {
+    expect(compareMigrations("tenant", journal, { table: null, applied: 0, latestWhen: null, hashes: [] }).status).toBe("untracked");
+    const nj = compareMigrations("tenant", null, { table: "__drizzle_migrations", applied: 2, latestWhen: 2000, hashes: [] });
+    expect(nj.status).toBe("no_journal");
+    expect(nj.expected).toBe(0);
+  });
+
+  it("reads a journal folder and hashes its SQL files like the migrator does", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hisaabo-journal-"));
+    try {
+      mkdirSync(join(dir, "meta"));
+      writeFileSync(join(dir, "meta", "_journal.json"), JSON.stringify({ entries: [{ idx: 1, tag: "0001_two", when: 20 }, { idx: 0, tag: "0000_one", when: 10 }] }));
+      writeFileSync(join(dir, "0000_one.sql"), "create table one();");
+      const j = readJournal(dir)!;
+      expect(j.entries.map((e) => e.tag)).toEqual(["0000_one", "0001_two"]); // sorted by when
+      expect(j.entries[0].hash).toBe(sha("create table one();"));
+      expect(j.entries[1].hash).toBeNull(); // SQL file missing
+      expect(readJournal(join(dir, "nope"))).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the repo's real journals from the monorepo root and from the bin folder", () => {
+    const repoRoot = join(process.cwd(), "..", "..");
+    const fromCwd = loadJournals({ here: "/nonexistent", cwd: repoRoot });
+    expect(fromCwd.tenant?.entries.length).toBeGreaterThan(0);
+    expect(fromCwd.control?.entries.length).toBeGreaterThan(0);
+    expect(fromCwd.unified?.entries.length).toBeGreaterThan(0);
+    expect(fromCwd.tenant!.entries.every((e) => e.hash)).toBe(true);
+    const fromBin = loadJournals({ here: join(process.cwd(), "src", "bin"), cwd: "/nonexistent" });
+    expect(fromBin.tenant?.dir).toBe(fromCwd.tenant?.dir);
+    expect(journalDirCandidates("tenant", { here: "/a/b/c", cwd: "/w", override: "/o" })[0]).toBe("/o/drizzle-tenant");
+  });
+
+  it("only ever queries the known tracking tables", () => {
+    expect(appliedMigrationsSql(MIGRATION_TABLES.tenant)).toContain('"drizzle"."__drizzle_tenant_migrations"');
+    expect(appliedMigrationsSql(MIGRATION_TABLES.unified)).toContain('"drizzle"."__drizzle_migrations"');
+    expect(() => appliedMigrationsSql("users; drop table users")).toThrow();
+    expect(journalKindFor("control", "multi-db")).toBe("control");
+    expect(journalKindFor("tenant", "multi-db")).toBe("tenant");
+    expect(journalKindFor("control", "shared-db")).toBe("unified");
+  });
+});
+
+describe("infra", () => {
+  it("parses per-database health and tolerates nulls", () => {
+    const i = parseInfra({ size_bytes: "1048576", connections: 3, cache_hit: null, dead_tuples: 12, live_tuples: "100", bloat_top: [{ table: "invoices", dead: 9, live: 1 }], drizzle_tables: ["__drizzle_migrations"] });
+    expect(i.sizeBytes).toBe(1048576);
+    expect(i.cacheHit).toBeNull();
+    expect(i.deadTuples).toBe(12);
+    expect(i.bloatTop).toEqual([{ table: "invoices", dead: 9, live: 1 }]);
+    expect(i.drizzleTables).toEqual(["__drizzle_migrations"]);
+    expect(parseInfra(null).tables).toBe(0);
+  });
+
+  it("fmtBytes uses binary units", () => {
+    expect(fmtBytes(512)).toBe("512 B");
+    expect(fmtBytes(48 * 1024 * 1024)).toBe("48.0 MB");
+    expect(fmtBytes(1.9 * 1024 ** 3)).toBe("1.90 GB");
+  });
+
+  it("sortDbs puts the control db first, then problems, then the largest", () => {
+    const sorted = sortDbs(buildDemoStats(NOW).dbs);
+    expect(sorted[0].kind).toBe("control");
+    const statuses = sorted.slice(1).map((d) => (d.migrations ? d.migrations.status : d.error ? "error" : "none"));
+    expect(statuses[0]).toBe("error"); // unreachable first
+    expect(statuses.slice(1, 3)).toEqual(["behind", "behind"]);
+    expect(statuses.at(-1)).toBe("in_sync");
+  });
+
+  it("derives migration and health alerts", () => {
+    const texts = deriveAlerts(buildDemoStats(NOW)).map((a) => `${a.level}:${a.text}`);
+    expect(texts).toContain("red:2 dbs behind on migrations");
+    expect(texts).toContain("yellow:1 db ahead of this build");
+    expect(texts).toContain("yellow:1 db with untracked migrations");
+    expect(texts.some((t) => t.startsWith("yellow:1 db with > 20% dead tuples"))).toBe(true);
+    expect(texts).toContain("yellow:2 deadlocks since stats reset");
+  });
+
+  it("renders the infra view at several sizes without leaking tenant names", () => {
+    for (const [cols, rows] of [[80, 30], [100, 40], [150, 50], [200, 60]] as const) {
+      const state = stateFor("infra", true);
+      state.stats = maskStats(state.stats!);
+      const frame = renderFrame(state, cols, rows);
+      expect(frame).toHaveLength(rows);
+      for (const row of frame) expect(width(row)).toBe(cols);
+      const text = frame.join("\n");
+      expect(text).toContain("Migrations");
+      expect(text).not.toContain("Verma");
+      expect(text).not.toContain("tenant_verma");
+    }
+    const natural = renderFrame(stateFor("infra"), 150).join("\n");
+    expect(natural).toContain("▼ behind 1");
+    expect(natural).toContain("▲ ahead +1");
+    expect(natural).toContain("0003_needy_siren");
+    expect(natural).toContain("Tables needing vacuum");
   });
 });

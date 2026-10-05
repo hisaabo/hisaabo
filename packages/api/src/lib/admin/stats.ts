@@ -13,6 +13,11 @@
  * database (self-hosted mode) are never double counted.
  */
 
+import {
+  compareMigrations, appliedMigrationsSql, MIGRATION_TABLES,
+  type Journals, type JournalKind, type MigrationState, type AppliedMigrations,
+} from "./migrations.js";
+
 // ── Runner contract ─────────────────────────────────────────────
 
 export interface DbTarget {
@@ -118,6 +123,39 @@ export interface ControlStats {
   };
 }
 
+export interface DbInfra {
+  sizeBytes: number;
+  connections: number;
+  /** Buffer cache hit ratio 0..1, null when the database has had no reads yet. */
+  cacheHit: number | null;
+  xactCommit: number;
+  xactRollback: number;
+  deadlocks: number;
+  tempBytes: number;
+  liveTuples: number;
+  deadTuples: number;
+  tables: number;
+  seqScans: number;
+  idxScans: number;
+  unusedIndexes: number;
+  lastVacuumAt: string | null;
+  bloatTop: { table: string; dead: number; live: number }[];
+  /** Tracking tables present in the drizzle schema. */
+  drizzleTables: string[];
+}
+
+export interface DbReport {
+  key: string;
+  /** Database name as Postgres reports it. */
+  name: string;
+  kind: "control" | "tenant";
+  tenantId: string | null;
+  tenantName: string | null;
+  infra: DbInfra | null;
+  migrations: MigrationState | null;
+  error: string | null;
+}
+
 export interface TenantWithMetrics extends TenantRow {
   /** Which physical database the tenant lives in ("control" when shared). */
   dbKey: string;
@@ -132,6 +170,10 @@ export interface PlatformFailure extends OpsFailure {
 }
 
 export interface PlatformStats {
+  /** One entry per physical database: the control database first, then tenants. */
+  dbs: DbReport[];
+  /** Whether migration journals were found next to this build. */
+  journals: Record<JournalKind, boolean>;
   /** Most recent operational failures across all tenants, newest first. */
   failures: PlatformFailure[];
   collectedAt: string;
@@ -147,8 +189,35 @@ export interface PlatformStats {
 
 // ── SQL ─────────────────────────────────────────────────────────
 
+/** Per-database health, embedded in both blobs so every physical DB reports it. */
+const INFRA_SQL = `
+    select json_build_object(
+      'name', current_database(),
+      'size_bytes', pg_database_size(current_database()),
+      'connections', (select count(*) from pg_stat_activity where datname = current_database()),
+      'cache_hit', (select case when blks_hit + blks_read = 0 then null else round(blks_hit::numeric / (blks_hit + blks_read), 4) end
+                    from pg_stat_database where datname = current_database()),
+      'xact_commit', (select xact_commit from pg_stat_database where datname = current_database()),
+      'xact_rollback', (select xact_rollback from pg_stat_database where datname = current_database()),
+      'deadlocks', (select deadlocks from pg_stat_database where datname = current_database()),
+      'temp_bytes', (select temp_bytes from pg_stat_database where datname = current_database()),
+      'live_tuples', (select coalesce(sum(n_live_tup), 0) from pg_stat_user_tables),
+      'dead_tuples', (select coalesce(sum(n_dead_tup), 0) from pg_stat_user_tables),
+      'tables', (select count(*) from pg_stat_user_tables),
+      'seq_scans', (select coalesce(sum(seq_scan), 0) from pg_stat_user_tables),
+      'idx_scans', (select coalesce(sum(idx_scan), 0) from pg_stat_user_tables),
+      'unused_indexes', (select count(*) from pg_stat_user_indexes i join pg_index x on x.indexrelid = i.indexrelid
+                         where i.idx_scan = 0 and not x.indisprimary and not x.indisunique),
+      'last_vacuum_at', (select max(greatest(last_autovacuum, last_vacuum)) from pg_stat_user_tables),
+      'bloat_top', (select coalesce(json_agg(x), '[]'::json) from (
+          select relname as "table", n_dead_tup as dead, n_live_tup as live from pg_stat_user_tables
+          where n_dead_tup > 1000 order by n_dead_tup desc limit 3) x),
+      'drizzle_tables', (select coalesce(json_agg(tablename order by tablename), '[]'::json) from pg_tables where schemaname = 'drizzle')
+    )`;
+
 export const CONTROL_SQL = `
 select json_build_object(
+  'infra', (${INFRA_SQL}),
   'tenants', (
     select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from (
       select t.id, t.name, t.slug, t.plan, t.status, t.db_name, t.db_host, t.db_port, t.created_at,
@@ -206,6 +275,7 @@ select json_build_object(
 
 export const TENANT_SQL = `
 select json_build_object(
+  'infra', (${INFRA_SQL}),
   'summary', (
     select row_to_json(s) from (
       select
@@ -372,6 +442,38 @@ function obj(v: unknown): Row {
 
 function arr(v: unknown): Row[] {
   return Array.isArray(v) ? (v as Row[]) : [];
+}
+
+export function parseInfra(raw: unknown): DbInfra {
+  const d = obj(raw);
+  return {
+    sizeBytes: num(d.size_bytes),
+    connections: num(d.connections),
+    cacheHit: d.cache_hit === null || d.cache_hit === undefined ? null : num(d.cache_hit),
+    xactCommit: num(d.xact_commit),
+    xactRollback: num(d.xact_rollback),
+    deadlocks: num(d.deadlocks),
+    tempBytes: num(d.temp_bytes),
+    liveTuples: num(d.live_tuples),
+    deadTuples: num(d.dead_tuples),
+    tables: num(d.tables),
+    seqScans: num(d.seq_scans),
+    idxScans: num(d.idx_scans),
+    unusedIndexes: num(d.unused_indexes),
+    lastVacuumAt: str(d.last_vacuum_at),
+    bloatTop: arr(d.bloat_top).map((b) => ({ table: String(b.table ?? ""), dead: num(b.dead), live: num(b.live) })),
+    drizzleTables: (Array.isArray(d.drizzle_tables) ? d.drizzle_tables : []).map((t) => String(t)),
+  };
+}
+
+export function parseAppliedMigrations(raw: unknown, table: string | null): AppliedMigrations {
+  const d = obj(raw);
+  return {
+    table,
+    applied: num(d.applied),
+    latestWhen: d.latest === null || d.latest === undefined ? null : num(d.latest),
+    hashes: (Array.isArray(d.hashes) ? d.hashes : []).map((h) => String(h)),
+  };
 }
 
 export function parseControlStats(raw: unknown): ControlStats {
@@ -587,6 +689,29 @@ export interface CollectOptions {
   runner: SqlRunner;
   concurrency?: number;
   now?: () => Date;
+  /** Migration journals shipped with this build; omit to skip drift detection. */
+  journals?: Journals;
+}
+
+const NO_JOURNALS: Journals = { control: null, tenant: null, unified: null };
+
+/**
+ * Which journal and tracking table a database should be compared against.
+ * Multi-db: control DB ↔ drizzle-control, tenant DBs ↔ drizzle-tenant.
+ * Shared DB (self-hosted): the one database ↔ the unified drizzle/ folder.
+ */
+export function journalKindFor(kind: DbReport["kind"], mode: PlatformStats["mode"]): JournalKind {
+  if (mode === "shared-db") return "unified";
+  return kind === "control" ? "control" : "tenant";
+}
+
+async function readMigrations(runner: SqlRunner, target: DbTarget, infra: DbInfra, kind: JournalKind, journals: Journals): Promise<MigrationState> {
+  const table = MIGRATION_TABLES[kind];
+  const present = infra.drizzleTables.includes(table) ? table : null;
+  const applied = present
+    ? parseAppliedMigrations(await runner.queryJson(target, appliedMigrationsSql(present)), present)
+    : { table: null, applied: 0, latestWhen: null, hashes: [] };
+  return compareMigrations(kind, journals[kind], applied);
 }
 
 const CONTROL_KEY = "control";
@@ -602,6 +727,12 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   });
   await Promise.all(workers);
   return results;
+}
+
+function keyForTenant(t: TenantRow): string {
+  if (!t.dbName) return CONTROL_KEY;
+  const server = [t.dbHost, t.dbPort].filter(Boolean).join(":");
+  return server ? `${server}/${t.dbName}` : t.dbName;
 }
 
 /** Flatten per-tenant failure lists into one newest-first feed, attributing each to its tenant. */
@@ -624,15 +755,14 @@ function errorMessage(e: unknown): string {
 export async function collectPlatformStats(opts: CollectOptions): Promise<PlatformStats> {
   const now = opts.now ?? (() => new Date());
   const started = Date.now();
-  const control = parseControlStats(await opts.runner.queryJson({ name: null }, CONTROL_SQL));
+  const journals = opts.journals ?? NO_JOURNALS;
+  const controlRaw = await opts.runner.queryJson({ name: null }, CONTROL_SQL);
+  const control = parseControlStats(controlRaw);
+  const controlInfra = parseInfra(obj(controlRaw).infra);
 
   // Group live tenants by physical database so shared DBs are queried once.
   const targets = new Map<string, DbTarget>();
-  const keyFor = (t: TenantRow): string => {
-    if (!t.dbName) return CONTROL_KEY;
-    const server = [t.dbHost, t.dbPort].filter(Boolean).join(":");
-    return server ? `${server}/${t.dbName}` : t.dbName;
-  };
+  const keyFor = keyForTenant;
   for (const t of control.tenants) {
     if (t.status === "deleted") continue;
     const k = keyFor(t);
@@ -642,13 +772,54 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
   if (targets.size === 0) targets.set(CONTROL_KEY, { name: null });
 
   const keys = [...targets.keys()];
+  const mode: PlatformStats["mode"] = keys.some((k) => k !== CONTROL_KEY) ? "multi-db" : "shared-db";
   const results = await mapLimit(keys, opts.concurrency ?? 4, async (k) => {
+    const target = targets.get(k)!;
     try {
-      return { key: k, metrics: parseTenantMetrics(await opts.runner.queryJson(targets.get(k)!, TENANT_SQL), now()), error: null as string | null };
+      const raw = await opts.runner.queryJson(target, TENANT_SQL);
+      const metrics = parseTenantMetrics(raw, now());
+      const infra = parseInfra(obj(raw).infra);
+      let migrations: MigrationState | null = null;
+      let error: string | null = null;
+      if (k !== CONTROL_KEY) {
+        try {
+          migrations = await readMigrations(opts.runner, target, infra, journalKindFor("tenant", mode), journals);
+        } catch (e) {
+          error = `migrations: ${errorMessage(e)}`;
+        }
+      }
+      return { key: k, metrics, infra, migrations, error };
     } catch (e) {
-      return { key: k, metrics: null, error: errorMessage(e) };
+      return { key: k, metrics: null, infra: null, migrations: null, error: errorMessage(e) };
     }
   });
+
+  // Control database report (in shared-db mode this is also the only data database).
+  let controlMigrations: MigrationState | null = null;
+  let controlError: string | null = null;
+  try {
+    controlMigrations = await readMigrations(opts.runner, { name: null }, controlInfra, journalKindFor("control", mode), journals);
+  } catch (e) {
+    controlError = `migrations: ${errorMessage(e)}`;
+  }
+  const dbs: DbReport[] = [
+    { key: CONTROL_KEY, name: control.db.name, kind: "control", tenantId: null, tenantName: null, infra: controlInfra, migrations: controlMigrations, error: controlError },
+    ...results
+      .filter((r) => r.key !== CONTROL_KEY)
+      .map((r) => {
+        const owner = control.tenants.find((t) => t.status !== "deleted" && keyForTenant(t) === r.key) ?? null;
+        return {
+          key: r.key,
+          name: owner?.dbName ?? r.key,
+          kind: "tenant" as const,
+          tenantId: owner?.id ?? null,
+          tenantName: owner?.name ?? null,
+          infra: r.infra,
+          migrations: r.migrations,
+          error: r.error,
+        };
+      }),
+  ];
   const byKey = new Map(results.map((r) => [r.key, r]));
   const errors = results.filter((r) => r.error).map((r) => `${r.key}: ${r.error}`);
 
@@ -664,8 +835,10 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
     };
   });
 
-  const mode: PlatformStats["mode"] = keys.some((k) => k !== CONTROL_KEY) ? "multi-db" : "shared-db";
+  const allErrors = [...errors, ...(controlError ? [`${CONTROL_KEY}: ${controlError}`] : [])];
   return {
+    dbs,
+    journals: { control: Boolean(journals.control), tenant: Boolean(journals.tenant), unified: Boolean(journals.unified) },
     failures: mergeFailures(tenants),
     collectedAt: now().toISOString(),
     durationMs: Date.now() - started,
@@ -673,7 +846,7 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
     control,
     totals: sumMetrics(results.flatMap((r) => (r.metrics ? [r.metrics] : [])), now()),
     tenants,
-    databases: { queried: keys.length, failed: errors.length },
-    errors,
+    databases: { queried: keys.length, failed: results.filter((r) => !r.metrics).length },
+    errors: allErrors,
   };
 }

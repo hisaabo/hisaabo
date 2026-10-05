@@ -5,8 +5,9 @@
  * Uses a seeded PRNG so every run looks the same.
  */
 
-import type { PlatformStats, TenantMetrics, TenantOps, TenantWithMetrics } from "./stats.js";
+import type { PlatformStats, TenantMetrics, TenantOps, TenantWithMetrics, DbReport, DbInfra } from "./stats.js";
 import { lastTwelveMonths, sumMetrics, mergeFailures, emptyOps } from "./stats.js";
+import type { MigrationState } from "./migrations.js";
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -181,7 +182,54 @@ export function buildDemoStats(now: Date = new Date()): PlatformStats {
     createdAt: iso(new Date(now.getTime() - (i * 7 + 2) * 3_600_000)),
   }));
 
+  const TENANT_TAGS = ["0000_lame_molecule_man", "0001_parallel_korg", "0002_perfect_sugar_man", "0003_needy_siren"];
+  const infraFor = (seed: number, sizeMb: number, dead: number): DbInfra => ({
+    sizeBytes: Math.round(sizeMb * 1024 * 1024),
+    connections: 1 + (seed % 3),
+    cacheHit: 0.985 + (seed % 7) * 0.002,
+    xactCommit: 10_000 * (seed + 1),
+    xactRollback: 12 * (seed % 5),
+    deadlocks: seed === 5 ? 2 : 0,
+    tempBytes: 0,
+    liveTuples: 40_000 + seed * 3_000,
+    deadTuples: dead,
+    tables: 42,
+    seqScans: 500 + seed * 20,
+    idxScans: 90_000 + seed * 2_000,
+    unusedIndexes: seed % 4,
+    lastVacuumAt: iso(new Date(now.getTime() - (seed % 9 + 1) * 3_600_000)),
+    bloatTop: dead > 1000 ? [{ table: "invoices", dead: Math.round(dead * 0.7), live: 30_000 }, { table: "audit_log", dead: Math.round(dead * 0.3), live: 80_000 }] : [],
+    drizzleTables: seed === 11 ? [] : ["__drizzle_tenant_migrations"],
+  });
+  const migrationFor = (seed: number): MigrationState => {
+    const base: MigrationState = { kind: "tenant", status: "in_sync", applied: 4, expected: 4, pending: [], unknownApplied: 0, latestApplied: TENANT_TAGS[3], latestAppliedAt: iso(new Date(now.getTime() - 3 * 86_400_000)) };
+    if (seed === 11) return { ...base, status: "untracked", applied: 0, latestApplied: null, latestAppliedAt: null };
+    if (seed === 4 || seed === 16) return { ...base, status: "behind", applied: 3, pending: [TENANT_TAGS[3]], latestApplied: TENANT_TAGS[2] };
+    if (seed === 7) return { ...base, status: "ahead", applied: 5, unknownApplied: 1 };
+    return base;
+  };
+  const dbs: DbReport[] = [
+    {
+      key: "control", name: "hisaabo", kind: "control", tenantId: null, tenantName: null,
+      infra: { ...infraFor(0, 48, 300), connections: 6, tables: 9, drizzleTables: ["__drizzle_control_migrations"] },
+      migrations: { kind: "control", status: "in_sync", applied: 4, expected: 4, pending: [], unknownApplied: 0, latestApplied: "0003_woozy_psylocke", latestAppliedAt: iso(new Date(now.getTime() - 3 * 86_400_000)) },
+      error: null,
+    },
+    ...tenants.map((t, i) => ({
+      key: t.dbKey,
+      name: t.dbName ?? t.dbKey,
+      kind: "tenant" as const,
+      tenantId: t.id,
+      tenantName: t.name,
+      infra: t.metrics ? infraFor(i, 12 + (t.metrics.invoices / 40), i === 5 ? 48_000 : i % 6 === 0 ? 4_000 : 200) : null,
+      migrations: t.metrics ? migrationFor(i) : null,
+      error: t.error,
+    })),
+  ];
+
   return {
+    dbs,
+    journals: { control: true, tenant: true, unified: false },
     failures: mergeFailures(tenants),
     collectedAt: iso(now),
     durationMs: 412,

@@ -13,12 +13,14 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { collectPlatformStats, CONTROL_SQL, TENANT_SQL } from "../../lib/admin/stats.js";
+import { loadJournals, MIGRATION_TABLES } from "../../lib/admin/migrations.js";
+import { join } from "node:path";
 import { DirectRunner } from "../../lib/admin/runners.js";
 import { deriveAlerts } from "../../lib/admin/alerts.js";
 import { renderFrame, type ViewState } from "../../lib/admin/screens.js";
 import { maskStats } from "../../lib/admin/privacy.js";
 import { createTestWorld, createInvoiceWithItems, createParty } from "../helpers/fixtures.js";
-import { truncateAllTables, closeTestDb, getTenantTestDb } from "../helpers/test-db.js";
+import { truncateAllTables, closeTestDb, getTenantTestDb, getTestClient } from "../helpers/test-db.js";
 
 let runner: DirectRunner;
 
@@ -46,15 +48,43 @@ describe("admin dashboard SQL against the real schema", () => {
     expect(control.users).toBeTypeOf("object");
     expect(control.db).toBeTypeOf("object");
 
+    expect(control.infra).toBeTypeOf("object");
     const tenant = (await runner.queryJson({ name: null }, TENANT_SQL)) as Record<string, unknown>;
+    expect(tenant.infra).toBeTypeOf("object");
     expect(tenant.summary).toBeTypeOf("object");
     expect(tenant.counts).toBeTypeOf("object");
     expect(tenant.ops).toBeTypeOf("object");
     expect(Array.isArray(tenant.monthly)).toBe(true);
   });
 
+  it("reads a real tracking table and reports pending migrations against the shipped journal", async () => {
+    // The CI database is created with db:push, so no tracking table exists. Create an
+    // empty one: every journal entry is then pending and the status must be "behind".
+    const client = getTestClient();
+    await client.unsafe(`create schema if not exists "drizzle"`);
+    await client.unsafe(`create table if not exists "drizzle"."${MIGRATION_TABLES.unified}" (id serial primary key, hash text not null, created_at bigint)`);
+    try {
+      const journals = loadJournals({ here: "/nonexistent", cwd: join(process.cwd(), "..", "..") });
+      const stats = await collectPlatformStats({ runner, journals });
+      const control = stats.dbs[0];
+      expect(control.infra?.drizzleTables).toContain(MIGRATION_TABLES.unified);
+      expect(control.migrations?.status).toBe("behind");
+      expect(control.migrations?.pending).toEqual(journals.unified!.entries.map((e) => e.tag));
+      expect(deriveAlerts(stats).map((a) => a.text)).toContain("1 db behind on migrations");
+    } finally {
+      await client.unsafe(`drop table if exists "drizzle"."${MIGRATION_TABLES.unified}"`);
+    }
+  });
+
   it("collectPlatformStats runs end to end with no per-database errors", async () => {
-    const stats = await collectPlatformStats({ runner });
+    const journals = loadJournals({ here: "/nonexistent", cwd: join(process.cwd(), "..", "..") });
+    expect(journals.unified).not.toBeNull();
+    const stats = await collectPlatformStats({ runner, journals });
+    expect(stats.dbs.length).toBeGreaterThanOrEqual(1);
+    expect(stats.dbs[0].kind).toBe("control");
+    expect(stats.dbs[0].infra?.sizeBytes).toBeGreaterThan(0);
+    expect(stats.dbs[0].migrations).not.toBeNull();
+    expect(["in_sync", "behind", "ahead", "untracked"]).toContain(stats.dbs[0].migrations!.status);
     expect(stats.errors).toEqual([]);
     expect(stats.databases.failed).toBe(0);
     expect(stats.control.tenants.length).toBeGreaterThanOrEqual(1);
@@ -68,7 +98,7 @@ describe("admin dashboard SQL against the real schema", () => {
     expect(Array.isArray(deriveAlerts(stats))).toBe(true);
     const masked = maskStats(stats);
     expect(JSON.stringify(masked)).not.toContain("Admin SQL Customer");
-    for (const view of ["overview", "tenants", "ops"] as const) {
+    for (const view of ["overview", "tenants", "ops", "infra"] as const) {
       const state: ViewState = {
         view, stats: masked, loading: false, refreshing: false, error: null, selected: 0, interactive: false,
         intervalSec: 0, nextRefreshAt: null, runnerLabel: "test", version: "test", now: new Date(), masked: true,
