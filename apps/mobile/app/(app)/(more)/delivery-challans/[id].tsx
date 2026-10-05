@@ -15,6 +15,7 @@ import { formatCurrency, formatDate } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 export default function DeliveryChallanDetailScreen() {
   const styles = useStyles();
@@ -22,6 +23,8 @@ export default function DeliveryChallanDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const utils = trpc.useUtils();
+  const canUpdate = useCan("update", "Invoice");
+  const canCreate = useCan("create", "Invoice");
 
   const { data: challan, isLoading, isError, refetch } = trpc.deliveryChallan.getById.useQuery(
     { id: id! },
@@ -223,7 +226,7 @@ export default function DeliveryChallanDetailScreen() {
         {/* Actions */}
         <Text style={styles.sectionLabel}>Actions</Text>
         <View style={styles.actionsCard}>
-          {challan.status === "draft" && (
+          {challan.status === "draft" && canUpdate && (
             <TouchableOpacity
               style={styles.actionBtn}
               onPress={handleMarkSent}
@@ -236,7 +239,7 @@ export default function DeliveryChallanDetailScreen() {
             </TouchableOpacity>
           )}
 
-          {(challan.status === "draft" || challan.status === "sent") && (
+          {(challan.status === "draft" || challan.status === "sent") && canUpdate && (
             <TouchableOpacity
               style={styles.actionBtn}
               onPress={handleMarkDelivered}
@@ -249,7 +252,7 @@ export default function DeliveryChallanDetailScreen() {
             </TouchableOpacity>
           )}
 
-          {canConvert && (
+          {canConvert && canCreate && (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnConvert]}
               onPress={handleConvert}

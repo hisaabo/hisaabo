@@ -23,6 +23,7 @@ import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError, DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 interface LineItem {
   itemId?: string;
@@ -331,6 +332,14 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: LineItemRo
 // ── Main Edit Screen ──────────────────────────────────────────
 
 export default function InvoiceEditScreen() {
+  return (
+    <PermissionGate action="update" resource="Invoice">
+      <InvoiceEditScreenContent />
+    </PermissionGate>
+  );
+}
+
+function InvoiceEditScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

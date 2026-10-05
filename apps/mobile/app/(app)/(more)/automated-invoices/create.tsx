@@ -22,6 +22,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 /* ── Types & Helpers ──────────────────────────────────────────── */
 
@@ -201,6 +202,14 @@ function LineItemRow({ item, index, onChange, onRemove }: LineItemRowProps) {
 /* ── Main Screen ──────────────────────────────────────────────── */
 
 export default function CreateRecurringInvoiceScreen() {
+  return (
+    <PermissionGate action="create" resource="RecurringInvoice">
+      <CreateRecurringInvoiceScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreateRecurringInvoiceScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

@@ -122,10 +122,10 @@ describe("Party detail — edit / merge / delete", () => {
     expect(screen.getByText("Edit")).toBeTruthy();
   });
 
-  it("seller_manager can edit and merge but not delete", () => {
+  it("seller_manager can edit but not merge or delete (party.merge requires delete:Party)", () => {
     renderAs("seller_manager", PartyDetailScreen);
     expect(iconCount("create-outline")).toBe(2);
-    expect(iconCount("git-merge-outline")).toBe(1);
+    expect(iconCount("git-merge-outline")).toBe(0);
     expect(iconCount("trash-outline")).toBe(0);
   });
 

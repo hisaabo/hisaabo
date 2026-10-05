@@ -18,10 +18,19 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 type PartyType = "customer" | "supplier";
 
 export default function EditPartyScreen() {
+  return (
+    <PermissionGate action="update" resource="Party">
+      <EditPartyScreenContent />
+    </PermissionGate>
+  );
+}
+
+function EditPartyScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();

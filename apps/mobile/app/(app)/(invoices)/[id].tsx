@@ -237,6 +237,8 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const colors = useColors();
   const SHIPMENT_STATUS_CONFIG = useShipmentStatusConfig();
   const [trackingSheetOpen, setTrackingSheetOpen] = useState(false);
+  // shipment.update requires update:Invoice
+  const canUpdateShipment = useCan("update", "Invoice");
   const utils = trpc.useUtils();
 
   const { data, isLoading, refetch } = trpc.shipment.list.useQuery(
@@ -390,8 +392,8 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
           </View>
         ) : null}
 
-        {/* Action buttons — hidden when invoice is paid */}
-        {!isPaid && (shipment.status === "pending" ||
+        {/* Action buttons — hidden when invoice is paid or the role can't update */}
+        {canUpdateShipment && (!isPaid && (shipment.status === "pending" ||
           shipment.status === "shipped" ||
           shipment.status === "in_transit") ? (
           <View style={shipmentStyles.actionRow}>
@@ -442,7 +444,7 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
               </TouchableOpacity>
             </View>
           )
-        )}
+        ))}
       </View>
 
       {trackingSheetOpen && (
@@ -478,6 +480,9 @@ export default function InvoiceDetailScreen() {
   );
 
   const canEdit = useCan("update", "Invoice");
+  const canRecordPayment = useCan("create", "Payment");
+  // Credit notes and sales returns are documents → create:Invoice
+  const canCreateDocument = useCan("create", "Invoice");
   // Role permission plus the API's rule: a seller_manager may delete only
   // unpaid invoices up to 2 hours old.
   const canDelete = useCanModify("delete", "Invoice", invoice ? { createdAt: invoice.createdAt as any, status: invoice.status } : undefined).allowed;
@@ -805,7 +810,7 @@ export default function InvoiceDetailScreen() {
         <Text style={styles.sectionTitle}>Actions</Text>
 
         {/* Status change buttons */}
-        {nextStatuses.length > 0 && (
+        {nextStatuses.length > 0 && canEdit && (
           <View style={styles.actionGroup}>
             {nextStatuses.map((ns) => (
               <TouchableOpacity
@@ -828,7 +833,7 @@ export default function InvoiceDetailScreen() {
         )}
 
         {/* Record Payment (for unpaid invoices; hidden when adjusted or balance fully covered) */}
-        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+        {balance > 0 && invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && canRecordPayment && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={[styles.actionBtn, { borderColor: colors.success + "60" }]}
@@ -845,7 +850,7 @@ export default function InvoiceDetailScreen() {
         )}
 
         {/* Credit Note / Sales Return conversions — hidden when fully adjusted */}
-        {invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && (
+        {invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "adjusted" && canCreateDocument && (
           <View style={styles.actionGroup}>
             <TouchableOpacity
               style={styles.actionBtn}

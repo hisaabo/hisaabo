@@ -18,6 +18,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit_card" | "payment_gateway";
 
@@ -41,6 +42,14 @@ const GATEWAY_MODES = [
 type GatewayModeKey = (typeof GATEWAY_MODES)[number]["key"];
 
 export default function BankAccountCreateScreen() {
+  return (
+    <PermissionGate action="create" resource="BankAccount">
+      <BankAccountCreateScreenContent />
+    </PermissionGate>
+  );
+}
+
+function BankAccountCreateScreenContent() {
   const s = useS();
   const colors = useColors();
   const router = useRouter();

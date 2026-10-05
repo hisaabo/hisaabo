@@ -19,6 +19,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { DatePickerField } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -164,6 +165,14 @@ function CarrierPickerModal({
 /* ── Main Screen ────────────────────────────────────────────────── */
 
 export default function CreateShipmentScreen() {
+  return (
+    <PermissionGate action="create" resource="Invoice">
+      <CreateShipmentScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreateShipmentScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { makeStyles } from "../lib/makeStyles";
 import { useColors } from "../contexts/ThemeContext";
 import { haptic } from "../lib/haptics";
+import { useCan } from "../hooks/useCan";
 
 interface BusinessSwitcherSheetProps {
   visible: boolean;
@@ -46,6 +47,8 @@ export function BusinessSwitcherSheet({
   const [slideAnim] = useState(() => new Animated.Value(0));
   const styles = useStyles();
   const colors = useColors();
+  // business.create requires a tenant admin; onCreateNew only reflects the plan limit
+  const canManageBusiness = useCan("manage", "Business");
 
   useEffect(() => {
     if (visible) {
@@ -143,7 +146,7 @@ export function BusinessSwitcherSheet({
             })}
           </ScrollView>
 
-          {onCreateNew && (
+          {onCreateNew && canManageBusiness && (
             <>
               {/* Divider */}
               <View style={styles.divider} />

@@ -21,6 +21,7 @@ import { haptic } from "../../../src/lib/haptics";
 import { DatePickerField } from "../../../src/components/ui";
 import { calculateGatewayCharge } from "@hisaabo/shared";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
+import { PermissionGate } from "../../../src/components/PermissionGate";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,14 @@ function allocateChronologically(
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function CreatePaymentScreen() {
+  return (
+    <PermissionGate action="create" resource="Payment">
+      <CreatePaymentScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreatePaymentScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

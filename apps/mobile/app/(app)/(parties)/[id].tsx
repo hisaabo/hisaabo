@@ -245,7 +245,7 @@ export default function PartyDetailScreen() {
               <Ionicons name="create-outline" size={22} color={colors.brand} />
             </TouchableOpacity>
           )}
-          {canUpdate && (
+          {canDelete && (
             <TouchableOpacity
               style={styles.mergeButton}
               onPress={handleOpenMerge}

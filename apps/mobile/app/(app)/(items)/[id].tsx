@@ -437,20 +437,27 @@ export default function ItemDetailScreen() {
                 {parseFloat(item.taxPercent ?? "0").toFixed(0)}%
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.infoCell}
-              onPress={() => {
-                setRenameNewUnit(item.unit);
-                setRenameUnitModalVisible(true);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.infoCellLabel}>Unit</Text>
-              <View style={styles.unitTappableRow}>
+            {canUpdate ? (
+              <TouchableOpacity
+                style={styles.infoCell}
+                onPress={() => {
+                  setRenameNewUnit(item.unit);
+                  setRenameUnitModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.infoCellLabel}>Unit</Text>
+                <View style={styles.unitTappableRow}>
+                  <Text style={styles.infoCellValue}>{item.unit}</Text>
+                  <Ionicons name="pencil-outline" size={13} color={colors.brand} />
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.infoCell}>
+                <Text style={styles.infoCellLabel}>Unit</Text>
                 <Text style={styles.infoCellValue}>{item.unit}</Text>
-                <Ionicons name="pencil-outline" size={13} color={colors.brand} />
               </View>
-            </TouchableOpacity>
+            )}
             {item.hsn && (
               <View style={styles.infoCell}>
                 <Text style={styles.infoCellLabel}>HSN</Text>
@@ -510,14 +517,16 @@ export default function ItemDetailScreen() {
                   </Text>
                 )}
               </View>
-              <TouchableOpacity
-                style={styles.adjustButton}
-                onPress={() => setAdjustModalVisible(true)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="swap-vertical-outline" size={18} color={colors.textPrimary} />
-                <Text style={styles.adjustButtonText}>Adjust</Text>
-              </TouchableOpacity>
+              {canUpdate && (
+                <TouchableOpacity
+                  style={styles.adjustButton}
+                  onPress={() => setAdjustModalVisible(true)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="swap-vertical-outline" size={18} color={colors.textPrimary} />
+                  <Text style={styles.adjustButtonText}>Adjust</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         )}
@@ -529,14 +538,16 @@ export default function ItemDetailScreen() {
               <Text style={styles.sectionLabel}>
                 Variants ({item.variants?.length ?? 0})
               </Text>
-              <TouchableOpacity
-                style={styles.addVariantButton}
-                onPress={openCreateVariant}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="add" size={15} color={colors.brand} />
-                <Text style={styles.addVariantButtonText}>Add</Text>
-              </TouchableOpacity>
+              {canUpdate && (
+                <TouchableOpacity
+                  style={styles.addVariantButton}
+                  onPress={openCreateVariant}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="add" size={15} color={colors.brand} />
+                  <Text style={styles.addVariantButtonText}>Add</Text>
+                </TouchableOpacity>
+              )}
             </View>
             {item.variants && item.variants.length > 0 ? (
               <>
@@ -583,20 +594,24 @@ export default function ItemDetailScreen() {
                           {vStock % 1 === 0 ? vStock.toFixed(0) : vStock.toFixed(2)} {item.unit}
                         </Text>
                         <View style={styles.variantActions}>
-                          <TouchableOpacity
-                            onPress={() => openEditVariant(v)}
-                            style={styles.variantActionBtn}
-                            activeOpacity={0.7}
-                          >
-                            <Ionicons name="pencil-outline" size={14} color={colors.brand} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            onPress={() => handleDeleteVariant(v.id, attrLabel)}
-                            style={[styles.variantActionBtn, styles.variantActionBtnDanger]}
-                            activeOpacity={0.7}
-                          >
-                            <Ionicons name="trash-outline" size={14} color={colors.danger} />
-                          </TouchableOpacity>
+                          {canUpdate && (
+                            <TouchableOpacity
+                              onPress={() => openEditVariant(v)}
+                              style={styles.variantActionBtn}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="pencil-outline" size={14} color={colors.brand} />
+                            </TouchableOpacity>
+                          )}
+                          {canDelete && (
+                            <TouchableOpacity
+                              onPress={() => handleDeleteVariant(v.id, attrLabel)}
+                              style={[styles.variantActionBtn, styles.variantActionBtnDanger]}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="trash-outline" size={14} color={colors.danger} />
+                            </TouchableOpacity>
+                          )}
                         </View>
                       </View>
                     </View>
