@@ -101,7 +101,7 @@ describe("defineAbilityFor — builds CASL ability for each role", () => {
       ["create", "Item"],
       ["read",   "Item"],
       ["update", "Item"],
-      // Payment — CRU (edit constraint is API-level: own + <2hrs)
+      // Payment — CRU
       ["create", "Payment"],
       ["read",   "Payment"],
       ["update", "Payment"],
@@ -156,10 +156,10 @@ describe("defineAbilityFor — builds CASL ability for each role", () => {
 
     // ---- Allowed permissions ----
     // From switch case:
-    //   Invoice:           create, read, update (own + <2hrs enforced at API level)
+    //   Invoice:           create, read, update
     //   Party:             create, read
     //   Item:              read
-    //   Payment:           create, read, update (own + <2hrs enforced at API level)
+    //   Payment:           create, read, update
     //   Business:          read
     //   Store:             read
     //   SalesTarget:       read

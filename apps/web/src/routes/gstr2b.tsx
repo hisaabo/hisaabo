@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { badgeColor } from "@/lib/badge-colors";
 import { StatCard } from "@/components/ui/StatCard";
@@ -255,6 +256,7 @@ function ReconciliationSection({
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const canIgnore = useCan("create", "GstReport");
 
   const { data: summary } = trpc.gstr2b.summary.useQuery({ returnPeriod: period });
 
@@ -426,7 +428,7 @@ function ReconciliationSection({
                                 {expanded ? "Hide" : "Details"}
                               </button>
                             )}
-                            {r.matchStatus !== "ignored" && (
+                            {canIgnore && r.matchStatus !== "ignored" && (
                               <button
                                 className="btn-ghost text-xs px-2 py-0.5 text-text-tertiary"
                                 onClick={() => ignoreMutation.mutate({ recordId: r.id })}
@@ -662,9 +664,12 @@ function GSTR2BPage() {
   const now = new Date();
   const [year, setYear]   = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [activeTab, setActiveTabRaw] = useState<G2BTab>(
+  const [storedTab, setActiveTabRaw] = useState<G2BTab>(
     () => (localStorage.getItem("hisaabo_gstr2b_tab") as G2BTab) || "upload",
   );
+  // Uploading needs create:GstReport — without it the Upload tab is hidden.
+  const canUpload = useCan("create", "GstReport");
+  const activeTab: G2BTab = !canUpload && storedTab === "upload" ? "reconciliation" : storedTab;
 
   const setActiveTab = (tab: G2BTab) => {
     setActiveTabRaw(tab);
@@ -674,7 +679,7 @@ function GSTR2BPage() {
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
 
   const tabs: Array<{ value: G2BTab; label: string }> = [
-    { value: "upload",         label: "Upload" },
+    ...(canUpload ? [{ value: "upload" as const, label: "Upload" }] : []),
     { value: "reconciliation", label: "Reconciliation" },
     { value: "missing-books",  label: "Not in Books" },
     { value: "missing-2b",     label: "Not in 2B" },

@@ -16,6 +16,7 @@ import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 type PaymentMode = "cash" | "bank" | "upi" | "cheque" | "other";
 
@@ -36,6 +37,7 @@ export default function ExpensesScreen() {
     colors.brand, "#22c55e", "#f59e0b", colors.danger, "#a855f7", "#3b82f6", "#ec4899", "#14b8a6",
   ], [colors]);
   const router = useRouter();
+  const canCreate = useCan("create", "Expense");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -193,7 +195,7 @@ export default function ExpensesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/expenses/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(more)/expenses/create" as never)} />}
     </SafeAreaView>
   );
 }

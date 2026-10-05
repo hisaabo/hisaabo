@@ -15,6 +15,7 @@ import { formatDateShort } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
+import { useCan } from "../../../../src/hooks/useCan";
 
 /* ── Status styling ───────────────────────────────────────────── */
 
@@ -53,6 +54,7 @@ export default function AutomatedInvoicesScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  const canCreate = useCan("create", "RecurringInvoice");
   const [selectedStatus, setSelectedStatus] = useState<TemplateStatus | null>(null);
   const [page, setPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -221,7 +223,7 @@ export default function AutomatedInvoicesScreen() {
         />
       )}
 
-      <FAB onPress={() => router.push("/(more)/automated-invoices/create" as never)} />
+      {canCreate && <FAB onPress={() => router.push("/(more)/automated-invoices/create" as never)} />}
     </SafeAreaView>
   );
 }

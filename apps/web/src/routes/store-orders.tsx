@@ -3,6 +3,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -224,6 +225,8 @@ interface OrderDetailPanelProps {
 function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps) {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  // confirmOrder / updateOrderStatus / cancelOrder all require update:Store.
+  const canUpdate = useCan("update", "Store");
 
   const utils = trpc.useUtils();
 
@@ -301,7 +304,7 @@ function OrderDetailPanel({ orderId, onClose, onUpdated }: OrderDetailPanelProps
         title={isLoading ? "Loading…" : o ? `Order ${o.orderNumber}` : "Order"}
         description={o ? `${o.customerName}${o.customerPhone ? ` · ${o.customerPhone}` : ""}` : undefined}
         footer={
-          o && o.status !== "delivered" && o.status !== "cancelled" ? (
+          o && o.status !== "delivered" && o.status !== "cancelled" && canUpdate ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
                 <button
@@ -533,6 +536,7 @@ function StoreOrdersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inlineConfirmId, setInlineConfirmId] = useState<string | null>(null);
   const [inlineCancelId, setInlineCancelId] = useState<string | null>(null);
+  const canUpdate = useCan("update", "Store");
 
   const utils = trpc.useUtils();
 
@@ -687,7 +691,7 @@ function StoreOrdersPage() {
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {order.status === "pending" && (
+                      {order.status === "pending" && canUpdate && (
                         <button
                           onClick={() => setInlineConfirmId(order.id)}
                           className="text-xs px-2 py-1 rounded font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 transition-colors"
@@ -695,7 +699,7 @@ function StoreOrdersPage() {
                           Confirm
                         </button>
                       )}
-                      {order.status === "confirmed" && (
+                      {order.status === "confirmed" && canUpdate && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({
@@ -709,7 +713,7 @@ function StoreOrdersPage() {
                           Preparing
                         </button>
                       )}
-                      {order.status === "preparing" && (
+                      {order.status === "preparing" && canUpdate && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({
@@ -723,7 +727,7 @@ function StoreOrdersPage() {
                           Ready
                         </button>
                       )}
-                      {order.status === "ready" && (
+                      {order.status === "ready" && canUpdate && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({
@@ -738,7 +742,7 @@ function StoreOrdersPage() {
                         </button>
                       )}
                       {order.status !== "delivered" &&
-                        order.status !== "cancelled" && (
+                        order.status !== "cancelled" && canUpdate && (
                           <button
                             onClick={() => setInlineCancelId(order.id)}
                             className="text-xs px-2 py-1 rounded font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950 transition-colors"

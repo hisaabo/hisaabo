@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput, toISOString } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -106,6 +107,9 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Shipments are Invoice-backed on the API: update:Invoice / delete:Invoice.
+  const canUpdate = useCan("update", "Invoice");
+  const canDelete = useCan("delete", "Invoice");
 
   // Editable fields
   const [editCarrier, setEditCarrier] = useState("");
@@ -193,7 +197,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
           s ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
-                {editing ? (
+                {!canUpdate ? null : editing ? (
                   <>
                     <button
                       onClick={saveEdit}
@@ -217,15 +221,17 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
                     Edit
                   </button>
                 )}
+                {canDelete && (
                 <button
                   onClick={() => setDeleteOpen(true)}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950 border border-red-200 dark:border-red-800 transition-colors"
                 >
                   Delete
                 </button>
+                )}
               </div>
               <div className="flex gap-2">
-                {s.status === "pending" && (
+                {s.status === "pending" && canUpdate && (
                   <button
                     onClick={() => markStatus("shipped")}
                     disabled={updateMutation.isPending}
@@ -234,7 +240,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
                     Mark Shipped
                   </button>
                 )}
-                {s.status === "shipped" && (
+                {s.status === "shipped" && canUpdate && (
                   <button
                     onClick={() => markStatus("in_transit")}
                     disabled={updateMutation.isPending}
@@ -243,7 +249,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
                     Mark In Transit
                   </button>
                 )}
-                {(s.status === "shipped" || s.status === "in_transit") && (
+                {(s.status === "shipped" || s.status === "in_transit") && canUpdate && (
                   <button
                     onClick={() => markStatus("delivered")}
                     disabled={updateMutation.isPending}

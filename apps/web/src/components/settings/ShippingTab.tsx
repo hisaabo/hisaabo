@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 // ── Built-in delivery methods (always available) ─────────────────────────
 
 const BUILT_IN_METHODS = [
@@ -48,6 +49,8 @@ interface ShippingTabProps {
 }
 
 export function ShippingTab({ biz }: ShippingTabProps) {
+  // business.update is tenant-admin only (manage:Business).
+  const canSave = useCan("manage", "Business");
   const utils = trpc.useUtils();
   const updateBiz = trpc.business.update.useMutation({
     onSuccess: () => {
@@ -213,7 +216,7 @@ export function ShippingTab({ biz }: ShippingTabProps) {
       </section>
 
       {/* ── Save button ─────────────────────────────────────────────── */}
-      {hasChanges && (
+      {canSave && hasChanges && (
         <div className="flex justify-end pt-4 border-t border-border-light">
           <button
             onClick={handleSave}

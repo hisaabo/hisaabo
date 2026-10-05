@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/hooks/useToast";
+import { useCan } from "@/hooks/useCan";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Modal } from "@/components/ui/Modal";
@@ -61,6 +62,8 @@ function ToggleSwitch({ checked, onChange, label, disabled }: ToggleSwitchProps)
 // ---------------------------------------------------------------------------
 
 function StoreSettingsCard() {
+  // store.updateSettings requires manage:Store.
+  const canSave = useCan("manage", "Store");
   const utils = trpc.useUtils();
 
   const { data: settings, isLoading } = trpc.store.getSettings.useQuery();
@@ -298,13 +301,15 @@ function StoreSettingsCard() {
         />
       </div>
 
-      <button
-        className="btn-primary mt-2"
-        onClick={handleSave}
-        disabled={!isDirty || updateMutation.isPending || slugStatus === "taken"}
-      >
-        {updateMutation.isPending ? "Saving…" : isDirty ? "Save Settings" : "No changes"}
-      </button>
+      {canSave && (
+        <button
+          className="btn-primary mt-2"
+          onClick={handleSave}
+          disabled={!isDirty || updateMutation.isPending || slugStatus === "taken"}
+        >
+          {updateMutation.isPending ? "Saving…" : isDirty ? "Save Settings" : "No changes"}
+        </button>
+      )}
     </div>
   );
 }
@@ -495,6 +500,8 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
 // ---------------------------------------------------------------------------
 
 function StoreItemsCard() {
+  // store.bulkToggleItems requires update:Store.
+  const canManageItems = useCan("update", "Store");
   const [showModal, setShowModal] = useState(false);
 
   const { data: itemsResponse, isLoading } = trpc.store.listStoreItems.useQuery({
@@ -527,9 +534,11 @@ function StoreItemsCard() {
               </p>
             )}
           </div>
-          <button className="btn-primary" onClick={() => setShowModal(true)}>
-            Manage Items
-          </button>
+          {canManageItems && (
+            <button className="btn-primary" onClick={() => setShowModal(true)}>
+              Manage Items
+            </button>
+          )}
         </div>
 
         {/* Quick preview: show first 8 enabled items */}

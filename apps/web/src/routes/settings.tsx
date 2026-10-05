@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { useCan } from "@/hooks/useCan";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { BusinessTab, BusinessForm } from "@/components/settings/BusinessTab";
@@ -40,6 +41,8 @@ function SettingsPage() {
   });
   const canCreateBusiness = hasRole && (canCreateBizPlan ?? true);
   const isOwner = session?.role === "owner" || session?.role === "superadmin";
+  const canManageBusiness = useCan("manage", "Business");
+  const canImport = useCan("manage", "Import");
 
   // Listen for "create-business" event from BusinessSwitcher (when already on settings)
   useEffect(() => {
@@ -239,11 +242,11 @@ function SettingsPage() {
         <SettingsNav value={tab} onChange={handleTabChange} role={session?.role} />
         <div className="flex-1 min-w-0">
           {tab === "business" && <BusinessTab biz={biz} />}
-          {tab === "documents" && <DocumentsTab biz={biz} />}
+          {tab === "documents" && <DocumentsTab biz={biz} canManage={canManageBusiness} />}
           {tab === "shipping" && biz && <ShippingTab biz={biz} />}
           {tab === "team" && <TeamTab />}
           {tab === "targets" && <SalesTargetsTab />}
-          {tab === "data" && <DataTab />}
+          {tab === "data" && <DataTab canImport={canImport} canExportCsv={canManageBusiness} />}
           {tab === "account" && <AccountTab />}
           {tab === "store" && <StoreTab />}
           {tab === "pos" && biz && <POSTab biz={biz} />}

@@ -21,6 +21,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 type AccountType = "savings" | "current" | "cash" | "upi" | "credit" | "other";
 
@@ -105,6 +106,14 @@ function AccountPickerModal({
 function todayDate() { return new Date(); }
 
 export default function BankTransferScreen() {
+  return (
+    <PermissionGate action="create" resource="BankTransaction">
+      <BankTransferScreenContent />
+    </PermissionGate>
+  );
+}
+
+function BankTransferScreenContent() {
   const s = useS();
   const colors = useColors();
   const router = useRouter();

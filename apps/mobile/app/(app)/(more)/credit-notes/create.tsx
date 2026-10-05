@@ -23,6 +23,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { DatePickerField } from "../../../../src/components/ui";
 import { LineItemNotesField } from "../../../../src/components/LineItemNotesField";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 interface LineItem {
   itemId?: string;
@@ -188,6 +189,14 @@ function LineItemRow({ item, index, onChange, onRemove, onPickItem }: {
 }
 
 export default function CreditNoteCreateScreen() {
+  return (
+    <PermissionGate action="create" resource="Invoice">
+      <CreditNoteCreateScreenContent />
+    </PermissionGate>
+  );
+}
+
+function CreditNoteCreateScreenContent() {
   const s = useS();
   const colors = useColors();
   const router = useRouter();
