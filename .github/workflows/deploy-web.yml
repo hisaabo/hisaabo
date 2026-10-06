@@ -43,6 +43,10 @@ jobs:
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+          # Public values (repository variables, not secrets) for the generated
+          # .well-known app-link files; placeholders are emitted until they are set.
+          VITE_ANDROID_APP_CERT_SHA256: ${{ vars.VITE_ANDROID_APP_CERT_SHA256 }}
+          VITE_APPLE_TEAM_ID: ${{ vars.VITE_APPLE_TEAM_ID }}
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
