@@ -25,16 +25,49 @@ export function safeFilename(name: string, fallback = "download"): string {
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
-/** Write a file owner-only (0600), refusing to follow a symlink at the target. */
-export function writeFileSafe(file: string, data: string | Uint8Array): void {
-  try {
-    if (fs.lstatSync(file).isSymbolicLink()) {
-      fatalError(`Refusing to write to a symlink: ${file}`, EXIT.USAGE);
-    }
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+/** Cap on any single downloaded artifact (PDF, CSV) written by the CLI. */
+export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Write a downloaded artifact (server data) to a user-chosen path. This is the CLI's
+ * one intentional network-to-disk sink for small exports; large streams use
+ * `commands/backup/export.ts` (exclusive-create, 0600).
+ *
+ * Guards: size cap, optional magic-prefix check, owner-only mode (0600), symlink
+ * refused atomically via O_NOFOLLOW (no lstat-then-write race), and the opened
+ * descriptor must be a regular file. An existing regular file is overwritten.
+ */
+export function writeFileSafe(
+  file: string,
+  data: string | Uint8Array,
+  opts: { magic?: string } = {},
+): void {
+  const bytes = typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
+  if (bytes.length > MAX_DOWNLOAD_BYTES) {
+    fatalError(`Refusing to write ${Math.round(bytes.length / 1024 / 1024)} MB; max ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB`, EXIT.USAGE);
   }
-  fs.writeFileSync(file, data, { mode: 0o600 });
+  if (opts.magic !== undefined && bytes.subarray(0, opts.magic.length).toString("latin1") !== opts.magic) {
+    fatalError(`Unexpected response: not a ${opts.magic.replace(/[^A-Za-z]/g, "")} file`, EXIT.GENERAL);
+  }
+  let fd: number;
+  try {
+    // O_NOFOLLOW is undefined on Windows (no symlink following by default there); `?? 0` is a no-op.
+    const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | noFollow, 0o600);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") fatalError(`Refusing to write to a symlink: ${file}`, EXIT.USAGE);
+    throw e;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) fatalError(`Refusing to write to a non-regular file: ${file}`, EXIT.USAGE);
+    fs.ftruncateSync(fd, 0);
+    fs.fchmodSync(fd, 0o600);
+    let off = 0;
+    while (off < bytes.length) off += fs.writeSync(fd, bytes, off, bytes.length - off);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**

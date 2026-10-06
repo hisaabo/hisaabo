@@ -101,73 +101,6 @@ export function formatStatus(status: string): string {
   return cfg.color(label);
 }
 
-// ── Financial year ─────────────────────────────────────────────────────────
-
-/**
- * Current FY string, e.g. "2025-26". Assumes FY starts April 1.
- */
-export function currentFY(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1; // 1-indexed
-  if (month >= 4) {
-    return `${year}-${String(year + 1).slice(2)}`;
-  }
-  return `${year - 1}-${String(year).slice(2)}`;
-}
-
-/**
- * FY start date as ISO string (April 1 of current FY).
- */
-export function fyStart(): string {
-  const now = new Date();
-  const year = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
-  return `${year}-04-01`;
-}
-
-/**
- * Today as ISO date string.
- */
-export function todayISO(): string {
-  return new Date().toISOString().split("T")[0] ?? "";
-}
-
-/**
- * First day of current month.
- */
-export function monthStart(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-/**
- * Last day of current month.
- */
-export function monthEnd(): string {
-  const now = new Date();
-  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`;
-}
-
-/**
- * Quarter start/end for a quarter string like "Q1", "Q2", "Q3", "Q4".
- * Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar
- */
-export function quarterRange(q: string): { from: string; to: string; month: number; year: number } {
-  const now = new Date();
-  const fyYear = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
-
-  const ranges: Record<string, { from: string; to: string; month: number; year: number }> = {
-    Q1: { from: `${fyYear}-04-01`, to: `${fyYear}-06-30`, month: 4, year: fyYear },
-    Q2: { from: `${fyYear}-07-01`, to: `${fyYear}-09-30`, month: 7, year: fyYear },
-    Q3: { from: `${fyYear}-10-01`, to: `${fyYear}-12-31`, month: 10, year: fyYear },
-    Q4: { from: `${fyYear + 1}-01-01`, to: `${fyYear + 1}-03-31`, month: 1, year: fyYear + 1 },
-  };
-
-  const upper = q.toUpperCase();
-  return ranges[upper] ?? ranges["Q1"]!;
-}
-
 export function deliveryMethodLabel(method: string): string {
   const map: Record<string, string> = {
     self_pickup: "Self Pickup",
@@ -180,21 +113,5 @@ export function deliveryMethodLabel(method: string): string {
   return map[method] ?? method;
 }
 
-/**
- * Widen a plain `YYYY-MM-DD` date to a full ISO datetime for server fields
- * validated with `z.string().datetime()`. Anything else is passed through.
- */
-export function toApiDateTime(date: string, edge: "start" | "end" = "start"): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
-  return edge === "start" ? `${date}T00:00:00.000Z` : `${date}T23:59:59.999Z`;
-}
-
-/** Start-of-day datetime for an optional `--from` date (see {@link toApiDateTime}). */
-export function apiFrom(date: string | undefined): string | undefined {
-  return date === undefined ? undefined : toApiDateTime(date, "start");
-}
-
-/** End-of-day datetime for an optional `--to` date (see {@link toApiDateTime}). */
-export function apiTo(date: string | undefined): string | undefined {
-  return date === undefined ? undefined : toApiDateTime(date, "end");
-}
+// Date/time-zone helpers live in dates.ts (dependency-free, unit-tested directly).
+export * from "./dates.js";

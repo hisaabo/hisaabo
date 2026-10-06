@@ -26,16 +26,34 @@ interface ImportResult {
 
 function readInputFile(filePath: string): string {
   const abs = path.resolve(filePath);
-  let size: number;
+  // Open once and do every check on the descriptor (no stat-then-read race).
+  let fd: number;
   try {
-    size = fs.statSync(abs).size;
+    fd = fs.openSync(abs, fs.constants.O_RDONLY);
   } catch {
     return fatalError(`File not found: ${abs}`, EXIT.NOT_FOUND);
   }
-  if (size > MAX_FILE_BYTES) {
-    fatalError(`File too large (${Math.round(size / 1024 / 1024)} MB; max ${MAX_FILE_BYTES / 1024 / 1024} MB)`, EXIT.USAGE);
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) fatalError(`Not a regular file: ${abs}`, EXIT.USAGE);
+    if (st.size > MAX_FILE_BYTES) {
+      fatalError(`File too large (${Math.round(st.size / 1024 / 1024)} MB; max ${MAX_FILE_BYTES / 1024 / 1024} MB)`, EXIT.USAGE);
+    }
+    // Bounded read: never pull in more than the cap even if the file grows after fstat.
+    const buf = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let len = 0;
+    for (;;) {
+      const n = fs.readSync(fd, buf, len, buf.length - len, null);
+      if (n === 0) break;
+      len += n;
+      if (len > MAX_FILE_BYTES) {
+        fatalError(`File too large (max ${MAX_FILE_BYTES / 1024 / 1024} MB)`, EXIT.USAGE);
+      }
+    }
+    return buf.toString("utf-8", 0, len);
+  } finally {
+    fs.closeSync(fd);
   }
-  return fs.readFileSync(abs, "utf-8");
 }
 
 function readJsonFile(filePath: string): Array<Record<string, unknown>> {

@@ -3,7 +3,7 @@ import * as path from "path";
 import { HisaaboClient, HisaaboApiError, requestTimeoutMs } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, EXIT, success } from "../../output.js";
-import { requireUuid, safeFilename, writeFileSafe } from "../../safety.js";
+import { MAX_DOWNLOAD_BYTES, requireUuid, safeFilename, writeFileSafe } from "../../safety.js";
 
 interface PdfOpts {
   output?: string;
@@ -45,6 +45,14 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
       fatalError(`Failed to download PDF: HTTP ${res.status}`, EXIT.GENERAL);
     }
 
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!/^application\/pdf\b/i.test(contentType)) {
+      fatalError(`Unexpected response type: ${contentType || "none"} (expected application/pdf)`, EXIT.GENERAL);
+    }
+    const declared = Number(res.headers.get("content-length") ?? "0");
+    if (declared > MAX_DOWNLOAD_BYTES) {
+      fatalError("PDF too large to download", EXIT.GENERAL);
+    }
     const buffer = await res.arrayBuffer();
     const bytes = Buffer.from(buffer);
 
@@ -61,7 +69,7 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
       outputPath = fileName;
     }
 
-    writeFileSafe(outputPath, bytes);
+    writeFileSafe(outputPath, bytes, { magic: "%PDF-" });
     success(`Saved: ${outputPath} (${Math.round(bytes.length / 1024)} KB)`);
 
     if (opts.open) {
