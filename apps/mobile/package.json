@@ -16,7 +16,7 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~55.0.10",
+    "@expo/metro-runtime": "~57.0.16",
     "@expo/vector-icons": "~15.1.1",
     "@hisaabo/shared": "workspace:*",
     "@react-native-community/datetimepicker": "8.6.0",
