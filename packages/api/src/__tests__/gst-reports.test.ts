@@ -667,13 +667,13 @@ describe("gstr1ToCSV — CSV structure and header rows", () => {
   it("third line contains the business GSTIN", () => {
     const csv = gstr1ToCSV(makeReport({ businessGstin: "27AAAPL1234C1ZV" }));
     const lines = csv.split("\n");
-    expect(lines[2]).toBe("GSTIN,27AAAPL1234C1ZV");
+    expect(lines[2]).toBe(`GSTIN,"27AAAPL1234C1ZV"`);
   });
 
   it("fourth line contains the business name", () => {
     const csv = gstr1ToCSV(makeReport({ businessName: "Laxmi Enterprises" }));
     const lines = csv.split("\n");
-    expect(lines[3]).toBe("Business,Laxmi Enterprises");
+    expect(lines[3]).toBe(`Business,"Laxmi Enterprises"`);
   });
 
   it("contains the B2B section header", () => {
@@ -1544,5 +1544,33 @@ describe("gstr1ToPortalJson — date formatting", () => {
     type InvEntry = { idt: string };
     type B2BEntry = { inv: InvEntry[] };
     expect((json.b2b as B2BEntry[])[0].inv[0].idt).toBe("31-08-2025");
+  });
+});
+
+describe("gstr1ToCSV — formula injection", () => {
+  it("neutralises formula prefixes and quotes in party, invoice and business fields", () => {
+    const csv = gstr1ToCSV(
+      makeReport({
+        businessName: "=cmd|' /C calc'!A0",
+        b2b: [
+          {
+            partyGstin: "29ABCDE1234F1Z5",
+            partyName: '=HYPERLINK("http://evil","x")',
+            invoiceNumber: "@SUM(1+1)",
+            invoiceDate: new Date("2025-04-15").toISOString(),
+            invoiceType: "Regular",
+            taxableValue: 1,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+            totalInvoiceValue: 1,
+          },
+        ],
+      }),
+    );
+    expect(csv).toContain(`Business,"'=cmd|' /C calc'!A0"`);
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
+    expect(csv).toContain(`"'@SUM(1+1)"`);
+    for (const line of csv.split("\n")) expect(line.startsWith("=")).toBe(false);
   });
 });

@@ -5,17 +5,19 @@ import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { eq, and, gt, lt, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, lt, inArray, isNull, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
 import { buildBusinessDateFilter } from "./lib/business-date.js";
-import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import QRCode from "qrcode";
 import { appRouter } from "./router.js";
-import { createContext, getSessionIdFromRequest } from "./context.js";
+import { TRPCError } from "@trpc/server";
+import { createContext } from "./context.js";
+import { assertActiveMembership } from "./lib/tenant-access.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
 import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
@@ -30,13 +32,21 @@ import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
 import { getStorage } from "./lib/storage/index.js";
+import { getConnInfo } from "@hono/node-server/conninfo";
+import { getTrustedClientIp } from "./lib/client-ip.js";
+import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { NegativeCache } from "./lib/ttl-negative-cache.js";
+import { validateOrderItemsShape, normalizeIndianMobile, aggregateStockDemand, findInsufficientStock } from "./lib/store-order-validation.js";
+import { verifyShippingWebhook, parseWebhookTime, WEBHOOK_TOLERANCE_MS } from "./lib/shipping-webhook.js";
 import { getOrRenderStoreOg, storeMetaSummary, injectStoreMeta, jsonLdScriptSafe } from "./lib/og/index.js";
 import { readFileSync, existsSync } from "node:fs";
 
 // ── Process crash handlers ────────────────────────────────────
+// A stray rejected promise (e.g. a failed fire-and-forget DB write) must not
+// take every in-flight request down with it; log and keep serving. Truly
+// corrupt state surfaces as an uncaught exception, which still exits.
 process.on("unhandledRejection", (reason) => {
-  logger.fatal({ err: reason }, "Unhandled promise rejection — shutting down");
-  process.exit(1);
+  logger.error({ err: reason }, "Unhandled promise rejection");
 });
 
 process.on("uncaughtException", (err) => {
@@ -59,7 +69,15 @@ function escapeHtml(str: string): string {
 const app = new Hono();
 
 // ── Security headers ───────────────────────────────────────────
+// Hono's defaults include X-Content-Type-Options: nosniff on every response.
 app.use("*", secureHeaders());
+
+// Locked-down CSP for the self-contained branded HTML pages (/pay/upi,
+// landing, 404). They have inline <style> and data: images only, no scripts.
+const BRANDED_HTML_CSP =
+  "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline' https://fonts.googleapis.com; " +
+  "font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const brandedHtmlHeaders = (c: Context) => c.header("Content-Security-Policy", BRANDED_HTML_CSP);
 
 // ── Request ID tracing ────────────────────────────────────────
 app.use("*", async (c: Context, next: Next) => {
@@ -106,23 +124,22 @@ app.use("*", cors({
 }));
 
 // ── Safe IP extraction ─────────────────────────────────────────
-// x-forwarded-for is client-controlled when not behind a trusted proxy.
-// Trusting it directly allows anyone to spoof their IP and bypass rate limits.
-// Cloudflare's cf-connecting-ip is stripped of spoofed values by the CDN layer.
-// When behind a reverse proxy we take the LAST entry in x-forwarded-for
-// (appended by the proxy itself), not the first (which the client can forge).
+// Forwarding headers are only honoured as configured in lib/client-ip.ts
+// (TRUST_CLOUDFLARE / TRUST_PROXY_HOPS). With TRUST_PROXY_HOPS=0 the API is
+// directly exposed, so the socket peer address is the client.
 function getClientIp(c: Context): string {
-  // Cloudflare provides the real client IP — trust it unconditionally
-  const cfIp = c.req.header("cf-connecting-ip");
-  if (cfIp) return cfIp.trim();
+  const trusted = getTrustedClientIp(c.req.raw.headers);
+  if (trusted) return trusted;
 
-  // Behind a reverse proxy take the LAST entry — the proxy's own addition
-  const xff = c.req.header("x-forwarded-for");
-  if (xff) {
-    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
-    if (parts.length > 0) return parts[parts.length - 1];
+  const hops = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? "1", 10);
+  if (hops === 0) {
+    try {
+      const addr = getConnInfo(c).remote.address;
+      if (addr) return addr;
+    } catch {
+      // no socket info (e.g. app.request in tests)
+    }
   }
-
   return "unknown";
 }
 
@@ -146,13 +163,35 @@ function isSameOrigin(c: Context): boolean {
   return false;
 }
 
-// Rate limits per minute:
+// Rate limits per minute (the "authenticated" tiers require a plausibly
+// shaped session cookie / Bearer token — see lib/rate-limit-tier.ts; the
+// auth endpoints share a strict 20/min per-IP bucket regardless):
 // Same-origin authenticated: 300 (normal app usage — higher to accommodate
 //   post-import cache invalidation bursts and dashboard queries)
 // Same-origin unauthenticated: 60 (login attempts, public pages)
 // External authenticated: 120 (API consumers with valid session)
 // External unauthenticated: 10 (prevent abuse from unknown sources)
 app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
+
+// @trpc/server has no server-side batch cap, so enforce one here: a batch URL
+// lists its procedures comma-separated.
+app.use("/api/trpc/*", async (c: Context, next: Next) => {
+  if (trpcProcedures(c.req.path).length > MAX_TRPC_BATCH) {
+    return c.json({ error: `Batch too large (max ${MAX_TRPC_BATCH} calls)` }, 400);
+  }
+  await next();
+});
+
+// Public store + webhook payloads are small JSON; cap them well below the
+// tRPC limit.
+app.use("/store/*", bodyLimit({
+  maxSize: 256 * 1024,
+  onError: (c) => c.json({ error: "Payload too large" }, 413),
+}));
+app.use("/webhooks/*", bodyLimit({
+  maxSize: 1024 * 1024,
+  onError: (c) => c.json({ error: "Payload too large" }, 413),
+}));
 
 // Escape hatch for e2e test harnesses that hammer the API during seeding.
 // Only honored outside production, so accidentally setting this in a real
@@ -167,19 +206,32 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
     return;
   }
   const ip = getClientIp(c);
-  const hasSession = c.req.header("cookie")?.includes("session_id=")
-    || c.req.header("authorization")?.startsWith("Bearer ");
-  const sameOrigin = isSameOrigin(c);
+  const now = Date.now();
 
-  let limit: number;
-  let tier: string;
-  if (sameOrigin && hasSession) { limit = 300; tier = "same-auth"; }
-  else if (sameOrigin) { limit = 60; tier = "same-anon"; }
-  else if (hasSession) { limit = 120; tier = "ext-auth"; }
-  else { limit = 10; tier = "ext-anon"; }
+  // Credential-taking endpoints get a strict per-IP budget no matter what
+  // headers the caller claims; each procedure in a batch counts.
+  const strictCount = countStrictProcedures(c.req.path);
+  if (strictCount > 0) {
+    const key = `auth:${ip}`;
+    const entry = rateMap.get(key);
+    if (!entry || now > entry.reset) {
+      rateMap.set(key, { count: strictCount, reset: now + 60_000 });
+    } else if (entry.count + strictCount > STRICT_AUTH_LIMIT_PER_MIN) {
+      c.header("Retry-After", "60");
+      logSecurityEvent("rate_limit", { ip, path: c.req.path, reason: "auth-strict" });
+      return c.json({ error: "Too many requests" }, 429);
+    } else {
+      entry.count += strictCount;
+    }
+  }
+
+  const hasCredential = hasPlausibleCredential({
+    authorization: c.req.header("authorization"),
+    cookie: c.req.header("cookie"),
+  });
+  const { tier, limit } = pickRateTier({ sameOrigin: isSameOrigin(c), hasCredential });
 
   const key = `${tier}:${ip}`;
-  const now = Date.now();
   const entry = rateMap.get(key);
   if (!entry || now > entry.reset) {
     rateMap.set(key, { count: 1, reset: now + 60_000 });
@@ -251,6 +303,7 @@ app.use("*", createCsrfMiddleware({
 // Used in PDF QR codes — PDF viewers won't open upi:// directly
 // but will open https:// links which then redirect to the UPI app.
 app.get("/pay/upi", async (c) => {
+  brandedHtmlHeaders(c);
   const pa = c.req.query("pa");
   const pn = c.req.query("pn");
   const am = c.req.query("am");
@@ -421,6 +474,33 @@ async function verifyBusinessAccess(
   return { ok: true, business: biz };
 }
 
+// ── Session validation for non-tRPC authenticated endpoints ─────
+// Goes through the same createContext() the tRPC layer uses (cookie / refresh
+// Bearer / at_* access token / API key, idle expiry, revoked users), then
+// requires an active tenant and a current membership of the caller in it.
+type RestAuth =
+  | { ok: true; userId: string; tenantId: string }
+  | { ok: false; status: 400 | 401 | 403; error: string };
+
+async function authenticateRest(c: Context): Promise<RestAuth> {
+  const ctx = await createContext({
+    req: c.req.raw,
+    resHeaders: new Headers(),
+    info: {} as never,
+  });
+  if (!ctx.user) return { ok: false, status: 401, error: "Unauthorized" };
+  if (!ctx.tenantId) return { ok: false, status: 400, error: "No organization selected" };
+
+  try {
+    await assertActiveMembership(ctx.tenantId, ctx.user.id);
+  } catch (err) {
+    if (err instanceof TRPCError) return { ok: false, status: 403, error: err.message };
+    throw err;
+  }
+
+  return { ok: true, userId: ctx.user.id, tenantId: ctx.tenantId };
+}
+
 // ── PDF-specific rate limiting (per IP, 30/min) ──────────────
 const pdfRateMap = new Map<string, { count: number; reset: number }>();
 const PDF_RATE_LIMIT = 30; // per minute
@@ -458,23 +538,12 @@ app.get("/api/invoices/:id/pdf", async (c) => {
   // Accept legacy "a5-landscape" param from older clients and remap to "a5"
   const format = (rawFormat === "a5-landscape" ? "a5" : rawFormat) as "a5" | "a4" | "thermal";
 
-  // Auth check — look up session in control DB
-  const sessionId = getSessionIdFromRequest(c.req.raw);
-  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
+  const auth = await authenticateRest(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+  const sessionRow = { userId: auth.userId, tenantId: auth.tenantId };
 
-  const [sessionRow] = await controlDb
-    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
-    .from(sessions)
-    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
-
-  if (!sessionRow) return c.json({ error: "Unauthorized" }, 401);
-  if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
-
-  // Verify tenant is active
-  const [tenant] = await controlDb.select({ status: tenants.status, plan: tenants.plan })
+  const [tenant] = await controlDb.select({ plan: tenants.plan })
     .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
-  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
 
   const businessId = c.req.header("x-business-id");
   if (!businessId) return c.json({ error: "No business selected" }, 400);
@@ -528,7 +597,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
       const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
       upiQrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 200, margin: 1 });
       // Clickable link uses HTTPS redirect (PDF viewers won't open upi:// directly)
-      const apiBase = new URL(c.req.url).origin;
+      const apiBase = getApiPublicBase(c);
       upiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
     }
   }
@@ -641,19 +710,9 @@ const LOGO_SAFE_HEADERS = {
 app.get("/api/businesses/:id/logo", async (c) => {
   const businessId = c.req.param("id");
 
-  const sessionId = getSessionIdFromRequest(c.req.raw);
-  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
-
-  const [sessionRow] = await controlDb
-    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
-    .from(sessions)
-    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
-  if (!sessionRow || !sessionRow.tenantId) return c.json({ error: "Unauthorized" }, 401);
-
-  const [tenant] = await controlDb.select({ status: tenants.status })
-    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
-  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+  const auth = await authenticateRest(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+  const sessionRow = { userId: auth.userId, tenantId: auth.tenantId };
 
   const db = await getTenantDb(sessionRow.tenantId);
   const bizAccess = await verifyBusinessAccess(db, businessId, sessionRow.tenantId);
@@ -701,19 +760,9 @@ app.get("/api/items/:itemId/images/:imageId", async (c) => {
   const itemId = c.req.param("itemId");
   const imageId = c.req.param("imageId");
 
-  const sessionId = getSessionIdFromRequest(c.req.raw);
-  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
-
-  const [sessionRow] = await controlDb
-    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
-    .from(sessions)
-    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
-  if (!sessionRow || !sessionRow.tenantId) return c.json({ error: "Unauthorized" }, 401);
-
-  const [tenant] = await controlDb.select({ status: tenants.status })
-    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
-  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+  const auth = await authenticateRest(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+  const sessionRow = { userId: auth.userId, tenantId: auth.tenantId };
 
   const db = await getTenantDb(sessionRow.tenantId);
 
@@ -764,22 +813,9 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 
   const partyId = c.req.param("id");
 
-  // Auth check — same pattern as invoice PDF
-  const sessionId = getSessionIdFromRequest(c.req.raw);
-  if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
-
-  const [sessionRow] = await controlDb
-    .select({ userId: sessions.userId, tenantId: sessions.tenantId })
-    .from(sessions)
-    .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
-    .limit(1);
-
-  if (!sessionRow) return c.json({ error: "Unauthorized" }, 401);
-  if (!sessionRow.tenantId) return c.json({ error: "No organization selected" }, 400);
-
-  const [tenant] = await controlDb.select({ status: tenants.status })
-    .from(tenants).where(eq(tenants.id, sessionRow.tenantId)).limit(1);
-  if (!tenant || tenant.status !== "active") return c.json({ error: "Organization suspended" }, 403);
+  const auth = await authenticateRest(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+  const sessionRow = { userId: auth.userId, tenantId: auth.tenantId };
 
   const businessId = c.req.header("x-business-id");
   if (!businessId) return c.json({ error: "No business selected" }, 400);
@@ -879,7 +915,7 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     if (ledgerUpiId) {
       const ledgerUpiDeepLink = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
       ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiDeepLink, { width: 200, margin: 1 });
-      const apiBase = new URL(c.req.url).origin;
+      const apiBase = getApiPublicBase(c);
       ledgerUpiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
     }
   }
@@ -919,8 +955,11 @@ const orderRateMap = new Map<string, { count: number; reset: number }>();
 // attacker who cycles fake phone numbers hits the IP ceiling first.
 const storeIpRateMap = new Map<string, { count: number; reset: number }>();
 const STORE_IP_LIMIT_PER_MIN = 20;
+// Catalog browsing (paging, category switches, search-as-you-type) legitimately
+// issues many more GETs than the POST endpoints.
+const STORE_CATALOG_LIMIT_PER_MIN = 120;
 
-function checkStoreIpRateLimit(ip: string, path: string): boolean {
+function checkStoreIpRateLimit(ip: string, path: string, limit = STORE_IP_LIMIT_PER_MIN): boolean {
   const now = Date.now();
   const key = `${ip}:${path}`;
   const entry = storeIpRateMap.get(key);
@@ -928,7 +967,7 @@ function checkStoreIpRateLimit(ip: string, path: string): boolean {
     storeIpRateMap.set(key, { count: 1, reset: now + 60_000 });
     return true;
   }
-  if (entry.count >= STORE_IP_LIMIT_PER_MIN) return false;
+  if (entry.count >= limit) return false;
   entry.count++;
   return true;
 }
@@ -944,6 +983,10 @@ setInterval(() => {
   }
 }, 5 * 60_000).unref();
 
+// Unknown slugs would otherwise fan out to every tenant DB on each request.
+const unknownSlugCache = new NegativeCache(5000, 30_000);
+const slugLookups = new Map<string, Promise<{ tenantId: string; businessId: string } | null>>();
+
 async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
   // Validate slug format
   if (!slug || !/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(slug)) return null;
@@ -953,7 +996,19 @@ async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; busin
   if (cached && now < cached.expires) {
     return { tenantId: cached.tenantId, businessId: cached.businessId };
   }
+  if (unknownSlugCache.has(slug, now)) return null;
 
+  // Coalesce concurrent lookups for the same slug into one scan.
+  let lookup = slugLookups.get(slug);
+  if (!lookup) {
+    lookup = lookupStoreSlug(slug).finally(() => slugLookups.delete(slug));
+    slugLookups.set(slug, lookup);
+  }
+  return lookup;
+}
+
+async function lookupStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
+  const now = Date.now();
   const isMultiTenant = process.env.MULTI_TENANT === "true";
 
   if (!isMultiTenant) {
@@ -964,19 +1019,25 @@ async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; busin
       .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
       .limit(1);
 
-    if (!biz) return null;
+    if (!biz) {
+      unknownSlugCache.add(slug, now);
+      return null;
+    }
 
     const resolved = { tenantId: "single", businessId: biz.id };
     slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
     return resolved;
   }
 
-  // Multi-tenant: scan all active tenants to find the business with this slug
+  // Multi-tenant: scan all active tenants to find the business with this slug.
+  // Follow-up: replace with a global slug registry in the control DB so this
+  // is a single indexed lookup.
   const activeTenants = await controlDb
     .select({ id: tenants.id })
     .from(tenants)
     .where(eq(tenants.status, "active"));
 
+  let scanComplete = true;
   for (const tenant of activeTenants) {
     try {
       const db = await getTenantDb(tenant.id);
@@ -992,9 +1053,12 @@ async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; busin
       }
     } catch {
       // Skip tenants with DB connectivity issues
+      scanComplete = false;
     }
   }
 
+  // Don't remember a miss if some tenants couldn't be searched.
+  if (scanComplete) unknownSlugCache.add(slug, now);
   return null;
 }
 
@@ -1114,9 +1178,19 @@ app.get("/store/:slug/items/:itemId/images/:imageId", async (c) => {
 // Public base URLs used for share metadata. API base feeds the og:image URL;
 // store base feeds the canonical storefront URL. Both default to the cloud
 // hosts and fall back to the request origin for self-host.
+let warnedApiPublicUrl = false;
 function getApiPublicBase(c: Context): string {
   const env = process.env.API_PUBLIC_URL;
-  if (env) return env.replace(/\/$/, "");
+  if (env && /^https?:\/\//i.test(env)) return env.replace(/\/$/, "");
+  if (process.env.NODE_ENV === "production") {
+    // The Host header is attacker-controlled; never build public URLs from it
+    // in production.
+    if (!warnedApiPublicUrl) {
+      warnedApiPublicUrl = true;
+      logger.warn("API_PUBLIC_URL is not set; public share/PDF links fall back to localhost. Set it to the API's public https URL.");
+    }
+    return `http://localhost:${process.env.PORT || "3000"}`;
+  }
   const proto = c.req.header("x-forwarded-proto") ?? "https";
   const host = c.req.header("host") ?? "localhost:3000";
   return `${proto}://${host}`;
@@ -1224,6 +1298,7 @@ app.get("/store/:slug", async (c) => {
   }
   const resolved = await resolveStoreSlug(slug);
   if (!resolved) {
+    brandedHtmlHeaders(c);
     return c.html(
       brandedHtml("Store not found", "Store not found", "This storefront doesn't exist or is no longer available.", 404),
       404,
@@ -1240,6 +1315,7 @@ app.get("/store/:slug", async (c) => {
     .limit(1);
 
   if (!biz) {
+    brandedHtmlHeaders(c);
     return c.html(
       brandedHtml("Store not found", "Store not found", "This storefront doesn't exist or is no longer available.", 404),
       404,
@@ -1348,6 +1424,11 @@ function storeSeoShell(meta: ReturnType<typeof storeMetaSummary>): string {
 // GET /store/:slug/catalog.json — public item catalog
 app.get("/store/:slug/catalog.json", async (c) => {
   const slug = c.req.param("slug");
+  const catalogIp = getClientIp(c);
+  if (!checkStoreIpRateLimit(catalogIp, "/store/catalog", STORE_CATALOG_LIMIT_PER_MIN)) {
+    logSecurityEvent("rate_limit_store", { ip: catalogIp, path: c.req.path });
+    return c.json({ error: "Too many requests" }, 429);
+  }
   const resolved = await resolveStoreSlug(slug);
   if (!resolved) return c.json({ error: "Store not found" }, 404);
 
@@ -1630,6 +1711,9 @@ app.post("/store/:slug/identify", async (c) => {
   if (typeof phone !== "string" || typeof turnstileToken !== "string") {
     return c.json({ error: "phone and turnstileToken are required" }, 400);
   }
+  if (!normalizeIndianMobile(phone)) {
+    return c.json({ error: "phone must be a valid 10-digit Indian mobile number" }, 400);
+  }
 
   // Validate Turnstile — reuse the IP captured at rate-limit time above.
   const valid = await verifyTurnstile(turnstileToken, ip || null);
@@ -1639,27 +1723,14 @@ app.post("/store/:slug/identify", async (c) => {
   const resolved = await resolveStoreSlug(slug);
   if (!resolved) return c.json({ error: "Store not found" }, 404);
 
-  const db = await getStoreDb(resolved.tenantId);
-
-  // Normalize to last 10 digits (strip +91, spaces, dashes)
-  const normalizedPhone = phone.replace(/\D/g, "").slice(-10);
-
-  const [party] = await db.select({ name: parties.name })
-    .from(parties)
-    .where(and(
-      eq(parties.businessId, resolved.businessId),
-      sql`REPLACE(REPLACE(${parties.phone}, '+91', ''), ' ', '') LIKE '%' || ${normalizedPhone}`,
-    ))
-    .limit(1);
-
-  if (party) {
-    // Return first name only — don't expose full name to public endpoint
-    const firstName = party.name.split(" ")[0];
-    return c.json({ known: true, name: firstName });
-  }
-
+  // Deliberately uniform: this endpoint is public and unauthenticated, so it
+  // must not reveal whether a phone number belongs to an existing customer
+  // (enumeration) or what their name is. Returning-customer recognition has to
+  // happen after the phone is verified, not before.
   return c.json({ known: false });
 });
+
+class StoreOrderError extends Error {}
 
 // POST /store/:slug/order — place an order (public, no auth)
 app.post("/store/:slug/order", async (c) => {
@@ -1721,22 +1792,8 @@ app.post("/store/:slug/order", async (c) => {
   if (typeof customerPhone !== "string" || !/^[6-9]\d{9}$/.test(customerPhone)) {
     return c.json({ error: "customerPhone must be a valid 10-digit Indian mobile number" }, 400);
   }
-  if (!Array.isArray(orderItems) || orderItems.length === 0) {
-    return c.json({ error: "items array is required and must not be empty" }, 400);
-  }
-  for (const it of orderItems) {
-    if (typeof it !== "object" || it === null) return c.json({ error: "Invalid item in items array" }, 400);
-    const item = it as Record<string, unknown>;
-    if (typeof item.itemId !== "string") return c.json({ error: "Each item must have an itemId" }, 400);
-    const qty = Number(item.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: "Each item must have a positive quantity" }, 400);
-    // Optional variant/unit fields
-    if (item.variantId !== undefined && typeof item.variantId !== "string") return c.json({ error: "variantId must be a string" }, 400);
-    if (item.selectedUnit !== undefined && typeof item.selectedUnit !== "string") return c.json({ error: "selectedUnit must be a string" }, 400);
-    if (item.conversionFactor !== undefined && (!Number.isFinite(Number(item.conversionFactor)) || Number(item.conversionFactor) <= 0)) {
-      return c.json({ error: "conversionFactor must be a positive number" }, 400);
-    }
-  }
+  const itemsError = validateOrderItemsShape(orderItems);
+  if (itemsError) return c.json({ error: itemsError }, 400);
 
   // Rate limit: 5 orders per phone per minute
   const now = Date.now();
@@ -1762,6 +1819,7 @@ app.post("/store/:slug/order", async (c) => {
     name: businesses.name,
     storeEnabled: businesses.storeEnabled,
     storeMinOrderAmount: businesses.storeMinOrderAmount,
+    storeAllowNegativeStock: businesses.storeAllowNegativeStock,
     invoicePrefix: businesses.invoicePrefix,
     nextInvoiceNumber: businesses.nextInvoiceNumber,
     storeOrderPrefix: businesses.storeOrderPrefix,
@@ -1785,6 +1843,7 @@ app.post("/store/:slug/order", async (c) => {
     taxPercent: items.taxPercent,
     taxInclusive: items.taxInclusive,
     stockQuantity: items.stockQuantity,
+    itemType: items.itemType,
     unit: items.unit,
     itemMode: items.itemMode,
     unitVariants: items.unitVariants,
@@ -1845,6 +1904,10 @@ app.post("/store/:slug/order", async (c) => {
     let selectedUnit: string | undefined;
     let conversionFactor: string | undefined;
     let variantId: string | undefined;
+
+    if (item.itemMode === "variants" && !oi.variantId) {
+      return c.json({ error: `Please choose a variant for item "${item.name}"` }, 400);
+    }
 
     if (item.itemMode === "variants" && oi.variantId) {
       // Validate variant exists and belongs to this item
@@ -2011,13 +2074,32 @@ app.post("/store/:slug/order", async (c) => {
       // active by the foundItems/foundVariants queries earlier in this handler.
       const itemIds = [...new Set(lineItemInputs.filter(li => !li.variantId).map(li => li.itemId))];
       const variantIds = [...new Set(lineItemInputs.filter(li => li.variantId).map(li => li.variantId!))];
-      if (itemIds.length > 0) {
-        await tx.select({ id: items.id }).from(items)
-          .where(inArray(items.id, itemIds)).for("update");
-      }
-      if (variantIds.length > 0) {
-        await tx.select({ id: itemVariants.id }).from(itemVariants)
-          .where(inArray(itemVariants.id, variantIds)).for("update");
+      const lockedItems = itemIds.length > 0
+        ? await tx.select({ id: items.id, stockQuantity: items.stockQuantity }).from(items)
+            .where(inArray(items.id, itemIds)).for("update")
+        : [];
+      const lockedVariants = variantIds.length > 0
+        ? await tx.select({ id: itemVariants.id, stockQuantity: itemVariants.stockQuantity }).from(itemVariants)
+            .where(inArray(itemVariants.id, variantIds)).for("update")
+        : [];
+
+      // Reject over-selling against the freshly locked stock (the earlier read
+      // was outside the transaction). Service items carry no inventory.
+      if (!biz.storeAllowNegativeStock) {
+        const demand = aggregateStockDemand(lineItemInputs);
+        for (const id of [...demand.items.keys()]) {
+          if (itemMap.get(id)?.itemType === "service") demand.items.delete(id);
+        }
+        const short = [
+          ...findInsufficientStock(demand.items, new Map(lockedItems.map((r) => [r.id, r.stockQuantity]))),
+          ...findInsufficientStock(demand.variants, new Map(lockedVariants.map((r) => [r.id, r.stockQuantity]))),
+        ];
+        if (short.length > 0) {
+          const names = [...new Set(lineItemInputs
+            .filter((li) => short.includes(li.variantId ?? li.itemId))
+            .map((li) => li.name))];
+          throw new StoreOrderError(`Insufficient stock for: ${names.join(", ")}`);
+        }
       }
       for (const li of lineItemInputs) {
         if (li.variantId) {
@@ -2062,6 +2144,7 @@ app.post("/store/:slug/order", async (c) => {
       message: "Order placed successfully! The business will confirm shortly.",
     }, 201);
   } catch (err) {
+    if (err instanceof StoreOrderError) return c.json({ error: err.message }, 409);
     logger.error({ err }, "[store/order] Failed to create order");
     return c.json({ error: "Failed to place order. Please try again." }, 500);
   }
@@ -2157,11 +2240,18 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
   }
 
   const rawBody = await c.req.text();
-  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  const signatureBuf = Buffer.from(signature, "utf8");
-  if (expectedBuf.length !== signatureBuf.length || !timingSafeEqual(expectedBuf, signatureBuf)) {
-    return c.json({ error: "Invalid signature" }, 401);
+  // Carriers that send `x-webhook-timestamp` sign `${timestamp}.${body}` and are
+  // replay-protected (+-5 min). Existing carriers that only sign the body keep
+  // working unless SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP=true.
+  const verdict = verifyShippingWebhook({
+    secret,
+    rawBody,
+    signature,
+    timestampHeader: c.req.header("x-webhook-timestamp"),
+    requireTimestamp: process.env.SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP === "true",
+  });
+  if (!verdict.ok) {
+    return c.json({ error: verdict.error }, verdict.status);
   }
 
   const businessId = c.req.param("businessId");
@@ -2205,6 +2295,18 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
     db = resolvedDb;
   }
 
+  let eventTime = new Date();
+  if (body.timestamp !== undefined && body.timestamp !== null) {
+    const parsed = parseWebhookTime(body.timestamp);
+    if (!parsed) return c.json({ error: "Invalid timestamp" }, 400);
+    // Event time may legitimately be in the past (carrier scan time) but not
+    // meaningfully in the future.
+    if (parsed.getTime() - Date.now() > WEBHOOK_TOLERANCE_MS) {
+      return c.json({ error: "Timestamp is in the future" }, 400);
+    }
+    eventTime = parsed;
+  }
+
   // Extract tracking number — carriers typically send it as `awb`, `tracking_id`, or `waybill`
   const trackingNumber = body.awb || body.tracking_id || body.waybill || body.trackingNumber || null;
   if (!trackingNumber) {
@@ -2232,7 +2334,7 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
     location: body.location || body.scan_location || body.city || null,
     source: "webhook",
     carrierStatus: body.status_code || body.status || null,
-    eventTime: body.timestamp ? new Date(body.timestamp) : new Date(),
+    eventTime,
   });
 
   return c.json({ ok: true, shipmentId: shipment.id });
@@ -2240,6 +2342,7 @@ app.post("/webhooks/shipping/:businessId", async (c) => {
 
 // Base page — shows when someone visits the API root
 app.get("/", (c) => {
+  brandedHtmlHeaders(c);
   return c.html(brandedHtml(
     "API",
     "Hisaabo API",
@@ -2254,6 +2357,7 @@ app.notFound((c) => {
   if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
     return c.json({ error: "Not found" }, 404);
   }
+  brandedHtmlHeaders(c);
   return c.html(brandedHtml(
     "Not Found",
     "Page not found",

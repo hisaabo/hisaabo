@@ -420,7 +420,8 @@ export const storeRouter = router({
             eq(storeOrders.id, input.orderId),
             eq(storeOrders.businessId, ctx.businessId),
           ))
-          .limit(1);
+          .limit(1)
+          .for("update");
 
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
         if (order.status === "delivered" || order.status === "cancelled") {
@@ -445,6 +446,33 @@ export const storeRouter = router({
           await tx.update(invoices)
             .set({ status: "cancelled", updatedAt: new Date() })
             .where(eq(invoices.id, order.invoiceId));
+
+          // Put back the stock the order decremented at placement. Mirrors the
+          // decrement in POST /store/:slug/order (server.ts): variant lines
+          // restore the variant's stock, others restore quantity * conversion
+          // factor on the item. The order can only reach "cancelled" once
+          // (guarded above), so this runs at most once per order.
+          const lines = await tx.select({
+            itemId: invoiceItems.itemId,
+            variantId: invoiceItems.variantId,
+            quantity: invoiceItems.quantity,
+            conversionFactor: invoiceItems.conversionFactor,
+          }).from(invoiceItems).where(eq(invoiceItems.invoiceId, order.invoiceId));
+
+          for (const li of lines) {
+            if (li.variantId) {
+              await tx.update(itemVariants).set({
+                stockQuantity: sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
+                updatedAt: new Date(),
+              }).where(eq(itemVariants.id, li.variantId));
+            } else if (li.itemId) {
+              const cf = li.conversionFactor || "1";
+              await tx.update(items).set({
+                stockQuantity: sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
+                updatedAt: new Date(),
+              }).where(eq(items.id, li.itemId));
+            }
+          }
         }
 
         return { success: true, orderId: input.orderId };

@@ -1,7 +1,7 @@
 import { eq, and, ilike, or, sql, desc, asc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { parties, invoices, payments, expenses, items, invoiceItems } from "@hisaabo/db";
-import { createPartySchema, updatePartySchema, paginationSchema, money } from "@hisaabo/shared";
+import { createPartySchema, updatePartySchema, paginationSchema, money, csvRow } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -573,33 +573,29 @@ export const partyRouter = router({
         const yyyy = d.getFullYear();
         return `${dd}/${mm}/${yyyy}`;
       }
-      function csvCell(v: string): string {
-        return `"${v.replace(/"/g, '""')}"`;
-      }
-
       let runningBalance = party.openingBalance;
       const rows: string[] = [];
 
       // Opening balance row
-      rows.push([
-        csvCell(fmtDate(new Date(input.fromDate || new Date(0).toISOString()))),
-        csvCell("Opening Balance"),
-        csvCell(""),
-        csvCell(""),
-        csvCell(""),
-        csvCell(runningBalance),
-      ].join(","));
+      rows.push(csvRow([
+        fmtDate(new Date(input.fromDate || new Date(0).toISOString())),
+        "Opening Balance",
+        "",
+        "",
+        "",
+        runningBalance,
+      ]));
 
       for (const e of entries) {
         runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
-        rows.push([
-          csvCell(fmtDate(new Date(e.date))),
-          csvCell(e.description),
-          csvCell(e.number),
-          csvCell(e.debit),
-          csvCell(e.credit),
-          csvCell(runningBalance),
-        ].join(","));
+        rows.push(csvRow([
+          fmtDate(new Date(e.date)),
+          e.description,
+          e.number,
+          e.debit,
+          e.credit,
+          runningBalance,
+        ]));
       }
 
       const header = "Date,Description,Document #,Debit,Credit,Balance";
@@ -734,13 +730,9 @@ export const partyRouter = router({
 
       vouchers.sort((a, b) => a.sortKey - b.sortKey);
 
-      function csvCell(v: string): string {
-        return `"${v.replace(/"/g, '""')}"`;
-      }
-
       const header = "Date,Vch Type,Vch No.,Debit Ledger,Credit Ledger,Amount";
       const rows = vouchers.map(v =>
-        [csvCell(v.date), csvCell(v.vchType), csvCell(v.vchNo), csvCell(v.debitLedger), csvCell(v.creditLedger), csvCell(v.amount)].join(",")
+        csvRow([v.date, v.vchType, v.vchNo, v.debitLedger, v.creditLedger, v.amount])
       );
       const csv = [header, ...rows].join("\n");
 
