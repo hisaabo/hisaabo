@@ -9,6 +9,7 @@ import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
 import { requireTenantRole, ADMIN_ROLES, invalidateMembershipCache } from "../lib/tenant-access.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
+import { lockSignup, isOpenSignupEnabled, hasPendingInvitation, SIGNUP_CLOSED_MESSAGE } from "../lib/signup-policy.js";
 import { enforceTeamMemberLimit, enforceOrgCreationLimit, getLimits } from "../lib/plan-limits.js";
 
 function hashInvitationToken(token: string): string {
@@ -142,26 +143,35 @@ export const tenantRouter = router({
       const tenantNameResult = await autoSelectTenantInSession(ctx.req, tenantId);
       return { tenantId, tenantName: tenantNameResult };
     } else {
-      // Self-hosted: join/create default tenant
-      let [defaultTenant] = await controlDb.select({ id: tenants.id })
-        .from(tenants).where(eq(tenants.slug, "default")).limit(1);
-      if (!defaultTenant) {
-        [defaultTenant] = await controlDb.insert(tenants).values({
-          name: "Default Organization", slug: "default",
-        }).returning({ id: tenants.id });
-      }
+      // Self-hosted: join/create default tenant. Once the default tenant has
+      // an owner this needs a pending invitation unless open signup is on.
+      const defaultTenantId = await controlDb.transaction(async (tx) => {
+        await lockSignup(tx);
 
-      const memberCount = await controlDb.select({ id: tenantMembers.id })
-        .from(tenantMembers).where(eq(tenantMembers.tenantId, defaultTenant.id));
-      const role = memberCount.length === 0 ? "owner" : "member";
+        let [defaultTenant] = await tx.select({ id: tenants.id })
+          .from(tenants).where(eq(tenants.slug, "default")).limit(1);
+        if (!defaultTenant) {
+          [defaultTenant] = await tx.insert(tenants).values({
+            name: "Default Organization", slug: "default",
+          }).returning({ id: tenants.id });
+        }
 
-      await controlDb.insert(tenantMembers).values({
-        tenantId: defaultTenant.id, userId: ctx.user.id,
-        role, acceptedAt: new Date(),
+        const memberCount = await tx.select({ id: tenantMembers.id })
+          .from(tenantMembers).where(eq(tenantMembers.tenantId, defaultTenant.id));
+
+        if (memberCount.length > 0 && !isOpenSignupEnabled() && !(await hasPendingInvitation(tx, normalizeEmail(ctx.user.email)))) {
+          throw new TRPCError({ code: "FORBIDDEN", message: SIGNUP_CLOSED_MESSAGE });
+        }
+
+        await tx.insert(tenantMembers).values({
+          tenantId: defaultTenant.id, userId: ctx.user.id,
+          role: memberCount.length === 0 ? "owner" : "member", acceptedAt: new Date(),
+        });
+        return defaultTenant.id;
       });
 
-      const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenant.id);
-      return { tenantId: defaultTenant.id, tenantName: tenantNameResult };
+      const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenantId);
+      return { tenantId: defaultTenantId, tenantName: tenantNameResult };
     }
   }),
 
@@ -340,6 +350,7 @@ export const tenantRouter = router({
     .input(z.object({
       email: z.string().email(),
       role: z.enum(["admin", "seller_manager", "seller", "accountant"]).default("seller"),
+      returnLink: z.boolean().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can invite members");
@@ -418,9 +429,9 @@ export const tenantRouter = router({
         console.error("[invite] Failed to send invitation email:", err);
       });
 
-      // The raw token is returned because the web Team tab shows a copyable
-      // invite link and the CLI prints it; it is never logged.
-      return { token: rawToken, expiresAt };
+      // The link is only returned on request (web Team tab shows a copyable
+      // link); it is never logged.
+      return { expiresAt, inviteUrl: input.returnLink ? inviteUrl : undefined };
     }),
 
   // Accept an invitation

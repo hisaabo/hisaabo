@@ -388,15 +388,15 @@ describe("tenant.removeMember", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("tenant.inviteMember", () => {
-  it("owner can invite a new member — returns raw token and expiry 7 days from now", async () => {
+  it("owner can invite a new member — returns expiry 7 days from now and no raw token or link by default", async () => {
     const caller = callerForTenant(rameshSession.id, ramesh, tenant1.id);
     const result = await caller.tenant.inviteMember({
       email: "newcomer@acme.in",
       role: "seller",
     });
 
-    expect(typeof result.token).toBe("string");
-    expect(result.token.length).toBeGreaterThan(10);
+    expect(result).not.toHaveProperty("token");
+    expect(result.inviteUrl).toBeUndefined();
     const msUntilExpiry = result.expiresAt.getTime() - Date.now();
     expect(msUntilExpiry).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
     expect(msUntilExpiry).toBeLessThan(8 * 24 * 60 * 60 * 1000);

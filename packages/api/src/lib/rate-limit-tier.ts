@@ -46,6 +46,8 @@ export const STRICT_PROCEDURES = new Set([
   "auth.register",
   "auth.sendMagicLink",
   "auth.verifyMagicLink",
+  "auth.nativeStart",
+  "auth.nativeExchange",
   "auth.confirmEmailChange",
   "tenant.peekInvitation",
 ]);

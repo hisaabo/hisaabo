@@ -6,6 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
+import { isSmsConfigured } from "../lib/sms.js";
 
 // ── Validators ─────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ const updateStoreSettingsSchema = z.object({
   storeDeliveryNote: z.string().max(500).optional().nullable(),
   storeWhatsappNumber: z.string().max(15).optional().nullable(),
   storeAllowNegativeStock: z.boolean().optional(),
+  storeRequirePhoneOtp: z.boolean().optional(),
   storeOrderPrefix: z.string().min(1).max(10).optional(),
 });
 
@@ -59,6 +61,7 @@ export const storeRouter = router({
       storeDeliveryNote: businesses.storeDeliveryNote,
       storeWhatsappNumber: businesses.storeWhatsappNumber,
       storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+      storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
       storeOrderPrefix: businesses.storeOrderPrefix,
       nextStoreOrderNumber: businesses.nextStoreOrderNumber,
       currency: businesses.currency,
@@ -67,13 +70,20 @@ export const storeRouter = router({
       .limit(1);
 
     if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
-    return biz;
+    return { ...biz, phoneOtpAvailable: isSmsConfigured() };
   }),
 
   updateSettings: adminProcedure
     .input(updateStoreSettingsSchema)
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "manage", "Store");
+
+      if (input.storeRequirePhoneOtp && !isSmsConfigured()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Phone verification needs an SMS provider. Ask the server administrator to configure SMS_PROVIDER.",
+        });
+      }
 
       // Validate slug uniqueness within this tenant's businesses
       if (input.storeSlug) {
@@ -109,6 +119,7 @@ export const storeRouter = router({
           storeDeliveryNote: businesses.storeDeliveryNote,
           storeWhatsappNumber: businesses.storeWhatsappNumber,
           storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+          storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
           storeOrderPrefix: businesses.storeOrderPrefix,
         });
 

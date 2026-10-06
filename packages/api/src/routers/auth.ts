@@ -4,8 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash, randomBytes } from "node:crypto";
 import * as argon2 from "argon2";
-import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, apiKeys, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
-import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
+import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, apiKeys, nativeAuthRequests, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
+import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema, nativeStartSchema, nativeExchangeSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
 import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions } from "../context.js";
@@ -14,6 +14,16 @@ import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
+import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
+import {
+  NATIVE_REQUEST_TTL_MS,
+  NATIVE_CODE_TTL_MS,
+  isValidNativeRedirectUri,
+  sha256Hex,
+  generateNativeCode,
+  verifyPkceS256,
+  buildNativeRedirectUrl,
+} from "../lib/native-auth.js";
 
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -67,34 +77,16 @@ function getClientIpFromRequest(req: Request): string | null {
 }
 
 /**
- * Tauri desktop clients can't solve Cloudflare Turnstile challenges — the
- * widget rejects the `tauri.localhost` / `tauri://localhost` host. The web
- * bundle running inside Tauri sets `X-Hisaabo-Client: desktop` and we skip
- * the Turnstile gate here.
- *
- * Trade-off: the header is client-supplied and therefore spoofable. A
- * scripted attacker who sends this header bypasses Turnstile. We accept
- * that because (a) the desktop build is distributed as a signed binary,
- * (b) magic-link already has per-email rate limiting, and (c) register
- * abuse is still bounded by email validation + session creation costs.
- * If abuse materialises, add per-IP rate limiting on these endpoints.
- */
-function isDesktopClient(req: Request): boolean {
-  return req.headers.get("x-hisaabo-client") === "desktop";
-}
-
-/**
  * Returns true when the session being minted will be consumed as a Bearer
- * token rather than a cookie. Mobile and desktop clients carry
- * `X-Hisaabo-Client: mobile | desktop`; they never rely on Set-Cookie.
+ * token rather than a cookie. Desktop, mobile and CLI clients carry
+ * `X-Hisaabo-Client: desktop | mobile | cli`; they never rely on Set-Cookie.
  *
- * We use the client header (not the presence of an Authorization header) as
- * the signal because at session creation time there IS no existing Bearer
- * token yet — the whole point is we are minting the very first one.
+ * The header only selects the session type (and whether `sessionToken` is
+ * returned in the body). It never relaxes any other check, Turnstile included.
  */
 function isBearerClient(req: Request): boolean {
   const client = req.headers.get("x-hisaabo-client");
-  return client === "mobile" || client === "desktop";
+  return client === "desktop" || client === "mobile" || client === "cli";
 }
 
 // ── Shared helper: self-hosted default tenant assignment ───────
@@ -289,10 +281,8 @@ export const authRouter = router({
   register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
     // Require Turnstile when secret key is configured (production).
     // Self-hosted / dev without the key can skip verification.
-    // Desktop (Tauri) clients also skip — see isDesktopClient() doc comment.
     const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
-    const desktop = isDesktopClient(ctx.req);
-    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken && !desktop) {
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
     }
     if (input.turnstileToken) {
@@ -343,6 +333,8 @@ export const authRouter = router({
       provisioned,
       async (markUsed) =>
         controlDb.transaction(async (tx) => {
+          await enforceSelfHostedSignup(tx, emailLower);
+
           const [user] = await tx.insert(users).values({
             email: emailLower,
             name: input.name,
@@ -415,7 +407,10 @@ export const authRouter = router({
       setSessionCookie(ctx.resHeaders, sessionToken);
     }
 
-    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
+    return {
+      user: { id: user.id, email: user.email, name: user.name },
+      sessionToken: registerAuthMethod === "bearer" ? sessionToken : undefined,
+    };
   }),
 
   // ── Password login ───────────────────────────────────────────
@@ -478,14 +473,22 @@ export const authRouter = router({
       throw new TRPCError({ code: "FORBIDDEN", message: "Account has no organization membership" });
     }
 
-    const sessionToken = await createSessionForUser(user.id, ctx, isBearerClient(ctx.req) ? "bearer" : "cookie");
+    const bearer = isBearerClient(ctx.req);
+    const sessionToken = await createSessionForUser(user.id, ctx, bearer ? "bearer" : "cookie");
 
-    return { user: { id: user.id, email: user.email, name: user.name }, sessionToken };
+    return {
+      user: { id: user.id, email: user.email, name: user.name },
+      sessionToken: bearer ? sessionToken : undefined,
+    };
   }),
 
   // ── Magic link: request ──────────────────────────────────────
   sendMagicLink: publicProcedure.input(magicLinkRequestSchema).mutation(async ({ input, ctx }) => {
-    // Verify Turnstile token when provided (skipped in dev / self-hosted without secret key)
+    // Turnstile is required whenever a secret key is configured; no client
+    // header can skip it. Dev / self-hosted without the key can omit it.
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+    }
     if (input.turnstileToken) {
       const ip = getClientIpFromRequest(ctx.req);
       const valid = await verifyTurnstile(input.turnstileToken, ip);
@@ -495,6 +498,19 @@ export const authRouter = router({
     }
 
     const email = normalizeEmail(input.email);
+
+    // Check if user already exists to send welcome vs sign-in variant
+    // (API response is always { success: true } regardless — no enumeration risk)
+    const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, email)).limit(1);
+
+    // Closed self-hosted server: unknown, uninvited emails get no link. The
+    // response is identical so this reveals nothing.
+    if (!existingUser && !isMultiTenant() && !isOpenSignupEnabled()) {
+      const [anyUser] = await controlDb.select({ id: users.id }).from(users).limit(1);
+      if (anyUser && !(await hasPendingInvitation(controlDb, email))) {
+        return { success: true };
+      }
+    }
 
     // Rate limit: max 5 requests per email per 15 minutes
     const recentTokens = await controlDb
@@ -523,35 +539,16 @@ export const authRouter = router({
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
     const tokenParam = `token=${encodeURIComponent(rawToken)}`;
 
-    // Primary email CTA is ALWAYS the HTTPS link — email clients (Gmail,
-    // Outlook, Apple Mail, corporate gateways) strip or refuse to render
-    // anchors with custom URL schemes like `hisaabo://`, treating them as
-    // phishing / protocol-hijack vectors. Shipping the deep link as the
-    // primary `<a href="...">` produces a plain-text, non-clickable line
-    // in most inboxes.
-    //
-    // When the sign-in was initiated from the desktop or mobile app we
-    // thread the `source` through the HTTPS URL as a query param so the
-    // /auth/verify page can hand off to the native app via the `hisaabo://`
-    // scheme from a real browser (where custom schemes ARE honored by the
-    // OS), instead of consuming the token inside the browser session.
+    // The email CTA is always the HTTPS link: email clients refuse to render
+    // custom URL schemes. `source` is still threaded through for older native
+    // clients whose /auth/verify page hands off to the app.
     const sourceSuffix =
       input.source === "desktop" || input.source === "mobile"
         ? `&source=${input.source}`
         : "";
     const webUrl = `${baseUrl}/auth/verify?${tokenParam}${sourceSuffix}`;
-    const deepLinkUrl = `hisaabo://verify?${tokenParam}`;
 
-    // Secondary is the raw deep link — some email clients do render it
-    // (and it serves as a copy-paste fallback) but we no longer depend
-    // on its clickability.
-    const primaryUrl = webUrl;
-    const secondaryUrl = deepLinkUrl;
-
-    // Check if user already exists to send welcome vs sign-in variant
-    // (API response is always { success: true } regardless — no enumeration risk)
-    const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, email)).limit(1);
-    await emailService.sendMagicLink(email, primaryUrl, secondaryUrl, !existingUser);
+    await emailService.sendMagicLink(email, webUrl, !existingUser);
 
     return { success: true }; // Always success — no email enumeration
   }),
@@ -650,6 +647,7 @@ export const authRouter = router({
             .limit(1);
 
           if (!user) {
+            await enforceSelfHostedSignup(tx, emailLocal);
             isNew = true;
             const [newUser] = await tx.insert(users).values({
               email: emailLocal,
@@ -732,10 +730,122 @@ export const authRouter = router({
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
-      sessionToken,
+      sessionToken: magicLinkAuthMethod === "bearer" ? sessionToken : undefined,
       isNewUser,
       needsProfile: !user.name,
     };
+  }),
+
+  // ── Native login (system-browser handoff + PKCE) ─────────────
+  nativeStart: publicProcedure.input(nativeStartSchema).mutation(async ({ input, ctx }) => {
+    if (!isValidNativeRedirectUri(input.client, input.redirectUri)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid redirect URI" });
+    }
+
+    // Opportunistic cleanup of expired requests
+    await controlDb.delete(nativeAuthRequests).where(lte(nativeAuthRequests.expiresAt, new Date()));
+
+    const expiresAt = new Date(Date.now() + NATIVE_REQUEST_TTL_MS);
+    const [row] = await controlDb.insert(nativeAuthRequests).values({
+      client: input.client,
+      redirectUri: input.redirectUri,
+      codeChallenge: input.codeChallenge,
+      state: input.state,
+      expiresAt,
+      ipAddress: getClientIpFromRequest(ctx.req),
+    }).returning({ id: nativeAuthRequests.id });
+
+    return { requestId: row.id, expiresAt };
+  }),
+
+  nativeRequestInfo: publicProcedure
+    .input(z.object({ requestId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const [row] = await controlDb
+        .select({ client: nativeAuthRequests.client, expiresAt: nativeAuthRequests.expiresAt })
+        .from(nativeAuthRequests)
+        .where(and(
+          eq(nativeAuthRequests.id, input.requestId),
+          isNull(nativeAuthRequests.consumedAt),
+          gt(nativeAuthRequests.expiresAt, new Date()),
+        ))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Sign-in request not found" });
+      return { client: row.client as "desktop" | "mobile" | "cli", expiresAt: row.expiresAt };
+    }),
+
+  nativeAuthorize: protectedProcedure
+    .input(z.object({ requestId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      // Only an interactive browser (cookie) session may approve a native
+      // sign-in; bearer sessions, access tokens and API keys cannot mint more.
+      if (ctx.authTokenKind !== "cookie") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Sign in with the browser to authorize this request" });
+      }
+
+      const code = generateNativeCode();
+      const now = new Date();
+      const [row] = await controlDb.update(nativeAuthRequests)
+        .set({
+          userId: ctx.user!.id,
+          codeHash: sha256Hex(code),
+          authorizedAt: now,
+          expiresAt: new Date(now.getTime() + NATIVE_CODE_TTL_MS),
+        })
+        .where(and(
+          eq(nativeAuthRequests.id, input.requestId),
+          isNull(nativeAuthRequests.authorizedAt),
+          isNull(nativeAuthRequests.consumedAt),
+          gt(nativeAuthRequests.expiresAt, now),
+        ))
+        .returning({ redirectUri: nativeAuthRequests.redirectUri, state: nativeAuthRequests.state });
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Sign-in request not found" });
+
+      return { redirectUrl: buildNativeRedirectUrl(row.redirectUri, code, row.state) };
+    }),
+
+  nativeExchange: publicProcedure.input(nativeExchangeSchema).mutation(async ({ input, ctx }) => {
+    const fail = () => new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired sign-in request" });
+
+    const header = ctx.req.headers.get("x-hisaabo-client");
+    const [request] = await controlDb.select().from(nativeAuthRequests)
+      .where(eq(nativeAuthRequests.id, input.requestId))
+      .limit(1);
+
+    if (
+      !request ||
+      !header ||
+      header !== request.client ||
+      !request.codeHash ||
+      !request.userId ||
+      request.consumedAt ||
+      request.expiresAt <= new Date() ||
+      !verifyPkceS256(input.codeVerifier, request.codeChallenge)
+    ) {
+      throw fail();
+    }
+
+    // Atomic single-use claim: only one concurrent exchange can win
+    const [claimed] = await controlDb.update(nativeAuthRequests)
+      .set({ consumedAt: new Date() })
+      .where(and(
+        eq(nativeAuthRequests.id, request.id),
+        isNull(nativeAuthRequests.consumedAt),
+        eq(nativeAuthRequests.codeHash, sha256Hex(input.code)),
+        gt(nativeAuthRequests.expiresAt, new Date()),
+      ))
+      .returning({ userId: nativeAuthRequests.userId });
+    if (!claimed?.userId) throw fail();
+
+    const [user] = await controlDb
+      .select({ id: users.id, email: users.email, name: users.name })
+      .from(users)
+      .where(eq(users.id, claimed.userId))
+      .limit(1);
+    if (!user) throw fail();
+
+    const sessionToken = await createSessionForUser(user.id, ctx, "bearer");
+    return { user, sessionToken };
   }),
 
   // ── Complete profile (first magic link sign-in) ──────────────
@@ -797,7 +907,7 @@ export const authRouter = router({
       const baseUrl = process.env.APP_URL || "http://localhost:5173";
       const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}`;
 
-      await emailService.sendMagicLink(email, verifyUrl);
+      await emailService.sendMagicLink(email, verifyUrl, false);
 
       return { success: true };
     }),

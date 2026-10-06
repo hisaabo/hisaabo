@@ -45,6 +45,22 @@ export const magicLinkVerifySchema = z.object({
   token: z.string().min(1).max(128),
 });
 
+export const nativeAuthClientSchema = z.enum(["desktop", "mobile", "cli"]);
+
+export const nativeStartSchema = z.object({
+  client: nativeAuthClientSchema,
+  redirectUri: z.string().max(512),
+  codeChallenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  codeChallengeMethod: z.literal("S256"),
+  state: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/),
+});
+
+export const nativeExchangeSchema = z.object({
+  requestId: z.string().uuid(),
+  code: z.string().min(1).max(128),
+  codeVerifier: z.string().regex(/^[A-Za-z0-9\-._~]{43,128}$/),
+});
+
 export const completeProfileSchema = z.object({
   name: z.string().min(2).max(100),
 });

@@ -85,6 +85,7 @@ export const businesses = pgTable("businesses", {
   storeDeliveryNote: text("store_delivery_note"),
   storeWhatsappNumber: text("store_whatsapp_number"),
   storeAllowNegativeStock: boolean("store_allow_negative_stock").default(false).notNull(),
+  storeRequirePhoneOtp: boolean("store_require_phone_otp").default(false).notNull(),
   // Custom shipping/delivery methods configured by the business (in addition to built-in ones)
   customShippingMethods: jsonb("custom_shipping_methods").$type<Array<{ id: string; label: string; hasTracking: boolean }>>(),
   // Carrier API credentials (encrypted at rest) — keyed by carrier slug
@@ -663,6 +664,22 @@ export const storeOrders = pgTable("store_orders", {
   index("store_orders_phone_idx").on(t.businessId, t.customerPhone),
   uniqueIndex("store_orders_number_idx").on(t.businessId, t.orderNumber),
   index("store_orders_invoice_idx").on(t.invoiceId),
+]);
+
+// ── Store Phone OTPs ───────────────────────────────────────────
+
+export const storePhoneOtps = pgTable("store_phone_otps", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  phone: text("phone").notNull(),
+  codeHash: text("code_hash").notNull(),
+  attempts: integer("attempts").default(0).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("store_phone_otps_business_phone_idx").on(t.businessId, t.phone),
 ]);
 
 // ── Recurring Invoice Templates ────────────────────────────────

@@ -125,6 +125,7 @@ export const businessRowSchema = z.object({
   storeDeliveryNote: z.string().nullable(),
   storeWhatsappNumber: z.string().nullable(),
   storeAllowNegativeStock: z.boolean(),
+  storeRequirePhoneOtp: z.boolean().default(false),
   customShippingMethods: z.unknown().nullable(),
   // carrierCredentials is redacted — exported as null
   carrierCredentials: z.null(),

@@ -12,6 +12,13 @@ const checks: EnvCheck[] = [
   { key: "CORS_ORIGINS", required: true, hint: "Comma-separated allowed origins (e.g. https://app.hisaabo.in)" },
   { key: "APP_URL", required: false, hint: "Frontend URL for magic link emails" },
   {
+    key: "API_PUBLIC_URL",
+    required: false,
+    condition: () => process.env.NODE_ENV === "production",
+    hint: "Public base URL of this API (http:// or https://), used for absolute links and webhooks. Required in production",
+  },
+  { key: "ALLOW_OPEN_SIGNUP", required: false, hint: "Set to \"true\" to let anyone register on a self-hosted server (default: invite-only after the first owner)" },
+  {
     key: "ENCRYPTION_KEY",
     required: false,
     condition: () =>
@@ -29,6 +36,15 @@ const checks: EnvCheck[] = [
 
 export function isValidEncryptionKey(key: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(key);
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -62,6 +78,11 @@ export function validateEnv(): void {
     !process.env.EXPORT_SECRET
   ) {
     errors.push("A signing secret is required in production: set ENCRYPTION_KEY (or SESSION_SECRET / EXPORT_SECRET).");
+  }
+
+  const publicUrl = process.env.API_PUBLIC_URL;
+  if (publicUrl && process.env.NODE_ENV === "production" && !isValidHttpUrl(publicUrl)) {
+    errors.push("API_PUBLIC_URL must be a valid http:// or https:// URL.");
   }
 
   if (errors.length > 0) {

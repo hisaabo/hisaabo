@@ -23,3 +23,6 @@ process.env.MULTI_TENANT = "false";
 process.env.NODE_ENV = "test";
 // Prevent real email delivery during tests
 process.env.RESEND_API_KEY = "";
+// Most suites create several users on one self-hosted DB; the invite-only
+// signup policy has its own suite that turns this off.
+process.env.ALLOW_OPEN_SIGNUP = "true";

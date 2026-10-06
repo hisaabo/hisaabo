@@ -29,6 +29,8 @@ import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
+import { createSmsService, isSmsConfigured } from "./lib/sms.js";
+import { sendStoreOtp, verifyStoreOtp, verifyOtpToken } from "./lib/store-otp.js";
 import { registerExportRoute } from "./http/exportStream.js";
 import { registerImportRoute } from "./http/importStream.js";
 import { getStorage } from "./lib/storage/index.js";
@@ -1443,6 +1445,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
     storeDeliveryNote: businesses.storeDeliveryNote,
     storeWhatsappNumber: businesses.storeWhatsappNumber,
     storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+    storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
     currency: businesses.currency,
     phone: businesses.phone,
     email: businesses.email,
@@ -1651,6 +1654,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
         minOrderAmount: biz.storeMinOrderAmount,
         deliveryNote: biz.storeDeliveryNote,
         whatsappNumber: biz.storeWhatsappNumber,
+        otpRequired: biz.storeRequirePhoneOtp && isSmsConfigured(),
         currency: biz.currency,
         phone: biz.phone,
         email: biz.email,
@@ -1730,6 +1734,121 @@ app.post("/store/:slug/identify", async (c) => {
   return c.json({ known: false });
 });
 
+
+// Shared guard for the OTP endpoints: per-IP limit, origin allow-list, JSON body.
+async function readStoreOtpRequest(c: Context, pathKey: string, ipLimit: number) {
+  const ip = getClientIp(c);
+  if (!checkStoreIpRateLimit(ip, pathKey, ipLimit)) {
+    logSecurityEvent("rate_limit_store_post", { ip, path: c.req.path });
+    return { error: c.json({ error: "Too many requests. Please wait a moment." }, 429) };
+  }
+  const originCheck = assertAllowedStoreOrigin(c, ip);
+  if (!originCheck.ok) {
+    logSecurityEvent("origin_block", { ip, path: c.req.path });
+    return { error: c.json({ error: "Origin not allowed" }, 403) };
+  }
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return { error: c.json({ error: "Invalid JSON body" }, 400) };
+  }
+  if (!body || typeof body !== "object") {
+    return { error: c.json({ error: "Invalid request body" }, 400) };
+  }
+  return { ip, body: body as Record<string, unknown> };
+}
+
+async function resolveOtpStore(slug: string) {
+  const resolved = await resolveStoreSlug(slug);
+  if (!resolved) return null;
+  const db = await getStoreDb(resolved.tenantId);
+  const [biz] = await db.select({
+    id: businesses.id,
+    name: businesses.name,
+    otpRequired: businesses.storeRequirePhoneOtp,
+  }).from(businesses)
+    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
+    .limit(1);
+  return biz ? { db, biz } : null;
+}
+
+// POST /store/:slug/otp/send — text a one-time code to the customer's phone
+app.post("/store/:slug/otp/send", async (c) => {
+  const req = await readStoreOtpRequest(c, "/store/otp-send", 5);
+  if (req.error) return req.error;
+  const { ip, body } = req;
+
+  const { phone, turnstileToken } = body;
+  if (typeof phone !== "string" || typeof turnstileToken !== "string") {
+    return c.json({ error: "phone and turnstileToken are required" }, 400);
+  }
+  const normalizedPhone = normalizeIndianMobile(phone);
+  if (!normalizedPhone) {
+    return c.json({ error: "phone must be a valid 10-digit Indian mobile number" }, 400);
+  }
+  if (!(await verifyTurnstile(turnstileToken, ip || null))) {
+    return c.json({ error: "Verification failed" }, 403);
+  }
+
+  const store = await resolveOtpStore(c.req.param("slug"));
+  if (!store) return c.json({ error: "Store not found" }, 404);
+  const sms = createSmsService();
+  if (!store.biz.otpRequired || !sms) {
+    return c.json({ error: "Phone verification is not enabled for this store" }, 400);
+  }
+
+  try {
+    const result = await sendStoreOtp(store.db, sms, {
+      businessId: store.biz.id,
+      businessName: store.biz.name,
+      phone: normalizedPhone,
+      ip: ip || null,
+    });
+    if (!result.ok) {
+      if (result.status === 429) {
+        logSecurityEvent("rate_limit_store_post", { ip, path: c.req.path, reason: "otp_phone" });
+      }
+      return c.json({ error: result.error }, result.status);
+    }
+    return c.json({ sent: true, expiresInSec: result.expiresInSec });
+  } catch (err) {
+    logger.error({ err }, "[store/otp/send] Failed");
+    return c.json({ error: "Could not send the code. Please try again." }, 500);
+  }
+});
+
+// POST /store/:slug/otp/verify — exchange a code for a short-lived order token
+app.post("/store/:slug/otp/verify", async (c) => {
+  const req = await readStoreOtpRequest(c, "/store/otp-verify", 10);
+  if (req.error) return req.error;
+  const { body } = req;
+
+  const { phone, code } = body;
+  if (typeof phone !== "string" || typeof code !== "string") {
+    return c.json({ error: "phone and code are required" }, 400);
+  }
+  const normalizedPhone = normalizeIndianMobile(phone);
+  if (!normalizedPhone || !/^\d{6}$/.test(code)) {
+    return c.json({ error: "Invalid phone or code" }, 400);
+  }
+
+  const store = await resolveOtpStore(c.req.param("slug"));
+  if (!store) return c.json({ error: "Store not found" }, 404);
+  if (!store.biz.otpRequired) {
+    return c.json({ error: "Phone verification is not enabled for this store" }, 400);
+  }
+
+  const result = await verifyStoreOtp(store.db, {
+    businessId: store.biz.id,
+    phone: normalizedPhone,
+    code,
+  });
+  if (!result.ok) return c.json({ error: result.error }, result.status);
+  const { ok: _ok, ...payload } = result;
+  return c.json(payload);
+});
+
 class StoreOrderError extends Error {}
 
 // POST /store/:slug/order — place an order (public, no auth)
@@ -1775,6 +1894,7 @@ app.post("/store/:slug/order", async (c) => {
     deliveryPincode,
     notes,
     items: orderItems,
+    otpToken,
   } = body as Record<string, unknown>;
 
   // Validate Turnstile for order submission
@@ -1820,6 +1940,7 @@ app.post("/store/:slug/order", async (c) => {
     storeEnabled: businesses.storeEnabled,
     storeMinOrderAmount: businesses.storeMinOrderAmount,
     storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+    storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
     invoicePrefix: businesses.invoicePrefix,
     nextInvoiceNumber: businesses.nextInvoiceNumber,
     storeOrderPrefix: businesses.storeOrderPrefix,
@@ -1830,6 +1951,12 @@ app.post("/store/:slug/order", async (c) => {
     .limit(1);
 
   if (!biz) return c.json({ error: "Store not found" }, 404);
+
+  // Same predicate as catalog.json's otpRequired, so the storefront and the order
+  // endpoint always agree on whether a verified phone is needed.
+  if (biz.storeRequirePhoneOtp && isSmsConfigured() && !verifyOtpToken(otpToken, resolved.businessId, customerPhone)) {
+    return c.json({ error: "Please verify your phone number to place an order", code: "PHONE_NOT_VERIFIED" }, 403);
+  }
 
   // Validate items exist and are store-enabled
   type OrderItemInput = { itemId: string; quantity: number; variantId?: string; selectedUnit?: string; conversionFactor?: number };
