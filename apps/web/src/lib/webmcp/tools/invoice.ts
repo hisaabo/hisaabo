@@ -10,6 +10,7 @@
  * instructions.
  */
 
+import { canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE } from "@hisaabo/shared";
 import type { WebMcpToolDefinition } from "../types";
 import {
   MAX_PAGE_SIZE,
@@ -233,6 +234,10 @@ const invoiceCreate: WebMcpToolDefinition = {
     const lineItems = objectArray(input.lineItems);
     if (!partyId) throw new Error("partyId is required — find it with party_list.");
     if (!type) throw new Error("type must be 'sale' or 'purchase'.");
+    const documentType = enumOf(input.documentType, DOCUMENT_TYPES) ?? "invoice";
+    if (!canCreateDocumentType(ctx.role, documentType, type)) {
+      throw new Error(SELLER_PURCHASE_DENIED_MESSAGE);
+    }
     if (!lineItems || lineItems.length === 0) throw new Error("At least one line item is required.");
 
     return await ctx.client.invoice.create.mutate({

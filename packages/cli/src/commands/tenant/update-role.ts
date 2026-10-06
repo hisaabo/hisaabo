@@ -5,6 +5,10 @@ import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 const VALID_ROLES = ["admin", "seller_manager", "seller", "accountant"] as const;
 type TenantRole = typeof VALID_ROLES[number];
 
+function isTenantRole(v: string): v is TenantRole {
+  return (VALID_ROLES as readonly string[]).includes(v);
+}
+
 interface UpdateRoleOpts {
   json?: boolean;
 }
@@ -13,7 +17,7 @@ export async function tenantUpdateRoleCommand(userId: string, role: string, opts
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  if (!VALID_ROLES.includes(role as TenantRole)) {
+  if (!isTenantRole(role)) {
     fatalError(`Invalid role "${role}". Must be one of: ${VALID_ROLES.join(", ")}`, EXIT.VALIDATION);
   }
 

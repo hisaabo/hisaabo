@@ -42,11 +42,12 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "superjson": "^2.2.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@hisaabo/api": "workspace:*",
     "@hisaabo/shared": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.3.0",

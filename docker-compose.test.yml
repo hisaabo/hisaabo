@@ -16,7 +16,7 @@ services:
     image: postgres:16-alpine
     container_name: hisaabo_test_db
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: test
       POSTGRES_PASSWORD: test

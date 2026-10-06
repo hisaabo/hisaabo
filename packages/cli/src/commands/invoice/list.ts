@@ -1,10 +1,11 @@
 import { HisaaboClient, HisaaboApiError, type InvoiceSummary } from "../../client.js";
+import type { InputOf } from "../../api-types.js";
 import { requireAuth } from "../../config.js";
 import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, outputIds,
   paginationFooter, EXIT, getWidthTier, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate, formatStatus, currentFY, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { formatAmount, formatDate, formatStatus, currentFY, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 
 interface ListOpts {
   json?: boolean;
@@ -50,10 +51,10 @@ export async function invoiceListCommand(opts: ListOpts): Promise<void> {
   try {
     const result = await client.invoice.list({
       type: opts.type as "sale" | "purchase" | undefined ?? null,
-      status: opts.status as InvoiceSummary["status"] | undefined ?? null,
+      status: opts.status as InputOf<"invoice.list">["status"] ?? null,
       partyId: opts.partyId ?? null,
-      fromDate: from ?? null,
-      toDate: to ?? null,
+      fromDate: apiFrom(from) ?? null,
+      toDate: apiTo(to) ?? null,
       search: opts.search ?? null,
       sortBy: opts.sortBy as "date" | "amount" | "number" | undefined ?? null,
       sortDir: opts.sortDir as "asc" | "desc" | undefined ?? null,
@@ -86,7 +87,7 @@ export async function invoiceListCommand(opts: ListOpts): Promise<void> {
     const standardCols: ColumnDef<InvoiceSummary>[] = [
       { key: "invoiceNumber", header: "#", width: 10 },
       { key: "partyName", header: "Party", width: 18 },
-      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(String(v ?? "")) },
+      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];
@@ -94,11 +95,11 @@ export async function invoiceListCommand(opts: ListOpts): Promise<void> {
     const wideCols: ColumnDef<InvoiceSummary>[] = [
       { key: "invoiceNumber", header: "#", width: 10 },
       { key: "partyName", header: "Party", width: 18 },
-      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(String(v ?? "")) },
-      { key: "dueDate", header: "Due", width: 12, format: (v) => formatDate(v ? String(v) : null) },
+      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(v as Date | null) },
+      { key: "dueDate", header: "Due", width: 12, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "amountPaid", header: "Paid (₹)", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "balanceDue", header: "Balance (₹)", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "totalAdjusted", header: "Balance (₹)", align: "right", width: 12, format: (_v, r) => formatAmount(String(parseFloat(r.totalAmount) - parseFloat(r.amountPaid) - parseFloat(r.totalAdjusted))) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];
 

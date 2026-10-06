@@ -55,6 +55,7 @@ function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
 }
 
 beforeEach(() => {
+  localStorage.setItem(WEBMCP_PREF_KEY, "on");
   registerTool = vi.fn(async () => {});
   Object.defineProperty(document, "modelContext", {
     value: {
@@ -125,6 +126,14 @@ describe("useWebMcp", () => {
     rerender(makeInput({ pathname: "/parties" }));
     await Promise.resolve();
     expect(registerTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays silent by default (opt-in) and for legacy stored values", async () => {
+    localStorage.removeItem(WEBMCP_PREF_KEY);
+    const { result } = renderHook(() => useWebMcp(makeInput()));
+    await Promise.resolve();
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(result.current.enabled).toBe(false);
   });
 
   it("stays silent when the user turned agent access off", async () => {

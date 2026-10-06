@@ -1,7 +1,7 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, success, outputJSON, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 interface ApiKeyRevokeOpts {
   yes?: boolean;
@@ -12,17 +12,7 @@ export async function apiKeyRevokeCommand(id: string, opts: ApiKeyRevokeOpts): P
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  if (!opts.yes && process.stdin.isTTY) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(`  Revoke API key ${id}? This cannot be undone. (y/N): `, resolve);
-    });
-    rl.close();
-    if (answer.trim().toLowerCase() !== "y") {
-      console.log("  Cancelled.");
-      process.exit(0);
-    }
-  }
+  await confirmOrExit(`  Revoke API key ${id}? This cannot be undone.`, opts);
 
   try {
     const result = await client.apiKey.revoke({ id });

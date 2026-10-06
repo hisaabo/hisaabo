@@ -32,6 +32,10 @@ export const trpc = createTRPCReact<AppRouter>();
  * response from server" (because the Hono `{error: "…"}` shape is
  * not a valid superjson error envelope).
  *
+ * `X-Hisaabo-Client: mobile` marks this as a bearer client: the API returns
+ * `sessionToken` in JSON bodies only for such clients, and `nativeExchange`
+ * requires it to match the client that started the sign-in.
+ *
  * Exported for tests (see `__tests__/trpc-headers.test.ts`).
  */
 export function commonOptions() {
@@ -42,6 +46,7 @@ export function commonOptions() {
     headers() {
       const headers: Record<string, string> = {
         "X-Requested-With": "hisaabo",
+        "X-Hisaabo-Client": "mobile",
       };
       const token = getTokenSync();
       if (token) {
@@ -86,6 +91,7 @@ export const vanillaTRPC = createVanillaClient<AppRouter>({
           // (`auth.me` on app launch) can replay a stale native
           // cookie jar entry.
           "X-Requested-With": "hisaabo",
+          "X-Hisaabo-Client": "mobile",
         };
         const token = getTokenSync();
         if (token) {

@@ -10,33 +10,62 @@
 # not-applicable key and explain WHY in a comment.
 #
 # Schema: procedure names use "router.procedure" form (same as trpc.X.Y calls).
+#
+# Rules enforced by `scripts/check-parity.ts --validate` (CI fails otherwise):
+#   - every entry needs a reason: the comment block directly above it (a
+#     "# --- Section ---" banner does not count) or an inline "- proc  # why";
+#   - an entry must name a procedure that exists in the API;
+#   - an entry is stale -- and an error -- if the excluded platform already uses
+#     the procedure: delete the entry;
+#   - no duplicates.
+#
+# Platforms: "mobile" is the Expo app. The desktop app is the web app inside a
+# Tauri shell, so it has no separate column: whatever web uses, desktop uses.
+#
+# Security tagging
+# ----------------
+# Start the reason with "[security]" when a procedure is excluded because of
+# risk rather than UX. Such entries are counted by --validate and must not be
+# deleted merely to silence a gap; removing one means consciously exposing the
+# capability on that platform. For MCP (an autonomous agent acting with a
+# user's credentials) the security-sensitive classes are:
+#   - bulk tenant export/import (selfExport.*, selfImport.*, business.exportData)
+#   - third-party credential configuration (eInvoice.configure/getConfig/testConnection)
+#   - credential and session administration (apiKey.*, auth.listSessions/revokeSession)
+#   - tenant member administration (tenant.inviteMember/removeMember/
+#     updateMemberRole/revokeInvitation)
+# Procedures in these classes should be excluded from MCP and tagged [security].
+# (apiKey.*, session and member mutations are currently still exposed by
+# packages/mcp, so they cannot be listed yet without tripping the stale-entry
+# check; remove the MCP tools first, then add the tagged entries.)
 
 schema_version: "2.0"
 
 exceptions:
   mobile:
     not-applicable:
-      # --- Multi-Tenancy ---
-      # Mobile derives current tenant info from auth.me; the standalone
-      # procedure is not needed.
-      - tenant.current
-
       # --- Business ---
-      # Admin/compliance feature. Desktop-only; not meaningful on mobile.
-      - business.auditTrail
       # Bulk data export requires file system access; not available on mobile.
       - business.exportData
       # Business logo upload/delete are web-only (canvas-based resize, file picker).
       # Mobile displays the logo via /api/businesses/:id/logo but doesn't edit.
       - business.uploadLogo
       - business.deleteLogo
-      # Point-of-Sale mode is a web/desktop-only fullscreen register.
-      # Mobile doesn't have a POS terminal surface.
+      # Point-of-Sale mode is a fullscreen register built for the web app (and its
+      # desktop shell). Mobile doesn't have a POS terminal surface.
       - business.setPosEnabled
       - business.ensureWalkInParty
       # POS catalog (tile grid with alt-unit / variant expansion) is a
       # register-UI concern, not a mobile flow.
       - pos.catalog
+
+      # --- Auth ---
+      # [security] Native-auth consent endpoints render in the browser (web consent
+      # page) for a cookie web session; mobile only consumes the resulting code.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Mobile signs in through the browser hand-off, not an in-app magic-link form.
+      - auth.sendMagicLink
 
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
@@ -44,13 +73,8 @@ exceptions:
       - selfImport.request
 
       # --- Parties ---
-      # Tally integration is an accounting desktop workflow.
+      # Tally integration is an accounting workflow built for the web app.
       - party.tallyExport
-
-      # --- Invoicing ---
-      # Used by web to pre-fill delivery method on re-send. Mobile uses
-      # expo-sharing which has no delivery-method concept.
-      - invoice.lastDeliveryMethod
 
       # --- Document Types ---
       # Debit Notes — rare document type; intentionally omitted from mobile.
@@ -67,13 +91,12 @@ exceptions:
       - purchaseReturn.delete
 
       # --- Payments ---
-      # Bulk bank-account assignment for untracked payments is a desktop
-      # admin workflow.
-      - payment.untrackedPayments
+      # Bulk bank-account assignment for untracked payments is an admin
+      # workflow built for the web app.
       - payment.assignAccount
 
       # --- Dashboard / Analytics ---
-      # Complex charting analytics; intentionally desktop-only.
+      # Complex charting analytics; built for the web app, not mobile.
       - dashboard.salesTrend
       - dashboard.topCustomers
       - dashboard.topSellingItems
@@ -83,19 +106,14 @@ exceptions:
       - dashboard.monthlyComparison
 
       # --- GST Compliance ---
-      # GST compliance reports are complex accounting workflows; desktop-only.
+      # GST compliance reports are complex accounting workflows built for the web app.
       - gst.gstr1
       - gst.gstr1CSV
       - gst.gstr3b
 
       # --- Online Store Admin ---
-      # Store settings and item-visibility management are admin setup
-      # workflows; intentionally desktop-only.
-      - store.getSettings
-      - store.updateSettings
-      - store.checkSlug
-      - store.listStoreItems
-      - store.bulkToggleItems
+      # Per-item / per-variant storefront overrides are edited in the web item
+      # editor; mobile manages store-level settings only.
       - store.updateItemStoreSettings
       - store.updateVariantStoreSettings
 
@@ -113,7 +131,7 @@ exceptions:
       - itemImage.delete
 
       # --- Data Import ---
-      # Bulk CSV import is a desktop/power-user workflow.
+      # Bulk CSV import is a web-app power-user workflow.
       - import.importParties
       - import.importItems
       - import.importInvoices
@@ -122,7 +140,7 @@ exceptions:
       - import.reconcileDirectPayments
 
       # --- Sales Targets ---
-      # Sales target management is a desktop admin workflow.
+      # Sales target management is an admin workflow built for the web app.
       - target.list
       - target.myTargets
       - target.create
@@ -131,7 +149,7 @@ exceptions:
       - target.getProgress
 
       # --- Reports ---
-      # Complex reporting workflows; intentionally desktop-only.
+      # Complex reporting workflows; built for the web app, not mobile.
       - reports.daybook
       - reports.outstanding
       - reports.salesRegister
@@ -145,14 +163,11 @@ exceptions:
       - reports.paymentSummary
 
       # --- API Keys ---
-      # Developer/integration feature; desktop-only.
-      - apiKey.list
-      - apiKey.create
-      - apiKey.revoke
+      # Developer/integration feature.
 
       # --- Recurring Invoices ---
       # Suggestions engine analyzes recent invoices — heavy query
-      # better suited to web/desktop; mobile shows templates only.
+      # better suited to the web app; mobile shows templates only.
       - recurringInvoice.suggestions
 
       # --- Onboarding ---
@@ -163,14 +178,14 @@ exceptions:
       - tenant.peekInvitation
 
       # --- Chart of Accounts ---
-      # Accounting management is a desktop/CA workflow.
+      # Accounting management is a web-app/CA workflow.
       - account.list
       - account.create
       - account.update
       - account.delete
 
       # --- Journal Entries ---
-      # Journal entries are CA adjustments — desktop accounting workflow.
+      # Journal entries are CA adjustments — web-app accounting workflow.
       - journal.list
       - journal.getById
       - journal.create
@@ -183,7 +198,7 @@ exceptions:
       - journal.createFromTemplate
 
       # --- ITC Tracking ---
-      # ITC is GST compliance for CAs — desktop workflow.
+      # ITC is GST compliance for CAs — web-app workflow.
       - itc.dashboard
       - itc.ledger
       - itc.markBlocked
@@ -193,7 +208,7 @@ exceptions:
       - itc.gstr3bTable4
 
       # --- Bank Reconciliation ---
-      # Bank recon requires CSV upload and review — desktop workflow.
+      # Bank recon requires CSV upload and review — web-app workflow.
       - bankRecon.uploadCSV
       - bankRecon.confirmMapping
       - bankRecon.importList
@@ -215,7 +230,7 @@ exceptions:
       - bankRecon.templateFork
 
       # --- E-Invoicing ---
-      # E-invoicing is GST compliance — desktop workflow.
+      # E-invoicing is GST compliance — web-app workflow.
       - eInvoice.configure
       - eInvoice.getConfig
       - eInvoice.testConnection
@@ -227,7 +242,7 @@ exceptions:
       - eInvoice.getStatus
 
       # --- E-Way Bill ---
-      # E-way bill management is compliance — desktop workflow.
+      # E-way bill management is compliance — web-app workflow.
       - ewayBill.generate
       - ewayBill.cancel
       - ewayBill.updateVehicle
@@ -237,7 +252,7 @@ exceptions:
       - ewayBill.expiringList
 
       # --- GSTR-2B Reconciliation ---
-      # GSTR-2B upload and reconciliation — desktop accounting workflow.
+      # GSTR-2B upload and reconciliation — web-app accounting workflow.
       - gstr2b.upload
       - gstr2b.uploads
       - gstr2b.records
@@ -248,12 +263,16 @@ exceptions:
       - gstr2b.ignoreRecord
 
       # --- Additional GST Reports ---
+      # Annual/composition returns and JSON exports are CA compliance workflows
+      # built for the web app; not designed for a phone.
       - gst.gstr9
       - gst.gstr9Json
       - gst.gstr1Json
       - gst.cmp08
 
       # --- Additional Reports ---
+      # Statutory financial statements and Tally export are wide, print-oriented
+      # reports built for the web app; mobile ships the summary reports only.
       - reports.trialBalance
       - reports.balanceSheet
       - reports.profitAndLoss
@@ -264,15 +283,35 @@ exceptions:
       - reports.comparativeProfitAndLoss
       - reports.tallyExport
 
+      # --- Party Ledger CSV ---
+      # CSV download triggered from the web GST/party screens (browser file
+      # save). Mobile shares the ledger as a PDF via /api/parties/:id/ledger.pdf.
+      - party.ledgerReportCSV
+
       # --- HSN ---
+      # HSN lookup/validation backs the web item editor's autocomplete; mobile's
+      # item form takes the code as plain text.
       - hsn.search
       - hsn.validate
       - hsn.validateForTurnover
 
   cli:
     not-applicable:
+      # --- GST JSON / Party ledger CSV ---
+      # Browser download flows. The CLI exposes the same data as structured
+      # output (gst gstr9, party ledger) which can be piped or exported to CSV.
+      - gst.gstr9Json
+      - party.ledgerReportCSV
+
       # --- Auth ---
       # Browser-only flows requiring email verification links / callbacks.
+      # [security] Native-auth consent endpoints (browser hand-off for cookie web
+      # sessions only). The CLI starts the flow via nativeStart/exchange but the
+      # consent page itself is web-only.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Signup/config copy is a UI concern; the CLI has no signup screen.
+      - system.config
       - auth.requestEmailChange
       - auth.sendMagicLink
       - auth.verifyMagicLink
@@ -315,19 +354,13 @@ exceptions:
       - import.reconcileDirectPayments
 
       # --- Parties ---
-      # Tally accounting integration — desktop-specific export format.
+      # Tally accounting integration — Tally-specific export format.
       - party.tallyExport
 
       # --- Bank Reconciliation ---
       # Interactive CSV upload + review workflow — not suited for CLI.
       - bankRecon.uploadCSV
       - bankRecon.confirmMapping
-      - bankRecon.importDetail
-      - bankRecon.lines
-      - bankRecon.confirmMatch
-      - bankRecon.manualMatch
-      - bankRecon.unmatch
-      - bankRecon.ignoreLine
       - bankRecon.templateCreate
       - bankRecon.templateDelete
       - bankRecon.templateFork
@@ -356,9 +389,21 @@ exceptions:
 
   mcp:
     not-applicable:
+      # --- GST JSON / Party ledger CSV ---
+      # File-download formats for the GST portal / spreadsheets. MCP agents read
+      # the structured equivalents (gst.gstr9, party.ledger).
+      - gst.gstr9Json
+      - party.ledgerReportCSV
+
       # --- Auth ---
       # MCP runs as a pre-authenticated server-side agent. It does not
       # manage user sessions, login flows, or account registration.
+      # [security] Native-auth consent endpoints are the browser hand-off that mints
+      # a one-time code for a cookie web session; an agent must never drive them.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Signup/config copy is a UI concern; agents have no signup screen.
+      - system.config
       - auth.completeProfile
       - auth.login
       - auth.logout
@@ -381,7 +426,9 @@ exceptions:
       - tenant.peekInvitation
 
       # --- Backup & Restore ---
-      # Tenant-level backup/restore requires file I/O; not an MCP workflow.
+      # [security] Whole-tenant export/import: an agent (or a prompt injected into
+      # one) must not be able to exfiltrate every record or overwrite the books.
+      # Also requires file I/O, which is not an MCP workflow.
       - selfExport.request
       - selfImport.request
 
@@ -391,7 +438,7 @@ exceptions:
       # Logo is a browser UI concern; MCP agents don't manage brand assets.
       - business.uploadLogo
       - business.deleteLogo
-      # POS mode is a web/desktop-only cashier surface; not an MCP workflow.
+      # POS mode is a cashier surface in the web app; not an MCP workflow.
       - business.setPosEnabled
       - business.ensureWalkInParty
       - pos.catalog
@@ -400,9 +447,9 @@ exceptions:
       # Manual transaction entry — rare admin workflow.
       - bankAccount.addTransaction
 
-      # --- Business ---
-      # Admin/compliance and bulk export — not core MCP agent workflows.
-      - business.auditTrail
+      # --- Business: bulk export ---
+      # [security] Bulk export of all business data; same exfiltration risk as
+      # selfExport.request. Agents read through the scoped list/get procedures.
       - business.exportData
 
       # --- Dashboard / Analytics ---
@@ -426,7 +473,7 @@ exceptions:
       - import.reconcileDirectPayments
 
       # --- Parties ---
-      # Tally accounting integration — desktop-specific export format.
+      # Tally accounting integration — Tally-specific export format.
       - party.tallyExport
 
       # --- Bank Reconciliation ---
@@ -439,13 +486,14 @@ exceptions:
       - bankRecon.templateUpdate
 
       # --- E-Invoicing ---
-      # Credential management not for MCP agents.
+      # [security] Government e-invoice portal credentials: configuring or
+      # reading them must stay a human action, never an agent action.
       - eInvoice.configure
       - eInvoice.getConfig
       - eInvoice.testConnection
 
       # --- Chart of Accounts ---
-      # Accounting management is a desktop/CA workflow — read-only reporting sufficient for agents.
+      # Accounting management is a web-app/CA workflow — read-only reporting sufficient for agents.
       - account.list
 
       # --- Bank Reconciliation ---

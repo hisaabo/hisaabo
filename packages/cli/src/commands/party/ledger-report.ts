@@ -4,7 +4,8 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV,
   EXIT, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { formatAmount, formatDate, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
 interface LedgerReportOpts {
   json?: boolean;
@@ -15,14 +16,7 @@ interface LedgerReportOpts {
   thisFy?: boolean;
 }
 
-interface LedgerReportEntry {
-  date: string;
-  type: string;
-  number: string;
-  debit: string;
-  credit: string;
-  balance: string;
-}
+type LedgerReportEntry = NonNullable<OutputOf<"party.ledgerReport">>["entries"][number];
 
 export async function partyLedgerReportCommand(partyId: string, opts: LedgerReportOpts): Promise<void> {
   const cfg = requireAuth();
@@ -34,16 +28,17 @@ export async function partyLedgerReportCommand(partyId: string, opts: LedgerRepo
   else if (opts.thisMonth) { from = monthStart(); to = monthEnd(); }
 
   try {
-    const result = await client.party.ledgerReport({ partyId, from, to });
+    const result = await client.party.ledgerReport({ partyId, fromDate: apiFrom(from), toDate: apiTo(to) });
+    if (!result) fatalError(`Party not found: ${partyId}`, EXIT.NOT_FOUND);
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    const entries: LedgerReportEntry[] = Array.isArray(result?.entries) ? result.entries : (Array.isArray(result) ? result : []);
+    const entries: LedgerReportEntry[] = result.entries;
 
-    console.log(`\n  Ledger Report: ${result?.partyName ?? partyId}`);
+    console.log(`\n  Ledger Report: ${result.party.name}`);
     if (from || to) {
       console.log(`  Period: ${from ?? "start"} → ${to ?? "today"}`);
     }
@@ -55,19 +50,17 @@ export async function partyLedgerReportCommand(partyId: string, opts: LedgerRepo
       { key: "number", header: "Number", width: 14 },
       { key: "debit", header: "Debit (₹)", align: "right", width: 13, format: (v) => parseFloat(String(v ?? "0")) !== 0 ? formatAmount(String(v)) : "-" },
       { key: "credit", header: "Credit (₹)", align: "right", width: 13, format: (v) => parseFloat(String(v ?? "0")) !== 0 ? formatAmount(String(v)) : "-" },
-      { key: "balance", header: "Balance (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "runningBalance", header: "Balance (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
     ];
 
     if (opts.format === "tsv") outputTSV(entries, cols);
     else if (opts.format === "csv") outputCSV(entries, cols);
     else outputTable(entries, cols);
 
-    if (result?.summary) {
-      console.log();
-      console.log(`  Total Debit:  ₹${formatAmount(String(result.summary.totalDebit ?? "0"))}`);
-      console.log(`  Total Credit: ₹${formatAmount(String(result.summary.totalCredit ?? "0"))}`);
-      console.log(`  Net Balance:  ₹${formatAmount(String(result.summary.netBalance ?? "0"))}\n`);
-    }
+    console.log();
+    console.log(`  Total Debit:  ₹${formatAmount(result.summary.totalDebit)}`);
+    console.log(`  Total Credit: ₹${formatAmount(result.summary.totalCredit)}`);
+    console.log(`  Closing Balance: ₹${formatAmount(result.summary.closingBalance)}\n`);
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

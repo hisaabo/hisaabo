@@ -18,7 +18,7 @@
  * header so the session-ID extraction path in auth.ts is exercised.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi, type MockInstance } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
@@ -76,8 +76,8 @@ function callerWithSession(sessionId: string, userId: string, email: string, ten
 /**
  * Unauthenticated caller — no user, no session cookie.
  */
-function unauthCaller() {
-  return _callerFactory(createTestContext({}));
+function unauthCaller(client?: "desktop" | "mobile" | "cli" | "web-spoof") {
+  return _callerFactory(createTestContext(client ? { headers: { "x-hisaabo-client": client } } : {}));
 }
 
 // ── Teardown ──────────────────────────────────────────────────────────────────
@@ -91,11 +91,14 @@ afterAll(async () => {
 // auth.register
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Session ids are never exposed by the API; clients refer to a session by sha256(id).
+const hashSessionId = (id: string) => createHash("sha256").update(id).digest("hex");
+
 describe("auth.register", () => {
   const db = getControlDb();
 
   it("registers a new user with email and password — creates user, session, and default tenant membership", async () => {
-    const caller = unauthCaller();
+    const caller = unauthCaller("mobile");
 
     const result = await caller.auth.register({
       email: "ramesh.new@vyapar.in",
@@ -109,7 +112,7 @@ describe("auth.register", () => {
     expect(result.user.name).toBe("Ramesh Kumar");
     expect(result.user.id).toBeTruthy();
     expect(typeof result.sessionToken).toBe("string");
-    expect(result.sessionToken.length).toBeGreaterThan(30);
+    expect(result.sessionToken!.length).toBeGreaterThan(30);
 
     // User row persisted in control DB
     const [dbUser] = await db.select().from(users).where(eq(users.email, "ramesh.new@vyapar.in")).limit(1);
@@ -125,7 +128,8 @@ describe("auth.register", () => {
     expect(dbSession).toBeDefined();
     // Session expires ~30 days from now: check it's at least 29 days in the future
     const msUntilExpiry = dbSession!.expiresAt.getTime() - Date.now();
-    expect(msUntilExpiry).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
+    // Bearer clients (mobile here) get the 7-day sliding window
+    expect(msUntilExpiry).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
   });
 
   it("rejects duplicate email registration — returns CONFLICT without creating a second user", async () => {
@@ -261,7 +265,7 @@ describe("auth.login", () => {
   });
 
   it("succeeds with correct email and password — returns user object and session token", async () => {
-    const caller = unauthCaller();
+    const caller = unauthCaller("desktop");
     const result = await caller.auth.login({
       email: "login.test@vyapar.in",
       password: "Test@1234!",
@@ -270,14 +274,14 @@ describe("auth.login", () => {
     expect(result.user.email).toBe("login.test@vyapar.in");
     expect(result.user.id).toBe(loginUserId);
     expect(typeof result.sessionToken).toBe("string");
-    expect(result.sessionToken.length).toBeGreaterThan(30);
+    expect(result.sessionToken!.length).toBeGreaterThan(30);
 
     // A new session row should now exist
     const db = getControlDb();
     const [session] = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, result.sessionToken))
+      .where(eq(sessions.id, result.sessionToken!))
       .limit(1);
     expect(session).toBeDefined();
     expect(session!.userId).toBe(loginUserId);
@@ -447,85 +451,78 @@ describe("auth.logout", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // auth.sendMagicLink — email URL shape
 //
-// CRITICAL INVARIANT: the primary email CTA is ALWAYS an HTTPS URL, never
-// a `hisaabo://` custom-scheme anchor. Email clients (Gmail, Outlook, Apple
-// Mail, corporate gateways) strip or refuse to render custom URL schemes as
-// clickable links, so a `hisaabo://` primary reaches the user as plain,
-// unclickable text. If this test fails because someone reverted the primary
-// URL to the custom scheme, DO NOT fix the test — fix the server to keep
-// shipping HTTPS as the primary and hand off to the native app from the
-// /auth/verify page. See apps/web/src/routes/auth/verify.tsx for the
-// browser-to-app hand-off logic this relies on.
-//
-// Historical regression the old suite guarded against (preserved below):
-// the deep link path must be `/verify`, never `/auth/verify`, because Expo
-// Router uses (auth) as a layout group, so the actual scheme path is
-// /verify. Desktop Tauri's deep-link handler translates /verify into the
-// webview path /auth/verify.
+// The email CTA is ALWAYS an HTTPS link (email clients strip custom URL
+// schemes). The secondary hisaabo:// link was removed; native clients sign in
+// through the browser handoff (auth.nativeStart) instead.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("auth.sendMagicLink — email URL shape", () => {
-  const sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
+  let sendSpy: MockInstance<typeof emailService.sendMagicLink>;
+  beforeAll(() => {
+    sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
+  });
 
   afterAll(() => {
     sendSpy.mockRestore();
   });
 
-  it("web source: primary is an https link with no source suffix, secondary is the hisaabo://verify deep link", async () => {
+  it("web source: https link with no source suffix and no secondary deep link", async () => {
     sendSpy.mockClear();
-    const caller = unauthCaller();
-    await caller.auth.sendMagicLink({ email: "deeplink-web@vyapar.in", source: "web" });
+    await unauthCaller().auth.sendMagicLink({ email: "deeplink-web@vyapar.in", source: "web" });
 
     expect(sendSpy).toHaveBeenCalledOnce();
-    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
-    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
-    // Web source does not thread `source` through the URL — the verify
-    // page only hands off to the native app when source is desktop/mobile.
-    expect(primaryUrl).not.toContain("source=");
-    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    expect(secondaryUrl).not.toContain("hisaabo://auth/");
+    const args = sendSpy.mock.calls[0]!;
+    expect(args[1]).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
+    expect(args[1]).not.toContain("source=");
+    expect(args.some((a) => typeof a === "string" && a.startsWith("hisaabo://"))).toBe(false);
   });
 
-  it("mobile source: primary is an https link with source=mobile, secondary is the hisaabo://verify deep link — primary MUST NOT be a custom-scheme URL because email clients strip non-http anchors and the user ends up with plain, unclickable text", async () => {
-    sendSpy.mockClear();
-    const caller = unauthCaller();
-    await caller.auth.sendMagicLink({ email: "deeplink-mobile@vyapar.in", source: "mobile" });
-
-    expect(sendSpy).toHaveBeenCalledOnce();
-    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
-    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
-    expect(primaryUrl).toContain("&source=mobile");
-    // Regression guard: primary MUST be https so Gmail/Outlook render it as
-    // a clickable button.
-    expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
-    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    expect(secondaryUrl).not.toContain("hisaabo://auth/");
-  });
-
-  it("desktop source: primary is an https link with source=desktop, secondary is the hisaabo://verify deep link — same email-client rationale as mobile", async () => {
-    sendSpy.mockClear();
-    const caller = unauthCaller();
-    await caller.auth.sendMagicLink({ email: "deeplink-desktop@vyapar.in", source: "desktop" });
-
-    expect(sendSpy).toHaveBeenCalledOnce();
-    const [, primaryUrl, secondaryUrl] = sendSpy.mock.calls[0]!;
-    expect(primaryUrl).toMatch(/^https?:\/\/.+\/auth\/verify\?token=/);
-    expect(primaryUrl).toContain("&source=desktop");
-    expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
-    expect(secondaryUrl).toMatch(/^hisaabo:\/\/verify\?token=/);
-    expect(secondaryUrl).not.toContain("hisaabo://auth/");
-  });
-
-  it("primary URL is NEVER a hisaabo:// custom-scheme link for ANY source — this is the load-bearing invariant that kept desktop/mobile users stuck with unclickable email buttons; if this ever regresses, users report 'the link in the email does nothing, I have to copy-paste it into Firefox' (verbatim user report)", async () => {
-    for (const source of ["web", "desktop", "mobile"] as const) {
+  it("mobile/desktop source: still https and keeps the source param for older clients; never a hisaabo:// link", async () => {
+    for (const source of ["mobile", "desktop"] as const) {
       sendSpy.mockClear();
-      const caller = unauthCaller();
-      await caller.auth.sendMagicLink({ email: `deeplink-${source}-guard@vyapar.in`, source });
-
-      const [, primaryUrl] = sendSpy.mock.calls[0]!;
-      expect(primaryUrl).not.toMatch(/^hisaabo:\/\//);
-      expect(primaryUrl).toMatch(/^https?:\/\//);
+      await unauthCaller().auth.sendMagicLink({ email: `deeplink-${source}@vyapar.in`, source });
+      const args = sendSpy.mock.calls[0]!;
+      expect(args[1]).toMatch(/^https?:\/\//);
+      expect(args[1]).toContain(`&source=${source}`);
+      expect(args.some((a) => typeof a === "string" && a.startsWith("hisaabo://"))).toBe(false);
     }
+  });
+});
+
+describe("auth.sendMagicLink — Turnstile is never skipped by a client header", () => {
+  let sendSpy: MockInstance<typeof emailService.sendMagicLink>;
+  beforeAll(() => {
+    sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
+  });
+
+  afterAll(() => {
+    sendSpy.mockRestore();
+    delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
+  it("requires a Turnstile token when TURNSTILE_SECRET_KEY is set, even for X-Hisaabo-Client: desktop", async () => {
+    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+    sendSpy.mockClear();
+    for (const client of [undefined, "desktop", "mobile", "cli"] as const) {
+      await expect(
+        unauthCaller(client).auth.sendMagicLink({ email: "turnstile-required@vyapar.in", source: "web" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+    }
+    expect(sendSpy).not.toHaveBeenCalled();
+    delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
+  it("register requires a Turnstile token when configured, even for the desktop client", async () => {
+    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+    await expect(
+      unauthCaller("desktop").auth.register({
+        email: "turnstile-register@vyapar.in",
+        name: "No Token",
+        password: "SecurePass1!",
+        confirmPassword: "SecurePass1!",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+    delete process.env.TURNSTILE_SECRET_KEY;
   });
 });
 
@@ -542,7 +539,7 @@ describe("auth.verifyMagicLink", () => {
   const db = getControlDb();
 
   it("creates a new user AND tenant membership atomically — no FK violation", async () => {
-    const caller = unauthCaller();
+    const caller = unauthCaller("mobile");
     const email = "magic-link-new@vyapar.in";
     const rawToken = "test-magic-token-" + Date.now();
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
@@ -725,7 +722,7 @@ describe("auth.revokeSession", () => {
 
     // From session A, revoke session B
     const callerA = callerWithSession(sessionA.id, user.id, user.email, tenant.id);
-    const result = await callerA.auth.revokeSession({ sessionId: sessionB.id });
+    const result = await callerA.auth.revokeSession({ sessionId: hashSessionId(sessionB.id) });
     expect(result.success).toBe(true);
 
     // Verify session B is gone from DB — createContext will return user:null
@@ -754,7 +751,7 @@ describe("auth.revokeSession", () => {
 
     const caller = callerWithSession(session.id, user.id, user.email);
     await expect(
-      caller.auth.revokeSession({ sessionId: session.id }),
+      caller.auth.revokeSession({ sessionId: hashSessionId(session.id) }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
       message: "Cannot revoke your current session. Use logout instead.",
@@ -770,7 +767,7 @@ describe("auth.revokeSession", () => {
     // User 1 tries to revoke User 2's session
     const caller1 = callerWithSession(session1.id, user1.id, user1.email);
     await expect(
-      caller1.auth.revokeSession({ sessionId: session2.id }),
+      caller1.auth.revokeSession({ sessionId: hashSessionId(session2.id) }),
     ).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "Session not found",

@@ -20,11 +20,16 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerReportTools(server: McpServer, client: HisaaboClient) {
+/** The accounting report procedures require full ISO datetimes; widen YYYY-MM-DD to a whole day. */
+const startOfDay = (d: string) => `${d}T00:00:00.000Z`;
+const endOfDay = (d: string) => `${d}T23:59:59.999Z`;
+const today = () => new Date().toISOString().slice(0, 10);
+
+export function registerReportTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "report_daybook",
@@ -264,7 +269,7 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
         .describe("Date for the trial balance in YYYY-MM-DD format. Defaults to today."),
     },
     wrapTool(async (input) => {
-      const result = await client.reports.trialBalance({ asOfDate: input.as_of_date });
+      const result = await client.reports.trialBalance({ asOfDate: endOfDay(input.as_of_date ?? today()) });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -283,7 +288,7 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
         .describe("Date for the balance sheet in YYYY-MM-DD format. Defaults to today."),
     },
     wrapTool(async (input) => {
-      const result = await client.reports.balanceSheet({ asOfDate: input.as_of_date });
+      const result = await client.reports.balanceSheet({ asOfDate: endOfDay(input.as_of_date ?? today()) });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -298,13 +303,13 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
       "Use this to answer 'What was our profit this quarter?' or 'What are our top expense categories?'",
     ].join(" "),
     {
-      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("Start date in YYYY-MM-DD format."),
-      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("End date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
-      const result = await client.reports.profitAndLoss({ fromDate: input.from_date, toDate: input.to_date });
+      const result = await client.reports.profitAndLoss({ fromDate: startOfDay(input.from_date), toDate: endOfDay(input.to_date) });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -319,13 +324,13 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
       "Use this to answer 'How much cash did we generate from operations?' or 'What was our net cash position?'",
     ].join(" "),
     {
-      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("Start date in YYYY-MM-DD format."),
-      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("End date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
-      const result = await client.reports.cashFlowStatement({ fromDate: input.from_date, toDate: input.to_date });
+      const result = await client.reports.cashFlowStatement({ fromDate: startOfDay(input.from_date), toDate: endOfDay(input.to_date) });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -342,16 +347,16 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
     {
       account_id: z.string().uuid()
         .describe("Account UUID (from account_list or trial balance)."),
-      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("Start date in YYYY-MM-DD format."),
-      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe("End date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
       const result = await client.reports.generalLedger({
         accountId: input.account_id,
-        fromDate: input.from_date,
-        toDate: input.to_date,
+        fromDate: startOfDay(input.from_date),
+        toDate: endOfDay(input.to_date),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -366,15 +371,21 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
       "Use this to analyze changes in account balances between two dates.",
     ].join(" "),
     {
-      period1_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("First period end date in YYYY-MM-DD format."),
-      period2_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Second period end date in YYYY-MM-DD format. Defaults to today."),
+      current_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Current period start date in YYYY-MM-DD format."),
+      current_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Current period end date in YYYY-MM-DD format."),
+      previous_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Previous period start date in YYYY-MM-DD format."),
+      previous_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Previous period end date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
       const result = await client.reports.comparativeTrialBalance({
-        period1Date: input.period1_date,
-        period2Date: input.period2_date,
+        currentFYStart: startOfDay(input.current_from),
+        currentFYEnd: endOfDay(input.current_to),
+        previousFYStart: startOfDay(input.previous_from),
+        previousFYEnd: endOfDay(input.previous_to),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -389,15 +400,15 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
       "Use this to analyze how assets, liabilities, and equity have changed.",
     ].join(" "),
     {
-      period1_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("First period date in YYYY-MM-DD format."),
-      period2_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Second period date in YYYY-MM-DD format. Defaults to today."),
+      current_as_of: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Current balance sheet date in YYYY-MM-DD format."),
+      previous_as_of: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Previous balance sheet date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
       const result = await client.reports.comparativeBalanceSheet({
-        period1Date: input.period1_date,
-        period2Date: input.period2_date,
+        currentAsOf: endOfDay(input.current_as_of),
+        previousAsOf: endOfDay(input.previous_as_of),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -412,21 +423,21 @@ export function registerReportTools(server: McpServer, client: HisaaboClient) {
       "Use this to answer 'How did our profit compare between this quarter and last quarter?'",
     ].join(" "),
     {
-      period1_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("First period start date in YYYY-MM-DD format."),
-      period1_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("First period end date in YYYY-MM-DD format."),
-      period2_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Second period start date in YYYY-MM-DD format."),
-      period2_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Second period end date in YYYY-MM-DD format."),
+      current_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Current period start date in YYYY-MM-DD format."),
+      current_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Current period end date in YYYY-MM-DD format."),
+      previous_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Previous period start date in YYYY-MM-DD format."),
+      previous_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+        .describe("Previous period end date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
       const result = await client.reports.comparativeProfitAndLoss({
-        period1From: input.period1_from,
-        period1To: input.period1_to,
-        period2From: input.period2_from,
-        period2To: input.period2_to,
+        currentFYStart: startOfDay(input.current_from),
+        currentFYEnd: endOfDay(input.current_to),
+        previousFYStart: startOfDay(input.previous_from),
+        previousFYEnd: endOfDay(input.previous_to),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],

@@ -3,16 +3,24 @@ import { useState, useRef, useEffect } from "react";
 interface PhoneVerifyProps {
   slug: string;
   accentColor: string;
-  onVerified: (phone: string, name: string, isNew: boolean, turnstileToken: string) => void;
+  /** When true the customer must enter an SMS code before checkout. */
+  otpRequired?: boolean;
+  onVerified: (phone: string, name: string, isNew: boolean, turnstileToken: string, otpToken?: string) => void;
   onBack: () => void;
 }
 
-export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVerifyProps) {
+const RESEND_SECONDS = 30;
+
+export function PhoneVerify({ slug, accentColor, otpRequired = false, onVerified, onBack }: PhoneVerifyProps) {
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showNameInput, setShowNameInput] = useState(false);
   const [name, setName] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [code, setCode] = useState("");
+  const [resendIn, setResendIn] = useState(0);
+  const otpTokenRef = useRef<string>("");
   const turnstileRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
   const tokenRef = useRef<string>("");
@@ -21,9 +29,15 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
   useEffect(() => {
     if (!turnstileRef.current) return;
 
-    const siteKey =
+    // The always-pass test key is dev-only; production builds must configure a real key.
+    const configuredKey =
       (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA"; // Cloudflare test key for dev
+      (import.meta.env.PROD ? undefined : "1x00000000000000000000AA");
+    if (!configuredKey) {
+      setError("Verification is not configured. Please contact the store.");
+      return;
+    }
+    const siteKey: string = configuredKey;
 
     const win = window as unknown as {
       turnstile?: {
@@ -88,7 +102,93 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
     tokenRef.current = "";
   }
 
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  function storeUrl(path: string) {
+    const API_URL = (import.meta.env.VITE_API_URL as string | undefined) || "";
+    const prefix = API_URL ? `${API_URL}/store` : "";
+    return `${prefix}/${slug}/${path}`;
+  }
+
+  async function postJson<T>(path: string, body: unknown, fallback: string): Promise<T> {
+    // `credentials: "omit"` — never attach cookies to these public endpoints.
+    const res = await fetch(storeUrl(path), {
+      method: "POST",
+      credentials: "omit",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "hisaabo" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: fallback })) as { error?: string };
+      throw new Error(err.error || fallback);
+    }
+    return res.json() as Promise<T>;
+  }
+
+  async function handleSendCode() {
+    if (phone.length !== 10) {
+      setError("Please enter a valid 10-digit mobile number");
+      return;
+    }
+    if (!tokenRef.current) {
+      setError("Please complete the verification");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await postJson("otp/send", { phone: `+91${phone}`, turnstileToken: tokenRef.current }, "Could not send the code");
+      setCodeSent(true);
+      setCode("");
+      setResendIn(RESEND_SECONDS);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      // Turnstile tokens are single-use.
+      resetWidget();
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyCode() {
+    if (!/^\d{6}$/.test(code)) {
+      setError("Enter the 6-digit code we sent you");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const data = await postJson<{ otpToken: string; known: boolean; name?: string }>(
+        "otp/verify",
+        { phone: `+91${phone}`, code },
+        "Invalid or expired code",
+      );
+      otpTokenRef.current = data.otpToken;
+      if (data.known && data.name && !/^(walk.?in|cash|misc|general)/i.test(data.name)) {
+        onVerified(`+91${phone}`, data.name, false, "", data.otpToken);
+      } else {
+        setShowNameInput(true);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function backToPhone() {
+    setCodeSent(false);
+    setCode("");
+    setError("");
+    resetWidget();
+  }
+
   async function handleIdentify() {
+    if (otpRequired) return handleSendCode();
     if (phone.length !== 10) {
       setError("Please enter a valid 10-digit mobile number");
       return;
@@ -102,15 +202,13 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
     setError("");
 
     try {
-      const API_URL = (import.meta.env.VITE_API_URL as string | undefined) || "";
-      const prefix = API_URL ? `${API_URL}/store` : "";
       // `credentials: "omit"` — never attach cookies (the admin
       // `session_id` cookie from a same-origin self-hosted deploy would
       // otherwise trip CSRF / identity boundaries on this public
       // endpoint). `X-Requested-With` is defence in depth so the client
       // keeps working if the server's `/store/*` CSRF exemption is
       // later narrowed.
-      const res = await fetch(`${prefix}/${slug}/identify`, {
+      const res = await fetch(storeUrl("identify"), {
         method: "POST",
         credentials: "omit",
         headers: {
@@ -127,9 +225,11 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
 
       const data = await res.json() as { known: boolean; name?: string };
 
+      // The API may omit `name` (it no longer discloses customer names), so a
+      // missing name falls through to the name prompt.
       if (data.known && data.name && !/^(walk.?in|cash|misc|general)/i.test(data.name)) {
         // Known customer — proceed straight to checkout with their name + the verified token
-        onVerified(`+91${phone}`, data.name || "", false, tokenRef.current);
+        onVerified(`+91${phone}`, data.name, false, tokenRef.current);
       } else {
         // New customer — ask for their name
         setShowNameInput(true);
@@ -148,123 +248,188 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
       setError("Please enter your name (at least 2 characters)");
       return;
     }
-    onVerified(`+91${phone}`, name.trim(), true, tokenRef.current);
+    onVerified(`+91${phone}`, name.trim(), true, tokenRef.current, otpTokenRef.current || undefined);
   }
 
-  // ── Name input screen (new customer) ────────────────────────
-  if (showNameInput) {
-    return (
-      <div className="max-w-sm mx-auto px-6 py-8 animate-fade-in">
-        <button
-          onClick={() => { setShowNameInput(false); resetWidget(); }}
-          className="flex items-center gap-1.5 text-sm font-medium mb-6"
-          style={{ color: accentColor }}
-        >
-          <BackIcon color={accentColor} /> Back
-        </button>
+  const stage = showNameInput ? "name" : codeSent ? "code" : "phone";
 
-        <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
-          Welcome!
-        </h2>
-        <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
-          Looks like you're new here. What should we call you?
-        </p>
-
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => { setName(e.target.value); setError(""); }}
-          placeholder="Your name"
-          autoFocus
-          className="store-input w-full mb-3"
-          onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
-        />
-
-        {error && (
-          <p className="text-xs font-medium mb-3" style={{ color: "var(--store-danger)" }}>
-            {error}
-          </p>
-        )}
-
-        <button
-          onClick={handleNameSubmit}
-          className="btn-primary w-full py-3 text-base"
-          style={{ background: accentColor }}
-        >
-          Continue to Checkout
-        </button>
-      </div>
-    );
-  }
-
-  // ── Phone input screen ───────────────────────────────────────
+  // One tree for every step so the Turnstile widget (mounted once) is never
+  // unmounted; it is only hidden once a code is no longer needed.
   return (
     <div className="max-w-sm mx-auto px-6 py-8 animate-fade-in">
-      <button
-        onClick={onBack}
-        className="flex items-center gap-1.5 text-sm font-medium mb-6"
-        style={{ color: accentColor }}
-      >
-        <BackIcon color={accentColor} /> Back to cart
-      </button>
+      {stage === "name" && (
+        <>
+          <button
+            onClick={() => { setShowNameInput(false); if (otpRequired) backToPhone(); else resetWidget(); }}
+            className="flex items-center gap-1.5 text-sm font-medium mb-6"
+            style={{ color: accentColor }}
+          >
+            <BackIcon color={accentColor} /> Back
+          </button>
 
-      <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
-        Enter your mobile number
-      </h2>
-      <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
-        We'll use this to process your order
-      </p>
+          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
+            Welcome!
+          </h2>
+          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
+            Looks like you're new here. What should we call you?
+          </p>
 
-      {/* Phone input with +91 prefix */}
-      <div className="flex mb-3">
-        <span
-          className="inline-flex items-center px-3.5 border border-r-0 rounded-l-lg text-sm font-medium flex-shrink-0"
-          style={{
-            background: "var(--store-bg-secondary)",
-            borderColor: "var(--store-border)",
-            color: "var(--store-text-secondary)",
-          }}
-        >
-          +91
-        </span>
-        <input
-          type="tel"
-          value={phone}
-          onChange={(e) => {
-            setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
-            setError("");
-          }}
-          placeholder="9876543210"
-          inputMode="numeric"
-          autoFocus
-          className="store-input rounded-l-none flex-1"
-          onKeyDown={(e) => e.key === "Enter" && handleIdentify()}
-        />
-      </div>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setError(""); }}
+            placeholder="Your name"
+            autoFocus
+            className="store-input w-full mb-3"
+            onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
+          />
 
-      {/* Turnstile widget */}
-      <div ref={turnstileRef} className="mb-3" />
+          {error && (
+            <p className="text-xs font-medium mb-3" style={{ color: "var(--store-danger)" }}>
+              {error}
+            </p>
+          )}
 
-      {error && (
+          <button
+            onClick={handleNameSubmit}
+            className="btn-primary w-full py-3 text-base"
+            style={{ background: accentColor }}
+          >
+            Continue to Checkout
+          </button>
+        </>
+      )}
+
+      {stage === "code" && (
+        <>
+          <button
+            onClick={backToPhone}
+            className="flex items-center gap-1.5 text-sm font-medium mb-6"
+            style={{ color: accentColor }}
+          >
+            <BackIcon color={accentColor} /> Change number
+          </button>
+
+          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
+            Enter the code
+          </h2>
+          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
+            We sent a 6-digit code by SMS to +91 {phone}
+          </p>
+
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => { setCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }}
+            placeholder="123456"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            aria-label="Verification code"
+            autoFocus
+            className="store-input w-full mb-3 tracking-widest text-center"
+            onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
+          />
+        </>
+      )}
+
+      {stage === "phone" && (
+        <>
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1.5 text-sm font-medium mb-6"
+            style={{ color: accentColor }}
+          >
+            <BackIcon color={accentColor} /> Back to cart
+          </button>
+
+          <h2 className="text-xl font-bold mb-1" style={{ color: "var(--store-text)" }}>
+            Enter your mobile number
+          </h2>
+          <p className="text-sm mb-5" style={{ color: "var(--store-muted)" }}>
+            {otpRequired ? "We'll text you a code to verify it" : "We'll use this to process your order"}
+          </p>
+
+          {/* Phone input with +91 prefix */}
+          <div className="flex mb-3">
+            <span
+              className="inline-flex items-center px-3.5 border border-r-0 rounded-l-lg text-sm font-medium flex-shrink-0"
+              style={{
+                background: "var(--store-bg-secondary)",
+                borderColor: "var(--store-border)",
+                color: "var(--store-text-secondary)",
+              }}
+            >
+              +91
+            </span>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                setError("");
+              }}
+              placeholder="9876543210"
+              inputMode="numeric"
+              autoFocus
+              className="store-input rounded-l-none flex-1"
+              onKeyDown={(e) => e.key === "Enter" && handleIdentify()}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Turnstile widget (needed to request a code or identify) */}
+      <div ref={turnstileRef} className={stage === "name" || (stage === "code" && resendIn > 0) ? "hidden" : "mb-3"} />
+
+      {stage !== "name" && error && (
         <p className="text-xs font-medium mb-3" style={{ color: "var(--store-danger)" }}>
           {error}
         </p>
       )}
 
-      <button
-        onClick={handleIdentify}
-        disabled={loading || phone.length !== 10}
-        className="btn-primary w-full py-3 text-base"
-        style={{ background: accentColor }}
-      >
-        {loading ? (
-          <span className="flex items-center justify-center gap-2">
-            <Spinner /> Verifying...
-          </span>
-        ) : (
-          "Continue"
-        )}
-      </button>
+      {stage === "phone" && (
+        <button
+          onClick={handleIdentify}
+          disabled={loading || phone.length !== 10}
+          className="btn-primary w-full py-3 text-base"
+          style={{ background: accentColor }}
+        >
+          {loading ? (
+            <span className="flex items-center justify-center gap-2">
+              <Spinner /> {otpRequired ? "Sending code..." : "Verifying..."}
+            </span>
+          ) : (
+            otpRequired ? "Send code" : "Continue"
+          )}
+        </button>
+      )}
+
+      {stage === "code" && (
+        <>
+          <button
+            onClick={handleVerifyCode}
+            disabled={loading || code.length !== 6}
+            className="btn-primary w-full py-3 text-base"
+            style={{ background: accentColor }}
+          >
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <Spinner /> Verifying...
+              </span>
+            ) : (
+              "Verify"
+            )}
+          </button>
+          <button
+            onClick={handleSendCode}
+            disabled={loading || resendIn > 0}
+            className="w-full mt-3 text-sm font-medium disabled:opacity-60"
+            style={{ color: accentColor }}
+          >
+            {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+          </button>
+        </>
+      )}
     </div>
   );
 }

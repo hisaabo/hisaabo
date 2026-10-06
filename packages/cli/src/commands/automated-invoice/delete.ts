@@ -1,24 +1,14 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function automatedInvoiceDeleteCommand(id: string, opts: { yes?: boolean; json?: boolean }): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
   try {
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Delete recurring invoice template ${id}? (y/N): `, resolve);
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete recurring invoice template ${id}?`, opts);
 
     const result = await client.recurringInvoice.delete(id);
 

@@ -21,12 +21,12 @@ import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
-import { formatCurrency, formatQuantity, formatDate } from "../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, isHttpUrl } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
-import { useCan, useCanModify } from "../../../src/hooks/useCan";
+import { useCan, useCanModify, useCanCreateDocument } from "../../../src/hooks/useCan";
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
 
@@ -275,7 +275,7 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const statusCfg = SHIPMENT_STATUS_CONFIG[shipment.status as ShipmentStatus] ?? SHIPMENT_STATUS_CONFIG.pending;
   const cost = parseFloat(shipment.cost ?? "0");
   const hasTracking = !!shipment.trackingNumber;
-  const trackingUrl = shipment.trackingUrl ?? null;
+  const trackingUrl = isHttpUrl(shipment.trackingUrl) ? shipment.trackingUrl : null;
 
   const handleMarkShipped = () => {
     haptic.medium();
@@ -481,8 +481,12 @@ export default function InvoiceDetailScreen() {
 
   const canEdit = useCan("update", "Invoice");
   const canRecordPayment = useCan("create", "Payment");
-  // Credit notes and sales returns are documents → create:Invoice
-  const canCreateDocument = useCan("create", "Invoice");
+  // Credit notes and sales returns are documents → create:Invoice, and sellers
+  // may not raise them against a purchase invoice.
+  const canCreateDocument = useCanCreateDocument(
+    "credit_note",
+    invoice?.type === "purchase" ? "purchase" : "sale",
+  );
   // Role permission plus the API's rule: a seller_manager may delete only
   // unpaid invoices up to 2 hours old.
   const canDelete = useCanModify("delete", "Invoice", invoice ? { createdAt: invoice.createdAt as any, status: invoice.status } : undefined).allowed;

@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
-import { formatDate, formatCurrency } from "../../../../src/lib/utils";
+import { formatDate, formatCurrency, isHttpUrl } from "../../../../src/lib/utils";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { fonts } from "../../../../src/lib/theme";
@@ -283,8 +283,9 @@ export default function ShipmentDetailScreen() {
   };
 
   const handleOpenTrackingUrl = () => {
-    if (shipment?.trackingUrl) {
-      Linking.openURL(shipment.trackingUrl).catch(() => {
+    const url = shipment?.trackingUrl;
+    if (isHttpUrl(url)) {
+      Linking.openURL(url).catch(() => {
         Alert.alert("Error", "Could not open the tracking URL.");
       });
     }
@@ -400,12 +401,12 @@ export default function ShipmentDetailScreen() {
                 label="Tracking Number"
                 value={shipment.trackingNumber}
                 mono
-                onPress={shipment.trackingUrl ? handleOpenTrackingUrl : undefined}
+                onPress={isHttpUrl(shipment.trackingUrl) ? handleOpenTrackingUrl : undefined}
               />
               <Divider />
             </>
           ) : null}
-          {shipment.trackingUrl ? (
+          {isHttpUrl(shipment.trackingUrl) ? (
             <>
               <InfoRow
                 icon="link-outline"

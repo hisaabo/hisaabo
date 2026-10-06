@@ -1,13 +1,9 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, outputTable, EXIT, type ColumnDef } from "../../output.js";
+import type { OutputOf } from "../../api-types.js";
 
-interface TenantEntry {
-  id: string;
-  name: string;
-  slug: string;
-  role: string;
-}
+type TenantEntry = OutputOf<"tenant.list">[number];
 
 interface ListOpts {
   json?: boolean;
@@ -18,7 +14,7 @@ export async function tenantListCommand(opts: ListOpts): Promise<void> {
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.tenant.list() as TenantEntry[];
+    const result = await client.tenant.list();
 
     if (opts.json) {
       outputJSON(result);
@@ -28,8 +24,8 @@ export async function tenantListCommand(opts: ListOpts): Promise<void> {
     console.log(`\n Organizations  ${result.length} total\n`);
 
     const cols: ColumnDef<TenantEntry>[] = [
-      { key: "name", header: "Name", width: 30 },
-      { key: "slug", header: "Slug", width: 24 },
+      { key: "tenantName", header: "Name", width: 30 },
+      { key: "tenantSlug", header: "Slug", width: 24 },
       { key: "role", header: "Role", width: 16 },
     ];
 

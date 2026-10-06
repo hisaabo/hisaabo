@@ -116,7 +116,6 @@ export function registerAutomatedInvoiceCommands(program: Command): void {
     .description("Update a recurring invoice template")
     .option("--name <name>", "Template name")
     .option("--frequency <freq>", "weekly/biweekly/monthly/quarterly/half_yearly/yearly/custom")
-    .option("--start-date <date>", "Start date (YYYY-MM-DD)")
     .option("--end-date <date>", "End date (YYYY-MM-DD)")
     .option("--max-runs <n>", "Maximum number of runs")
     .option("--notes <text>", "Notes")
@@ -126,7 +125,6 @@ export function registerAutomatedInvoiceCommands(program: Command): void {
         json: opts.json,
         name: opts.name,
         frequency: opts.frequency,
-        startDate: opts.startDate,
         endDate: opts.endDate,
         maxRuns: opts.maxRuns,
         notes: opts.notes,

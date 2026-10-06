@@ -4,7 +4,7 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, outputIds,
   paginationFooter, EXIT, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate } from "../../format.js";
+import { formatAmount, formatDate, apiFrom, apiTo } from "../../format.js";
 
 interface ListOpts {
   json?: boolean;
@@ -25,8 +25,8 @@ export async function paymentListCommand(opts: ListOpts): Promise<void> {
   try {
     const result = await client.payment.list({
       partyId: opts.partyId ?? null,
-      fromDate: opts.from ?? null,
-      toDate: opts.to ?? null,
+      fromDate: apiFrom(opts.from) ?? null,
+      toDate: apiTo(opts.to) ?? null,
       page,
       limit,
     });

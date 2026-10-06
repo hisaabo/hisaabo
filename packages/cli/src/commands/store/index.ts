@@ -5,6 +5,8 @@ import {
 } from "../../output.js";
 import { formatDate, formatAmount, formatStatus } from "../../format.js";
 
+const ORDER_STATUSES = ["pending", "confirmed", "preparing", "ready", "delivered", "cancelled"] as const;
+
 export async function storeSettingsCommand(opts: { json?: boolean }): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
@@ -20,8 +22,7 @@ export async function storeSettingsCommand(opts: { json?: boolean }): Promise<vo
     console.log("\n  Store Settings\n  " + "─".repeat(35));
     console.log(`  Enabled:  ${settings.storeEnabled ? "Yes" : "No"}`);
     if (settings.storeSlug) console.log(`  Slug:     ${settings.storeSlug}`);
-    if (settings.storeName) console.log(`  Name:     ${settings.storeName}`);
-    if (settings.storeDescription) console.log(`  About:    ${settings.storeDescription}`);
+    if (settings.storeTagline) console.log(`  Tagline:  ${settings.storeTagline}`);
     console.log();
 
   } catch (e) {
@@ -46,7 +47,14 @@ export async function storeOrdersCommand(opts: {
   const limit = opts.limit ?? 20;
 
   try {
-    const result = await client.store.listOrders({ status: opts.status ?? null, page, limit });
+    if (opts.status !== undefined && !(ORDER_STATUSES as readonly string[]).includes(opts.status)) {
+      fatalError(`--status must be one of: ${ORDER_STATUSES.join(", ")}`, EXIT.USAGE);
+    }
+    const result = await client.store.listOrders({
+      status: opts.status as (typeof ORDER_STATUSES)[number] | undefined,
+      page,
+      limit,
+    });
 
     if (opts.json) {
       outputJSON({ data: result.data, pagination: { page: result.page, limit: result.limit, total: result.total } });
@@ -58,7 +66,7 @@ export async function storeOrdersCommand(opts: {
     const cols: ColumnDef<StoreOrderSummary>[] = [
       { key: "orderNumber", header: "#", width: 12 },
       { key: "customerName", header: "Customer", width: 20 },
-      { key: "createdAt", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
+      { key: "createdAt", header: "Date", width: 13, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];

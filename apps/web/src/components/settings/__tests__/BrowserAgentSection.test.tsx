@@ -2,7 +2,7 @@
  * BrowserAgentSection — WebMCP user switch
  *
  * Covers:
- * - Default ON (no stored preference) and reading a stored "off"
+ * - Default OFF (no stored preference); only an explicit "on" enables it
  * - Toggling flips aria-checked and persists to localStorage
  * - Turning it back on clears the stored value
  * - The unsupported note appears only when the browser has no modelContext,
@@ -49,38 +49,38 @@ describe("BrowserAgentSection", () => {
     expect(screen.getByText(/Stored per browser\./i)).toBeInTheDocument();
   });
 
-  it("defaults to on when nothing is stored", () => {
-    render(<BrowserAgentSection />);
-
-    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("reflects a stored 'off' preference", () => {
-    localStorage.setItem(WEBMCP_PREF_KEY, "off");
-
+  it("defaults to off when nothing is stored", () => {
     render(<BrowserAgentSection />);
 
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
   });
 
-  it("turning it off flips aria-checked and persists to localStorage", () => {
+  it("reflects a stored explicit 'on' preference", () => {
+    localStorage.setItem(WEBMCP_PREF_KEY, "on");
+
     render(<BrowserAgentSection />);
-    const toggle = screen.getByRole("switch");
 
-    fireEvent.click(toggle);
-
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(localStorage.getItem(WEBMCP_PREF_KEY)).toBe("off");
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
 
-  it("turning it back on clears the stored value", () => {
-    localStorage.setItem(WEBMCP_PREF_KEY, "off");
+  it("turning it on flips aria-checked and persists an explicit value", () => {
     render(<BrowserAgentSection />);
     const toggle = screen.getByRole("switch");
 
     fireEvent.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem(WEBMCP_PREF_KEY)).toBe("on");
+  });
+
+  it("turning it back off clears the stored value", () => {
+    localStorage.setItem(WEBMCP_PREF_KEY, "on");
+    render(<BrowserAgentSection />);
+    const toggle = screen.getByRole("switch");
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(localStorage.getItem(WEBMCP_PREF_KEY)).toBeNull();
   });
 
@@ -94,7 +94,7 @@ describe("BrowserAgentSection", () => {
     const toggle = screen.getByRole("switch");
     expect(toggle).not.toBeDisabled();
     fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
   });
 
   it("hides the unsupported note when document.modelContext exists", () => {

@@ -1,8 +1,8 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 import { formatINR } from "../../format.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function paymentDeleteCommand(id: string, opts: { yes?: boolean; json?: boolean }): Promise<void> {
   const cfg = requireAuth();
@@ -12,17 +12,7 @@ export async function paymentDeleteCommand(id: string, opts: { yes?: boolean; js
     const payment = await client.payment.getById(id);
     if (!payment) fatalError(`Payment not found: ${id}`, EXIT.NOT_FOUND);
 
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Delete ${payment!.paymentNumber} (${formatINR(payment!.amount)})? (y/N): `, resolve);
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete ${payment!.paymentNumber} (${formatINR(payment!.amount)})?`, opts);
 
     const result = await client.payment.delete(id);
 

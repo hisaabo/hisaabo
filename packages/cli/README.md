@@ -22,12 +22,12 @@ npm install -g @hisaabo/cli
 hisaabo login --api-url https://your-hisaabo-instance.com
 ```
 
-You'll be prompted for email and password, then asked to pick a business if you have more than one.
+Your browser opens so you can sign in to the Hisaabo web app (magic link); the CLI receives a one-time code on a local 127.0.0.1 callback and exchanges it using PKCE. The URL is also printed for headless machines. You are then asked to pick a business if you have more than one. On a self-hosted server whose web app is not at the default hosted address, pass `--web-url https://your-web-app` (or set `HISAABO_WEB_URL`).
 
 **Log in with an API key (for scripts and CI):**
 
 ```bash
-hisaabo login --api-url https://your-hisaabo-instance.com --token hisaabo_key_abc123...
+echo "hisaabo_key_abc123..." | hisaabo login --api-url https://your-hisaabo-instance.com --token-stdin
 ```
 
 Generate API keys at Settings > API Keys in the Hisaabo web app.
@@ -46,7 +46,7 @@ hisaabo whoami
 
 | Command | Description |
 |---|---|
-| `hisaabo login` | Authenticate with email/password or API key |
+| `hisaabo login` | Sign in via browser, or with an API key (`--token-stdin`) |
 | `hisaabo logout` | Clear saved credentials |
 | `hisaabo whoami` | Show current user and active business |
 | `hisaabo switch` | Switch active business |
@@ -57,6 +57,7 @@ hisaabo whoami
 |---|---|
 | `hisaabo business list` | List all businesses under your account |
 | `hisaabo business switch` | Switch active business |
+| `hisaabo business sequence --type <type> --next-number <n>` | Set the next document number (invoice, payment, quotation, credit_note, delivery_challan, proforma; cannot go backwards) |
 
 ### Dashboard
 
@@ -83,6 +84,11 @@ hisaabo whoami
 | `party get <id>` | Get party profile with balance |
 | `party create` | Add a new customer or supplier |
 | `party ledger <id>` | Debit/credit history for a party |
+| `party update <id>` | Update a party (only the options you pass change) |
+| `party stats <id>` | Invoice and payment counts for a party |
+| `party top-items <id>` | Items a party buys most |
+| `party merge <sourceId> <targetId>` | Merge one party into another (moves invoices and payments) |
+| `party ledger-report <id>` | Ledger report with running balance and totals (`--from`, `--to`, `--this-month`, `--this-fy`) |
 | `party delete <id>` | Delete a party |
 
 ### Items
@@ -93,6 +99,18 @@ hisaabo whoami
 | `item get <id>` | Get item details with stock and pricing |
 | `item create` | Add a new product or service |
 | `item stock <id> <adjustment>` | Adjust stock (+10, -5, or set to 100) |
+| `item update <id>` | Update an item (only the options you pass change) |
+| `item merge <sourceId> <targetId>` | Merge one item into another (`--conversion-factor`) |
+| `item price-history <id>` | Past invoiced prices for an item |
+| `item sales-stats <id>` | Lifetime sales totals for an item |
+| `item stock-history <id>` | Stock adjustment history |
+| `item rename-unit <id> --old <u> --new <u>` | Rename one of an item's units |
+| `item switch-base-unit <id> --unit <u> --conversion-factor <n>` | Switch an item's base unit |
+| `item low-stock-count` | Count items below their low-stock threshold |
+| `item variants list <itemId>` | List an item's variants |
+| `item variants create <itemId> --attributes '{"size":"M"}'` | Create a variant |
+| `item variants update <variantId>` | Update a variant |
+| `item variants delete <variantId>` | Delete a variant |
 | `item delete <id>` | Delete an item |
 
 ### Payments
@@ -181,6 +199,8 @@ hisaabo whoami
 |---|---|
 | `import parties <file>` | Bulk import parties from JSON or CSV |
 | `import items <file>` | Bulk import items from JSON or CSV |
+
+`--source` defaults to `hisaabo` (the Hisaabo export format); use `--source mybillbook` for myBillBook files.
 
 ### Backup & Restore
 
@@ -286,6 +306,25 @@ Most commands accept these flags:
 | `--this-month` | Filter to current calendar month |
 | `--this-fy` | Filter to current financial year (April-March) |
 | `-y, --yes` | Skip confirmation prompts |
+| `--tz <zone>` | Global option: IANA time zone for date boundaries (see below) |
+
+### Dates and time zones
+
+`--from`, `--to`, `--this-month`, `--this-fy` and other date options take a plain
+`YYYY-MM-DD` date and mean that calendar day **in your local time zone**: `--from`
+is the start of the day (00:00:00.000) and `--to` is the end of the day
+(23:59:59.999), converted to the equivalent UTC instant before being sent to the
+server. Daylight-saving changes are handled per date. "Today", the current month
+and the financial year are also computed in that zone.
+
+To use a different zone, pass the global `--tz <IANA name>` option or set
+`HISAABO_TZ`. Precedence: `--tz`, then `HISAABO_TZ`, then the machine's zone.
+An unknown zone name is rejected with an error.
+
+```bash
+hisaabo --tz Asia/Kolkata invoice list --from 2025-04-01 --to 2025-04-30
+HISAABO_TZ=America/New_York hisaabo report profit-loss --this-month
+```
 
 ---
 

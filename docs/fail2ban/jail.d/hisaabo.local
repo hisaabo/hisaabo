@@ -9,9 +9,32 @@
 
 [DEFAULT]
 backend  = systemd
+# Never ban yourself, your monitoring, or the reverse proxy / tunnel that fronts
+# the API. Add your office/VPN addresses here (space separated). If a proxy on
+# the host (Caddy, nginx, cloudflared) forwards the client IP, the `ip` in the
+# log is the end client, but keep the proxy's own addresses here as a safeguard.
+ignoreip = 127.0.0.1/8 ::1
+
+# Which firewall chain the ban applies to depends on how traffic reaches the API:
+#
+#  (a) docker-compose.prod.yml default: the API port is bound to 127.0.0.1 and a
+#      reverse proxy ON THE HOST (Caddy / nginx / cloudflared) listens on 80/443.
+#      Client traffic hits the host's INPUT chain, so the stock actions work:
 banaction = iptables-multiport
-# Tell fail2ban what action to take. Use `nftables-multiport` if the host
-# uses nftables natively (most modern Debian/Ubuntu hosts do).
+#      (use `nftables-multiport` if the host uses nftables natively)
+#
+#  (b) Docker publishes the web-facing port itself (e.g. you run nginx in a
+#      container with `ports: 80:80`, or set API_BIND=0.0.0.0). Docker DNATs that
+#      traffic and it goes through FORWARD -> DOCKER-USER, NOT INPUT, so INPUT
+#      bans are silently ineffective. Ban in the DOCKER-USER chain instead:
+#        banaction = iptables-multiport
+#        chain     = DOCKER-USER
+#      (nftables hosts: `banaction = nftables-multiport` with `chain = forward`
+#      and a base chain hooked at forward priority < 0 — see fail2ban docs.)
+#
+# fail2ban only bans the address that appears in the log. That is correct only if
+# the API computes the client IP correctly: see TRUST_PROXY_HOPS / TRUST_CLOUDFLARE
+# in .env.prod.example and docs/fail2ban/README.md.
 
 # ── Brute-force auth jail ────────────────────────────────────────
 # Catches password-stuffing against /api/trpc/auth.login.

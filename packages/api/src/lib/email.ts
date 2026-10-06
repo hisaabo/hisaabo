@@ -12,12 +12,12 @@ function escapeHtml(str: string): string {
 }
 
 interface EmailService {
-  sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void>;
+  sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void>;
   sendInvitation(to: string, inviteUrl: string, businessName: string, inviterName: string | null): Promise<void>;
 }
 
 class ConsoleEmailService implements EmailService {
-  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void> {
+  async sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
       throw new Error("Email service not configured");
@@ -27,7 +27,6 @@ class ConsoleEmailService implements EmailService {
     console.log(`║  ${isNewUser ? "WELCOME" : "Magic link"} for ${to.padEnd(isNewUser ? 36 : 40)}║`);
     console.log("╠══════════════════════════════════════════════════════════╣");
     console.log(`║  Primary:   ${magicLinkUrl}`);
-    if (deepLinkUrl) console.log(`║  Secondary: ${deepLinkUrl}`);
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log("");
   }
@@ -55,15 +54,7 @@ class ResendEmailService implements EmailService {
     private fromAddress: string,
   ) {}
 
-  async sendMagicLink(to: string, magicLinkUrl: string, deepLinkUrl?: string, isNewUser?: boolean): Promise<void> {
-    // Secondary link: when primary is the web URL, secondary is the deep link
-    // (for desktop/mobile users). When primary is the deep link, secondary is the web URL.
-    const isSecondaryWeb = deepLinkUrl?.startsWith("http");
-    const secondaryLabel = isSecondaryWeb ? "Open in browser instead" : "Using the desktop app? Open in Hisaabo";
-    const deepLinkHtml = deepLinkUrl
-      ? `<tr><td style="padding: 0 40px;"><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding: 4px 0 0 0; text-align: center;"><p style="margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 20px; color: #6b7280;"><a href="${escapeHtml(deepLinkUrl)}" style="color: #4f46e5; text-decoration: underline; font-weight: 500;">${secondaryLabel}</a></p></td></tr></table></td></tr>`
-      : "";
-
+  async sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void> {
     const subject = isNewUser ? "Welcome to Hisaabo" : "Sign in to Hisaabo";
     const preheader = isNewUser
       ? "Your business deserves pakka hisaab. Set up your account and start invoicing in under 2 minutes."
@@ -177,9 +168,6 @@ ${mainContentHtml}
 </td></tr>
 
 ${reassuranceHtml}
-
-<!-- Deep link (optional) -->
-${deepLinkHtml}
 
 <!-- Divider -->
 <tr><td style="padding: 24px 40px 0 40px;">

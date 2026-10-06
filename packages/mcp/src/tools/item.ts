@@ -8,7 +8,6 @@
  *   item_adjust_stock            — record a stock-in or stock-out adjustment
  *   item_update                  — update an existing item's details or pricing
  *   item_delete                  — permanently delete an item
- *   item_categories              — list all distinct item categories
  *   item_create_variant          — add a variant to a variant-mode item
  *   item_update_variant          — update an existing item variant
  *   item_delete_variant          — permanently delete a variant
@@ -21,12 +20,12 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
-export function registerItemTools(server: McpServer, client: HisaaboClient) {
+export function registerItemTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "item_list",
@@ -221,43 +220,25 @@ export function registerItemTools(server: McpServer, client: HisaaboClient) {
   );
 
   server.tool(
-    "item_categories",
-    [
-      "Get a list of all distinct item categories used in the business.",
-      "Use this to discover valid category names before filtering item_list by category or creating items.",
-    ].join(" "),
-    {},
-    wrapTool(async (_input) => {
-      const categories = await client.item.categories();
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(categories, null, 2),
-        }],
-      };
-    })
-  );
-
-  server.tool(
     "item_adjust_stock",
     [
       "Record a manual stock adjustment for an inventory item.",
-      "Use a positive adjustment to add stock (e.g. '+50' for stock received) and a negative adjustment to remove stock (e.g. '-5' for damaged goods).",
+      "Use a positive adjustment to add stock (e.g. '50' for stock received) and a negative adjustment to remove stock (e.g. '-5' for damaged goods).",
       "Every adjustment is recorded in the audit log — always provide a reason.",
-      "Example: to record receiving 100 units from a supplier, set adjustment='+100' and reason='Stock received from Supplier X'.",
+      "Example: to record receiving 100 units from a supplier, set adjustment='100' and reason='Stock received from Supplier X'.",
     ].join(" "),
     {
       item_id: z.string().uuid()
         .describe("Item UUID from item_list."),
       adjustment: z.string().regex(/^[+-]?\d+(\.\d{1,3})?$/)
-        .describe("Signed quantity change as decimal string. '+50' or '50' to add, '-10' to subtract."),
+        .describe("Signed quantity change as decimal string. '50' to add, '-10' to subtract. Must not be zero."),
       reason: z.string().max(500).optional()
         .describe("Reason for the adjustment, e.g. 'Stock received from supplier', 'Damaged goods write-off'."),
     },
     wrapTool(async (input) => {
       const result = await client.item.adjustStock({
         itemId: input.item_id,
-        adjustment: input.adjustment,
+        quantity: input.adjustment.replace(/^\+/, ""),
         reason: input.reason,
       });
       return {
@@ -501,7 +482,7 @@ export function registerItemTools(server: McpServer, client: HisaaboClient) {
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(withPaginationMeta(result as any), null, 2),
+          text: JSON.stringify(withPaginationMeta(result), null, 2),
         }],
       };
     })

@@ -27,18 +27,18 @@ interface SettingItem {
   danger?: boolean;
   route?: string;
   /** Hide the row from roles that couldn't change anything on its screen. */
-  requires?: "manage:Business" | "update:Store";
+  requires?: "manage:Business" | "update:Store" | "manage:Team";
 }
 
 const SETTINGS: SettingItem[] = [
   { label: "Business Details", icon: "business-outline", description: "Name, GST, address", route: "/(more)/settings/business", requires: "manage:Business" },
   { label: "Documents", icon: "document-text-outline", description: "Prefixes and sequence numbers", route: "/(more)/settings/documents", requires: "manage:Business" },
-  { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team" },
+  { label: "Team", icon: "people-outline", description: "Members and roles", route: "/(more)/settings/team", requires: "manage:Team" },
   { label: "Online Store", icon: "storefront-outline", description: "Store settings and items", route: "/(more)/settings/store", requires: "update:Store" },
   { label: "Appearance", icon: "color-palette-outline", description: "Light, dark, or system", route: "/(more)/settings/appearance" },
   { label: "Profile", icon: "person-outline", description: "Name, email, password", route: "/(more)/settings/profile" },
   { label: "Account", icon: "shield-checkmark-outline", description: "Sessions and activity log", route: "/(more)/settings/account" },
-  { label: "API Keys", icon: "key-outline", description: "Programmatic access tokens", route: "/(more)/settings/api-keys" },
+  { label: "API Keys", icon: "key-outline", description: "Programmatic access tokens", route: "/(more)/settings/api-keys", requires: "manage:Team" },
   { label: "Sign Out", icon: "log-out-outline", description: "End your session", danger: true },
 ];
 
@@ -51,12 +51,15 @@ export default function SettingsScreen() {
   const [showOrgSwitcher, setShowOrgSwitcher] = useState(false);
   const canManageBusiness = useCan("manage", "Business");
   const canUpdateStore = useCan("update", "Store");
+  const canManageTeam = useCan("manage", "Team");
   const visibleSettings = SETTINGS.filter((item) =>
     item.requires === "manage:Business"
       ? canManageBusiness
       : item.requires === "update:Store"
         ? canUpdateStore
-        : true,
+        : item.requires === "manage:Team"
+          ? canManageTeam
+          : true,
   );
 
   const { data: session } = trpc.auth.me.useQuery();

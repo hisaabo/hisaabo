@@ -22,7 +22,7 @@ import {
   EmptyState,
   QueryError,
 } from "../../../src/components/ui";
-import { useCan } from "../../../src/hooks/useCan";
+import { useCanCreateDocument } from "../../../src/hooks/useCan";
 
 type InvoiceType = "sale" | "purchase";
 type StatusFilter = "all" | "unpaid" | "draft" | "sent" | "partial" | "overdue" | "paid" | "cancelled";
@@ -53,7 +53,8 @@ export default function InvoicesScreen() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [allInvoices, setAllInvoices] = useState<NonNullable<typeof data>["data"]>([]);
-  const canCreate = useCan("create", "Invoice");
+  // Sellers cannot create purchase invoices, so the FAB follows the active tab.
+  const canCreate = useCanCreateDocument("invoice", invoiceType);
 
   // Sync route params to state when navigating from other screens (e.g. home dashboard)
   useEffect(() => {
@@ -239,7 +240,9 @@ export default function InvoicesScreen() {
         keyboardDismissMode="on-drag"
       />
 
-      {canCreate && <FAB onPress={() => router.push("/(invoices)/create" as never)} />}
+      {canCreate && <FAB onPress={() => router.push(
+        (invoiceType === "purchase" ? "/(invoices)/create?type=purchase" : "/(invoices)/create") as never,
+      )} />}
     </SafeAreaView>
   );
 }

@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { Logo } from "@/components/ui/Logo";
 import { isDesktop } from "@/lib/isDesktop";
 import { saveDesktopToken } from "@/lib/desktop-session";
+import { peekNativeRequest } from "@/lib/native-login";
 
 export const Route = createFileRoute("/auth/verify")({
   component: VerifyPage,
@@ -13,23 +14,16 @@ function VerifyPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const [error, setError] = useState<string | null>(null);
-  // Capture token + source ONCE from the URL at mount, before the effect
+  // Capture the token ONCE from the URL at mount, before the effect
   // strips the query string for Referer safety. Lazy init keeps the values
-  // available for the hand-off UI (and its manual retry button) after
-  // history.replaceState has cleared window.location.search.
+  // available after history.replaceState has cleared window.location.search.
   const [token] = useState(() =>
     new URLSearchParams(window.location.search).get("token")
   );
-  const [source] = useState(() =>
-    new URLSearchParams(window.location.search).get("source")
-  );
-  // When the sign-in was initiated from a desktop or mobile client, the
-  // verify page hands off to the native app via the `hisaabo://` scheme
-  // instead of consuming the token in the browser. Emails ship the HTTPS
-  // URL as the clickable CTA because email clients strip custom URL
-  // schemes — see the rationale in packages/api/src/routers/auth.ts
-  // (sendMagicLink). `handoffMode` drives the "Opening Hisaabo…" UI.
-  const [handoffMode, setHandoffMode] = useState<"desktop" | "mobile" | null>(null);
+  const { data: existingSession, isLoading: sessionLoading } = trpc.auth.me.useQuery();
+  // A magic-link token must never silently replace an existing session
+  // (login CSRF / session fixation) — ask for an explicit click first.
+  const [needsConfirm, setNeedsConfirm] = useState(false);
   const calledRef = useRef(false);
 
   const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
@@ -39,7 +33,8 @@ function VerifyPage() {
       if (isDesktop() && data?.sessionToken) {
         await saveDesktopToken(data.sessionToken);
       }
-      utils.auth.me.invalidate();
+      if (existingSession?.user) utils.invalidate();
+      else utils.auth.me.invalidate();
       const pendingToken = sessionStorage.getItem("pendingInviteToken");
       if (data.needsProfile) {
         navigate({
@@ -48,6 +43,8 @@ function VerifyPage() {
         });
       } else if (pendingToken) {
         navigate({ to: `/invite/${pendingToken}` });
+      } else if (peekNativeRequest()) {
+        navigate({ to: "/auth/native" });
       } else {
         navigate({ to: "/" });
       }
@@ -56,39 +53,31 @@ function VerifyPage() {
   });
 
   useEffect(() => {
-    if (calledRef.current) return;
-    calledRef.current = true;
-
-    // Strip token AND source from the URL immediately to prevent Referer
+    // Strip the token from the URL immediately to prevent Referer
     // leakage and to stop a browser reload from re-triggering a spent token.
     window.history.replaceState({}, "", "/auth/verify");
+  }, []);
+
+  useEffect(() => {
+    if (sessionLoading || calledRef.current) return;
+    calledRef.current = true;
 
     if (!token) {
       setError("No token found in URL.");
       return;
     }
 
-    // Hand off to the native app when the sign-in originated there. The
-    // token is consumed inside the app's own `verifyMagicLink` call — not
-    // here in the browser — so the user ends up authenticated inside the
-    // Tauri/Expo app, which is what they wanted.
-    if (source === "desktop" || source === "mobile") {
-      setHandoffMode(source);
-      window.location.href = `hisaabo://verify?token=${encodeURIComponent(token)}`;
+    if (existingSession?.user) {
+      setNeedsConfirm(true);
       return;
     }
 
     verifyMutation.mutate({ token });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function retryHandoff() {
+  function confirmSwitch() {
     if (!token) return;
-    window.location.href = `hisaabo://verify?token=${encodeURIComponent(token)}`;
-  }
-
-  function verifyInBrowser() {
-    if (!token) return;
-    setHandoffMode(null);
+    setNeedsConfirm(false);
     verifyMutation.mutate({ token });
   }
 
@@ -120,28 +109,22 @@ function VerifyPage() {
               Back to sign in
             </button>
           </>
-        ) : handoffMode ? (
+        ) : needsConfirm ? (
           <>
-            <div className="w-12 h-12 mx-auto mb-4 flex items-center justify-center">
-              <Logo className="w-12 h-12" />
-            </div>
-            <h1 className="text-lg font-semibold text-text-primary mb-1">
-              Opening Hisaabo{handoffMode === "desktop" ? " Desktop" : ""}…
+            <h1 className="text-lg font-semibold text-text-primary mb-2">
+              You are already signed in
             </h1>
             <p className="text-sm text-text-tertiary mb-6">
-              We&rsquo;re handing your sign-in off to the {handoffMode === "desktop" ? "desktop app" : "mobile app"}. If nothing happens, tap the button below.
+              Signing in with this link will replace your current session. Switch account?
             </p>
-            <button
-              onClick={retryHandoff}
-              className="btn-primary w-full py-2.5 mb-3"
-            >
-              Open Hisaabo {handoffMode === "desktop" ? "Desktop" : "App"}
+            <button onClick={confirmSwitch} className="btn-primary w-full py-2.5 mb-3">
+              Switch account
             </button>
             <button
-              onClick={verifyInBrowser}
+              onClick={() => navigate({ to: "/" })}
               className="text-sm text-text-tertiary hover:text-text-primary underline underline-offset-2"
             >
-              Sign in here in the browser instead
+              Stay signed in
             </button>
           </>
         ) : (

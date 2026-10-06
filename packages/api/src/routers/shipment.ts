@@ -7,6 +7,13 @@ import { logAudit } from "../lib/audit.js";
 import { upsertShipmentCharge, removeShipmentCharge } from "../lib/shipment-invoice-sync.js";
 import { TRPCError } from "@trpc/server";
 
+// http(s) only: the URL is rendered as a link, so javascript:/data: must never be stored.
+// An empty string is accepted to clear the field.
+export const trackingUrlSchema = z.union([
+  z.literal(""),
+  z.string().max(500).url().refine((v) => /^https?:\/\//i.test(v), "Tracking URL must start with http:// or https://"),
+]);
+
 // Known carriers with auto-generated tracking URLs
 const CARRIER_TRACKING_URLS: Record<string, (trackingNumber: string) => string> = {
   delhivery: (t) => `https://www.delhivery.com/track/package/${t}`,
@@ -22,7 +29,7 @@ function buildTrackingUrl(carrier: string | null, trackingNumber: string | null)
   if (!carrier || !trackingNumber) return null;
   const key = carrier.toLowerCase().replace(/[\s-]/g, "_");
   const builder = CARRIER_TRACKING_URLS[key];
-  return builder ? builder(trackingNumber) : null;
+  return builder ? builder(encodeURIComponent(trackingNumber)) : null;
 }
 
 export const shipmentRouter = router({
@@ -119,7 +126,7 @@ export const shipmentRouter = router({
       carrier: z.string().max(100).optional(),
       mode: z.string().max(50).optional(),
       trackingNumber: z.string().max(200).optional(),
-      trackingUrl: z.string().max(500).optional(),
+      trackingUrl: trackingUrlSchema.optional(),
       cost: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
       weight: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
       shippingAddress: z.string().optional(),
@@ -195,7 +202,7 @@ export const shipmentRouter = router({
       carrier: z.string().max(100).optional(),
       mode: z.string().max(50).optional(),
       trackingNumber: z.string().max(200).optional(),
-      trackingUrl: z.string().max(500).optional(),
+      trackingUrl: trackingUrlSchema.optional(),
       cost: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
       weight: z.string().regex(/^\d+(\.\d{1,3})?$/).optional(),
       status: z.enum(["pending", "shipped", "in_transit", "delivered", "returned"]).optional(),

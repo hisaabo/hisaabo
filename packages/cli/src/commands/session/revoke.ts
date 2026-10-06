@@ -1,14 +1,18 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, success, outputJSON, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 interface RevokeSessionOpts {
+  yes?: boolean;
   json?: boolean;
 }
 
 export async function revokeSessionCommand(sessionId: string, opts: RevokeSessionOpts): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
+
+  await confirmOrExit(`Revoke session ${sessionId}?`, opts);
 
   try {
     const result = await client.auth.revokeSession({ sessionId });

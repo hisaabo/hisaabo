@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { csvCell, stripControlChars } from "@hisaabo/shared";
 
 // ── Environment detection ──────────────────────────────────────────────────
 
@@ -17,6 +18,39 @@ export function hasColor(): boolean {
 export function stripAnsi(str: string): string {
   // eslint-disable-next-line no-control-regex
   return str.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/**
+ * Neutralise terminal escape/control characters in untrusted text. Colour
+ * (SGR) sequences are kept so our own chalk styling survives; every other
+ * control sequence introducer is replaced.
+ */
+export function sanitizeTerminal(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.split(/(\x1b\[[0-9;]*m)/).map((part, i) => (i % 2 === 1 ? part : stripControlChars(part))).join("");
+}
+
+/**
+ * Defence in depth: route every string written to stdout/stderr (including
+ * console.*) through sanitizeTerminal so server-supplied text can't inject
+ * escape sequences. A single leading CR is kept for in-place progress lines.
+ */
+export function installTerminalSanitizer(): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    const orig = stream.write.bind(stream) as (chunk: unknown, ...rest: unknown[]) => boolean;
+    stream.write = ((chunk: unknown, ...rest: unknown[]): boolean => {
+      if (typeof chunk === "string") {
+        const lead = chunk.startsWith("\r") ? "\r" : "";
+        chunk = lead + sanitizeTerminal(chunk.slice(lead.length));
+      }
+      return orig(chunk, ...rest);
+    }) as typeof stream.write;
+  }
+}
+
+/** Sanitise a table cell: no control chars and no line breaks. */
+function cellText(str: string): string {
+  return sanitizeTerminal(str).replace(/[\r\n\t]+/g, " ");
 }
 
 // ── Terminal width tiers ──────────────────────────────────────────────────
@@ -53,26 +87,26 @@ export const EXIT = {
 
 export function fatalError(message: string, code = 1): never {
   if (hasColor()) {
-    process.stderr.write(chalk.red("Error: ") + message + "\n");
+    process.stderr.write(chalk.red("Error: ") + sanitizeTerminal(message) + "\n");
   } else {
-    process.stderr.write("Error: " + message + "\n");
+    process.stderr.write("Error: " + sanitizeTerminal(message) + "\n");
   }
   process.exit(code);
 }
 
 export function success(message: string): void {
   if (hasColor()) {
-    process.stdout.write(chalk.green("✓ ") + message + "\n");
+    process.stdout.write(chalk.green("✓ ") + sanitizeTerminal(message) + "\n");
   } else {
-    process.stdout.write("OK: " + message + "\n");
+    process.stdout.write("OK: " + sanitizeTerminal(message) + "\n");
   }
 }
 
 export function warn(message: string): void {
   if (hasColor()) {
-    process.stderr.write(chalk.yellow("Warning: ") + message + "\n");
+    process.stderr.write(chalk.yellow("Warning: ") + sanitizeTerminal(message) + "\n");
   } else {
-    process.stderr.write("Warning: " + message + "\n");
+    process.stderr.write("Warning: " + sanitizeTerminal(message) + "\n");
   }
 }
 
@@ -85,7 +119,8 @@ export function outputJSON(data: unknown): void {
 // ── Table output ──────────────────────────────────────────────────────────
 
 export interface ColumnDef<T extends object> {
-  key: keyof T | string;
+  /** A property of the row, or a dotted path into a nested object (e.g. "party.name"). */
+  key: (keyof T & string) | `${string}.${string}`;
   header: string;
   width?: number;
   align?: "left" | "right";
@@ -100,6 +135,13 @@ function getNestedValue(obj: object, key: string): unknown {
     cur = (cur as Record<string, unknown>)[part];
   }
   return cur;
+}
+
+function cellValue<T extends object>(col: ColumnDef<T>, row: T): string {
+  const raw = col.format
+    ? col.format(getNestedValue(row, col.key as string), row)
+    : String(getNestedValue(row, col.key as string) ?? "");
+  return cellText(raw);
 }
 
 function padEnd(str: string, len: number): string {
@@ -124,10 +166,7 @@ export function outputTable<T extends object>(rows: T[], columns: ColumnDef<T>[]
   const widths = columns.map((col) => {
     let max = stripAnsi(col.header).length;
     for (const row of rows) {
-      const val = col.format
-        ? col.format(getNestedValue(row, col.key as string), row)
-        : String(getNestedValue(row, col.key as string) ?? "");
-      const vis = stripAnsi(val).length;
+      const vis = stripAnsi(cellValue(col, row)).length;
       if (vis > max) max = vis;
     }
     if (col.width) max = Math.min(max, col.width);
@@ -140,9 +179,10 @@ export function outputTable<T extends object>(rows: T[], columns: ColumnDef<T>[]
   let header = " ";
   for (let i = 0; i < columns.length; i++) {
     const col = columns[i];
+    const hdr = cellText(col.header);
     const h = col.align === "right"
-      ? padStart(col.header, widths[i])
-      : padEnd(col.header, widths[i]);
+      ? padStart(hdr, widths[i])
+      : padEnd(hdr, widths[i]);
     header += (hasColor() ? chalk.dim(h) : h) + "  ";
   }
   process.stdout.write(" " + (hasColor() ? chalk.dim(sep) : sep) + "\n");
@@ -154,9 +194,7 @@ export function outputTable<T extends object>(rows: T[], columns: ColumnDef<T>[]
     let line = " ";
     for (let i = 0; i < columns.length; i++) {
       const col = columns[i];
-      let val = col.format
-        ? col.format(getNestedValue(row, col.key as string), row)
-        : String(getNestedValue(row, col.key as string) ?? "");
+      let val = cellValue(col, row);
       // Truncate if needed
       const vis = stripAnsi(val).length;
       if (col.width && vis > col.width) {
@@ -176,35 +214,21 @@ export function outputTable<T extends object>(rows: T[], columns: ColumnDef<T>[]
 // ── TSV output ────────────────────────────────────────────────────────────
 
 export function outputTSV<T extends object>(rows: T[], columns: ColumnDef<T>[]): void {
-  process.stdout.write(columns.map((c) => c.header).join("\t") + "\n");
+  process.stdout.write(columns.map((c) => stripControlChars(c.header).replace(/[\t\r\n]+/g, " ")).join("\t") + "\n");
   for (const row of rows) {
-    const line = columns.map((col) => {
-      const val = col.format
-        ? col.format(getNestedValue(row, col.key as string), row)
-        : String(getNestedValue(row, col.key as string) ?? "");
-      return stripAnsi(val).replace(/\t/g, " ");
-    });
+    const line = columns.map((col) => stripAnsi(cellValue(col, row)));
     process.stdout.write(line.join("\t") + "\n");
   }
 }
 
 // ── CSV output ────────────────────────────────────────────────────────────
 
-function csvEscape(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
-}
-
 export function outputCSV<T extends object>(rows: T[], columns: ColumnDef<T>[]): void {
-  process.stdout.write(columns.map((c) => csvEscape(c.header)).join(",") + "\n");
+  process.stdout.write(columns.map((c) => csvCell(stripControlChars(c.header))).join(",") + "\n");
   for (const row of rows) {
     const line = columns.map((col) => {
-      const val = col.format
-        ? col.format(getNestedValue(row, col.key as string), row)
-        : String(getNestedValue(row, col.key as string) ?? "");
-      return csvEscape(stripAnsi(val));
+      const val = stripAnsi(cellValue(col, row));
+      return val === "-" ? '"-"' : csvCell(val); // bare dash is an empty-value placeholder, not a formula
     });
     process.stdout.write(line.join(",") + "\n");
   }
@@ -214,7 +238,7 @@ export function outputCSV<T extends object>(rows: T[], columns: ColumnDef<T>[]):
 
 export function outputIds(ids: string[]): void {
   for (const id of ids) {
-    process.stdout.write(id + "\n");
+    process.stdout.write(sanitizeTerminal(id).replace(/[\r\n]+/g, " ") + "\n");
   }
 }
 

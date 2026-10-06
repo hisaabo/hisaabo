@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, hasColor, termWidth } from "../../output.js";
-import { formatAmount, formatStatus, formatRelativeDate, currentFY, fyStart, todayISO } from "../../format.js";
+import { formatAmount, formatStatus, formatRelativeDate, currentFY, fyStart, todayISO, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 function box(title: string, lines: string[], width: number): string[] {
@@ -32,7 +32,7 @@ export async function dashboardCommand(opts: { json?: boolean }): Promise<void> 
   const to = todayISO();
 
   try {
-    const summary = await client.dashboard.summary({ fromDate: from, toDate: to });
+    const summary = await client.dashboard.summary({ fromDate: apiFrom(from), toDate: apiTo(to) });
 
     if (opts.json) {
       outputJSON(summary);

@@ -574,10 +574,10 @@ describe("Root layout navigation", () => {
     }
   });
 
-  it("shows every item while the role is not yet known (graceful degradation)", () => {
+  it("hides every permissioned item while the role is not yet known (fail closed)", () => {
     renderAs(null, Root);
     for (const label of ["Dashboard", "Cash & Bank", "Expenses", "Business Reports"]) {
-      expect(navItem(label), label).toBeInTheDocument();
+      expect(navItem(label), label).not.toBeInTheDocument();
     }
   });
 
@@ -585,6 +585,12 @@ describe("Root layout navigation", () => {
     stub.pathname = "/";
     renderAs("seller", Root);
     expect(stub.navigate).toHaveBeenCalledWith({ to: "/invoices" });
+  });
+
+  it.each([["/reports", "seller"], ["/gst", "seller"], ["/pos", "accountant"]])("redirects a role lacking permission away from %s", (path, role) => {
+    stub.pathname = path;
+    renderAs(role, Root);
+    expect(stub.navigate).toHaveBeenCalledWith({ to: "/" });
   });
 
   it("keeps a role with Report:read on the dashboard", () => {

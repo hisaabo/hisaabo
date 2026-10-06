@@ -16,6 +16,7 @@ export async function invoiceStatusCommand(id: string, status: string, opts: { j
   try {
     // Get current invoice to show before state
     const before = await client.invoice.get(id);
+    if (!before) fatalError(`Invoice not found: ${id}`, EXIT.NOT_FOUND);
     const updated = await client.invoice.updateStatus(id, status as InvoiceStatus);
 
     if (opts.json) {

@@ -12,13 +12,13 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export function registerGstTools(server: McpServer, client: HisaaboClient) {
+export function registerGstTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "gst_report_csv",
@@ -102,7 +102,7 @@ export function registerGstTools(server: McpServer, client: HisaaboClient) {
         .describe("Financial year in YYYY-YY format, e.g. '2023-24'."),
     },
     wrapTool(async (input) => {
-      const result = await client.gst.gstr9({ financialYear: input.financial_year });
+      const result = await client.gst.gstr9({ financialYear: Number(input.financial_year.slice(0, 4)) });
       return {
         content: [{
           type: "text" as const,

@@ -3,17 +3,19 @@
 > Agent-native financial operating system for India.
 
 [![CI](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/ci.yml)
+[![Security](https://github.com/hisaabo/hisaabo/actions/workflows/security.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/security.yml)
+[![Parity](https://github.com/hisaabo/hisaabo/actions/workflows/parity-check.yml/badge.svg)](https://github.com/hisaabo/hisaabo/actions/workflows/parity-check.yml)
 [![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1844_passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-5626_passing-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Expo](https://img.shields.io/badge/Expo-55-000020?logo=expo&logoColor=white)](https://expo.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
 [![Hono](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
 [![tRPC](https://img.shields.io/badge/tRPC-11-2596BE?logo=trpc&logoColor=white)](https://trpc.io/)
-[![Drizzle](https://img.shields.io/badge/Drizzle-0.38-C5F74F?logo=drizzle&logoColor=black)](https://orm.drizzle.team/)
+[![Drizzle](https://img.shields.io/badge/Drizzle-0.45-C5F74F?logo=drizzle&logoColor=black)](https://orm.drizzle.team/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?logo=docker&logoColor=white)](https://ghcr.io/hisaabo/hisaabo)
 [![@hisaabo/cli](https://img.shields.io/npm/v/@hisaabo/cli?logo=npm&logoColor=white&label=@hisaabo/cli)](https://www.npmjs.com/package/@hisaabo/cli)
@@ -163,7 +165,8 @@ Add to Claude Desktop's `claude_desktop_config.json`:
 
 ```bash
 npm install -g @hisaabo/cli
-hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo login --api-url https://your-hisaabo-instance.com   # opens your browser to sign in
+# CI / scripts: echo "$HISAABO_API_KEY" | hisaabo login --api-url https://your-hisaabo-instance.com --token-stdin
 
 hisaabo dashboard --json | jq '{revenue, outstanding, overdueCount}'
 hisaabo invoice list --this-month --format csv > invoices.csv
@@ -436,7 +439,7 @@ pnpm dev
 | API | http://localhost:3000 |
 | Online store | http://localhost:5174 |
 
-Create an account on first visit. The setup wizard creates your first business with a seeded Chart of Accounts.
+The first account created on a fresh self-hosted server becomes the owner; after that sign-up is by invitation only unless you set `ALLOW_OPEN_SIGNUP=true`. The setup wizard creates your first business with a seeded Chart of Accounts.
 
 ### 2. Try the API immediately
 
@@ -450,11 +453,11 @@ curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
 
 ```bash
 npm install -g @hisaabo/cli
-hisaabo login --api-url https://your-hisaabo-instance.com
-hisaabo whoami --json  # Copy token, tenantId, businessId
+hisaabo login --api-url https://your-hisaabo-instance.com   # browser sign-in
+hisaabo whoami --json  # confirm the active business and tenant
 ```
 
-Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
+For the MCP server, create a dedicated API key in Settings > API Keys and use it as `HISAABO_TOKEN`. Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
 
 ---
 
@@ -669,7 +672,7 @@ Key guidelines:
 - Use the `money` module from `packages/shared` for all monetary arithmetic
 - All input validation in `packages/shared/src/validators.ts` as Zod schemas
 - No component libraries -- pure Tailwind CSS
-- New features ship with tests and a `feature-parity.yaml` update
+- New features ship with tests; check platform coverage with `node --experimental-strip-types scripts/check-parity.ts --scan` (exceptions live in `parity-exceptions.yaml`)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 

@@ -19,20 +19,49 @@
 #       options: { max-size: "10m", max-file: "5", compress: "true" }
 #   That gives the same disk-cap protection minus the journald features.
 
+# Network exposure:
+#   The API is published on the HOST LOOPBACK only. Put a TLS-terminating reverse
+#   proxy on the same host in front of it (Caddy, nginx using nginx/nginx.conf,
+#   or a Cloudflare Tunnel) and expose only 80/443 publicly. To reach the API
+#   from other hosts deliberately, set API_BIND=0.0.0.0 in .env.prod and firewall
+#   the port; plain HTTP must never be exposed to the internet.
+#
+# Client IP / rate limiting:
+#   The API derives the client IP from forwarding headers only as configured by
+#   TRUST_PROXY_HOPS / TRUST_CLOUDFLARE (see .env.prod.example). The defaults
+#   below assume exactly ONE trusted proxy in front of the API. Set
+#   TRUST_PROXY_HOPS=0 if you publish the API port directly (no proxy).
+#
+# Hardening:
+#   api runs as the unprivileged `node` user with a read-only root filesystem,
+#   all capabilities dropped, and only /tmp (tmpfs) and /storage (volume) writable.
+
 services:
   api:
     image: ${HISAABO_API_IMAGE:-ghcr.io/hisaabo/hisaabo-api:latest}
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-3000}:3000"
     env_file: .env.prod
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-hisaabo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hisaabo}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hisaabo}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}@postgres:5432/${POSTGRES_DB:-hisaabo}
       NODE_ENV: production
       PORT: 3000
       UV_THREADPOOL_SIZE: "8"
+      STORAGE_LOCAL_DIR: /storage/objects
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      TRUST_CLOUDFLARE: ${TRUST_CLOUDFLARE:-false}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - api_storage:/storage
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health?deep=true"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -50,7 +79,23 @@ services:
     restart: unless-stopped
     volumes:
       - pgdata:/var/lib/postgresql/data
-    env_file: .env.prod
+    # Only the variables postgres needs — no API secrets (ENCRYPTION_KEY,
+    # RESEND_API_KEY, R2_*, ...) are exposed to this container.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hisaabo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-hisaabo}
+    security_opt:
+      - no-new-privileges:true
+    # The official entrypoint chowns PGDATA and drops to the postgres user.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hisaabo}"]
       interval: 5s
@@ -73,7 +118,7 @@ services:
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: ${POSTGRES_USER:-hisaabo}
-      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
       DB_USER: ${POSTGRES_USER:-hisaabo}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
@@ -84,6 +129,8 @@ services:
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
     volumes:
       - backup_data:/var/backups/hisaabo
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: journald
       options:
@@ -92,3 +139,4 @@ services:
 volumes:
   pgdata:
   backup_data:
+  api_storage:

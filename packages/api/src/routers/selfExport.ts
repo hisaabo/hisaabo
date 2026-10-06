@@ -10,9 +10,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and } from "drizzle-orm";
-import { controlDb, tenantMembers, tenants } from "@hisaabo/db";
+import { eq } from "drizzle-orm";
+import { controlDb, tenants } from "@hisaabo/db";
 import { router, protectedProcedure } from "../trpc.js";
+import { requireTenantRole, OWNER_ROLES } from "../lib/tenant-access.js";
 import { signExportToken } from "../lib/exportToken.js";
 import { logger } from "../lib/logger.js";
 
@@ -70,30 +71,11 @@ export const selfExportRouter = router({
     .input(z.object({ tenantId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       // ── Authz: caller must be owner of the target tenant ──────────────────────
-      const [membership] = await controlDb
-        .select({ role: tenantMembers.role })
-        .from(tenantMembers)
-        .where(
-          and(
-            eq(tenantMembers.tenantId, input.tenantId),
-            eq(tenantMembers.userId, ctx.user.id),
-          ),
-        )
-        .limit(1);
-
-      if (!membership) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "You are not a member of this organization",
-        });
-      }
-
-      if (membership.role !== "owner" && membership.role !== "superadmin") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only organization owners can export data",
-        });
-      }
+      await requireTenantRole(
+        { user: ctx.user, tenantId: input.tenantId },
+        OWNER_ROLES,
+        "Only organization owners can export data",
+      );
 
       // ── Verify tenant is active ───────────────────────────────────────────────
       const [tenant] = await controlDb

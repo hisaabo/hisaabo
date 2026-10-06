@@ -1,14 +1,78 @@
-import { eq, and, sql, desc, notInArray, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
+
+type PaymentTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
+
+// Allocations must fit inside the payment itself.
+function assertAllocationsFitPayment(allocations: Array<{ amount: string }>, paymentAmount: string) {
+  if (money.compare(money.sum(allocations.map((a) => a.amount)), paymentAmount) > 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Allocations exceed the payment amount" });
+  }
+}
+
+// Fail with a clean NOT_FOUND before any payment row is written; otherwise an
+// unknown invoice id surfaces as a foreign-key violation (HTTP 500).
+async function assertInvoicesExist(tx: PaymentTx, businessId: string, invoiceIds: string[]) {
+  const ids = [...new Set(invoiceIds)];
+  if (ids.length === 0) return;
+  const found = await tx.select({ id: invoices.id }).from(invoices)
+    .where(and(inArray(invoices.id, ids), eq(invoices.businessId, businessId)));
+  if (found.length !== ids.length) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+  }
+}
+
+// Lock the target invoice and make sure this payment may be applied to it.
+async function assertAllocationAllowed(
+  tx: PaymentTx,
+  businessId: string,
+  partyId: string,
+  alloc: { invoiceId: string; amount: string },
+) {
+  const [inv] = await tx.select({
+    totalAmount: invoices.totalAmount,
+    amountPaid: invoices.amountPaid,
+    partyId: invoices.partyId,
+    status: invoices.status,
+    documentType: invoices.documentType,
+    deletedAt: invoices.deletedAt,
+  }).from(invoices)
+    .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, businessId)))
+    .limit(1)
+    .for("update");
+
+  if (!inv) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+  if (inv.deletedAt || inv.status === "cancelled" || inv.documentType !== "invoice") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Payments cannot be applied to this invoice" });
+  }
+  if (inv.partyId !== partyId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice belongs to a different party than the payment" });
+  }
+  const balance = money.sub(inv.totalAmount, inv.amountPaid);
+  if (money.compare(alloc.amount, balance) > 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
+  }
+}
+
+// Posting to a bank account needs visibility of it (sellers have none) and it
+// must belong to this business.
+async function assertBankAccountUsable(tx: PaymentTx, ability: AppAbility, businessId: string, bankAccountId: string) {
+  requireCan(ability, "read", "BankAccount");
+  const [account] = await tx.select({ id: bankAccounts.id })
+    .from(bankAccounts)
+    .where(and(eq(bankAccounts.id, bankAccountId), eq(bankAccounts.businessId, businessId)))
+    .limit(1);
+  if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Bank account not found" });
+}
 
 export const paymentRouter = router({
   list: viewerProcedure
@@ -201,6 +265,16 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
       }
 
+      if (input.bankAccountId) {
+        await assertBankAccountUsable(tx, ctx.ability, ctx.businessId, input.bankAccountId);
+      }
+      if (input.allocations?.length) assertAllocationsFitPayment(input.allocations, input.amount);
+      await assertInvoicesExist(
+        tx,
+        ctx.businessId,
+        input.allocations?.length ? input.allocations.map((a) => a.invoiceId) : input.invoiceId ? [input.invoiceId] : [],
+      );
+
       // Atomically generate payment number
       const [biz] = await tx.select({
         prefix: businesses.paymentPrefix,
@@ -245,19 +319,7 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of effectiveAllocations) {
-        // Overpayment guard: lock invoice row with FOR UPDATE to prevent
-        // concurrent payments from both passing the balance check
-        const [invBefore] = await tx.select({
-          totalAmount: invoices.totalAmount,
-          amountPaid: invoices.amountPaid,
-        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1).for("update");
-
-        if (invBefore) {
-          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
-          if (money.compare(alloc.amount, balance) > 0) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
-          }
-        }
+        await assertAllocationAllowed(tx, ctx.businessId, input.partyId, alloc);
 
         // Single SQL: update amountPaid and status atomically
         await tx.execute(sql`
@@ -459,6 +521,13 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
+      if (input.bankAccountId) {
+        await assertBankAccountUsable(tx, ctx.ability, ctx.businessId, input.bankAccountId);
+      }
+      if (input.allocations?.length) {
+        assertAllocationsFitPayment(input.allocations, input.amount ?? existing.amount);
+      }
+
       // 2. Reverse old invoice allocations (per-allocation for multi-invoice payments)
       const existingAllocations = await tx.select({
         invoiceId: paymentAllocations.invoiceId,
@@ -543,6 +612,10 @@ export const paymentRouter = router({
         ? input.allocations[0].invoiceId
         : existing.invoiceId;
 
+      if (input.allocations?.length) {
+        await assertInvoicesExist(tx, ctx.businessId, input.allocations.map((a) => a.invoiceId));
+      }
+
       const [result] = await tx.update(payments)
         .set({
           amount: newAmount,
@@ -565,19 +638,7 @@ export const paymentRouter = router({
           : [];
 
       for (const alloc of newAllocations) {
-        // Overpayment guard: lock invoice row with FOR UPDATE to prevent
-        // concurrent payment updates from both passing the balance check
-        const [invBefore] = await tx.select({
-          totalAmount: invoices.totalAmount,
-          amountPaid: invoices.amountPaid,
-        }).from(invoices).where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, ctx.businessId))).limit(1).for("update");
-
-        if (invBefore) {
-          const balance = money.sub(invBefore.totalAmount, invBefore.amountPaid);
-          if (money.compare(alloc.amount, balance) > 0) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: `Allocation ${alloc.amount} exceeds invoice balance ${balance}` });
-          }
-        }
+        await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc);
 
         // Single SQL: update amountPaid and status atomically
         await tx.execute(sql`

@@ -253,9 +253,9 @@ describe("list screens — create FAB follows the router's create permission", (
       expect(fabCount()).toBe(0);
     });
 
-    it("shows the FAB while the session is still loading", () => {
+    it("hides the FAB while the session is still loading (fail closed)", () => {
       renderAs(null, Screen, { loading: true });
-      expect(fabCount()).toBe(1);
+      expect(fabCount()).toBe(0);
     });
   });
 });
@@ -571,18 +571,58 @@ describe("Delivery challan detail — status (update:Invoice) / convert (create:
     stub.data["deliveryChallan.getById"] = invoiceDoc("draft");
   });
 
-  it("seller sees Mark as Sent, Mark as Delivered and Convert to Invoice", () => {
+  it("seller sees Mark as Sent, Cancel Challan and Convert to Invoice on a draft", () => {
     renderAs("seller", ChallanDetailScreen);
     expect(has("Mark as Sent")).toBe(true);
-    expect(has("Mark as Delivered")).toBe(true);
+    expect(has("Cancel Challan")).toBe(true);
     expect(has("Convert to Invoice")).toBe(true);
+    // 'delivered' is not a delivery_challan status — the API never accepted it.
+    expect(has("Mark as Delivered")).toBe(false);
   });
 
   it("accountant sees none of them", () => {
     renderAs("accountant", ChallanDetailScreen);
     expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(false);
     expect(has("Mark as Delivered")).toBe(false);
     expect(has("Convert to Invoice")).toBe(false);
+  });
+
+  it("a sent challan can only be cancelled (sent -> cancelled)", () => {
+    stub.data["deliveryChallan.getById"] = invoiceDoc("sent");
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(true);
+    expect(has("Mark as Delivered")).toBe(false);
+  });
+
+  it("a cancelled challan is terminal: no status actions, no convert", () => {
+    stub.data["deliveryChallan.getById"] = invoiceDoc("cancelled");
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(false);
+    expect(has("Mark as Delivered")).toBe(false);
+    expect(has("Convert to Invoice")).toBe(false);
+  });
+
+  it("Cancel Challan sends status 'cancelled' (never 'delivered')", () => {
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    renderAs("seller", ChallanDetailScreen);
+    fireEvent.press(screen.getByText("Cancel Challan"));
+    const buttons = alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    buttons.find((b) => b.text === "Cancel Challan")!.onPress!();
+    alert.mockRestore();
+    expect(stub.mutations["deliveryChallan.updateStatus"]).toEqual([{ id: "doc-1", status: "cancelled" }]);
+  });
+
+  it("a purchase-side challan hides Convert to Invoice from a seller but not a seller_manager", () => {
+    stub.data["deliveryChallan.getById"] = { ...invoiceDoc("draft"), type: "purchase" };
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Convert to Invoice")).toBe(false);
+    expect(has("Mark as Sent")).toBe(true);
+    screen.unmount();
+    renderAs("seller_manager", ChallanDetailScreen);
+    expect(has("Convert to Invoice")).toBe(true);
   });
 });
 
@@ -698,14 +738,21 @@ describe("Settings index — rows that lead only to edit screens", () => {
     expect(has("Online Store")).toBe(true);
   });
 
-  it("seller sees none of them, but still sees Team, Profile and Sign Out", () => {
+  it("seller sees none of them, nor Team or API Keys, but still sees Profile and Sign Out", () => {
     renderAs("seller", SettingsIndexScreen);
+    expect(has("API Keys")).toBe(false);
     expect(has("Business Details")).toBe(false);
     expect(has("Documents")).toBe(false);
     expect(has("Online Store")).toBe(false);
-    expect(has("Team")).toBe(true);
+    expect(has("Team")).toBe(false);
     expect(has("Profile")).toBe(true);
     expect(has("Sign Out")).toBe(true);
+  });
+
+  it("admin sees Team and API Keys", () => {
+    renderAs("admin", SettingsIndexScreen);
+    expect(has("Team")).toBe(true);
+    expect(has("API Keys")).toBe(true);
   });
 });
 
@@ -726,9 +773,9 @@ describe("Store settings — Save and toggles need manage:Store", () => {
   const editTagline = () =>
     fireEvent.changeText(screen.getByPlaceholderText("Fresh organic produce delivered daily"), "Fresh");
 
-  it("admin sees both toggles and Save once the form is dirty", () => {
+  it("admin sees the store toggles (enabled, negative stock, phone OTP) and Save once dirty", () => {
     renderAs("admin", StoreSettingsScreen);
-    expect(screen.UNSAFE_queryAllByType(Switch)).toHaveLength(2);
+    expect(screen.UNSAFE_queryAllByType(Switch)).toHaveLength(3);
     editTagline();
     fireEvent.press(screen.getByText("Save"));
     expect(stub.mutations["store.updateSettings"]).toHaveLength(1);

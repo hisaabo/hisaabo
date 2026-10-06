@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
 import { formatAmount } from "../../format.js";
 import chalk from "chalk";
 
@@ -22,22 +22,14 @@ export async function dashboardTopOutstandingCommand(opts: TopOutstandingOpts): 
       return;
     }
 
-    const rows: Array<{ party: string; outstanding: string; oldestAge: string }> = Array.isArray(data)
-      ? data.map((r: Record<string, unknown>) => ({
-          party: String(r["partyName"] ?? r["party"] ?? "-"),
-          outstanding: formatAmount(String(r["outstanding"] ?? r["outstandingAmount"] ?? "0")),
-          oldestAge: r["oldestInvoiceDays"] != null
-            ? `${r["oldestInvoiceDays"]}d`
-            : r["oldestAge"] != null
-            ? `${r["oldestAge"]}d`
-            : "-",
-        }))
-      : [];
+    const rows = data.map((r) => ({
+      party: r.partyName,
+      outstanding: formatAmount(r.outstanding),
+    }));
 
-    const columns = [
-      { key: "party", header: "Party", align: "left" as const },
-      { key: "outstanding", header: "Outstanding ₹", align: "right" as const },
-      { key: "oldestAge", header: "Oldest Invoice", align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "party", header: "Party", align: "left" },
+      { key: "outstanding", header: "Outstanding ₹", align: "right" },
     ];
 
     if (opts.format === "tsv") {

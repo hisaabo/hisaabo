@@ -624,6 +624,41 @@ describe("create/edit screens are gated (deep links)", () => {
   });
 });
 
+// ── Purchase-side invoice creation (sellers may not record purchases) ─────
+
+describe("Invoice create — purchase side is denied for sellers", () => {
+  it.each(["seller_manager", "admin"])("%s sees the Sale/Purchase toggle", (role) => {
+    renderAs(role, InvoiceCreateScreen);
+    expect(screen.getByText("Sale")).toBeTruthy();
+    expect(screen.getByText("Purchase")).toBeTruthy();
+  });
+
+  it("seller sees no Purchase toggle (sale only)", () => {
+    renderAs("seller", InvoiceCreateScreen);
+    expect(screen.queryByTestId("permission-denied")).toBeNull();
+    expect(screen.queryByText("Purchase")).toBeNull();
+  });
+
+  it("legacy 'member' role is treated as a seller", () => {
+    renderAs("member", InvoiceCreateScreen);
+    expect(screen.queryByText("Purchase")).toBeNull();
+  });
+
+  it("seller deep-linking to create?type=purchase gets the no-access state", () => {
+    stub.params.type = "purchase";
+    renderAs("seller", InvoiceCreateScreen);
+    expect(screen.getByTestId("permission-denied")).toBeTruthy();
+    expect(screen.queryByText("Create Invoice")).toBeNull();
+  });
+
+  it.each(["seller_manager", "admin"])("%s can open create?type=purchase", (role) => {
+    stub.params.type = "purchase";
+    renderAs(role, InvoiceCreateScreen);
+    expect(screen.queryByTestId("permission-denied")).toBeNull();
+    expect(screen.getByText("Create Invoice")).toBeTruthy();
+  });
+});
+
 // ── Business creation entry points (business.create → manage:Business) ────
 
 describe("Create business entry points follow manage:Business", () => {

@@ -15,12 +15,12 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
-export function registerPartyTools(server: McpServer, client: HisaaboClient) {
+export function registerPartyTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "party_list",

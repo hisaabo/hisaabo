@@ -63,9 +63,15 @@ export function TurnstileModal({ open, onVerified, onClose }: TurnstileModalProp
 
     setError(false);
 
-    const sitekey =
+    // The always-pass test key is dev-only; production builds must configure a real key.
+    const configuredKey =
       (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA"; // Cloudflare test key — always passes
+      (import.meta.env.PROD ? undefined : "1x00000000000000000000AA");
+    if (!configuredKey) {
+      setError(true);
+      return;
+    }
+    const sitekey: string = configuredKey;
 
     function mount() {
       if (!containerRef.current || !window.turnstile) return;

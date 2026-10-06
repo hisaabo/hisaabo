@@ -7,6 +7,8 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HisaaboClient } from "./client.js";
+import { createToolRegistry, type ToolRegistry } from "./lib/registry.js";
+import { resolvePolicy, type ToolPolicy } from "./lib/policy.js";
 import { registerInvoiceTools } from "./tools/invoice.js";
 import { registerPartyTools } from "./tools/party.js";
 import { registerItemTools } from "./tools/item.js";
@@ -36,7 +38,19 @@ import { registerSystemTools } from "./tools/system.js";
 import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 
-export function registerTools(server: McpServer, client: HisaaboClient): void {
+export function registerTools(
+  server: McpServer,
+  client: HisaaboClient,
+  policy: ToolPolicy = resolvePolicy(),
+): ToolRegistry {
+  const registry = createToolRegistry(server, policy);
+  registerAllTools(registry, client);
+  registerResources(server, client);
+  registerPrompts(server, new Set(registry.registered.map((t) => t.name)));
+  return registry;
+}
+
+function registerAllTools(server: ToolRegistry, client: HisaaboClient): void {
   // Core business operations
   registerInvoiceTools(server, client);
   registerPartyTools(server, client);
@@ -96,10 +110,4 @@ export function registerTools(server: McpServer, client: HisaaboClient): void {
 
   // System status
   registerSystemTools(server, client);
-
-  // Read-only context resources
-  registerResources(server, client);
-
-  // Prompt templates for guided workflows
-  registerPrompts(server);
 }

@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-open-external-url"
+description = """
+Allows the main window to call open_external_url, which opens a URL in the
+system browser. The command itself only accepts https URLs (plus loopback
+http in debug builds).
+"""
+commands.allow = ["open_external_url"]

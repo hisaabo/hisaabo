@@ -3,7 +3,8 @@ import { TouchableOpacity, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import type { Action, Resource } from "@hisaabo/shared";
-import { useCan } from "../hooks/useCan";
+import { useCan, useCanCreateDocument } from "../hooks/useCan";
+import { trpc } from "../lib/trpc";
 import { makeStyles } from "../lib/makeStyles";
 import { EmptyState } from "./ui";
 
@@ -15,17 +16,30 @@ import { EmptyState } from "./ui";
 export function PermissionGate({
   action,
   resource,
+  documentType,
+  side,
   children,
 }: {
   action: Action;
   resource: Resource;
+  /**
+   * When set, the screen also needs the per-document-type rule (sellers cannot
+   * create purchase-side documents) for `documentType` on `side`.
+   */
+  documentType?: string;
+  side?: "sale" | "purchase";
   children: ReactNode;
 }) {
-  const allowed = useCan(action, resource);
+  const hasRole = useCan(action, resource);
+  const canCreateType = useCanCreateDocument(documentType ?? "invoice", side);
+  const allowed = hasRole && (documentType === undefined || canCreateType);
+  const { isLoading } = trpc.auth.me.useQuery(undefined);
   const router = useRouter();
   const styles = useStyles();
 
   if (allowed) return <>{children}</>;
+  // Fail closed while the role is unknown, but don't flash "no access".
+  if (isLoading) return <SafeAreaView style={styles.container} />;
 
   return (
     <SafeAreaView style={styles.container} testID="permission-denied">

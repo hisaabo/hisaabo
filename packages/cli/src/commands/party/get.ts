@@ -9,6 +9,7 @@ export async function partyGetCommand(id: string, opts: { json?: boolean }): Pro
 
   try {
     const party = await client.party.get(id);
+    if (!party) fatalError(`Party not found: ${id}`, EXIT.NOT_FOUND);
 
     if (opts.json) {
       outputJSON(party);

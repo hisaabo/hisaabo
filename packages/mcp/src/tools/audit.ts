@@ -6,11 +6,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerAuditTools(server: McpServer, client: HisaaboClient) {
+export function registerAuditTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "business_audit_trail",

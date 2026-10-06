@@ -40,6 +40,8 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
     pinEnabled,
     authenticate,
     verifyPin,
+    refreshPinLockout,
+    pinLockedUntil,
   } = useBiometricStore();
   const styles = useStyles();
   const colors = useColors();
@@ -49,6 +51,20 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const lockRemainingMs = Math.max(0, pinLockedUntil - now);
+  const pinLocked = lockRemainingMs > 0;
+
+  // Pick up a lockout persisted from a previous launch, and tick while locked.
+  useEffect(() => {
+    refreshPinLockout();
+  }, [refreshPinLockout]);
+  useEffect(() => {
+    if (pinLockedUntil <= Date.now()) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [pinLockedUntil]);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -154,7 +170,7 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
 
   // Handle PIN digit entry
   const handlePinDigit = useCallback((digit: string) => {
-    if (verifying) return;
+    if (verifying || pinLocked) return;
     haptic.light();
     setError("");
     setPin((prev) => {
@@ -171,12 +187,13 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
             triggerShake();
             setError("Incorrect PIN");
             setPin("");
+            setNow(Date.now());
           }
         }, 100);
       }
       return newPin;
     });
-  }, [handleUnlockSuccess, triggerShake, verifyPin, verifying]);
+  }, [handleUnlockSuccess, pinLocked, triggerShake, verifyPin, verifying]);
 
   const handlePinDelete = useCallback(() => {
     if (verifying) return;
@@ -263,7 +280,13 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
             ))}
           </View>
 
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          {pinLocked ? (
+            <Text style={styles.errorText}>
+              Too many attempts. Try again in {formatLockout(lockRemainingMs)}.
+            </Text>
+          ) : error ? (
+            <Text style={styles.errorText}>{error}</Text>
+          ) : null}
 
           {/* Number pad */}
           <View style={styles.numPad}>
@@ -330,6 +353,14 @@ export function LockScreen({ onUnlock, onSignOut }: LockScreenProps) {
       </TouchableOpacity>
     </Animated.View>
   );
+}
+
+function formatLockout(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m ${totalSeconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 /* -- Mini Logo Icon (reused from splash pattern) ------------ */

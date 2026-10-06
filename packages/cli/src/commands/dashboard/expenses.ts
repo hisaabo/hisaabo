@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
+import { formatAmount, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface ExpensesOpts {
@@ -23,32 +23,31 @@ export async function dashboardExpensesCommand(opts: ExpensesOpts): Promise<void
   else if (opts.thisFy) { fromDate = fyStart(); toDate = todayISO(); }
 
   try {
-    const data = await client.dashboard.expensesByCategory({ fromDate, toDate });
+    const data = await client.dashboard.expensesByCategory({ fromDate: apiFrom(fromDate), toDate: apiTo(toDate) });
 
     if (opts.json) {
       outputJSON(data);
       return;
     }
 
-    const items: Array<Record<string, unknown>> = Array.isArray(data) ? data : [];
-    const total = items.reduce((sum, r) => sum + parseFloat(String(r["totalAmount"] ?? r["amount"] ?? "0")), 0);
+    const total = data.reduce((sum, r) => sum + parseFloat(r.total), 0);
 
-    const rows = items.map((r: Record<string, unknown>) => {
-      const amt = parseFloat(String(r["totalAmount"] ?? r["amount"] ?? "0"));
+    const rows = data.map((r) => {
+      const amt = parseFloat(r.total);
       const pct = total > 0 ? ((amt / total) * 100).toFixed(1) + "%" : "-";
       return {
-        category: String(r["category"] ?? "-"),
+        category: r.category,
         amount: formatAmount(String(amt)),
-        count: String(r["count"] ?? r["expenseCount"] ?? "-"),
+        count: String(r.count),
         pct,
       };
     });
 
-    const columns = [
-      { key: "category", header: "Category", align: "left" as const },
-      { key: "amount", header: "Amount ₹", align: "right" as const },
-      { key: "count", header: "Count", align: "right" as const },
-      { key: "pct", header: "% of Total", align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "category", header: "Category", align: "left" },
+      { key: "amount", header: "Amount ₹", align: "right" },
+      { key: "count", header: "Count", align: "right" },
+      { key: "pct", header: "% of Total", align: "right" },
     ];
 
     if (opts.format === "tsv") {

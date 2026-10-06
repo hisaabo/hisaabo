@@ -24,6 +24,7 @@ export function registerApiKeyCommands(program: Command): void {
     .command("create")
     .description("Create a new API key")
     .requiredOption("--name <name>", "Name / label for this key")
+    .option("--expires-in-days <n>", "Days until the key expires", "90")
     .option("--json", "JSON output")
     .action(async (opts) => {
       const { apiKeyCreateCommand } = await import("../../commands/api-key/create.js");

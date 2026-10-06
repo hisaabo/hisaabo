@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, termWidth } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { fatalError, outputJSON, outputTSV, outputCSV, EXIT, hasColor, termWidth, type ColumnDef } from "../../output.js";
+import { formatAmount, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface CollectionEfficiencyOpts {
@@ -33,24 +33,18 @@ export async function dashboardCollectionEfficiencyCommand(opts: CollectionEffic
   else if (opts.thisFy) { fromDate = fyStart();    toDate = todayISO(); }
 
   try {
-    const data = await client.dashboard.collectionEfficiency({ fromDate, toDate });
+    const data = await client.dashboard.collectionEfficiency({ fromDate: apiFrom(fromDate), toDate: apiTo(toDate) });
 
     if (opts.json) {
       outputJSON(data);
       return;
     }
 
-    const d = (data ?? {}) as Record<string, unknown>;
-
     // Top-level metrics
-    const totalInvoiced  = parseFloat(String(d["totalInvoiced"]  ?? d["invoiced"]       ?? d["billed"]   ?? "0"));
-    const totalCollected = parseFloat(String(d["totalCollected"] ?? d["collected"]       ?? d["received"] ?? "0"));
-    const outstanding    = parseFloat(String(d["outstanding"]    ?? d["totalOutstanding"]               ?? String(totalInvoiced - totalCollected)));
-    const collectionRate = parseFloat(String(d["collectionRate"] ?? d["rate"] ?? (totalInvoiced > 0 ? ((totalCollected / totalInvoiced) * 100).toFixed(2) : "0")));
-    const dso            = parseFloat(String(d["dso"]            ?? d["daysSalesOutstanding"]            ?? "0"));
-
-    // Aging breakdown sub-object
-    const aging = (d["aging"] ?? d["agingBreakdown"] ?? d["breakdown"] ?? null) as Record<string, unknown> | null;
+    const totalInvoiced  = parseFloat(data.totalInvoiced);
+    const totalCollected = parseFloat(data.totalCollected);
+    const outstanding    = totalInvoiced - totalCollected;
+    const collectionRate = data.efficiencyPct;
 
     if (opts.format === "tsv" || opts.format === "csv") {
       const rows: Array<Record<string, string>> = [
@@ -58,16 +52,10 @@ export async function dashboardCollectionEfficiencyCommand(opts: CollectionEffic
         { metric: "Total Collected", value: formatAmount(totalCollected) },
         { metric: "Outstanding",     value: formatAmount(outstanding) },
         { metric: "Collection Rate", value: `${collectionRate.toFixed(1)}%` },
-        { metric: "DSO (days)",      value: dso > 0 ? String(Math.round(dso)) : "-" },
       ];
-      if (aging) {
-        for (const [k, v] of Object.entries(aging)) {
-          rows.push({ metric: `Aging: ${k}`, value: formatAmount(String(v)) });
-        }
-      }
-      const columns = [
-        { key: "metric", header: "Metric", align: "left" as const },
-        { key: "value",  header: "Value",  align: "right" as const },
+      const columns: ColumnDef<(typeof rows)[number]>[] = [
+        { key: "metric", header: "Metric", align: "left" },
+        { key: "value",  header: "Value",  align: "right" },
       ];
       if (opts.format === "tsv") outputTSV(rows, columns);
       else outputCSV(rows, columns);
@@ -113,45 +101,8 @@ export async function dashboardCollectionEfficiencyCommand(opts: CollectionEffic
     const rateLabel = "Collection Rate".padEnd(20).slice(0, 20);
     process.stdout.write(`  │ ${hasColor() ? chalk.bold(rateLabel) : rateLabel}  ${bar} ${rateStr.padStart(6)} │\n`);
 
-    if (dso > 0) {
-      const dsoStr   = `${Math.round(dso)} days`;
-      const dsoLabel = "DSO".padEnd(20).slice(0, 20);
-      const dsoColor = dso <= 30 ? chalk.green : dso <= 60 ? chalk.yellow : chalk.red;
-      const dsoVal   = hasColor() ? dsoColor(dsoStr) : dsoStr;
-      process.stdout.write(`  │ ${dsoLabel}  ${dsoVal.padStart(innerW - 22)} │\n`);
-    }
-
-    // Aging buckets if available
-    if (aging && Object.keys(aging).length > 0) {
-      sep();
-      process.stdout.write(`  │ ${hasColor() ? chalk.bold("Aging Breakdown") : "Aging Breakdown"}${" ".repeat(innerW - 16)} │\n`);
-      const agingEntries = Object.entries(aging);
-      for (const [bucket, val] of agingEntries) {
-        const amt      = parseFloat(String(val));
-        const amtStr   = `₹${formatAmount(amt)}`;
-        const bucketLabel = bucket.padEnd(20).slice(0, 20);
-        const isOld    = /90\+|90_plus/i.test(bucket);
-        const color    = isOld ? chalk.red : /31|61/.test(bucket) ? chalk.yellow : undefined;
-        const valStr   = color && hasColor() ? color(amtStr) : amtStr;
-        process.stdout.write(`  │   ${bucketLabel.slice(0, 18)}  ${valStr.padStart(innerW - 22)} │\n`);
-      }
-    }
 
     process.stdout.write("  └" + "─".repeat(innerW) + "┘\n\n");
-
-    // Also show aging as a table for easy reading
-    if (aging && Object.keys(aging).length > 0) {
-      const agingRows = Object.entries(aging).map(([bucket, val]) => ({
-        bucket,
-        amount: formatAmount(String(val)),
-      }));
-      const agingColumns = [
-        { key: "bucket", header: "Aging Bucket", align: "left" as const },
-        { key: "amount", header: "Amount ₹",     align: "right" as const },
-      ];
-      outputTable(agingRows, agingColumns);
-      process.stdout.write("\n");
-    }
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

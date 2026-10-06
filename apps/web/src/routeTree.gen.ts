@@ -37,6 +37,7 @@ import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoic
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
 import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
+import { Route as AuthNativeRouteImport } from './routes/auth/native'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
 
 const StoreOrdersRoute = StoreOrdersRouteImport.update({
@@ -179,6 +180,11 @@ const AuthVerifyRoute = AuthVerifyRouteImport.update({
   path: '/auth/verify',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthNativeRoute = AuthNativeRouteImport.update({
+  id: '/auth/native',
+  path: '/auth/native',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
   id: '/auth/complete-profile',
   path: '/auth/complete-profile',
@@ -213,6 +219,7 @@ export interface FileRoutesByFullPath {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
 }
@@ -244,6 +251,7 @@ export interface FileRoutesByTo {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
 }
@@ -276,6 +284,7 @@ export interface FileRoutesById {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
 }
@@ -309,6 +318,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
   fileRoutesByTo: FileRoutesByTo
@@ -340,6 +350,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
   id:
@@ -371,6 +382,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
   fileRoutesById: FileRoutesById
@@ -403,6 +415,7 @@ export interface RootRouteChildren {
   ShipmentsRoute: typeof ShipmentsRoute
   StoreOrdersRoute: typeof StoreOrdersRoute
   AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
+  AuthNativeRoute: typeof AuthNativeRoute
   AuthVerifyRoute: typeof AuthVerifyRoute
   InviteTokenRoute: typeof InviteTokenRoute
 }
@@ -605,6 +618,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthVerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/native': {
+      id: '/auth/native'
+      path: '/auth/native'
+      fullPath: '/auth/native'
+      preLoaderRoute: typeof AuthNativeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/complete-profile': {
       id: '/auth/complete-profile'
       path: '/auth/complete-profile'
@@ -643,6 +663,7 @@ const rootRouteChildren: RootRouteChildren = {
   ShipmentsRoute: ShipmentsRoute,
   StoreOrdersRoute: StoreOrdersRoute,
   AuthCompleteProfileRoute: AuthCompleteProfileRoute,
+  AuthNativeRoute: AuthNativeRoute,
   AuthVerifyRoute: AuthVerifyRoute,
   InviteTokenRoute: InviteTokenRoute,
 }

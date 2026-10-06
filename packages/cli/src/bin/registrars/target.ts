@@ -31,6 +31,7 @@ export function registerTargetCommands(program: Command): void {
     .option("--value <n>", "Target value")
     .option("--start-date <date>", "Start date")
     .option("--end-date <date>", "End date")
+    .option("--user-id <id>", "User the target applies to (default: you)")
     .option("--notes <text>", "Notes")
     .action(async (opts) => {
       await targetCreateCommand({
@@ -40,6 +41,7 @@ export function registerTargetCommands(program: Command): void {
         value: opts.value,
         startDate: opts.startDate,
         endDate: opts.endDate,
+        userId: opts.userId,
         notes: opts.notes,
       });
     });

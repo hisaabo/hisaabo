@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import { csvRow } from "@hisaabo/shared";
 
 // Dynamic quantity formatting (no trailing zeros, up to 3 decimals) lives in
 // @hisaabo/shared so web, mobile and the PDF layer format quantities
@@ -134,12 +135,7 @@ export function getDocumentTypeColor(type: string): string {
 }
 
 export function downloadCSV(filename: string, headers: string[], rows: (string | number)[][]) {
-  const csv = [
-    headers.join(","),
-    ...rows.map((r) =>
-      r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")
-    ),
-  ].join("\n");
+  const csv = [csvRow(headers), ...rows.map((r) => csvRow(r))].join("\n");
 
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -148,4 +144,9 @@ export function downloadCSV(filename: string, headers: string[], rows: (string |
   a.download = `${filename}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** True only for absolute http(s) URLs; guards user-supplied hrefs against javascript:/data: schemes. */
+export function isHttpUrl(value: string | null | undefined): value is string {
+  return !!value && /^https?:\/\//i.test(value.trim());
 }

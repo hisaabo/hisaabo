@@ -70,3 +70,8 @@ export function formatDateInput(date: Date | string | null | undefined): string 
 export function todayISODate(): string {
   return dayjs().format("YYYY-MM-DD");
 }
+
+/** True only for absolute http(s) URLs; guards user-supplied links against other schemes. */
+export function isHttpUrl(value: string | null | undefined): value is string {
+  return !!value && /^https?:\/\//i.test(value.trim());
+}

@@ -119,6 +119,7 @@ export const journalRouter = router({
 
       const entry = await ctx.db.transaction(async (tx) => {
         // Generate entry number atomically inside transaction
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':journal_entry_number'))`);
         const [maxEntry] = await tx
           .select({
             count: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,
@@ -301,6 +302,7 @@ export const journalRouter = router({
 
       const result = await ctx.db.transaction(async (tx) => {
         // Generate entry number for the reversing entry
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':journal_entry_number'))`);
         const [maxEntry] = await tx
           .select({
             count: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,
@@ -552,6 +554,7 @@ export const journalRouter = router({
 
       const entry = await ctx.db.transaction(async (tx) => {
         // Generate entry number atomically inside transaction
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':journal_entry_number'))`);
         const [maxEntry] = await tx
           .select({
             count: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,

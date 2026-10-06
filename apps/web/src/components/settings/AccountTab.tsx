@@ -8,6 +8,7 @@ import { cn, todayISODate } from "@/lib/utils";
 import dayjs from "dayjs";
 import { parseUserAgent } from "@/lib/parse-user-agent";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
+import { useCan } from "@/hooks/useCan";
 import { BrowserAgentSection } from "./BrowserAgentSection";
 
 // ── Action label map ──────────────────────────────────────────────────────────
@@ -734,15 +735,23 @@ const ACCOUNT_TABS = [
 
 export function AccountTab() {
   const [tab, setTab] = useState("sessions");
+  const canManageKeys = useCan("manage", "Team");
+  const tabs = canManageKeys ? ACCOUNT_TABS : ACCOUNT_TABS.filter((t) => t.value !== "api-keys");
 
   return (
     <div className="space-y-6">
       <ProfileCard />
       <BrowserAgentSection />
       <div>
-        <PillTabs tabs={ACCOUNT_TABS} value={tab} onChange={setTab} className="mb-4" />
+        <PillTabs tabs={tabs} value={tab} onChange={setTab} className="mb-4" />
         {tab === "sessions" && <SessionsContent />}
-        {tab === "api-keys" && <ApiKeysContent />}
+        {tab === "api-keys" && (canManageKeys ? (
+          <ApiKeysContent />
+        ) : (
+          <p className="text-sm text-text-secondary" role="alert">
+            No access. Only owners and admins can manage API keys.
+          </p>
+        ))}
         {tab === "activity" && <ActivityLogContent />}
       </div>
     </div>

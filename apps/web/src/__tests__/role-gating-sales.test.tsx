@@ -78,6 +78,7 @@ beforeEach(() => stub.reset());
 
 const button = (name: string | RegExp) => screen.queryByRole("button", { name });
 const labelled = (label: string) => screen.queryByLabelText(label);
+const buttons = (name: string | RegExp) => screen.queryAllByRole("button", { name });
 const dialog = (name: string | RegExp) => screen.queryByRole("dialog", { name });
 const pressN = () => fireEvent.keyDown(document.body, { key: "n" });
 
@@ -130,6 +131,43 @@ describe("Invoices page", () => {
       stub.search = { create: "1" };
       renderAs("accountant", Invoices);
       expect(dialog("New Invoice")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("purchase tab — sellers cannot create purchase invoices", () => {
+    beforeEach(() => {
+      stub.data["invoice.list"] = { data: [invoice({ type: "purchase" })], total: 1 };
+    });
+    const openPurchases = () => fireEvent.click(screen.getByText("Purchases"));
+
+    it("seller: '+ New Invoice' shows on Sales, disappears on Purchases", () => {
+      renderAs("seller", Invoices);
+      expect(buttons(/New Invoice/).length).toBeGreaterThan(0);
+      openPurchases();
+      expect(buttons(/New Invoice/)).toHaveLength(0);
+    });
+
+    it("seller: N does nothing on the Purchases tab", () => {
+      renderAs("seller", Invoices);
+      openPurchases();
+      pressN();
+      expect(dialog("New Invoice")).not.toBeInTheDocument();
+    });
+
+    it.each(["seller_manager", "admin"])("%s: '+ New Invoice' stays on the Purchases tab and N opens the form", (role) => {
+      renderAs(role, Invoices);
+      openPurchases();
+      expect(buttons(/New Invoice/).length).toBeGreaterThan(0);
+      pressN();
+      expect(dialog("New Invoice")).toBeInTheDocument();
+    });
+
+    it("seller: no credit note / sales return buttons on a sent purchase invoice", () => {
+      stub.data["invoice.getById"] = invoice({ type: "purchase", status: "sent" });
+      stub.search = { id: "inv-1" };
+      renderAs("seller", Invoices);
+      expect(button("Issue Credit Note")).not.toBeInTheDocument();
+      expect(button("Create Sales Return")).not.toBeInTheDocument();
     });
   });
 
@@ -410,6 +448,59 @@ describe("DocumentListPage row and detail actions", () => {
   it("accountant gets no Convert to Invoice", () => {
     renderDocs("accountant", { ...base, convert: { convertingId: null, onConvert: vi.fn() } });
     expect(button("Convert to Invoice")).not.toBeInTheDocument();
+  });
+
+  describe("purchase side (sellers cannot create purchase-side documents)", () => {
+    const challans: DocumentListPageConfig = {
+      ...base, trpcRouter: "deliveryChallan", documentType: "delivery_challan", hasTypeFilter: true,
+      title: "Delivery Challans", buttonLabel: "+ New Challan",
+    };
+    const openPurchases = () => fireEvent.click(screen.getByText("Purchases"));
+
+    it("seller: '+ New Challan' shows on Sales, hidden on Purchases", () => {
+      renderDocs("seller", challans);
+      expect(button("+ New Challan")).toBeInTheDocument();
+      openPurchases();
+      expect(button("+ New Challan")).not.toBeInTheDocument();
+    });
+
+    it.each(["seller_manager", "admin"])("%s: '+ New Challan' stays on Purchases", (role) => {
+      renderDocs(role, challans);
+      openPurchases();
+      expect(button("+ New Challan")).toBeInTheDocument();
+    });
+
+    it("seller: no Convert to Invoice on the Purchases tab", () => {
+      renderDocs("seller", { ...challans, convert: { convertingId: null, onConvert: vi.fn() } });
+      expect(button("Convert to Invoice")).toBeInTheDocument();
+      openPurchases();
+      expect(button("Convert to Invoice")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("status actions follow the per-document transition table", () => {
+    const challans: DocumentListPageConfig = {
+      ...base, trpcRouter: "deliveryChallan", documentType: "delivery_challan",
+      title: "Delivery Challans", buttonLabel: "+ New Challan", markPaid: true,
+    };
+
+    it("delivery challan: draft offers Mark Sent only", () => {
+      renderDocs("seller", challans, doc({ status: "draft" }));
+      expect(button("Mark Sent")).toBeInTheDocument();
+      expect(button("Mark Paid")).not.toBeInTheDocument();
+    });
+
+    it("delivery challan: sent offers no Mark Sent / Mark Paid (sent -> cancelled only)", () => {
+      renderDocs("seller", challans, doc({ status: "sent" }));
+      expect(button("Mark Sent")).not.toBeInTheDocument();
+      expect(button("Mark Paid")).not.toBeInTheDocument();
+    });
+
+    it("delivery challan: cancelled is terminal", () => {
+      renderDocs("seller", challans, doc({ status: "cancelled" }));
+      expect(button("Mark Sent")).not.toBeInTheDocument();
+      expect(button("Mark Paid")).not.toBeInTheDocument();
+    });
   });
 
   it("detail panel Edit shows for update:Invoice roles", () => {

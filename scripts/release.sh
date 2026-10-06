@@ -51,49 +51,53 @@ PACKAGE_FILES=(
 echo "Bumping all packages to $VERSION..."
 echo ""
 
+# Single node helper: the version and file path are passed as argv (never
+# spliced into the JS source), and the JSON key path is a fixed argument.
+#   bump_json <file> <label> [key-path]   e.g. bump_json app.json "app.json (expo)" expo.version
+bump_json() {
+  node -e '
+    const fs = require("fs");
+    const [file, label, keyPath, version] = process.argv.slice(1);
+    const obj = JSON.parse(fs.readFileSync(file, "utf8"));
+    const keys = keyPath.split(".");
+    const last = keys.pop();
+    let target = obj;
+    for (const k of keys) target = target[k];
+    const old = target[last];
+    target[last] = version;
+    fs.writeFileSync(file, JSON.stringify(obj, null, 2) + "\n");
+    console.log("  " + label.padEnd(40) + old + " → " + version);
+  ' "$1" "$2" "${3:-version}" "$VERSION"
+}
+
+CHANGED_FILES=()
+
 for f in "${PACKAGE_FILES[@]}"; do
   if [ -f "$f" ]; then
-    node -e "
-      const fs = require('fs');
-      const pkg = JSON.parse(fs.readFileSync('$f', 'utf8'));
-      const old = pkg.version;
-      pkg.version = '$VERSION';
-      fs.writeFileSync('$f', JSON.stringify(pkg, null, 2) + '\n');
-      console.log('  ' + '$f'.padEnd(42) + old + ' → $VERSION');
-    "
+    bump_json "$f" "$f"
+    CHANGED_FILES+=("$f")
   fi
 done
 
 # Expo app.json (version lives under expo.version)
 if [ -f apps/mobile/app.json ]; then
-  node -e "
-    const fs = require('fs');
-    const app = JSON.parse(fs.readFileSync('apps/mobile/app.json', 'utf8'));
-    const old = app.expo.version;
-    app.expo.version = '$VERSION';
-    fs.writeFileSync('apps/mobile/app.json', JSON.stringify(app, null, 2) + '\n');
-    console.log('  apps/mobile/app.json (expo)'.padEnd(42) + old + ' → $VERSION');
-  "
+  bump_json apps/mobile/app.json "apps/mobile/app.json (expo)" expo.version
+  CHANGED_FILES+=(apps/mobile/app.json)
 fi
 
 # Tauri conf (version at top level)
 if [ -f apps/desktop/src-tauri/tauri.conf.json ]; then
-  node -e "
-    const fs = require('fs');
-    const conf = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
-    const old = conf.version;
-    conf.version = '$VERSION';
-    fs.writeFileSync('apps/desktop/src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
-    console.log('  apps/desktop/src-tauri/tauri.conf.json'.padEnd(42) + old + ' → $VERSION');
-  "
+  bump_json apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/tauri.conf.json version
+  CHANGED_FILES+=(apps/desktop/src-tauri/tauri.conf.json)
 fi
 
 echo ""
 
 # ─── Commit ────────────────────────────────────────────────────────────────
 
-git add -A '*.json'
-git commit -m "chore: bump version to ${VERSION}"
+# Stage and commit exactly the files bumped above, nothing else.
+git add -- "${CHANGED_FILES[@]}"
+git commit -m "chore: bump version to ${VERSION}" -- "${CHANGED_FILES[@]}"
 
 echo ""
 echo "Version bumped to $VERSION and committed."

@@ -1,6 +1,14 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import { apiFrom, apiTo } from "../../format.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
+
+const CANCEL_REASONS = ["1", "2", "3", "4"] as const;
+
+function isCancelReason(v: string): v is (typeof CANCEL_REASONS)[number] {
+  return (CANCEL_REASONS as readonly string[]).includes(v);
+}
 
 function handleError(e: unknown): never {
   if (e instanceof HisaaboApiError) {
@@ -16,21 +24,20 @@ export async function eInvoiceDashboardCommand(opts: { json?: boolean; from?: st
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.eInvoice.dashboard({ fromDate: opts.from, toDate: opts.to });
+    const result = await client.eInvoice.dashboard({ fromDate: apiFrom(opts.from), toDate: apiTo(opts.to) });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    const r = result as Record<string, unknown>;
     console.log("\n E-Invoice Dashboard\n");
     console.log(` ${"═".repeat(50)}\n`);
 
-    const generated = String(r["totalGenerated"] ?? r["generated"] ?? "0");
-    const cancelled = String(r["totalCancelled"] ?? r["cancelled"] ?? "0");
-    const failed = String(r["totalFailed"] ?? r["failed"] ?? "0");
-    const pending = String(r["pending"] ?? "0");
+    const generated = String(result.counts.generated);
+    const cancelled = String(result.counts.cancelled);
+    const failed = String(result.counts.failed);
+    const pending = String(result.counts.pending);
 
     console.log(`  Generated:   ${generated.padStart(8)}`);
     console.log(`  Cancelled:   ${cancelled.padStart(8)}`);
@@ -55,9 +62,8 @@ export async function eInvoiceGenerateCommand(invoiceId: string, opts: { json?: 
       return;
     }
 
-    const r = result as Record<string, unknown>;
-    const irn = String(r["irn"] ?? r["invoiceReferenceNumber"] ?? "-");
-    const ackNo = String(r["ackNo"] ?? r["acknowledgementNumber"] ?? "-");
+    const irn = result.irn ?? "-";
+    const ackNo = result.irnAckNumber ?? "-";
     console.log(`  E-Invoice generated.\n`);
     console.log(`  IRN:  ${irn}`);
     console.log(`  ACK:  ${ackNo}`);
@@ -68,12 +74,16 @@ export async function eInvoiceGenerateCommand(invoiceId: string, opts: { json?: 
   }
 }
 
-export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: boolean; reason?: string }): Promise<void> {
+export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: boolean; reason?: string; yes?: boolean }): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
+  await confirmOrExit(`Cancel the e-invoice for ${invoiceId}? This cannot be undone.`, opts);
+
   try {
-    const result = await client.eInvoice.cancel({ invoiceId, cancelReason: opts.reason ?? "1" });
+    const cancelReason = opts.reason ?? "1";
+    if (!isCancelReason(cancelReason)) fatalError("--reason must be one of: 1, 2, 3, 4", EXIT.USAGE);
+    const result = await client.eInvoice.cancel({ invoiceId, cancelReason });
 
     if (opts.json) {
       outputJSON(result);
@@ -99,8 +109,7 @@ export async function eInvoiceRetryCommand(invoiceId: string, opts: { json?: boo
       return;
     }
 
-    const r = result as Record<string, unknown>;
-    const status = String(r["status"] ?? "queued");
+    const status = result.eInvoiceStatus ?? "queued";
     console.log(`  Retry queued for invoice ${invoiceId}. Status: ${status}\n`);
 
   } catch (e) {

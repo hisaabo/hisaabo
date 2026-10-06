@@ -16,6 +16,12 @@ declare namespace WebMCP {
 
   interface ToolExecuteCallbackOptions {
     signal: AbortSignal;
+    /**
+     * Spec `ModelContextClient.requestUserInteraction`: runs `callback` while the
+     * browser attributes the prompt to the agent. Absent on older surfaces and
+     * polyfills; the runtime then falls back to `window.confirm`.
+     */
+    requestUserInteraction?<T>(callback: () => Promise<T>): Promise<T>;
   }
 
   type ToolExecuteCallback = (

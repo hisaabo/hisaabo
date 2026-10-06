@@ -56,6 +56,8 @@ export async function placeOrder(
       variantId?: string;
     }>;
     turnstileToken?: string;
+    /** Proof of phone ownership from /otp/verify; required when the store enforces OTP. */
+    otpToken?: string;
   }
 ): Promise<OrderResult> {
   // `credentials: "omit"` — never attach cookies. `X-Requested-With` is

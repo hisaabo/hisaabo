@@ -111,6 +111,7 @@ export function App() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [isNewCustomer, setIsNewCustomer] = useState(false);
+  const [otpToken, setOtpToken] = useState<string | undefined>(undefined);
 
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
@@ -308,7 +309,9 @@ export function App() {
           slug={slug}
           accentColor={catalog.business.accentColor || "var(--store-accent)"}
           onBack={() => setView("cart")}
-          onVerified={(phone, name, isNew) => {
+          otpRequired={catalog.business.otpRequired === true}
+          onVerified={(phone, name, isNew, _turnstile, token) => {
+            setOtpToken(token);
             setCustomerPhone(phone);
             setCustomerName(name);
             setIsNewCustomer(isNew);
@@ -330,6 +333,7 @@ export function App() {
           slug={slug}
           customerPhone={customerPhone}
           customerName={customerName}
+          otpToken={otpToken}
           isNewCustomer={isNewCustomer}
           onBack={() => setView("phone-verify")}
           onSuccess={handleOrderSuccess}

@@ -1,6 +1,10 @@
+use tauri::Emitter;
 use tauri::Listener;
-use tauri::Manager;
 
+mod deep_link;
+mod external_url;
+mod native;
+mod native_login;
 mod session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -11,6 +15,8 @@ pub fn run() {
             session::save_session_token,
             session::get_session_token,
             session::clear_session_token,
+            native::start_native_login,
+            native::open_external_url,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -21,23 +27,16 @@ pub fn run() {
                 )?;
             }
 
-            // Listen for deep link events (hisaabo://verify?token=xxx)
-            // The deep link scheme uses /verify (matching Expo Router's layout
-            // group path), but the webview runs the web app which uses
-            // /auth/verify (TanStack Router).
+            // Listen for deep link events (hisaabo://verify?token=xxx).
+            // The URL is parsed strictly and only the validated token is
+            // forwarded to the webview as an event; the web app performs the
+            // navigation. Nothing from the URL is ever evaluated as script.
             let handle = app.handle().clone();
             app.listen("deep-link://new-url", move |event: tauri::Event| {
-                if let Some(urls) = serde_json::from_str::<Vec<String>>(event.payload()).ok() {
+                if let Ok(urls) = serde_json::from_str::<Vec<String>>(event.payload()) {
                     for url in urls {
-                        if url.contains("/verify") {
-                            if let Some(window) = handle.get_webview_window("main") {
-                                let query = url.split('?').nth(1).unwrap_or("");
-                                let js = format!(
-                                    "window.location.href = '/auth/verify?{}'",
-                                    query
-                                );
-                                let _ = window.eval(&js);
-                            }
+                        if let Some(token) = deep_link::parse_verify_token(&url) {
+                            let _ = handle.emit_to("main", "hisaabo://verify-token", token);
                         }
                     }
                 }

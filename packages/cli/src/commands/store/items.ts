@@ -4,15 +4,9 @@ import {
   outputJSON, outputTable, outputTSV, outputCSV, EXIT, fatalError, type ColumnDef,
 } from "../../output.js";
 import { formatAmount } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
-interface StoreItem {
-  id: string;
-  name: string;
-  price: string;
-  enabled: boolean;
-  stock: number | null;
-  [key: string]: unknown;
-}
+type StoreItem = OutputOf<"store.listStoreItems">["data"][number];
 
 export async function storeItemsCommand(opts: {
   json?: boolean;
@@ -22,19 +16,20 @@ export async function storeItemsCommand(opts: {
   const client = new HisaaboClient(cfg);
 
   try {
-    const items: StoreItem[] = await client.store.listStoreItems({});
+    const result = await client.store.listStoreItems({});
+    const items: StoreItem[] = result.data;
 
     if (opts.json) {
-      outputJSON(items);
+      outputJSON(result);
       return;
     }
 
     const cols: ColumnDef<StoreItem>[] = [
       { key: "id", header: "ID", width: 36 },
       { key: "name", header: "Name", width: 30 },
-      { key: "price", header: "Price (₹)", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "enabled", header: "Status", width: 10, format: (v) => v ? "Enabled" : "Disabled" },
-      { key: "stock", header: "Stock", align: "right", width: 8, format: (v) => v == null ? "-" : String(v) },
+      { key: "salePrice", header: "Price (₹)", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "storeEnabled", header: "Status", width: 10, format: (v) => v ? "Enabled" : "Disabled" },
+      { key: "stockQuantity", header: "Stock", align: "right", width: 8, format: (v) => v == null ? "-" : String(v) },
     ];
 
     if (opts.format === "tsv") {
@@ -46,7 +41,7 @@ export async function storeItemsCommand(opts: {
       return;
     }
 
-    console.log(`\n Store Items  (${items.length} total)\n`);
+    console.log(`\n Store Items  (${result.total} total)\n`);
     outputTable(items, cols);
     console.log();
 

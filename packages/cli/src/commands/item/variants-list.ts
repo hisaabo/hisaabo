@@ -5,20 +5,14 @@ import {
   EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
 interface VariantsListOpts {
   json?: boolean;
   format?: string;
 }
 
-interface VariantRow {
-  id: string;
-  sku: string;
-  salePrice: string;
-  purchasePrice: string;
-  stockQuantity: string;
-  attributes: string;
-}
+type VariantRow = OutputOf<"item.listVariants">[number];
 
 export async function itemVariantsListCommand(itemId: string, opts: VariantsListOpts): Promise<void> {
   const cfg = requireAuth();
@@ -32,7 +26,7 @@ export async function itemVariantsListCommand(itemId: string, opts: VariantsList
       return;
     }
 
-    const variants: VariantRow[] = Array.isArray(result?.variants) ? result.variants : (Array.isArray(result) ? result : []);
+    const variants: VariantRow[] = result;
 
     console.log(`\n  Variants for item: ${itemId}\n`);
 
@@ -42,7 +36,7 @@ export async function itemVariantsListCommand(itemId: string, opts: VariantsList
       { key: "salePrice", header: "Sale (₹)", align: "right", width: 12, format: (v) => v ? formatAmount(String(v)) : "-" },
       { key: "purchasePrice", header: "Purchase (₹)", align: "right", width: 14, format: (v) => v ? formatAmount(String(v)) : "-" },
       { key: "stockQuantity", header: "Stock", align: "right", width: 10, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "attributes", header: "Attributes", width: 20, format: (v) => v ? JSON.stringify(v) : "-" },
+      { key: "attributeValues", header: "Attributes", width: 20, format: (v) => v ? JSON.stringify(v) : "-" },
     ];
 
     if (opts.format === "tsv") outputTSV(variants, cols);

@@ -65,6 +65,7 @@ export function registerTenantCommands(program: Command): void {
   tenant
     .command("revoke-invitation <invitationId>")
     .description("Revoke a pending invitation")
+    .option("--yes", "Skip confirmation prompt")
     .option("--json", "JSON output")
     .action(async (invitationId, opts) => {
       const { revokeInvitationCommand } = await import("../../commands/tenant/revoke-invitation.js");

@@ -6,6 +6,8 @@ export interface StoreConfig {
     minOrderAmount?: string;
     deliveryNote?: string;
     whatsappNumber?: string;
+    /** True when customers must verify their phone by SMS code before ordering. */
+    otpRequired?: boolean;
     currency: string;
     phone?: string;
     email?: string;

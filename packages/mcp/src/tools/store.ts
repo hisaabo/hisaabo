@@ -12,14 +12,14 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
 const ORDER_STATUSES = ["pending", "confirmed", "preparing", "ready", "delivered", "cancelled"] as const;
 
-export function registerStoreTools(server: McpServer, client: HisaaboClient) {
+export function registerStoreTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "store_settings",
@@ -66,6 +66,8 @@ export function registerStoreTools(server: McpServer, client: HisaaboClient) {
         .describe("WhatsApp number for order notifications (digits only)."),
       store_allow_negative_stock: z.boolean().optional()
         .describe("If true, orders can be placed even when stock is zero or negative."),
+      store_require_phone_otp: z.boolean().optional()
+        .describe("If true, customers must verify their phone with an SMS one-time code before ordering. Requires an SMS provider configured on the server (fails otherwise)."),
       store_order_prefix: z.string().min(1).max(10).optional()
         .describe("Prefix for store order numbers, e.g. 'ORD'. Default 'ORD'."),
     },
@@ -79,6 +81,7 @@ export function registerStoreTools(server: McpServer, client: HisaaboClient) {
         storeDeliveryNote: input.store_delivery_note,
         storeWhatsappNumber: input.store_whatsapp_number,
         storeAllowNegativeStock: input.store_allow_negative_stock,
+        storeRequirePhoneOtp: input.store_require_phone_otp,
         storeOrderPrefix: input.store_order_prefix,
       });
       return {

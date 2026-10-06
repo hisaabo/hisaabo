@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
+import { formatAmount, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface TopCustomersOpts {
@@ -26,8 +26,8 @@ export async function dashboardTopCustomersCommand(opts: TopCustomersOpts): Prom
   try {
     const data = await client.dashboard.topCustomers({
       limit: opts.limit,
-      fromDate,
-      toDate,
+      fromDate: apiFrom(fromDate),
+      toDate: apiTo(toDate),
     });
 
     if (opts.json) {
@@ -35,18 +35,16 @@ export async function dashboardTopCustomersCommand(opts: TopCustomersOpts): Prom
       return;
     }
 
-    const rows: Array<{ party: string; revenue: string; invoices: string }> = Array.isArray(data)
-      ? data.map((r: Record<string, unknown>) => ({
-          party: String(r["partyName"] ?? r["party"] ?? "-"),
-          revenue: formatAmount(String(r["revenue"] ?? r["totalRevenue"] ?? r["totalSales"] ?? "0")),
-          invoices: String(r["invoiceCount"] ?? r["invoices"] ?? "-"),
-        }))
-      : [];
+    const rows = data.map((r) => ({
+      party: r.partyName,
+      revenue: formatAmount(r.totalAmount),
+      invoices: String(r.invoiceCount),
+    }));
 
-    const columns = [
-      { key: "party", header: "Customer", align: "left" as const },
-      { key: "revenue", header: "Revenue ₹", align: "right" as const },
-      { key: "invoices", header: "Invoices", align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "party", header: "Customer", align: "left" },
+      { key: "revenue", header: "Revenue ₹", align: "right" },
+      { key: "invoices", header: "Invoices", align: "right" },
     ];
 
     if (opts.format === "tsv") {

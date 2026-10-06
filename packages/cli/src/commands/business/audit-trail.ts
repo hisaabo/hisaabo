@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, paginationFooter } from "../../output.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, paginationFooter, type ColumnDef } from "../../output.js";
 import { formatDate } from "../../format.js";
 import chalk from "chalk";
 
@@ -29,31 +29,22 @@ export async function businessAuditTrailCommand(opts: AuditTrailOpts): Promise<v
       return;
     }
 
-    const items: unknown[] = Array.isArray(data)
-      ? data
-      : Array.isArray(data?.items)
-        ? data.items
-        : Array.isArray(data?.data)
-          ? data.data
-          : [];
+    const items = data.data;
 
-    const total: number = typeof data?.total === "number" ? data.total : items.length;
+    const total: number = data.total;
 
-    const rows = items.map((item: unknown) => {
-      const r = item as Record<string, unknown>;
-      return {
-        timestamp: formatDate(String(r["createdAt"] ?? r["timestamp"] ?? "")),
-        user: String(r["userName"] ?? r["user"] ?? r["userEmail"] ?? "-"),
-        action: String(r["action"] ?? r["event"] ?? "-"),
-        details: String(r["details"] ?? r["description"] ?? r["meta"] ?? "-"),
-      };
-    });
+    const rows = items.map((r) => ({
+      timestamp: formatDate(r.createdAt),
+      user: r.userName,
+      action: r.action,
+      details: r.metadata ?? `${r.entityType}${r.entityId ? ` ${r.entityId}` : ""}`,
+    }));
 
-    const columns = [
-      { key: "timestamp", header: "Date", align: "left" as const },
-      { key: "user", header: "User", align: "left" as const, width: 28 },
-      { key: "action", header: "Action", align: "left" as const, width: 24 },
-      { key: "details", header: "Details", align: "left" as const, width: 40 },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "timestamp", header: "Date", align: "left" },
+      { key: "user", header: "User", align: "left", width: 28 },
+      { key: "action", header: "Action", align: "left", width: 24 },
+      { key: "details", header: "Details", align: "left", width: 40 },
     ];
 
     if (opts.format === "tsv") {

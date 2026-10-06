@@ -5,40 +5,37 @@ import {
   EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount, formatDate } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
 interface PriceHistoryOpts {
   json?: boolean;
   format?: string;
 }
 
-interface PriceHistoryRow {
-  date: string;
-  salePrice: string;
-  purchasePrice: string;
-  changedBy: string;
-}
+type PriceHistoryRow = OutputOf<"item.priceHistory">[number];
 
 export async function itemPriceHistoryCommand(id: string, opts: PriceHistoryOpts): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.item.priceHistory({ itemId: id });
+    const result = await client.item.priceHistory({ id });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    const entries: PriceHistoryRow[] = Array.isArray(result?.history) ? result.history : (Array.isArray(result) ? result : []);
+    const entries: PriceHistoryRow[] = result;
 
-    console.log(`\n  Price History: ${result?.itemName ?? id}\n`);
+    console.log(`\n  Price History: ${id}\n`);
 
     const cols: ColumnDef<PriceHistoryRow>[] = [
-      { key: "date", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
-      { key: "salePrice", header: "Sale Price (₹)", align: "right", width: 16, format: (v) => v ? formatAmount(String(v)) : "-" },
-      { key: "purchasePrice", header: "Purchase (₹)", align: "right", width: 14, format: (v) => v ? formatAmount(String(v)) : "-" },
-      { key: "changedBy", header: "Changed By", width: 18 },
+      { key: "invoiceDate", header: "Date", width: 13, format: (v) => formatDate(v as Date | string | null | undefined) },
+      { key: "invoiceNumber", header: "Invoice", width: 16 },
+      { key: "invoiceType", header: "Type", width: 10 },
+      { key: "unitPrice", header: "Unit Price (₹)", align: "right", width: 16, format: (v) => v ? formatAmount(String(v)) : "-" },
+      { key: "partyName", header: "Party", width: 18 },
     ];
 
     if (opts.format === "tsv") outputTSV(entries, cols);

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import {
   defineAbilityFor,
+  canCreateDocumentType,
   type Action,
   type Resource,
   type Ability,
@@ -16,11 +17,26 @@ export function useAbility(): Ability {
   return useMemo(() => defineAbilityFor(role), [role]);
 }
 
-// useCan — boolean shortcut for the common "show this button?" case.
-// During the initial session load (role unknown) it returns `true` so the
-// UI doesn't flash hidden affordances; the API still enforces the real rule.
+// useCan — boolean shortcut for "should I show this control?". Fails closed
+// (false) while the session is loading or the role is unknown, per the
+// role-based-ui ADR; the root layouts gate on session load so this is brief.
 export function useCan(action: Action, resource: Resource): boolean {
-  const { data: session, isLoading } = trpc.auth.me.useQuery(undefined);
-  if (isLoading || !session?.role) return true;
+  const { data: session } = trpc.auth.me.useQuery(undefined);
+  if (!session?.role) return false;
   return defineAbilityFor(session.role).can(action, resource);
+}
+
+// useCanCreateDocument — role gate for creating a document of `documentType`
+// on the given sale/purchase side. Mirrors the API rule that sellers cannot
+// create purchase-side documents (purchase invoices, purchase returns, debit
+// notes, or any document flagged side "purchase"). Requires create:Invoice too.
+// Fails closed while the session loads.
+export function useCanCreateDocument(
+  documentType: string,
+  side?: "sale" | "purchase",
+): boolean {
+  const { data: session } = trpc.auth.me.useQuery(undefined);
+  if (!session?.role) return false;
+  if (!defineAbilityFor(session.role).can("create", "Invoice")) return false;
+  return canCreateDocumentType(session.role, documentType, side);
 }

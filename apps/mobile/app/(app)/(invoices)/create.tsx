@@ -27,7 +27,7 @@ import { useContacts, type PhoneContact } from "../../../src/hooks/useContacts";
 import { DatePickerField } from "../../../src/components/ui";
 import { LineItemNotesField } from "../../../src/components/LineItemNotesField";
 import { PermissionGate } from "../../../src/components/PermissionGate";
-import { useCan } from "../../../src/hooks/useCan";
+import { useCan, useCanCreateDocument } from "../../../src/hooks/useCan";
 
 type InvoiceType = "sale" | "purchase";
 
@@ -1612,8 +1612,15 @@ function AltUnitSelector({ baseUnit, unitVariants, selectedUnit, invoiceType, on
 // ── Main Create Screen ────────────────────────────────────────
 
 export default function InvoiceCreateScreen() {
+  const { type } = useLocalSearchParams<{ type?: string }>();
+  // Deep-linking to /create?type=purchase as a seller shows the no-access state.
   return (
-    <PermissionGate action="create" resource="Invoice">
+    <PermissionGate
+      action="create"
+      resource="Invoice"
+      documentType="invoice"
+      side={type === "purchase" ? "purchase" : "sale"}
+    >
       <InvoiceCreateForm />
     </PermissionGate>
   );
@@ -1627,6 +1634,8 @@ function InvoiceCreateForm() {
   const [invoiceType, setInvoiceType] = useState<InvoiceType>(
     (params.type as InvoiceType) ?? "sale"
   );
+  // Sellers cannot record purchase invoices: hide the Sale/Purchase toggle.
+  const canCreatePurchase = useCanCreateDocument("invoice", "purchase");
 
   const [selectedParty, setSelectedParty] = useState<{
     id: string;
@@ -1907,6 +1916,7 @@ function InvoiceCreateForm() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>New Invoice</Text>
+        {canCreatePurchase && (
         <View style={styles.typeToggle}>
           <TouchableOpacity
             style={[styles.typeBtn, invoiceType === "sale" && styles.typeBtnActive]}
@@ -1930,6 +1940,7 @@ function InvoiceCreateForm() {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
       </View>
 
       <KeyboardAvoidingView

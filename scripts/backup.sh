@@ -4,8 +4,15 @@
 # offsite R2/S3 upload. Run via cron or manually.
 #
 # Requires: pg_basebackup, pg_dump, psql, gzip
-# Optional: rclone (R2/S3 upload), age (encryption)
+# Optional: rclone (R2/S3 upload), openssl (encryption)
+#
+# Encryption: when BACKUP_ENCRYPTION_KEY is set every file is encrypted with
+#   openssl enc -aes-256-cbc -pbkdf2 -iter 600000   (output: <file>.enc)
+# which works non-interactively (cron). `age -p` cannot read a passphrase from
+# a non-tty, so it is no longer used for encryption; restore-db.sh still decrypts
+# legacy .age files. Offsite upload is REFUSED when no key is set.
 set -euo pipefail
+umask 077
 
 # ── Config ─────────────────────────────────────────────────────────
 DB_USER="${DB_USER:-hisaabo}"
@@ -17,6 +24,11 @@ R2_REMOTE="r2:${R2_BUCKET}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 VERIFY_FAILED=0
 BACKUP_FILES=()
+# Every file this run creates (plaintext and partial output). On failure before
+# the local set is complete they are all deleted, so no plaintext dump or
+# truncated archive is left behind.
+CREATED_FILES=()
+LOCAL_COMPLETE=0
 
 echo "=========================================="
 echo "[$TIMESTAMP] Starting Hisaabo backup..."
@@ -25,24 +37,34 @@ echo "=========================================="
 # Ensure backup dir exists
 mkdir -p "$BACKUP_DIR"
 
-# ── Cleanup trap for verify databases ──────────────────────────────
+# ── Cleanup trap for verify databases and failed-run artifacts ─────
 VERIFY_DBS_TO_CLEANUP=()
-cleanup_verify_dbs() {
-  for vdb in "${VERIFY_DBS_TO_CLEANUP[@]}"; do
-    dropdb -h "$PGHOST" -U "$DB_USER" --if-exists "$vdb" 2>/dev/null || true
+cleanup() {
+  local rc=$?
+  for vdb in "${VERIFY_DBS_TO_CLEANUP[@]:-}"; do
+    [ -n "$vdb" ] && dropdb -h "$PGHOST" -U "$DB_USER" --if-exists "$vdb" 2>/dev/null || true
   done
+  if [ "$rc" -ne 0 ] && [ "$LOCAL_COMPLETE" -eq 0 ]; then
+    for f in "${CREATED_FILES[@]:-}"; do
+      [ -n "$f" ] && rm -f -- "$f" || true
+    done
+    echo "Backup failed (exit $rc): removed incomplete/plaintext files from this run" >&2
+  fi
 }
-trap cleanup_verify_dbs EXIT
+trap cleanup EXIT
 
 # ── 1. Full base backup ───────────────────────────────────────────
 echo ""
 echo "── Full base backup ──────────────────────"
 BACKUP_FILE="$BACKUP_DIR/base_${TIMESTAMP}.tar.gz"
+# `-X fetch`: the default (-X stream) cannot write a tar to stdout.
+CREATED_FILES+=("$BACKUP_FILE")
 pg_basebackup \
   -h "$PGHOST" \
   -U "$DB_USER" \
   -D - \
   -Ft \
+  -X fetch \
   -z \
   -P \
   > "$BACKUP_FILE"
@@ -56,15 +78,15 @@ echo "── SQL dumps (per database) ──────────────
 DATABASES=$(psql -h "$PGHOST" -U "$DB_USER" -Atc \
   "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres'" 2>/dev/null || echo "")
 
+SQL_DUMPS=()
+SQL_DUMP_DB_MAP=()
 if [ -z "$DATABASES" ]; then
   echo "WARN: No databases found to dump"
 else
-  SQL_DUMPS=()
-  SQL_DUMP_DB_MAP=()
-
   for DB in $DATABASES; do
     SQL_DUMP="$BACKUP_DIR/dump_${DB}_${TIMESTAMP}.sql.gz"
     echo "Dumping database: $DB"
+    CREATED_FILES+=("$SQL_DUMP")
     pg_dump -h "$PGHOST" -U "$DB_USER" -d "$DB" --no-owner --no-privileges --format=plain | gzip > "$SQL_DUMP"
     echo "  Created: $SQL_DUMP ($(du -h "$SQL_DUMP" | cut -f1))"
     BACKUP_FILES+=("$SQL_DUMP")
@@ -93,7 +115,7 @@ fi
 # ── 4. Restore verification (SQL dumps only) ──────────────────────
 echo ""
 echo "── Restore verification ────────────────────"
-if [ "${#SQL_DUMPS[@]:-0}" -gt 0 ]; then
+if [ "${#SQL_DUMPS[@]}" -gt 0 ]; then
   for i in "${!SQL_DUMPS[@]}"; do
     DUMP_FILE="${SQL_DUMPS[$i]}"
     DB="${SQL_DUMP_DB_MAP[$i]}"
@@ -131,24 +153,37 @@ fi
 echo ""
 echo "── Encryption ──────────────────────────────"
 if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+  # The passphrase is passed to openssl via the environment, never argv.
+  export BACKUP_ENCRYPTION_KEY
   ENCRYPTED_FILES=()
   for i in "${!BACKUP_FILES[@]}"; do
     FILE="${BACKUP_FILES[$i]}"
     echo "  Encrypting: $(basename "$FILE")"
-    echo "$BACKUP_ENCRYPTION_KEY" | age -e -p -o "${FILE}.age" "$FILE"
-    rm "$FILE"
-    BACKUP_FILES[$i]="${FILE}.age"
-    ENCRYPTED_FILES+=("${FILE}.age")
+    CREATED_FILES+=("${FILE}.enc")
+    openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+      -pass env:BACKUP_ENCRYPTION_KEY -in "$FILE" -out "${FILE}.enc"
+    rm -f -- "$FILE"
+    BACKUP_FILES[$i]="${FILE}.enc"
+    ENCRYPTED_FILES+=("${FILE}.enc")
   done
   echo "  Encrypted ${#ENCRYPTED_FILES[@]} file(s)"
 else
-  echo "  Skipped (BACKUP_ENCRYPTION_KEY not set)"
+  echo "  Skipped (BACKUP_ENCRYPTION_KEY not set) — files are stored in PLAINTEXT"
 fi
+# Local backup set is complete (encrypted if a key is configured): from here on
+# a failure (e.g. offsite upload) must not delete it.
+LOCAL_COMPLETE=1
 
 # ── 6. Upload to R2/S3 ────────────────────────────────────────────
 echo ""
 echo "── Offsite upload (R2/S3) ──────────────────"
 if command -v rclone &> /dev/null && rclone listremotes 2>/dev/null | grep -q "^r2:$"; then
+  if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+    echo "ERROR: offsite upload is configured but BACKUP_ENCRYPTION_KEY is not set." >&2
+    echo "ERROR: refusing to upload unencrypted database backups. Set BACKUP_ENCRYPTION_KEY" >&2
+    echo "ERROR: (openssl rand -base64 32) or remove the R2_* credentials. Local backups were kept." >&2
+    exit 1
+  fi
   for FILE in "${BACKUP_FILES[@]}"; do
     BASENAME=$(basename "$FILE")
     if [[ "$BASENAME" == base_* ]]; then
@@ -159,9 +194,13 @@ if command -v rclone &> /dev/null && rclone listremotes 2>/dev/null | grep -q "^
   done
   echo "  Uploaded ${#BACKUP_FILES[@]} file(s) to $R2_REMOTE"
 
-  # Clean up old remote backups
-  rclone delete "$R2_REMOTE" --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-  echo "  Cleaned remote backups older than ${RETENTION_DAYS} days"
+  # Clean up old remote backups — scoped to the prefixes this script writes,
+  # so unrelated objects sharing the bucket are never touched.
+  for PREFIX in base dumps; do
+    rclone delete "$R2_REMOTE/$PREFIX/" --min-age "${RETENTION_DAYS}d" \
+      || echo "  WARN: remote retention cleanup failed for $PREFIX/" >&2
+  done
+  echo "  Cleaned remote backups older than ${RETENTION_DAYS} days (base/, dumps/)"
 else
   echo "  WARN: rclone not configured — skipping offsite backup"
 fi

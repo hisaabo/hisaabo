@@ -8,11 +8,21 @@ import {
 } from "../../output.js";
 import {
   formatAmount, formatDate, formatStatus, formatINR,
-  fyStart, todayISO, monthStart, monthEnd, currentFY,
+  fyStart, todayISO, monthStart, monthEnd, currentFY, toApiDateTime, apiFrom, apiTo,
 } from "../../format.js";
 import chalk from "chalk";
+import { confirmOrExit } from "../../safety.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+export type DocNamespaceKey =
+  | "quotation"
+  | "creditNote"
+  | "debitNote"
+  | "deliveryChallan"
+  | "proforma"
+  | "salesReturn"
+  | "purchaseReturn";
 
 export interface DocTypeConfig {
   /** kebab-case CLI command name, e.g. "credit-note" */
@@ -20,7 +30,7 @@ export interface DocTypeConfig {
   /** Human-readable label, e.g. "Credit Note" */
   label: string;
   /** camelCase key on HisaaboClient, e.g. "creditNote" */
-  nsKey: keyof HisaaboClient;
+  nsKey: DocNamespaceKey;
   /** Valid status values for this document type */
   statuses: string[];
 }
@@ -53,6 +63,7 @@ interface CreateOpts {
   rate?: string[];
   notes?: string;
   discount?: string;
+  type?: string;
   yes?: boolean;
 }
 
@@ -67,17 +78,14 @@ interface DeleteOpts {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type DocNamespace = {
-  list(input: any): Promise<any>;
-  getById(input: any): Promise<any>;
-  create(input: any): Promise<any>;
-  updateStatus(input: any): Promise<any>;
-  delete(input: any): Promise<any>;
-};
+// All document routers are generated from the same factory, so they share one shape.
+type DocNamespace = HisaaboClient["quotation"];
 
-function getNs(client: HisaaboClient, nsKey: keyof HisaaboClient): DocNamespace {
-  return client[nsKey] as unknown as DocNamespace;
+function getNs(client: HisaaboClient, nsKey: DocNamespaceKey): DocNamespace {
+  return client[nsKey];
 }
+
+type DocListRow = Awaited<ReturnType<DocNamespace["list"]>>["data"][number];
 
 async function promptLine(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(question, resolve));
@@ -100,10 +108,10 @@ export async function docListCommand(dt: DocTypeConfig, opts: ListOpts): Promise
 
   try {
     const result = await ns.list({
-      status: opts.status ?? null,
-      partySearch: opts.party ?? null,
-      fromDate: from ?? null,
-      toDate: to ?? null,
+      status: opts.status,
+      search: opts.party,
+      fromDate: apiFrom(from),
+      toDate: apiTo(to),
       page,
       limit,
     });
@@ -126,26 +134,26 @@ export async function docListCommand(dt: DocTypeConfig, opts: ListOpts): Promise
     console.log(`\n ${dt.label}s` + " ".repeat(Math.max(1, 40 - dt.label.length)) + `FY ${currentFY()}`);
     console.log(` ${"═".repeat(68)}\n`);
 
-    const narrowCols: ColumnDef<any>[] = [
-      { key: "documentNumber", header: "#", width: 12 },
+    const narrowCols: ColumnDef<DocListRow>[] = [
+      { key: "invoiceNumber", header: "#", width: 12 },
       { key: "partyName", header: "Party", width: 18 },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];
 
-    const standardCols: ColumnDef<any>[] = [
-      { key: "documentNumber", header: "#", width: 12 },
+    const standardCols: ColumnDef<DocListRow>[] = [
+      { key: "invoiceNumber", header: "#", width: 12 },
       { key: "partyName", header: "Party", width: 18 },
-      { key: "documentDate", header: "Date", width: 12, format: (v) => formatDate(String(v ?? "")) },
+      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];
 
-    const wideCols: ColumnDef<any>[] = [
-      { key: "documentNumber", header: "#", width: 12 },
+    const wideCols: ColumnDef<DocListRow>[] = [
+      { key: "invoiceNumber", header: "#", width: 12 },
       { key: "partyName", header: "Party", width: 20 },
-      { key: "documentDate", header: "Date", width: 12, format: (v) => formatDate(String(v ?? "")) },
-      { key: "dueDate", header: "Due", width: 12, format: (v) => formatDate(v ? String(v) : null) },
+      { key: "invoiceDate", header: "Date", width: 12, format: (v) => formatDate(v as Date | null) },
+      { key: "dueDate", header: "Due", width: 12, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => formatStatus(String(v ?? "")) },
     ];
@@ -157,7 +165,7 @@ export async function docListCommand(dt: DocTypeConfig, opts: ListOpts): Promise
     } else if (opts.format === "csv") {
       outputCSV(result.data, cols);
     } else if (opts.format === "ids") {
-      outputIds(result.data.map((r: any) => r.id));
+      outputIds(result.data.map((r) => r.id));
     } else {
       outputTable(result.data, cols);
       paginationFooter(result.page, result.limit, result.total);
@@ -181,6 +189,7 @@ export async function docGetCommand(dt: DocTypeConfig, id: string, opts: GetOpts
 
   try {
     const doc = await ns.getById({ id });
+    if (!doc) fatalError(`${dt.label} not found: ${id}`, EXIT.NOT_FOUND);
 
     if (opts.json) {
       outputJSON(doc);
@@ -205,9 +214,8 @@ export async function docGetCommand(dt: DocTypeConfig, id: string, opts: GetOpts
       process.stdout.write(`├${"─".repeat(inner + 2)}┤\n`);
     }
 
-    const docNum = doc.documentNumber ?? doc.number ?? id;
-    const title = `${dt.label.toUpperCase()}  ${docNum}`;
-    const statusBadge = formatStatus(doc.status ?? "draft");
+    const title = `${dt.label.toUpperCase()}  ${doc.invoiceNumber}`;
+    const statusBadge = formatStatus(doc.status);
     // eslint-disable-next-line no-control-regex
     const statusLen = statusBadge.replace(/\x1b\[[0-9;]*m/g, "").length;
     const topPad = Math.max(1, inner - title.length - statusLen);
@@ -215,25 +223,25 @@ export async function docGetCommand(dt: DocTypeConfig, id: string, opts: GetOpts
     process.stdout.write(`\n ┌${"─".repeat(inner + 2)}┐\n`);
     process.stdout.write(`│ ${hasColor() ? chalk.bold(title) : title}${" ".repeat(topPad)}${statusBadge} │\n`);
     divider();
-    if (doc.partyName) line(`Party:   ${doc.partyName}`);
-    if (doc.documentDate ?? doc.date) line(`Date:    ${formatDate(doc.documentDate ?? doc.date)}`);
+    if (doc.party) line(`Party:   ${doc.party.name}`);
+    line(`Date:    ${formatDate(doc.invoiceDate)}`);
     if (doc.dueDate) line(`Due:     ${formatDate(doc.dueDate)}`);
     if (doc.createdByName) line(`Created: ${doc.createdByName}${doc.createdAt ? ` (${formatDate(doc.createdAt)})` : ""}`);
     divider();
 
     // Line items
-    const items: any[] = doc.lineItems ?? doc.items ?? [];
+    const items = doc.lineItems;
     if (items.length > 0) {
       process.stdout.write(`│${"─".repeat(inner + 2)}│\n`);
       process.stdout.write(`│   #  ${"Item".padEnd(18)} ${"Qty".padStart(5)} ${"Rate (₹)".padStart(10)} ${"Amount (₹)".padStart(12)}  │\n`);
       process.stdout.write(`│  ${"──".padEnd(2)} ${"─".repeat(18)} ${"─".repeat(5)} ${"─".repeat(10)} ${"─".repeat(12)}  │\n`);
 
-      items.forEach((item: any, i: number) => {
+      items.forEach((item, i) => {
         const idx = String(i + 1).padStart(2);
-        const desc = (item.description ?? item.name ?? "").slice(0, 18).padEnd(18);
-        const qty = String(item.quantity ?? "1").padStart(5);
-        const rate = formatAmount(String(item.unitPrice ?? item.rate ?? "0")).padStart(10);
-        const amt = formatAmount(String(item.amount ?? "0")).padStart(12);
+        const desc = item.itemName.slice(0, 18).padEnd(18);
+        const qty = item.quantity.padStart(5);
+        const rate = formatAmount(item.unitPrice).padStart(10);
+        const amt = formatAmount(item.totalAmount).padStart(12);
         process.stdout.write(`│   ${idx}  ${desc} ${qty} ${rate} ${amt}   │\n`);
       });
 
@@ -242,13 +250,11 @@ export async function docGetCommand(dt: DocTypeConfig, id: string, opts: GetOpts
     }
 
     // Totals
-    if (doc.totalAmount !== undefined) {
-      if (doc.subtotal !== undefined) line(`Subtotal:`, formatAmount(String(doc.subtotal)).padStart(16));
-      if (doc.totalDiscount !== undefined && parseFloat(String(doc.totalDiscount)) !== 0)
-        line(`Discount:`, ("-" + formatAmount(String(doc.totalDiscount))).padStart(16));
-      process.stdout.write(`│  ${"─".repeat(inner - 2)}  │\n`);
-      line(`Total:`, (hasColor() ? chalk.bold(formatAmount(String(doc.totalAmount))) : formatAmount(String(doc.totalAmount))).padStart(16));
-    }
+    line(`Subtotal:`, formatAmount(doc.subtotal).padStart(16));
+    if (parseFloat(doc.discountAmount) !== 0)
+      line(`Discount:`, ("-" + formatAmount(doc.discountAmount)).padStart(16));
+    process.stdout.write(`│  ${"─".repeat(inner - 2)}  │\n`);
+    line(`Total:`, (hasColor() ? chalk.bold(formatAmount(doc.totalAmount)) : formatAmount(doc.totalAmount)).padStart(16));
 
     if (doc.notes || doc.termsAndConditions) {
       divider();
@@ -297,7 +303,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
           fatalError("No parties found. Create one with: hisaabo party create", EXIT.NOT_FOUND);
         }
 
-        parties.data.forEach((p: any, i: number) => {
+        parties.data.forEach((p, i) => {
           console.log(`    ${i + 1}  ${p.name.padEnd(20)} ${(p.phone ?? "").padEnd(14)}  ${p.type}`);
         });
 
@@ -319,7 +325,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
     }
 
     // ── Build line items ───────────────────────────────────────────
-    const lineItems: Array<{ itemId?: string; description: string; quantity: string; unitPrice: string; taxPercent?: string; discountPercent?: string }> = [];
+    const lineItems: Array<{ itemId?: string; itemName: string; quantity: string; unitPrice: string; taxPercent?: string; discountPercent?: string }> = [];
 
     if (opts.item && opts.item.length > 0) {
       for (let i = 0; i < opts.item.length; i++) {
@@ -333,7 +339,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
             unitPrice = items.data[0].salePrice;
             lineItems.push({
               itemId: items.data[0].id,
-              description: items.data[0].name,
+              itemName: items.data[0].name,
               quantity: qty,
               unitPrice,
               taxPercent: items.data[0].taxPercent,
@@ -343,19 +349,19 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
           }
         } else {
           const items = await client.item.list({ search: itemName, limit: 3 });
-          const matched = items.data.find((it: any) =>
+          const matched = items.data.find((it) =>
             it.name.toLowerCase().includes(itemName.toLowerCase()),
           );
           if (matched) {
             lineItems.push({
               itemId: matched.id,
-              description: matched.name,
+              itemName: matched.name,
               quantity: qty,
               unitPrice,
               taxPercent: matched.taxPercent,
             });
           } else {
-            lineItems.push({ description: itemName, quantity: qty, unitPrice });
+            lineItems.push({ itemName, quantity: qty, unitPrice });
           }
         }
       }
@@ -376,7 +382,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
 
         const items = await client.item.list({ search: search.trim(), limit: 5 });
         if (items.data.length > 0) {
-          items.data.forEach((it: any, i: number) => {
+          items.data.forEach((it, i) => {
             const stock = it.itemType === "service" ? "-" : String(it.stockQuantity);
             const price = it.salePrice ? formatINR(it.salePrice) : "no price";
             console.log(`      ${i + 1}  ${it.name.padEnd(20)} ${price.padEnd(12)}  Stock: ${stock}`);
@@ -415,7 +421,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
           `    > ${description}  x${qty}  @${formatAmount(unitPrice)}  ${taxPercent}% tax  = ${formatAmount(String(amount))}\n`,
         );
 
-        lineItems.push({ itemId, description, quantity: qty, unitPrice, taxPercent, discountPercent });
+        lineItems.push({ itemId, itemName: description, quantity: qty, unitPrice, taxPercent, discountPercent });
         itemNum++;
       }
       rl.close();
@@ -466,13 +472,16 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
     }
 
     // ── Create ────────────────────────────────────────────────────
+    const type = opts.type ?? "sale";
+    if (type !== "sale" && type !== "purchase") fatalError("--type must be sale or purchase", EXIT.USAGE);
     const doc = await ns.create({
+      type,
       partyId: partyId!,
-      documentDate,
-      dueDate,
+      invoiceDate: toApiDateTime(documentDate, "start"),
+      dueDate: dueDate ? toApiDateTime(dueDate, "end") : undefined,
       notes,
       lineItems,
-      ...(opts.discount ? { invoiceDiscount: opts.discount } : {}),
+      ...(opts.discount ? { invoiceDiscount: opts.discount, invoiceDiscountType: "percent" as const } : {}),
     });
 
     if (opts.json) {
@@ -480,9 +489,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
       return;
     }
 
-    const docNum = doc.documentNumber ?? doc.number ?? doc.id;
-    const total = doc.totalAmount ?? String(subtotal + taxTotal);
-    success(`Created: ${docNum} for ${formatINR(total)}`);
+    success(`Created: ${doc.invoiceNumber} for ${formatINR(doc.totalAmount)}`);
     console.log(`  View:    hisaabo ${dt.cmd} get ${doc.id}\n`);
 
   } catch (e) {
@@ -514,6 +521,7 @@ export async function docStatusCommand(
 
   try {
     const before = await ns.getById({ id });
+    if (!before) fatalError(`${dt.label} not found: ${id}`, EXIT.NOT_FOUND);
     const updated = await ns.updateStatus({ id, status });
 
     if (opts.json) {
@@ -521,7 +529,7 @@ export async function docStatusCommand(
       return;
     }
 
-    const fromBadge = formatStatus(before.status ?? "draft");
+    const fromBadge = formatStatus(before.status);
     const toBadge = formatStatus(status);
     console.log(`  ${id} status updated: ${fromBadge} -> ${toBadge}`);
 
@@ -551,22 +559,10 @@ export async function docDeleteCommand(
 
   try {
     const doc = await ns.getById({ id });
-    const docNum = doc.documentNumber ?? doc.number ?? id;
+    if (!doc) fatalError(`${dt.label} not found: ${id}`, EXIT.NOT_FOUND);
+    const docNum = doc.invoiceNumber;
 
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(
-          `  Delete ${docNum} (${doc.partyName ?? ""}, ${doc.totalAmount ?? ""})? (y/N): `,
-          resolve,
-        );
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete ${docNum} (${doc.party?.name ?? ""}, ${doc.totalAmount})?`, opts);
 
     const result = await ns.delete({ id });
 

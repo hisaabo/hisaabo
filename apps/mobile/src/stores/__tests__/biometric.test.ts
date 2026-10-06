@@ -46,6 +46,10 @@ jest.mock("expo-secure-store", () => ({
   deleteItemAsync: jest.fn(),
 }));
 
+jest.mock("../auth", () => ({
+  useAuthStore: { getState: () => ({ logout: mockLogout }) },
+}));
+
 jest.mock("expo-local-authentication", () => ({
   hasHardwareAsync: jest.fn(),
   isEnrolledAsync: jest.fn(),
@@ -54,6 +58,7 @@ jest.mock("expo-local-authentication", () => ({
   AuthenticationType: { FINGERPRINT: 1, FACIAL_RECOGNITION: 2, IRIS: 3 },
 }));
 
+const mockLogout = jest.fn().mockResolvedValue(undefined);
 const mockGet = SecureStore.getItemAsync as jest.Mock;
 const mockSet = SecureStore.setItemAsync as jest.Mock;
 const mockDelete = SecureStore.deleteItemAsync as jest.Mock;
@@ -79,6 +84,15 @@ function hashPin(pin: string): string {
   return String(hash);
 }
 
+// Key-addressed in-memory SecureStore for the PIN hashing / lockout tests.
+function useFakeStore(initial: Record<string, string> = {}) {
+  const data = new Map(Object.entries(initial));
+  mockGet.mockImplementation(async (k: string) => data.get(k) ?? null);
+  mockSet.mockImplementation(async (k: string, v: string) => { data.set(k, v); });
+  mockDelete.mockImplementation(async (k: string) => { data.delete(k); });
+  return data;
+}
+
 const BIOMETRIC_ENABLED_KEY = "hisaabo_biometric_enabled";
 const PIN_HASH_KEY = "hisaabo_pin_hash";
 const SETUP_PROMPTED_KEY = "hisaabo_setup_prompted";
@@ -99,7 +113,9 @@ beforeEach(() => {
     isLocked: false,
     isHydrated: false,
     setupPrompted: false,
+    pinLockedUntil: 0,
   });
+  mockLogout.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -252,55 +268,90 @@ describe("biometric store — fingerprint/PIN lock management", () => {
   });
 
   // -------------------------------------------------------------------------
-  it("setPin() stores the djb2 hash of the PIN — never the plaintext digits", async () => {
-    // WHAT: User sets PIN "9876". SecureStore must contain the hashed value,
-    //       not the literal string "9876".
-    // WHY: Even though this is a local UX lock (not a security boundary as
-    //      noted in the source), storing plaintext PINs in SecureStore would
-    //      be flagged in a Play Store / App Store security review and could
-    //      leak the PIN if the keychain is extracted from a rooted device.
-    //      The hash is not bcrypt — it's djb2 — but it is still not plaintext.
-    mockSet.mockResolvedValue(undefined);
+  it("setPin() stores a salted v2 hash of the PIN — never the plaintext digits", async () => {
+    // WHY: A 4-digit PIN with an unsalted 32-bit hash is trivially reversible
+    //      if the keychain is extracted; a per-install salt + SHA-256 is not.
+    const data = useFakeStore();
     const PIN = "9876";
 
     await useBiometricStore.getState().setPin(PIN);
 
-    const [key, storedValue] = mockSet.mock.calls[0];
-    expect(key).toBe(PIN_HASH_KEY);
-    // The stored value must NOT be the raw PIN
-    expect(storedValue).not.toBe(PIN);
-    // The stored value must match our expected hash
-    expect(storedValue).toBe(hashPin(PIN));
-    // State must reflect that PIN is now enabled
+    const stored = data.get(PIN_HASH_KEY)!;
+    expect(stored.startsWith("v2$")).toBe(true);
+    expect(stored).not.toContain(PIN);
+    expect(stored).not.toBe(hashPin(PIN));
+    expect(data.get("hisaabo_pin_salt")).toMatch(/^[0-9a-f]{32}$/);
     expect(useBiometricStore.getState().pinEnabled).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  it("verifyPin() returns true when the submitted PIN matches the stored hash", async () => {
-    // WHAT: User is on the lock screen and enters the correct PIN "4321".
-    // WHY: This is the unlock gate. If verifyPin() never returns true, users
-    //      who enabled PIN lock are permanently locked out of the app.
-    const CORRECT_PIN = "4321";
-    mockGet.mockResolvedValue(hashPin(CORRECT_PIN));
+  it("verifyPin() accepts the PIN set via setPin() and rejects others", async () => {
+    useFakeStore();
+    await useBiometricStore.getState().setPin("4321");
 
-    const result = await useBiometricStore.getState().verifyPin(CORRECT_PIN);
-
-    expect(result).toBe(true);
+    expect(await useBiometricStore.getState().verifyPin("0000")).toBe(false);
+    expect(await useBiometricStore.getState().verifyPin("4321")).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  it("verifyPin() returns false when the submitted PIN does not match (wrong PIN)", async () => {
-    // WHAT: User enters the wrong PIN "0000" when the actual PIN is "4321".
-    // WHY: If verifyPin() is too permissive (e.g. always returns true, or
-    //      ignores the stored hash), the PIN lock offers zero protection —
-    //      anyone can tap four digits to unlock the app.
-    const CORRECT_PIN = "4321";
-    const WRONG_PIN = "0000";
-    mockGet.mockResolvedValue(hashPin(CORRECT_PIN));
+  it("verifyPin() accepts a legacy 32-bit hash once and migrates it to v2", async () => {
+    const data = useFakeStore({ [PIN_HASH_KEY]: hashPin("4321") });
 
-    const result = await useBiometricStore.getState().verifyPin(WRONG_PIN);
+    expect(await useBiometricStore.getState().verifyPin("4321")).toBe(true);
 
-    expect(result).toBe(false);
+    expect(data.get(PIN_HASH_KEY)!.startsWith("v2$")).toBe(true);
+    expect(data.has("hisaabo_pin_salt")).toBe(true);
+    expect(await useBiometricStore.getState().verifyPin("4321")).toBe(true);
+    expect(await useBiometricStore.getState().verifyPin("1111")).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  it("verifyPin() locks out for 30s after 5 failures and refuses even the right PIN", async () => {
+    useFakeStore();
+    await useBiometricStore.getState().setPin("4321");
+
+    for (let i = 0; i < 5; i++) {
+      expect(await useBiometricStore.getState().verifyPin("0000")).toBe(false);
+    }
+    const until = useBiometricStore.getState().pinLockedUntil;
+    expect(until).toBeGreaterThan(Date.now() + 25_000);
+    expect(until).toBeLessThanOrEqual(Date.now() + 30_000);
+
+    expect(await useBiometricStore.getState().verifyPin("4321")).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  it("failure counter persists across launches and resets after a successful unlock", async () => {
+    const data = useFakeStore();
+    await useBiometricStore.getState().setPin("4321");
+
+    await useBiometricStore.getState().verifyPin("0000");
+    await useBiometricStore.getState().verifyPin("0000");
+    expect(data.get("hisaabo_pin_fails")).toBe("2");
+
+    expect(await useBiometricStore.getState().verifyPin("4321")).toBe(true);
+    expect(data.has("hisaabo_pin_fails")).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  it("wipes the PIN, biometric flag and session after 10 failures", async () => {
+    const data = useFakeStore({ hisaabo_biometric_enabled: "1" });
+    await useBiometricStore.getState().setPin("4321");
+    useBiometricStore.setState({ biometricEnabled: true, isLocked: true });
+
+    for (let i = 0; i < 10; i++) {
+      // Skip lockout windows between attempts.
+      data.delete("hisaabo_pin_lock_until");
+      await useBiometricStore.getState().verifyPin("0000");
+    }
+
+    expect(mockLogout).toHaveBeenCalledTimes(1);
+    expect(data.has(PIN_HASH_KEY)).toBe(false);
+    expect(data.has("hisaabo_biometric_enabled")).toBe(false);
+    const state = useBiometricStore.getState();
+    expect(state.pinEnabled).toBe(false);
+    expect(state.biometricEnabled).toBe(false);
+    expect(state.isLocked).toBe(false);
   });
 
   // -------------------------------------------------------------------------

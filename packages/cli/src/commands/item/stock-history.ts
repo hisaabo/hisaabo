@@ -5,6 +5,7 @@ import {
   paginationFooter, EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount, formatDate } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
 interface StockHistoryOpts {
   page?: number;
@@ -13,13 +14,7 @@ interface StockHistoryOpts {
   format?: string;
 }
 
-interface StockAdjustmentRow {
-  date: string;
-  adjustment: string;
-  reason: string;
-  balanceAfter: string;
-  createdBy: string;
-}
+type StockAdjustmentRow = OutputOf<"item.stockAdjustmentHistory">["data"][number];
 
 export async function itemStockHistoryCommand(id: string, opts: StockHistoryOpts): Promise<void> {
   const cfg = requireAuth();
@@ -36,17 +31,17 @@ export async function itemStockHistoryCommand(id: string, opts: StockHistoryOpts
       return;
     }
 
-    const entries: StockAdjustmentRow[] = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
-    const total: number = result?.total ?? entries.length;
+    const entries: StockAdjustmentRow[] = result.data;
+    const total: number = result.total;
 
-    console.log(`\n  Stock History: ${result?.itemName ?? id}\n`);
+    console.log(`\n  Stock History: ${id}\n`);
 
     const cols: ColumnDef<StockAdjustmentRow>[] = [
-      { key: "date", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
-      { key: "adjustment", header: "Adjustment", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "balanceAfter", header: "Balance After", align: "right", width: 14, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "adjustmentDate", header: "Date", width: 13, format: (v) => formatDate(v as Date | string | null | undefined) },
+      { key: "quantity", header: "Adjustment", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "newStock", header: "Balance After", align: "right", width: 14, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "reason", header: "Reason", width: 25 },
-      { key: "createdBy", header: "By", width: 16 },
+      { key: "createdByName", header: "By", width: 16 },
     ];
 
     if (opts.format === "tsv") outputTSV(entries, cols);

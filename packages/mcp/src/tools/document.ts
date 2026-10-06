@@ -17,31 +17,16 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
+import { lineItemSchema, toApiLineItems } from "../lib/lineItems.js";
 
 const DOCUMENT_TYPES = [
   "quotation", "credit_note", "debit_note", "delivery_challan",
   "proforma", "sales_return", "purchase_return",
 ] as const;
-
-// Shared line item schema reused across create tools
-const lineItemSchema = z.object({
-  description: z.string().min(1).max(500)
-    .describe("Product or service name/description."),
-  quantity: z.string().regex(/^\d+(\.\d{1,3})?$/)
-    .describe("Quantity as decimal string, e.g. '1.000'."),
-  unit_price: z.string().regex(/^\d+(\.\d{1,2})?$/)
-    .describe("Price per unit as decimal string, e.g. '250.00'."),
-  tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-    .describe("GST/tax rate percentage, e.g. '18.00'."),
-  discount_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-    .describe("Line-level discount percentage."),
-  item_id: z.string().uuid().optional()
-    .describe("Link to an inventory item UUID (optional)."),
-});
 
 // Shared list input schema
 const listInput = {
@@ -83,26 +68,8 @@ const createInput = {
 
 type DocumentNs = "quotation" | "creditNote" | "debitNote" | "deliveryChallan" | "proforma" | "salesReturn" | "purchaseReturn";
 
-function mapLineItems(lineItems: Array<{
-  description: string;
-  quantity: string;
-  unit_price: string;
-  tax_percent: string;
-  discount_percent: string;
-  item_id?: string;
-}>) {
-  return lineItems.map((li) => ({
-    description: li.description,
-    quantity: li.quantity,
-    unitPrice: li.unit_price,
-    taxPercent: li.tax_percent,
-    discountPercent: li.discount_percent,
-    itemId: li.item_id,
-  }));
-}
-
 function registerDocTypeTools(
-  server: McpServer,
+  server: ToolServer,
   client: HisaaboClient,
   docType: string,
   nsKey: DocumentNs,
@@ -116,7 +83,7 @@ function registerDocTypeTools(
     `List ${label} documents for the active business. Supports filtering by party, date range, and status.`,
     listInput,
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).list({
+      const result = await client[nsKey].list({
         type: input.type,
         status: input.status,
         partyId: input.party_id,
@@ -143,7 +110,7 @@ function registerDocTypeTools(
         .describe(`${label} UUID from ${prefix}_list.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).getById(input.document_id);
+      const result = await client[nsKey].getById(input.document_id);
       return {
         content: [{
           type: "text" as const,
@@ -162,7 +129,7 @@ function registerDocTypeTools(
     ].join(" "),
     createInput,
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).create({
+      const result = await client[nsKey].create({
         partyId: input.party_id,
         type: input.type,
         invoiceDate: input.document_date,
@@ -170,7 +137,7 @@ function registerDocTypeTools(
         notes: input.notes,
         termsAndConditions: input.terms_and_conditions,
         referenceDocumentId: input.reference_document_id,
-        lineItems: mapLineItems(input.line_items),
+        lineItems: await toApiLineItems(client, input.line_items),
       });
       return {
         content: [{
@@ -191,7 +158,7 @@ function registerDocTypeTools(
         .describe(`New status. Allowed: ${allowedStatuses.join(", ")}.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).updateStatus(input.document_id, input.status);
+      const result = await client[nsKey].updateStatus(input.document_id, input.status);
       return {
         content: [{
           type: "text" as const,
@@ -212,7 +179,7 @@ function registerDocTypeTools(
         .describe(`${label} UUID to delete.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).delete(input.document_id);
+      const result = await client[nsKey].delete(input.document_id);
       return {
         content: [{
           type: "text" as const,
@@ -223,7 +190,7 @@ function registerDocTypeTools(
   );
 }
 
-export function registerDocumentTools(server: McpServer, client: HisaaboClient) {
+export function registerDocumentTools(server: ToolServer, client: HisaaboClient) {
 
   // ── document_convert ─────────────────────────────────────────
 
@@ -244,7 +211,7 @@ export function registerDocumentTools(server: McpServer, client: HisaaboClient) 
     wrapTool(async (input) => {
       const result = await client.document.convert({
         sourceId: input.source_id,
-        targetType: input.target_type as any,
+        targetType: input.target_type,
       });
       return {
         content: [{

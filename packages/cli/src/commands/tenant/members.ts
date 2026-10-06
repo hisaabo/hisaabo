@@ -4,14 +4,9 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatDate } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
-interface TenantMember {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  joinedAt: string;
-}
+type TenantMember = OutputOf<"tenant.members">[number];
 
 interface MembersOpts {
   json?: boolean;
@@ -23,7 +18,7 @@ export async function tenantMembersCommand(opts: MembersOpts): Promise<void> {
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.tenant.members() as TenantMember[];
+    const result = await client.tenant.members();
 
     if (opts.json) {
       outputJSON(result);
@@ -33,10 +28,10 @@ export async function tenantMembersCommand(opts: MembersOpts): Promise<void> {
     console.log(`\n Team Members  ${result.length} total\n`);
 
     const cols: ColumnDef<TenantMember>[] = [
-      { key: "name", header: "Name", width: 24 },
-      { key: "email", header: "Email", width: 30 },
+      { key: "userName", header: "Name", width: 24 },
+      { key: "userEmail", header: "Email", width: 30 },
       { key: "role", header: "Role", width: 18 },
-      { key: "joinedAt", header: "Joined", width: 13, format: (v) => formatDate(String(v ?? "")) },
+      { key: "acceptedAt", header: "Joined", width: 13, format: (v) => formatDate(v as Date | null) },
     ];
 
     if (opts.format === "tsv") outputTSV(result, cols);

@@ -20,6 +20,7 @@ export function registerStoreCommands(program: Command): void {
     .option("--slug <slug>", "Store URL slug")
     .option("--tagline <text>", "Store tagline / description")
     .option("--enabled <bool>", "Enable or disable store (true/false)")
+    .option("--require-phone-otp <bool>", "Require customers to verify their phone by SMS code (true/false; needs an SMS provider on the server)")
     .option("--json", "JSON output")
     .action(async (opts) => {
       const { storeUpdateSettingsCommand } = await import("../../commands/store/update-settings.js");
@@ -27,6 +28,7 @@ export function registerStoreCommands(program: Command): void {
         slug: opts.slug,
         tagline: opts.tagline,
         enabled: opts.enabled,
+        requirePhoneOtp: opts.requirePhoneOtp,
         json: opts.json,
       });
     });

@@ -5,10 +5,8 @@ import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 const VALID_ROLES = ["admin", "seller_manager", "seller", "accountant"] as const;
 type TenantRole = typeof VALID_ROLES[number];
 
-interface InviteResult {
-  inviteToken?: string;
-  inviteLink?: string;
-  message?: string;
+function isTenantRole(v: string): v is TenantRole {
+  return (VALID_ROLES as readonly string[]).includes(v);
 }
 
 interface InviteOpts {
@@ -20,29 +18,23 @@ export async function tenantInviteCommand(email: string, opts: InviteOpts): Prom
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  const role: TenantRole = (opts.role as TenantRole) ?? "seller";
-
-  if (!VALID_ROLES.includes(role)) {
-    fatalError(`Invalid role "${role}". Must be one of: ${VALID_ROLES.join(", ")}`, EXIT.VALIDATION);
+  const requested = opts.role ?? "seller";
+  if (!isTenantRole(requested)) {
+    fatalError(`Invalid role "${requested}". Must be one of: ${VALID_ROLES.join(", ")}`, EXIT.VALIDATION);
   }
+  const role: TenantRole = requested;
 
   try {
-    const result = await client.tenant.inviteMember({ email, role }) as InviteResult;
+    const result = await client.tenant.inviteMember({ email, role });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    success(`Invited ${email} as ${role}`);
-    if (result.inviteLink) {
-      console.log(`  Invite link: ${result.inviteLink}`);
-    } else if (result.inviteToken) {
-      console.log(`  Invite token: ${result.inviteToken}`);
-    }
-    if (result.message) {
-      console.log(`  ${result.message}`);
-    }
+    success(`Invited ${email} as ${role} (invitation emailed)`);
+    if (result.inviteUrl) console.log(`  Invite link: ${result.inviteUrl}`);
+    console.log(`  Expires: ${result.expiresAt.toISOString()}`);
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

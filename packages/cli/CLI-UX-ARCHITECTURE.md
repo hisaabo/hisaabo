@@ -303,10 +303,13 @@ $ hisaabo login
   ───────────
 
   Server URL [http://localhost:3000]: https://billing.mycompany.in
-  Email: saurabh@example.com
-  Password: ••••••••
 
-  Authenticating... done
+  Opening your browser to sign in to Hisaabo...
+  If it does not open, visit this URL:
+
+    https://app.mycompany.in/auth/native?request=...
+
+  Waiting for sign-in (times out in 5 minutes)...
 
   You have access to 2 businesses:
 
@@ -321,8 +324,12 @@ $ hisaabo login
   Config saved to ~/.config/hisaabo/config.json
 
   You can switch businesses anytime with:
-    hisaabo business switch
+    hisaabo switch
 ```
+
+Sign-in uses the browser handoff (RFC 8252 loopback redirect with PKCE): the CLI starts a one-shot HTTP listener on `127.0.0.1:<random port>`, calls `auth.nativeStart` with the S256 code challenge and a random `state`, opens `<web-url>/auth/native?request=<id>`, and after the user signs in and approves, receives `?code=...&state=...` on the loopback URL. It then calls `auth.nativeExchange` with the code verifier and the header `X-Hisaabo-Client: cli` to get a bearer session token. No email or password is ever typed into the terminal, and the CLI has no password flow. `--web-url` / `HISAABO_WEB_URL` selects the web app when it is not at the default hosted address.
+
+For scripts and CI, pipe an API key instead: `echo "$KEY" | hisaabo login --api-url <url> --token-stdin` (or set `HISAABO_TOKEN` together with `HISAABO_API_URL` and skip logging in). API keys expire (default 90 days, maximum 365) and are revoked when the member is removed or their role changes.
 
 ### 3.2 Invoice Creation (Interactive)
 
@@ -705,7 +712,7 @@ $ hisaabo invoice list
   Your business selection will be preserved.
 ```
 
-Token refresh happens silently. Only show auth errors when refresh also fails.
+Sessions are not refreshed silently; when the token is rejected the CLI reports the error and asks the user to run `hisaabo login` again.
 
 ### 5.4 Business Logic Errors
 
@@ -728,7 +735,7 @@ $ hisaabo invoice create ...
   Error: Invoice number INV-0042 already exists
 
   The server auto-assigns the next number. If you need to reset:
-    hisaabo business sequence invoice 100
+    hisaabo business sequence --type invoice --next-number 100
 
 # Credit limit exceeded
 $ hisaabo invoice create --party "Kumar Stores" ...
@@ -860,6 +867,8 @@ Usage: hisaabo invoice create [options]
 Without flags, starts an interactive wizard.
 With flags, creates directly (use --yes to skip confirmation).
 
+Destructive commands (delete, merge, revoke, remove, restore) fail closed: in a terminal they prompt, but when stdin is not a TTY they refuse unless --yes is passed.
+
 Options:
   --type <sale|purchase>     Invoice type (default: sale)
   --party <name|id>          Party name (fuzzy match) or UUID
@@ -984,13 +993,11 @@ Location: `~/.config/hisaabo/config.json`
 
 ```json
 {
-  "server": "https://billing.mycompany.in",
-  "session": {
-    "id": "...",
-    "expiresAt": "2026-04-29T10:32:00.000Z"
-  },
-  "activeBusinessId": "550e8400-e29b-41d4-a716-446655440000",
-  "activeBusiness": "Sharma Trading Co.",
+  "apiUrl": "https://billing.mycompany.in",
+  "token": "sess_... or hisaabo_key_...",
+  "tenantId": "tenant-uuid",
+  "businessId": "550e8400-e29b-41d4-a716-446655440000",
+  "businessName": "Sharma Trading Co.",
   "defaults": {
     "invoiceType": "sale",
     "deliveryMethod": "hand_delivery",
@@ -1026,9 +1033,11 @@ $ hisaabo config set display.color false
 Every config value can be overridden via env var (useful for CI/CD):
 
 ```
-HISAABO_SERVER=https://billing.mycompany.in
-HISAABO_SESSION_ID=...
+HISAABO_API_URL=https://billing.mycompany.in
+HISAABO_TOKEN=hisaabo_key_...
+HISAABO_TENANT_ID=...
 HISAABO_BUSINESS_ID=...
+HISAABO_WEB_URL=https://app.mycompany.in   # browser sign-in only
 HISAABO_NO_COLOR=1
 HISAABO_FORMAT=json
 ```
@@ -1051,7 +1060,7 @@ Priority: CLI flags > env vars > config file > defaults.
 | JSON output | Built-in `JSON.stringify` | No dependency needed |
 | HTTP client | `ofetch` or `ky` | Small, handles retries, timeout |
 | Fuzzy search | `fuse.js` | For party/item name matching in interactive mode |
-| Keychain | `keytar` | Secure session storage on macOS/Linux |
+| Config store | `conf` | Config file with 0600 permissions (no keychain) |
 
 ### 8.2 Package Structure
 
@@ -1132,10 +1141,10 @@ import SuperJSON from "superjson";
 const trpc = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
-      url: `${config.server}/api/trpc`,
+      url: `${config.apiUrl}/api/trpc`,
       headers: () => ({
-        cookie: `session_id=${config.session.id}`,
-        "x-business-id": config.activeBusinessId,
+        authorization: `Bearer ${config.token}`,
+        "x-business-id": config.businessId,
       }),
       transformer: SuperJSON,
     }),
@@ -1154,12 +1163,12 @@ const invoices = await trpc.invoice.list.query({
 **Option B: REST-like HTTP** (for simpler build, but loses type safety):
 
 ```typescript
-const response = await fetch(`${config.server}/api/trpc/invoice.list`, {
+const response = await fetch(`${config.apiUrl}/api/trpc/invoice.list`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    Cookie: `session_id=${config.session.id}`,
-    "x-business-id": config.activeBusinessId,
+    Authorization: `Bearer ${config.token}`,
+    "x-business-id": config.businessId,
   },
   body: JSON.stringify({ json: { type: "sale", status: "overdue" } }),
 });
@@ -1169,22 +1178,24 @@ Option A is strongly preferred since the existing monorepo already has `@hisaabo
 
 ### 8.4 Auth Flow
 
-The API uses session cookies (HttpOnly, 30-day expiry). The CLI stores the session ID in the config file (or system keychain if `keytar` is available):
+The CLI authenticates with a bearer token sent as `Authorization: Bearer <token>`, plus `X-Hisaabo-Client: cli`. The token is either a session token obtained through the browser handoff (`auth.nativeStart` then `auth.nativeExchange`, see 3.1) or an API key (`hisaabo_key_...`) supplied with `--token-stdin` or `HISAABO_TOKEN`.
 
 ```typescript
-// Login: call auth.login, extract session_id from Set-Cookie header
-const response = await fetch(`${server}/api/trpc/auth.login`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ json: { email, password } }),
+// Browser handoff
+const { verifier, challenge } = generatePkce();          // node:crypto, S256
+const state = generateState();
+const listener = await startCallbackServer(state);       // http://127.0.0.1:<port>/callback
+const { requestId } = await client.auth.nativeStart({
+  redirectUri: redirectUriFor(listener.port),
+  codeChallenge: challenge,
+  state,
 });
-
-const setCookie = response.headers.get("set-cookie");
-const sessionId = parseCookie(setCookie, "session_id");
-
-// Store in config
-await saveConfig({ session: { id: sessionId, expiresAt: "..." } });
+await openBrowser(buildAuthorizeUrl(webUrl, requestId));
+const { code } = await listener.result;                  // one-time code, 5 minute timeout
+const { sessionToken } = await client.auth.nativeExchange({ requestId, code, codeVerifier: verifier });
 ```
+
+The token is stored in plaintext in `~/.config/hisaabo/config.json` (file mode `0600` in a `0700` directory); there is no keychain integration. `HISAABO_TOKEN` + `HISAABO_API_URL` bypass the file entirely. The API URL must be `https://`, except for loopback hosts, unless `HISAABO_ALLOW_INSECURE=1` is set.
 
 ### 8.5 Performance Budget
 

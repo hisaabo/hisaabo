@@ -16,6 +16,7 @@ export function registerSessionCommands(program: Command): void {
   session
     .command("revoke <sessionId>")
     .description("Revoke a specific session")
+    .option("--yes", "Skip confirmation prompt")
     .option("--json", "JSON output")
     .action(async (sessionId, opts) => {
       const { revokeSessionCommand } = await import("../../commands/session/revoke.js");
@@ -25,8 +26,9 @@ export function registerSessionCommands(program: Command): void {
   session
     .command("revoke-all")
     .description("Sign out from all devices")
-    .action(async () => {
+    .option("--yes", "Skip confirmation prompt")
+    .action(async (opts) => {
       const { revokeAllSessionsCommand } = await import("../../commands/session/revoke-all.js");
-      await revokeAllSessionsCommand();
+      await revokeAllSessionsCommand(opts);
     });
 }

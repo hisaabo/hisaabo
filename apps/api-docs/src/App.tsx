@@ -309,7 +309,7 @@ function OverviewPage() {
                   After login, the API sets a <InlineCode>session_id</InlineCode> HttpOnly cookie
                   (30-day expiry, SameSite=Lax). Browsers send it automatically.
                 </p>
-                <CodeBlock>Cookie: session_id=sess_VbK2mQ9xP4nR7wA1...</CodeBlock>
+                <CodeBlock>Cookie: session_id=sess_EXAMPLE_REPLACE_ME</CodeBlock>
               </div>
 
               {/* Bearer */}
@@ -330,7 +330,7 @@ function OverviewPage() {
                   <InlineCode>auth.login</InlineCode> or an API key from{" "}
                   <InlineCode>apiKey.create</InlineCode> as a Bearer token.
                 </p>
-                <CodeBlock>Authorization: Bearer sess_VbK2mQ9xP4nR7wA1...</CodeBlock>
+                <CodeBlock>Authorization: Bearer sess_EXAMPLE_REPLACE_ME</CodeBlock>
               </div>
 
               {/* Business ID */}

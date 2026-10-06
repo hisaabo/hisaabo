@@ -311,14 +311,13 @@ describe("tenant.acceptInvitation", () => {
     expect(result.tenantName).toBe("Sharma Traders");
   });
 
-  it("REGRESSION: accepting an already-accepted invite re-adds a removed member", async () => {
-    // Scenario: user accepted invite, was removed, clicks old link again.
-    // Should re-add them to the org.
+  it("SECURITY: an already-accepted invite cannot re-add a removed member", async () => {
+    // Scenario: user accepted invite, was removed, clicks the old link again.
+    // The invitation is spent; membership must not be granted again.
     const rawToken = randomUUID();
     const email = `reinvite.readd.${randomUUID().slice(0, 8)}@example.in`;
     const readdUser = await createUser({ email, name: "Re-add User" });
 
-    // Insert an already-accepted invite (from first invite cycle)
     await insertInvitation({
       tenantId: tenant1.id,
       email,
@@ -331,11 +330,10 @@ describe("tenant.acceptInvitation", () => {
     // User is NOT a member (was removed after accepting)
     const readdSession = await createSession(readdUser.id);
     const caller = callerNoTenant(readdSession.id, readdUser);
-    const result = await caller.tenant.acceptInvitation({ token: rawToken });
+    await expect(
+      caller.tenant.acceptInvitation({ token: rawToken }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-    expect(result.tenantId).toBe(tenant1.id);
-
-    // Should now be a member again
     const db = getControlDb();
     const [membership] = await db.select({ role: tenantMembers.role })
       .from(tenantMembers)
@@ -344,8 +342,7 @@ describe("tenant.acceptInvitation", () => {
         eq(tenantMembers.userId, readdUser.id),
       ))
       .limit(1);
-    expect(membership).toBeDefined();
-    expect(membership!.role).toBe("accountant");
+    expect(membership).toBeUndefined();
   });
 });
 
@@ -441,10 +438,9 @@ describe("tenant.pendingInvitations", () => {
     expect(emails).toContain("pending.charlie@kiran.in");
   });
 
-  it("sellers can also list pending invitations (read-only)", async () => {
+  it("sellers cannot list pending invitations — invitee emails are admin-only", async () => {
     const caller = callerForTenant(sellerSession.id, seller, tenant1.id);
-    const pending = await caller.tenant.pendingInvitations();
-    expect(pending.length).toBeGreaterThanOrEqual(2);
+    await expect(caller.tenant.pendingInvitations()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("requires tenantId in context — BAD_REQUEST without tenant", async () => {
@@ -594,8 +590,8 @@ describe("tenant.inviteMember — duplicate guard", () => {
       email: "reinvite.after.accept@example.in",
       role: "admin",
     });
-    expect(result.token).toBeDefined();
-    expect(result.token.length).toBeGreaterThan(10);
+    expect(result.expiresAt).toBeInstanceOf(Date);
+    expect(result).not.toHaveProperty("token");
   });
 
   it("allows same email to be invited to different tenants simultaneously", async () => {
@@ -604,13 +600,13 @@ describe("tenant.inviteMember — duplicate guard", () => {
 
     const email = `multi.tenant.invite.${randomUUID().slice(0, 8)}@example.in`;
 
-    const result1 = await caller1.tenant.inviteMember({ email, role: "seller" });
-    const result2 = await caller2.tenant.inviteMember({ email, role: "admin" });
+    const result1 = await caller1.tenant.inviteMember({ email, role: "seller", returnLink: true });
+    const result2 = await caller2.tenant.inviteMember({ email, role: "admin", returnLink: true });
 
     // Both should succeed — different tenants
-    expect(result1.token).toBeDefined();
-    expect(result2.token).toBeDefined();
-    expect(result1.token).not.toBe(result2.token);
+    expect(result1.inviteUrl).toMatch(/\/invite\/.+/);
+    expect(result2.inviteUrl).toMatch(/\/invite\/.+/);
+    expect(result1.inviteUrl).not.toBe(result2.inviteUrl);
   });
 });
 
@@ -633,14 +629,15 @@ describe("tenant.inviteMember — plan limit counting", () => {
     const invite1 = await caller.tenant.inviteMember({
       email: `limit.user1.${randomUUID().slice(0, 8)}@test.in`,
       role: "seller",
+      returnLink: true,
     });
-    expect(invite1.token).toBeDefined();
+    expect(invite1.inviteUrl).toBeDefined();
 
     // Accept invite 1 (simulate: mark as accepted in DB)
     const db = getControlDb();
     await db.update(invitations)
       .set({ acceptedAt: new Date() })
-      .where(eq(invitations.token, hashToken(invite1.token)));
+      .where(eq(invitations.token, hashToken(invite1.inviteUrl!.split("/invite/")[1]!)));
 
     // Add the user as a member (simulates what acceptInvitation does)
     const user1 = await createUser({ email: `limit.user1.${randomUUID().slice(0, 8)}@test.in` });
@@ -652,7 +649,7 @@ describe("tenant.inviteMember — plan limit counting", () => {
       email: `limit.user2.${randomUUID().slice(0, 8)}@test.in`,
       role: "seller",
     });
-    expect(invite2.token).toBeDefined();
+    expect(invite2.expiresAt).toBeInstanceOf(Date);
 
     // Invite person 3 — should FAIL (2 members + 1 pending = 3, hits limit)
     await expect(
@@ -700,7 +697,7 @@ describe("tenant.inviteMember — plan limit counting", () => {
       email: `reg.user2.${randomUUID().slice(0, 8)}@test.in`,
       role: "accountant",
     });
-    expect(invite2.token).toBeDefined();
+    expect(invite2.expiresAt).toBeInstanceOf(Date);
   });
 });
 
@@ -862,7 +859,7 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
 
-    const unauthenticated = _callerFactory(createTestContext({}));
+    const unauthenticated = _callerFactory(createTestContext({ headers: { "x-hisaabo-client": "mobile" } }));
     const verifyResult = await unauthenticated.auth.verifyMagicLink({ token: magicRawToken });
 
     expect(verifyResult.isNewUser).toBe(true);
@@ -875,7 +872,7 @@ describe("verifyMagicLink — skip auto-tenant for invited users", () => {
     expect(membershipsBeforeAccept.length).toBe(0);
 
     // tenant.list returns empty — this is what triggered "No organization found"
-    const sessionId = verifyResult.sessionToken;
+    const sessionId = verifyResult.sessionToken!;
     const authedCaller = callerNoTenant(sessionId, {
       id: verifyResult.user.id,
       email,

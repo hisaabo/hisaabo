@@ -36,6 +36,9 @@ const EXEMPT: Record<string, string> = {
   // ── Control plane: scoped by session / user / tenant-membership / role ──
   "apiKey.revoke": "DELETE scoped by id + userId + tenantId",
   "auth.revokeSession": "DELETE scoped by sessionId + userId",
+  "auth.nativeRequestInfo": "pre-login sign-in request id (random uuid); returns only client + expiry",
+  "auth.nativeAuthorize": "cookie session only; binds the request to ctx.user, single-use",
+  "auth.nativeExchange": "pre-login; requires one-time code + PKCE verifier + matching client header",
   "tenant.acceptById": "invitation matched to caller's own email",
   "tenant.select": "verifies caller is a member of the target tenant",
   "tenant.removeMember": "tenant-scoped (ctx.tenantId) + owner/admin role gate",

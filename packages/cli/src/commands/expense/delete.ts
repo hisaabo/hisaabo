@@ -1,7 +1,7 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function expenseDeleteCommand(id: string, opts: { yes?: boolean; json?: boolean }): Promise<void> {
   const cfg = requireAuth();
@@ -11,17 +11,7 @@ export async function expenseDeleteCommand(id: string, opts: { yes?: boolean; js
     // Fetch expense first
     const _list = await client.expense.list({ page: 1, limit: 1 });
     // We can't get by ID directly; use delete and check error
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Delete expense ${id}? (y/N): `, resolve);
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete expense ${id}?`, opts);
 
     const result = await client.expense.delete(id);
 

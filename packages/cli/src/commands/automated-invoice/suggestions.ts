@@ -13,14 +13,6 @@ const FREQUENCY_LABELS: Record<string, string> = {
   custom: "Custom",
 };
 
-function confidenceBadge(confidence: number): string {
-  const pct = Math.round(confidence * 100);
-  const label = `${pct}%`;
-  if (confidence >= 0.8) return chalk.green(label);
-  if (confidence >= 0.5) return chalk.yellow(label);
-  return chalk.dim(label);
-}
-
 interface SuggestionsOpts {
   json?: boolean;
 }
@@ -47,9 +39,10 @@ export async function automatedInvoiceSuggestionsCommand(opts: SuggestionsOpts):
 
     const cols: ColumnDef<RecurringInvoiceSuggestion>[] = [
       { key: "partyName", header: "Party", width: 24 },
-      { key: "frequency", header: "Suggested Frequency", width: 20, format: (v) => FREQUENCY_LABELS[String(v ?? "")] ?? String(v ?? "") },
-      { key: "confidence", header: "Confidence", width: 12, align: "right", format: (v) => confidenceBadge(Number(v ?? 0)) },
-      { key: "reason", header: "Reason", width: 36 },
+      { key: "suggestedFrequency", header: "Suggested Frequency", width: 20, format: (v) => FREQUENCY_LABELS[String(v ?? "")] ?? String(v ?? "") },
+      { key: "invoiceCount", header: "Invoices", width: 10, align: "right" },
+      { key: "medianAmount", header: "Median ₹", width: 14, align: "right" },
+      { key: "medianIntervalDays", header: "Interval (days)", width: 16, align: "right" },
     ];
 
     outputTable(result, cols);

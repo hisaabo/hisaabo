@@ -37,70 +37,90 @@ hisaabo --version
 
 ## Authentication
 
-### Login with API key (recommended)
-
-Generate an API key in the Hisaabo web app under **Settings → API Keys** (available on paid plans), then:
+### Sign in with your browser (interactive)
 
 ```bash
-hisaabo login --token hisaabo_key_xxxxxxxxxxxxxxxxxx
+hisaabo login --api-url https://your-hisaabo-instance.com
 ```
 
-The CLI validates the key, resolves your user and business context, and stores it in `~/.config/hisaabo/config.json`. API keys do not expire unless you set an expiry date during creation.
+Your browser opens so you can sign in to the Hisaabo web app (magic link). The CLI listens on a temporary `127.0.0.1` port, receives a one-time code there, and exchanges it using PKCE, so no password or long-lived secret is typed into the terminal. If the browser does not open (for example over SSH), copy the printed URL into a browser on any machine that can reach the web app; the sign-in must complete on the same machine unless the callback port is forwarded.
 
-To specify a self-hosted instance:
+If you have more than one business you are asked to pick one; change it later with `hisaabo switch`.
+
+| Option | Description |
+|---|---|
+| `--api-url <url>` | Server URL (env: `HISAABO_API_URL`). Prompted for if omitted |
+| `--web-url <url>` | Web app URL used for browser sign-in (env: `HISAABO_WEB_URL`). Needed on self-hosted servers whose web app is not at the default hosted address |
+| `--token-stdin` | Read an API key from stdin instead of using the browser (requires `--api-url`) |
+
+There is no email/password prompt. The CLI sends `X-Hisaabo-Client: cli` and receives a session token that is stored in the config file.
+
+### Sign in with an API key (scripts and CI)
+
+Create an API key in the Hisaabo web app under **Settings → API Keys** (admins only, paid plans), or with `hisaabo api-key create` once you are signed in, then pipe it in:
 
 ```bash
-hisaabo login --token hisaabo_key_xxx --api-url https://your-instance.com
+echo "hisaabo_key_xxxxxxxxxxxxxxxxxx" | hisaabo login --api-url https://your-instance.com --token-stdin
 ```
+
+The CLI validates the key, resolves your user and business, and stores it in the config file. Avoid the deprecated `--token <key>` flag: the key would be visible in the process list and your shell history.
+
+API keys expire (default 90 days, maximum 365 days; set it with `hisaabo api-key create --expires-in-days`) and are revoked when the member is removed or their role changes.
 
 ### Environment variables (recommended for automation)
 
-For cron jobs and CI/CD pipelines, set credentials as environment variables instead of logging in:
+For cron jobs and CI/CD pipelines, set credentials as environment variables instead of logging in. Nothing is written to disk:
 
 ```bash
 export HISAABO_API_URL=https://your-hisaabo-instance.com
-export HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
+export HISAABO_TOKEN=hisaabo_key_xxxxxxxxxxxxxxxxxx
+export HISAABO_TENANT_ID=your-tenant-uuid
 export HISAABO_BUSINESS_ID=your-business-uuid
 ```
 
-### Business creation and switching
+`HISAABO_TOKEN` is used only when `HISAABO_API_URL` is also set.
 
-Create a new business or switch between existing ones:
+### Transport security
+
+The API URL must use `https://`. Plain `http://` is accepted only for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`); for anything else the CLI refuses to send credentials unless you set `HISAABO_ALLOW_INSECURE=1`. URLs that contain `user:password@` are rejected.
+
+### Listing and switching businesses
 
 ```bash
 # List all businesses on your account
 hisaabo business list
 
-# Create a new business (interactive prompts for name, GSTIN, address)
-hisaabo business create
-
-# Switch the active business (interactive picker — arrow keys + Enter)
+# Switch the active business (interactive picker)
 hisaabo switch
-
-# Switch non-interactively
-hisaabo switch <business-id>
 ```
 
-Switching updates the stored `businessId` in `~/.config/hisaabo/config.json`. All subsequent commands operate on the newly selected business. To override the active business for a single command without switching, pass `--business <id>`.
+Set the next document number with `business sequence` (it can only move forward):
+
+```bash
+hisaabo business sequence --type invoice --next-number 101
+```
+
+`--type` is one of `invoice`, `payment`, `quotation`, `credit_note`, `delivery_challan`, `proforma`.
+
+Switching updates the stored `businessId` in the config file. All subsequent commands operate on the newly selected business. Create new businesses in the web or mobile app.
 
 **Web app:** Tap the business name in the sidebar to open a popover that lists all your businesses and includes a "Create New Business" option. Selecting a business reloads all data for that context.
 
 **Mobile app:** Tap the business name on the home dashboard to open a bottom sheet with the same business list and create option.
 
-### Register and profile management
+### Profile and sign-out
+
+There is no CLI command to register an account; accounts are created in the web app (or by accepting an invitation).
 
 ```bash
-# Register a new account
-hisaabo auth register --email you@example.com --name "Your Name"
-
-# Complete profile setup after an invite-based registration
-hisaabo auth complete-profile --name "Your Name"
-
 # Update your display name
-hisaabo auth update-name --name "New Name"
+hisaabo profile update-name "New Name"
 
-# Sign out of all active sessions (useful after a credential change)
-hisaabo auth logout-all
+# Sign out of this device
+hisaabo logout
+
+# Sign out of all devices (useful after a credential change)
+hisaabo logout --all
 ```
 
 ---
@@ -860,20 +880,22 @@ hisaabo target my --json
 
 ```bash
 # From CSV
-hisaabo import parties --file parties.csv --format csv
+hisaabo import parties parties.csv --format csv
 
 # From JSON
-hisaabo import parties --file parties.json --format json
+hisaabo import parties parties.json --format json
 
-# Preview without importing
-hisaabo import parties --file parties.csv --dry-run
+# From a MyBillBook export
+hisaabo import parties parties.csv --source mybillbook
 ```
+
+All import commands take the file as a positional argument and accept `--source <source>` to choose the adapter. The default is `hisaabo` (Hisaabo's own CSV/JSON layout); use `--source mybillbook` for MyBillBook exports.
 
 #### `hisaabo import items`
 
 ```bash
-hisaabo import items --file catalog.csv --format csv
-hisaabo import items --file catalog.json --dry-run
+hisaabo import items catalog.csv --format csv
+hisaabo import items catalog.json
 ```
 
 ---
@@ -1041,28 +1063,28 @@ hisaabo tenant members --json
 
 #### `hisaabo tenant invite`
 
-Invite a new member by email:
+Invite a new member by email. The invitation is emailed to them; the CLI does not print an invite link.
 
 ```bash
-hisaabo tenant invite --email colleague@example.com --role member
+hisaabo tenant invite colleague@example.com --role seller
 ```
 
-Available roles: `owner`, `admin`, `member`.
+Available roles: `admin`, `seller_manager`, `seller` (default), `accountant`.
 
 #### `hisaabo tenant remove`
 
 Remove a member from the tenant:
 
 ```bash
-hisaabo tenant remove user_xxxxxxxxxx
+hisaabo tenant remove user_xxxxxxxxxx --yes
 ```
 
-#### `hisaabo tenant role`
+#### `hisaabo tenant update-role`
 
 Update a member's role:
 
 ```bash
-hisaabo tenant role user_xxxxxxxxxx --role admin
+hisaabo tenant update-role user_xxxxxxxxxx admin
 ```
 
 #### `hisaabo tenant invitations`
@@ -1196,14 +1218,14 @@ hisaabo session list --expired
 hisaabo session list --json
 ```
 
-Shows device/browser, IP address, last activity time, creation date, and marks the current session.
+Shows device/browser, IP address, last activity time, creation date, and marks the current session. Session IDs shown here are opaque hashes, not the session tokens themselves, and are abbreviated in the table (use `--json` for the full value).
 
 #### `hisaabo session revoke`
 
 Terminate a specific session by ID.
 
 ```bash
-hisaabo session revoke <sessionId>
+hisaabo session revoke <sessionId> --yes
 ```
 
 The revoked session is immediately invalidated. The user on that device will be redirected to the login page.
@@ -1213,7 +1235,7 @@ The revoked session is immediately invalidated. The user on that device will be 
 Sign out from all devices (including the current one).
 
 ```bash
-hisaabo session revoke-all
+hisaabo session revoke-all --yes
 ```
 
 ---
@@ -1234,34 +1256,32 @@ Shows key name, creation date, expiry date, and last-used timestamp. The key sec
 #### `hisaabo api-key create`
 
 ```bash
-hisaabo api-key create --name "CI Pipeline" --expires 2027-04-01
-hisaabo api-key create --name "Read-only export script"
+hisaabo api-key create --name "CI Pipeline" --expires-in-days 90
+hisaabo api-key create --name "Read-only export script" --expires-in-days 30
 ```
 
-Copy the returned key immediately — it is not shown again.
+Keys expire after `--expires-in-days` (default 90, maximum 365). Copy the returned key immediately — it is not shown again. Creating keys requires an admin role. Keys are revoked automatically when the member is removed or their role changes.
 
 #### `hisaabo api-key revoke`
 
 ```bash
-hisaabo api-key revoke apikey_xxxxxxxxxx
+hisaabo api-key revoke apikey_xxxxxxxxxx --yes
 ```
 
 Revoked keys stop working instantly.
 
 ---
 
-### Global flags
-
-These flags work on every command:
+### Common flags
 
 | Flag | Description |
 |---|---|
-| `--json` | Output raw JSON instead of formatted tables |
-| `--business <id>` | Override the active business for this command |
-| `--api-url <url>` | Override the API URL for this command |
-| `--quiet` | Suppress all output except errors |
-| `--no-color` | Disable color output (useful for log files) |
+| `--json` | Output raw JSON instead of formatted tables (on most commands) |
+| `-y, --yes` | Skip the confirmation prompt on destructive commands |
 | `--help` | Show help for any command |
+| `--version` | Print the CLI version |
+
+**Destructive commands need `--yes` when non-interactive.** Commands that delete, merge, revoke, cancel, remove or restore data (for example `invoice delete`, `party merge`, `session revoke`, `api-key revoke`, `tenant remove`, `restore`) prompt for confirmation in a terminal. When stdin is not a TTY (cron, CI, an AI agent running shell commands) they refuse with a usage error unless you pass `--yes`.
 
 ---
 
@@ -1517,7 +1537,8 @@ export const hisaaboCLI = {
 ```bash
 # /etc/cron.d/hisaabo
 HISAABO_API_URL=https://your-hisaabo-instance.com
-HISAABO_API_KEY=hisaabo_key_xxxxxxxxxxxxxxxxxx
+HISAABO_TOKEN=hisaabo_key_xxxxxxxxxxxxxxxxxx
+HISAABO_TENANT_ID=tenant-uuid-here
 HISAABO_BUSINESS_ID=business-uuid-here
 
 # Daily summary at 8:00 AM
@@ -1550,14 +1571,11 @@ The CLI reads from `~/.config/hisaabo/config.json`, created automatically on fir
   "token": "hisaabo_key_xxxxxxxxxxxxxxxxxx",
   "tenantId": "tenant-uuid-here",
   "businessId": "business-uuid-here",
-  "output": {
-    "format": "table",
-    "color": true
-  }
+  "businessName": "Sharma Traders"
 }
 ```
 
-Priority order (highest to lowest): command-line flags → environment variables → config file.
+The token is stored in plaintext; the file is created with mode `0600` inside a `0700` directory. Environment variables (`HISAABO_TOKEN` with `HISAABO_API_URL`) take priority over the config file and are never written to disk, so prefer them for CI and shared machines.
 
 ---
 

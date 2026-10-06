@@ -11,11 +11,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerItcTools(server: McpServer, client: HisaaboClient) {
+export function registerItcTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "itc_dashboard",
@@ -25,13 +25,11 @@ export function registerItcTools(server: McpServer, client: HisaaboClient) {
       "Use this to answer 'How much ITC do we have available?' or 'What is our total blocked credit?'",
     ].join(" "),
     {
-      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Start date in YYYY-MM-DD format."),
-      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("End date in YYYY-MM-DD format."),
+      return_period: z.string().regex(/^\d{4}-\d{2}$/).optional()
+        .describe("Return period in YYYY-MM format (e.g. '2024-03'). Defaults to the current month."),
     },
     wrapTool(async (input) => {
-      const result = await client.itc.dashboard({ fromDate: input.from_date, toDate: input.to_date });
+      const result = await client.itc.dashboard({ returnPeriod: input.return_period });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -46,18 +44,21 @@ export function registerItcTools(server: McpServer, client: HisaaboClient) {
       "Use this to see the source of all ITC credits and their eligibility status.",
     ].join(" "),
     {
-      from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("Start date in YYYY-MM-DD format."),
-      to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-        .describe("End date in YYYY-MM-DD format."),
-      status: z.enum(["eligible", "blocked", "all"]).default("all").optional()
+      return_period: z.string().regex(/^\d{4}-\d{2}$/).optional()
+        .describe("Return period in YYYY-MM format (e.g. '2024-03')."),
+      status: z.enum(["all", "available", "utilized", "reversed", "reclaimed", "blocked"]).default("all").optional()
         .describe("Filter by ITC status."),
+      page: z.number().int().min(1).optional()
+        .describe("Page number (default 1)."),
+      limit: z.number().int().min(1).max(100).optional()
+        .describe("Results per page (default 50)."),
     },
     wrapTool(async (input) => {
       const result = await client.itc.ledger({
-        fromDate: input.from_date,
-        toDate: input.to_date,
-        status: input.status,
+        returnPeriod: input.return_period,
+        status: input.status === "all" ? undefined : input.status,
+        page: input.page,
+        limit: input.limit,
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -91,11 +92,17 @@ export function registerItcTools(server: McpServer, client: HisaaboClient) {
     {
       invoice_id: z.string().uuid()
         .describe("Purchase invoice UUID to block ITC for."),
-      reason: z.string().max(200).optional()
-        .describe("Optional reason for blocking ITC."),
+      block_reason: z.enum(["motor_vehicle", "food_beverage", "personal", "membership", "travel_benefits", "works_contract", "construction", "telecom", "other"]).optional()
+        .describe("Section 17(5) category for the block. Defaults to 'other'."),
+      reason: z.string().max(500).optional()
+        .describe("Optional free-text notes about why ITC is blocked."),
     },
     wrapTool(async (input) => {
-      const result = await client.itc.markBlocked({ invoiceId: input.invoice_id, reason: input.reason });
+      const result = await client.itc.markBlocked({
+        invoiceId: input.invoice_id,
+        blockReason: input.block_reason ?? "other",
+        notes: input.reason,
+      });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };

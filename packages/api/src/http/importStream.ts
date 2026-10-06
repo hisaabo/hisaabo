@@ -16,13 +16,52 @@
  */
 import { createGunzip } from "node:zlib";
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
+import { Readable, Transform, pipeline } from "node:stream";
 import type { Hono } from "hono";
-import { getTenantDb, businesses } from "@hisaabo/db";
-import { count as sqlCount } from "drizzle-orm";
+import { getTenantDb, businesses, controlDb, tenants } from "@hisaabo/db";
+import { count as sqlCount, eq } from "drizzle-orm";
 import { verifyImportToken } from "../lib/importToken.js";
 import { importTenantBackup } from "../lib/importEngine.js";
 import { logger } from "../lib/logger.js";
+import { getTenantRole, hasRole, OWNER_ROLES } from "../lib/tenant-access.js";
+
+/** Largest accepted upload (compressed). */
+export const MAX_IMPORT_BODY_BYTES = 200 * 1024 * 1024;
+/** Largest accepted decompressed tar stream (gzip-bomb guard). */
+export const MAX_IMPORT_DECOMPRESSED_BYTES = 500 * 1024 * 1024;
+
+/** Passes data through but errors the stream once more than `maxBytes` flowed. */
+export function createByteLimiter(maxBytes: number): Transform {
+  let seen = 0;
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      seen += chunk.length;
+      if (seen > maxBytes) {
+        cb(new Error(`Decompressed import exceeds ${maxBytes} bytes`));
+        return;
+      }
+      cb(null, chunk);
+    },
+  });
+}
+
+async function readBodyCapped(body: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<Buffer | null> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
 
 /**
  * Register the import upload route on a Hono app instance.
@@ -50,6 +89,20 @@ export function registerImportRoute(app: Hono): void {
     }
 
     const { userId } = tokenResult.payload;
+
+    // The token may outlive the user's role / the tenant's status: re-check.
+    const importerRole = await getTenantRole(tenantId, userId);
+    if (!hasRole(importerRole, OWNER_ROLES)) {
+      return c.json({ error: "Token no longer valid" }, 401);
+    }
+    const [tenantRow] = await controlDb
+      .select({ status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1);
+    if (!tenantRow || tenantRow.status !== "active") {
+      return c.json({ error: "Organization is not active" }, 403);
+    }
 
     // ── Re-check target tenant is empty ──────────────────────────────────
     // Checked again here because time may have elapsed since token issuance.
@@ -85,12 +138,18 @@ export function registerImportRoute(app: Hono): void {
     }
 
     // ── Read + hash the gzip body ─────────────────────────────────────────
-    const rawBody = await c.req.arrayBuffer();
-    if (rawBody.byteLength === 0) {
+    const declaredLength = Number(c.req.header("content-length") ?? "0");
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_IMPORT_BODY_BYTES) {
+      return c.json({ error: "Import file too large" }, 413);
+    }
+    const gzipBuf = await readBodyCapped(c.req.raw.body, MAX_IMPORT_BODY_BYTES);
+    if (gzipBuf === null) {
+      return c.json({ error: "Import file too large" }, 413);
+    }
+    if (gzipBuf.byteLength === 0) {
       return c.json({ error: "Empty body" }, 400);
     }
 
-    const gzipBuf = Buffer.from(rawBody);
     const fileHash = `sha256:${createHash("sha256").update(gzipBuf).digest("hex")}`;
     const fileSize = gzipBuf.byteLength;
 
@@ -111,7 +170,10 @@ export function registerImportRoute(app: Hono): void {
         yield gzipBuf;
       })(),
     );
-    const tarReadable = gzipReadable.pipe(gunzip) as unknown as Readable;
+    const limiter = createByteLimiter(MAX_IMPORT_DECOMPRESSED_BYTES);
+    const tarReadable = pipeline(gzipReadable, gunzip, limiter, (err) => {
+      if (err) logger.warn({ err, tenantId }, "importStream: decompression aborted");
+    }) as unknown as Readable;
 
     // ── Run the import engine ─────────────────────────────────────────────
     let result;

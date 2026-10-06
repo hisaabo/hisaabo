@@ -52,7 +52,10 @@ pg_isready -h "$SOCKETDIR" -U postgres
 ls -lh /storage/backups/
 
 # 5. If backups are encrypted, decrypt first
-echo "$BACKUP_ENCRYPTION_KEY" | age -d -o /storage/backups/hisaabo.dump /storage/backups/hisaabo.dump.age
+# (.dump.enc = openssl; legacy .dump.age files: `age -d -o hisaabo.dump hisaabo.dump.age`, prompts for the passphrase)
+BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY" openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+  -pass env:BACKUP_ENCRYPTION_KEY \
+  -in /storage/backups/hisaabo.dump.enc -out /storage/backups/hisaabo.dump
 
 # 6. Restore (WARNING: this drops and recreates the database)
 dropdb -h "$SOCKETDIR" -U postgres --if-exists hisaabo
@@ -76,9 +79,12 @@ docker compose stop api
 # 2. List available backups (exec into backup sidecar or the postgres container)
 docker compose exec backup ls -lh /var/backups/hisaabo/
 
-# 3. If encrypted, decrypt first
+# 3. If encrypted, decrypt first (or skip this and use restore-db.sh, which
+#    decrypts, restores into a scratch DB and swaps it in atomically:
+#    docker compose exec backup restore-db.sh hisaabo)
 docker compose exec backup sh -c \
-  'echo "$BACKUP_ENCRYPTION_KEY" | age -d -o /var/backups/hisaabo/decrypted.sql.gz /var/backups/hisaabo/dump_hisaabo_20260414_030000.sql.gz.age'
+  'openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:BACKUP_ENCRYPTION_KEY -in /var/backups/hisaabo/dump_hisaabo_20260414_030000.sql.gz.enc -out /var/backups/hisaabo/decrypted.sql.gz'
+# Legacy .age backups: age -d -o decrypted.sql.gz <file>.age  (interactive passphrase prompt)
 
 # 4. Restore from SQL dump
 docker compose exec -T postgres sh -c \

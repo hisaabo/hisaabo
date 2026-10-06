@@ -1,10 +1,13 @@
 FROM postgres:16-alpine
 
-RUN apk add --no-cache bash rclone age
+RUN apk add --no-cache bash rclone age openssl \
+    && adduser -D -u 10001 -h /home/backup backup
 
 COPY scripts/backup.sh /usr/local/bin/backup.sh
 COPY scripts/restore-db.sh /usr/local/bin/restore-db.sh
 COPY scripts/backup-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/backup.sh /usr/local/bin/restore-db.sh /usr/local/bin/entrypoint.sh
 
+# The entrypoint starts as root only to run crond (which switches users); the
+# backup job itself runs as the unprivileged `backup` user (see backup-entrypoint.sh).
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

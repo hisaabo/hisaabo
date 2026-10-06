@@ -200,13 +200,12 @@ function TeamSection() {
 function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("seller");
-  const [inviteResult, setInviteResult] = useState<{ token: string; inviteLink: string } | null>(null);
+  const [inviteResult, setInviteResult] = useState<{ inviteUrl?: string } | null>(null);
   const utils = trpc.useUtils();
 
   const inviteMutation = trpc.tenant.inviteMember.useMutation({
     onSuccess: (data) => {
-      const inviteLink = `/invite/${data.token}`;
-      setInviteResult({ token: data.token, inviteLink });
+      setInviteResult({ inviteUrl: data.inviteUrl });
       toast.success("Invitation created");
       utils.tenant.members.invalidate();
       utils.tenant.pendingInvitations.invalidate();
@@ -223,8 +222,14 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    inviteMutation.mutate({ email, role: role as "admin" | "seller_manager" | "seller" | "accountant" });
+    inviteMutation.mutate({
+      email,
+      role: role as "admin" | "seller_manager" | "seller" | "accountant",
+      returnLink: true,
+    });
   }
+
+  const inviteUrl = inviteResult?.inviteUrl;
 
   return (
     <Modal open={open} onClose={handleClose} title="Invite Team Member">
@@ -236,21 +241,20 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               We've sent an invitation email to {email}. You can also share the link below.
             </p>
           </div>
+          {inviteUrl && (
           <div>
             <label className="label">Invite Link</label>
             <div className="flex gap-2">
               <input
                 readOnly
-                value={`${window.location.origin}${inviteResult.inviteLink}`}
+                value={inviteUrl}
                 className="input flex-1 font-mono text-xs"
               />
               <button
                 type="button"
                 className="btn-secondary shrink-0"
                 onClick={() => {
-                  navigator.clipboard.writeText(
-                    `${window.location.origin}${inviteResult.inviteLink}`,
-                  );
+                  navigator.clipboard.writeText(inviteUrl);
                   toast.success("Copied to clipboard");
                 }}
               >
@@ -258,6 +262,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               </button>
             </div>
           </div>
+          )}
           <button className="btn-primary w-full" onClick={handleClose}>
             Done
           </button>

@@ -1,0 +1,34 @@
+# gitleaks configuration: extends the built-in ruleset and adds narrowly scoped
+# allowlists for documentation / test placeholders. Gitleaks auto-loads this file
+# from the repository root (no --config flag needed).
+title = "hisaabo gitleaks config"
+
+[extend]
+useDefault = true
+
+# 1. Exact placeholder values (matched against the detected secret). Anchored so
+#    a real key that merely contains one of these strings is still reported.
+[[allowlists]]
+description = "Obvious documentation placeholders"
+regexTarget = "secret"
+regexes = [
+  '''^YOUR_(API_KEY|SESSION_TOKEN)$''',
+  '''^(sess|hisaabo_key)_EXAMPLE[A-Za-z0-9_]*$''',
+  '''^EXAMPLE_[A-Z_]+$''',
+  # Historic (pre-rewrite) doc examples that still exist in git history.
+  '''^sess_VbK2mQ9xP4nR7wA1\.\.\.$''',
+  '''^hisaabo_key_VbK2mQ9xP4nR7wA1\.\.\.$''',
+  '''^eyJhbGciOiJIUzI1NiIs\.\.\.$''',
+  '''^hisaabo_key_(abc12345|xyz98765)(\.\.\.)?$''',
+  '''^hisaabo_key_abc123def456ghi789jkl012mno345pqrst678$''',
+  '''^abc123def456ghi789jkl012mno345pq$''',
+  # Test fixture in packages/api/src/__tests__/security-auth.test.ts.
+  '''^hisaabo_key_vyapar_sharma_testkey_12345$''',
+]
+
+# 2. The one schema comment showing the key-prefix display format.
+[[allowlists]]
+description = "Key-prefix example in a code comment"
+paths = ['''^packages/db/src/control-schema\.ts$''']
+regexTarget = "match"
+regexes = ['''hisaabo_key_abc12345\.\.\.''']

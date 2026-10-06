@@ -1,6 +1,7 @@
 import { eq, and, sql, inArray, isNull } from "drizzle-orm";
 import { invoices, invoiceItems, parties, businesses, items as itemsTable } from "@hisaabo/db";
 import type { TenantDatabase } from "@hisaabo/db";
+import { csvCell, csvRow } from "@hisaabo/shared";
 import { buildBusinessDateFilter } from "./business-date.js";
 
 // Split a tax amount exactly in half using paise-level integer arithmetic
@@ -708,21 +709,21 @@ export function gstr1ToCSV(report: GSTR1Report): string {
 
   lines.push("GSTR-1 Report");
   lines.push(`Period,${report.period}`);
-  lines.push(`GSTIN,${report.businessGstin}`);
-  lines.push(`Business,${report.businessName}`);
+  lines.push(`GSTIN,${csvCell(report.businessGstin)}`);
+  lines.push(`Business,${csvCell(report.businessName)}`);
   lines.push("");
 
   // B2B Section
   lines.push("B2B - Outward Supplies to Registered Persons");
   lines.push("Party GSTIN,Party Name,Invoice No,Invoice Date,Type,Taxable Value,CGST,SGST,IGST,Total Value");
   for (const row of report.b2b) {
-    lines.push([
-      row.partyGstin, `"${row.partyName}"`, row.invoiceNumber,
+    lines.push(csvRow([
+      row.partyGstin, row.partyName, row.invoiceNumber,
       new Date(row.invoiceDate).toLocaleDateString("en-IN"),
       row.invoiceType, row.taxableValue.toFixed(2),
       row.cgst.toFixed(2), row.sgst.toFixed(2), row.igst.toFixed(2),
       row.totalInvoiceValue.toFixed(2),
-    ].join(","));
+    ]));
   }
   lines.push("");
 
@@ -730,10 +731,10 @@ export function gstr1ToCSV(report: GSTR1Report): string {
   lines.push("B2CS - Outward Supplies to Unregistered Persons (Small)");
   lines.push("Tax Rate %,Taxable Value,CGST,SGST,IGST");
   for (const row of report.b2cSmall) {
-    lines.push([
+    lines.push(csvRow([
       row.taxRate, row.taxableValue.toFixed(2),
       row.cgst.toFixed(2), row.sgst.toFixed(2), row.igst.toFixed(2),
-    ].join(","));
+    ]));
   }
   lines.push("");
 

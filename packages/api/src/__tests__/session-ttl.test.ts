@@ -24,7 +24,7 @@ const COOKIE_SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 /** Mirrors the isBearerClient() detection in auth.ts */
 function detectAuthMethod(req: Request): "cookie" | "bearer" {
   const client = req.headers.get("x-hisaabo-client");
-  return client === "mobile" || client === "desktop" ? "bearer" : "cookie";
+  return client === "mobile" || client === "desktop" || client === "cli" ? "bearer" : "cookie";
 }
 
 /** Mirrors session insert values computed in auth.ts for login/register/verifyMagicLink */
@@ -89,6 +89,11 @@ describe("SECURITY — session authMethod is detected from x-hisaabo-client head
     expect(detectAuthMethod(req)).toBe("bearer");
   });
 
+  it("session creation records authMethod='bearer' when x-hisaabo-client is 'cli'", () => {
+    const req = new Request("http://localhost/", { headers: { "x-hisaabo-client": "cli" } });
+    expect(detectAuthMethod(req)).toBe("bearer");
+  });
+
   it("session creation records authMethod='cookie' when no x-hisaabo-client header is present — classic web browser path unchanged", () => {
     const req = new Request("http://localhost/");
     expect(detectAuthMethod(req)).toBe("cookie");
@@ -96,7 +101,7 @@ describe("SECURITY — session authMethod is detected from x-hisaabo-client head
 
   it("session creation records authMethod='cookie' for an unrecognised x-hisaabo-client value — unknown clients fall back to cookie semantics", () => {
     const req = new Request("http://localhost/", {
-      headers: { "x-hisaabo-client": "cli" },
+      headers: { "x-hisaabo-client": "web" },
     });
     expect(detectAuthMethod(req)).toBe("cookie");
   });

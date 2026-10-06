@@ -90,10 +90,31 @@ describe("list screens — create FAB follows `create` permission", () => {
       expect(fabCount()).toBe(0);
     });
 
-    it("shows the FAB while the session is still loading (no flash of hidden UI)", () => {
+    it("hides the FAB while the session is still loading (fail closed)", () => {
       renderAs(null, Screen, { loading: true });
-      expect(fabCount()).toBe(1);
+      expect(fabCount()).toBe(0);
     });
+  });
+});
+
+// ── Invoices list: purchase tab FAB ────────────────────────────────────────
+
+describe("Invoices list — purchase tab create FAB", () => {
+  it("seller: FAB on the sale tab, none on the purchase tab", () => {
+    renderAs("seller", InvoicesScreen);
+    expect(fabCount()).toBe(1);
+    screen.unmount();
+    stub.params.type = "purchase";
+    renderAs("seller", InvoicesScreen);
+    expect(fabCount()).toBe(0);
+  });
+
+  it.each(["seller_manager", "admin"])("%s: FAB on the purchase tab opens create?type=purchase", (role) => {
+    stub.params.type = "purchase";
+    renderAs(role, InvoicesScreen);
+    expect(fabCount()).toBe(1);
+    fireEvent.press(screen.UNSAFE_getByType(FAB));
+    expect(stub.router.push).toHaveBeenCalledWith("/(invoices)/create?type=purchase");
   });
 });
 

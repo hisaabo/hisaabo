@@ -36,8 +36,9 @@ describe("PermissionGate", () => {
     expect(stub.router.back).toHaveBeenCalledTimes(1);
   });
 
-  it("does not flash the no-access state while the session is still loading", () => {
+  it("renders neither the screen nor the no-access state while the session is loading", () => {
     renderScreen(null, Guarded, { loading: true });
-    expect(screen.getByText("expense form")).toBeTruthy();
+    expect(screen.queryByText("expense form")).toBeNull();
+    expect(screen.queryByTestId("permission-denied")).toBeNull();
   });
 });

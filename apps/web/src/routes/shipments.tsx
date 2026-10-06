@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput, toISOString } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, cn, isHttpUrl, formatDateInput, toISOString } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
 import { useCan } from "@/hooks/useCan";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -348,7 +348,7 @@ function ShipmentDetailPanel({ shipmentId, onClose, onUpdated }: ShipmentDetailP
                       placeholder="Tracking number"
                       className="w-full text-sm border border-border-light rounded-lg px-2.5 py-1.5 bg-surface-0 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-500"
                     />
-                  ) : s.trackingUrl ? (
+                  ) : isHttpUrl(s.trackingUrl) ? (
                     <a
                       href={s.trackingUrl}
                       target="_blank"
@@ -597,7 +597,7 @@ function ShipmentsPage() {
                       {s.carrier?.replace(/_/g, " ") ?? "—"}
                     </td>
                     <td className="text-xs" onClick={(e) => e.stopPropagation()}>
-                      {s.trackingUrl ? (
+                      {isHttpUrl(s.trackingUrl) ? (
                         <a
                           href={s.trackingUrl}
                           target="_blank"

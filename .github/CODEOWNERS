@@ -1,0 +1,25 @@
+# Code owners are automatically requested for review on PRs touching these paths.
+# Pair with branch protection ("Require review from Code Owners") to make the
+# review mandatory for security-critical and release-critical files.
+
+# CI/CD, release pipeline and dependency automation
+/.github/                       @sausin
+
+# Container images, runtime config and deployment
+/Dockerfile*                    @sausin
+/docker-compose*.yml            @sausin
+/docker-entrypoint.sh           @sausin
+/nginx/                         @sausin
+
+# Operational scripts (backup/restore, release, parity/ownership checks)
+/scripts/                       @sausin
+
+# Parity exceptions decide what MCP/CLI/mobile may NOT expose ([security] entries)
+/parity-exceptions.yaml         @sausin
+
+# Authentication, authorization and tenant-isolation core
+/packages/api/src/trpc.ts       @sausin
+/packages/api/src/context.ts    @sausin
+
+# Security policy
+/SECURITY.md                    @sausin

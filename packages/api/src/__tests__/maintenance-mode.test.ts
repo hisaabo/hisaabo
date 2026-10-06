@@ -49,6 +49,13 @@ vi.mock("@hisaabo/db", async () => {
   };
 });
 
+// `hasTenantAccess` also verifies membership against the control DB; these
+// tests use fake ids and no database, so treat every caller as an active member.
+vi.mock("../lib/tenant-access.js", async () => {
+  const actual = await vi.importActual<typeof import("../lib/tenant-access.js")>("../lib/tenant-access.js");
+  return { ...actual, assertActiveMembership: vi.fn(async () => undefined) };
+});
+
 // Imported AFTER the mocks so the test copies of the mocked deps are wired in.
 import { createCallerFactory, router, tenantProcedure, publicProcedure } from "../trpc.js";
 import { systemRouter } from "../routers/system.js";

@@ -9,7 +9,12 @@
 #   container's PostgreSQL via a Unix socket on the shared volume,
 #   then takes over PG ownership when the old container dies.
 #
-# Persistent data: /storage/pgdata, /storage/run, /storage/backups
+# Persistent data: /storage/pgdata, /storage/run, /storage/backups, /storage/secrets
+#
+# PostgreSQL requires scram-sha-256 password auth (also over the Unix socket).
+# A random password is generated on first boot into
+# /storage/secrets/pg_app_password (0600); older trust-auth installs are
+# migrated on the next boot (previous pg_hba.conf kept as pg_hba.conf.bak.*).
 # ONCE backup hooks: /hooks/pre-backup, /hooks/post-restore
 
 # ── Stage 1: Build API ────────────────────────────────────────
@@ -57,6 +62,9 @@ RUN apk add --no-cache \
       flock \
       curl \
       age \
+      openssl \
+      libcap \
+    && setcap 'cap_net_bind_service=+ep' /usr/local/bin/node \
     && mkdir -p /storage/pgdata /storage/run /storage/backups /storage/wal_archive \
     && chown -R postgres:postgres /storage/pgdata /storage/run /storage/wal_archive
 
@@ -66,8 +74,15 @@ RUN case "${TARGETARCH}" in \
       arm64) S6_ARCH="aarch64" ;; \
       *) S6_ARCH="${TARGETARCH}" ;; \
     esac && \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" | tar -C / -Jxpf - && \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" | tar -C / -Jxpf -
+    S6_BASE="https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}" && \
+    mkdir -p /tmp/s6 && cd /tmp/s6 && \
+    for f in "s6-overlay-noarch.tar.xz" "s6-overlay-${S6_ARCH}.tar.xz"; do \
+      curl -fsSLO "${S6_BASE}/${f}" && \
+      curl -fsSLO "${S6_BASE}/${f}.sha256" && \
+      sha256sum -c "${f}.sha256" && \
+      tar -C / -Jxpf "${f}" || exit 1 ; \
+    done && \
+    cd / && rm -rf /tmp/s6
 
 # ── Node setup ───────────────────────────────────────────────
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
@@ -87,9 +102,29 @@ COPY packages/shared/package.json packages/shared/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
+# npm/corepack/pnpm are build-time only: the base image's global copies (and the corepack-prepared pnpm) carry unfixable CVEs and the runtime only needs `node`.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+           /usr/local/bin/pnpm /usr/local/bin/pnpx \
+           /root/.cache /root/.local/share/pnpm /root/.npm \
+           "${COREPACK_HOME:-/nonexistent}" \
+    && for b in npm npx pnpm pnpx corepack; do ! command -v "$b" >/dev/null || { echo "FATAL: $b still present" >&2; exit 1; }; done
+
 # ── PostgreSQL config ────────────────────────────────────────
 COPY scripts/postgresql-wal.conf /etc/postgresql/wal.conf
 COPY scripts/postgresql-tuning.conf /etc/postgresql/tuning.conf
+
+# Password auth bootstrap (random scram-sha-256 password in /storage/secrets)
+COPY scripts/once-pg-auth.sh /usr/local/bin/once-pg-auth
+RUN chmod 755 /usr/local/bin/once-pg-auth
+
+# ── Guard: no build tooling in the runtime image ──────────────
+# esbuild/drizzle-kit/tsx ship Go/native binaries that Trivy flags and that the
+# runtime never needs (migrations run from the pre-bundled dist/migrate.mjs).
+# They are devDependencies of @hisaabo/db; fail the build if they sneak back in.
+RUN if find /app -path '*/node_modules/*' \( -name esbuild -o -name '@esbuild' -o -name tsx -o -name drizzle-kit \) | grep -q .; then \
+      echo "FATAL: build tooling (esbuild/tsx/drizzle-kit) present in runtime image" >&2; exit 1; \
+    fi
 
 # ── Smoke test: catch module resolution errors at build time ──
 RUN node --check packages/api/dist/server.js && \
@@ -133,18 +168,12 @@ exec flock "$LOCKFILE" /bin/sh -c '
   # Remove stale socket files left by the old container
   rm -f "$SOCKETDIR/.s.PGSQL.5432" "$SOCKETDIR/.s.PGSQL.5432.lock"
 
-  # Initialize data directory if empty
-  if [ ! -f "$PGDATA/PG_VERSION" ]; then
-    echo "[postgres] Initializing new database cluster..."
-    su-exec postgres /usr/libexec/postgresql16/initdb \
-      -D "$PGDATA" --auth=trust --no-locale --encoding=UTF8
-    # Allow local + socket connections (container-internal only)
-    echo "local all all trust" >> "$PGDATA/pg_hba.conf"
-    echo "host all all 127.0.0.1/32 trust" >> "$PGDATA/pg_hba.conf"
-  fi
-
   # Remove stale PID file (safe — we hold the flock, so no other PG is running)
   rm -f "$PGDATA/postmaster.pid"
+
+  # Init the cluster if empty, set the random app password and enforce
+  # scram-sha-256 in pg_hba.conf (also migrates older trust-auth installs).
+  /usr/local/bin/once-pg-auth prepare || exit 1
 
   echo "[postgres] Starting PostgreSQL..."
   exec su-exec postgres /usr/libexec/postgresql16/postgres \
@@ -175,18 +204,23 @@ COPY <<'PGREADY' /etc/s6-overlay/s6-rc.d/postgres-ready/up
 set -e
 SOCKETDIR="/storage/run"
 
+/usr/local/bin/once-pg-auth ensure-secret
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
+
 echo "[pg-ready] Waiting for PostgreSQL (own or delegated)..."
 
 # Wait for PG on the Unix socket — works regardless of which container owns PG
 for i in $(seq 1 60); do
-  if pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
+  if su-exec postgres pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
     echo "[pg-ready] PostgreSQL is ready on $SOCKETDIR"
-    # Ensure the hisaabo database exists
-    psql -h "$SOCKETDIR" -U postgres -tc \
+    # Ensure the hisaabo database exists. Client tools run as the unprivileged
+    # `postgres` user (the password is read as root above and passed via env).
+    su-exec postgres psql -h "$SOCKETDIR" -U postgres -tc \
       "SELECT 1 FROM pg_database WHERE datname = 'hisaabo'" \
       | grep -q 1 \
-      || createdb -h "$SOCKETDIR" -U postgres hisaabo
-    psql -h "$SOCKETDIR" -U postgres -d hisaabo -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+      || su-exec postgres createdb -h "$SOCKETDIR" -U postgres hisaabo
+    su-exec postgres psql -h "$SOCKETDIR" -U postgres -d hisaabo -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
     exit 0
   fi
   sleep 1
@@ -209,19 +243,36 @@ COPY <<'APIRUN' /etc/s6-overlay/s6-rc.d/api/run
 set -e
 SOCKETDIR="/storage/run"
 
+/usr/local/bin/once-pg-auth ensure-secret
+DB_PASSWORD="$(cat /storage/secrets/pg_app_password)"
+DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@/hisaabo?host=$SOCKETDIR"
+export DATABASE_URL
+unset DB_PASSWORD
+
+# Persistent object storage (item images). /storage is a volume, so fix the
+# ownership at runtime; the API itself never runs as root.
+STORAGE_LOCAL_DIR="${STORAGE_LOCAL_DIR:-/storage/objects}"
+export STORAGE_LOCAL_DIR
+mkdir -p "$STORAGE_LOCAL_DIR"
+chown node:node "$STORAGE_LOCAL_DIR"
+
+# s6 itself must run as root, but the API and its migrations run as the
+# unprivileged `node` user (secrets were read above while still root). The
+# environment (DATABASE_URL, ONCE-provided vars) is preserved by su-exec.
+# The node binary carries cap_net_bind_service (set at build time), so the
+# unprivileged API can bind :80 on any container runtime.
+
 # Run migrations (idempotent — safe even if old container is still serving)
 # Advisory lock inside migrate.mjs prevents conflicts during rolling deploys.
 echo "[api] Running database migrations..."
-if ! DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  node /app/packages/db/dist/migrate.mjs; then
+if ! su-exec node node /app/packages/db/dist/migrate.mjs; then
   echo "[api] FATAL: Migration failed — refusing to start with inconsistent DB"
   exit 1
 fi
 
 # Start API — connects to PG via Unix socket
 echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
-exec env DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  node packages/api/dist/server.js
+exec su-exec node node packages/api/dist/server.js
 APIRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
 
@@ -233,7 +284,10 @@ RUN mkdir -p /hooks
 COPY <<'PREBACKUP' /hooks/pre-backup
 #!/bin/sh
 set -e
+umask 077
 SOCKETDIR="/storage/run"
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
 
 echo "[backup] Discovering databases..."
 DATABASES=$(psql -h "$SOCKETDIR" -U postgres -Atc \
@@ -251,9 +305,17 @@ for db in $DATABASES; do
 
   if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
     echo "[backup] Encrypting ${db}.dump..."
-    echo "$BACKUP_ENCRYPTION_KEY" | age -e -p -o "${DUMP_FILE}.age" "$DUMP_FILE"
+    # `age -p` cannot take a passphrase non-interactively; use openssl with the
+    # key passed via the environment (never argv).
+    export BACKUP_ENCRYPTION_KEY
+    if ! openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+        -pass env:BACKUP_ENCRYPTION_KEY -in "$DUMP_FILE" -out "${DUMP_FILE}.enc"; then
+      rm -f "$DUMP_FILE" "${DUMP_FILE}.enc"
+      echo "[backup] ERROR: encryption of ${db} failed; plaintext dump removed" >&2
+      exit 1
+    fi
     rm -f "$DUMP_FILE"
-    ENC_SIZE=$(du -h "${DUMP_FILE}.age" | cut -f1)
+    ENC_SIZE=$(du -h "${DUMP_FILE}.enc" | cut -f1)
     echo "[backup] ${db}: dumped ${SIZE} -> encrypted ${ENC_SIZE}"
   else
     echo "[backup] ${db}: dumped ${SIZE}"
@@ -272,12 +334,14 @@ COPY <<'POSTRESTORE' /hooks/post-restore
 set -e
 SOCKETDIR="/storage/run"
 BACKUP_DIR="/storage/backups"
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
 
 # If RESTORE_DB is set, only restore that specific database
 TARGET_DB="${RESTORE_DB:-}"
 
 # Check if any dumps exist
-DUMP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' -o -name '*.dump.age' 2>/dev/null | wc -l)
+DUMP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' -o -name '*.dump.enc' -o -name '*.dump.age' 2>/dev/null | wc -l)
 if [ "$DUMP_COUNT" -eq 0 ]; then
   echo "[restore] No dump files found in $BACKUP_DIR, skipping"
   exit 0
@@ -296,7 +360,28 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Decrypt encrypted dumps (.dump.age)
+# Decrypt encrypted dumps (.dump.enc: openssl, non-interactive)
+for enc_file in "$BACKUP_DIR"/*.dump.enc; do
+  [ -f "$enc_file" ] || continue
+  BASENAME=$(basename "$enc_file" .dump.enc)
+
+  if [ -n "$TARGET_DB" ] && [ "$BASENAME" != "$TARGET_DB" ]; then
+    continue
+  fi
+
+  if [ -z "$BACKUP_ENCRYPTION_KEY" ]; then
+    echo "[restore] ERROR: ${BASENAME}.dump.enc found but BACKUP_ENCRYPTION_KEY is not set"
+    exit 1
+  fi
+
+  echo "[restore] Decrypting ${BASENAME}.dump.enc..."
+  export BACKUP_ENCRYPTION_KEY
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+    -pass env:BACKUP_ENCRYPTION_KEY -in "$enc_file" -out "$BACKUP_DIR/${BASENAME}.dump"
+  rm -f "$enc_file"
+done
+
+# Decrypt legacy age dumps (.dump.age; age prompts for the passphrase on the terminal)
 for age_file in "$BACKUP_DIR"/*.dump.age; do
   [ -f "$age_file" ] || continue
   BASENAME=$(basename "$age_file" .dump.age)
@@ -314,7 +399,7 @@ for age_file in "$BACKUP_DIR"/*.dump.age; do
   fi
 
   echo "[restore] Decrypting ${BASENAME}.dump.age..."
-  echo "$BACKUP_ENCRYPTION_KEY" | age -d -o "$DUMP_FILE" "$age_file"
+  age -d -o "$DUMP_FILE" "$age_file"
   rm -f "$age_file"
 done
 
@@ -363,10 +448,11 @@ LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
 
 ENV NODE_ENV=production
 ENV PORT=80
+ENV STORAGE_LOCAL_DIR=/storage/objects
 ENV HISAABO_VERSION=${VERSION}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
-# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
+# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, API_PUBLIC_URL (required), RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
 
 EXPOSE 80
 

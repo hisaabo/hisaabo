@@ -1,14 +1,18 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, success, outputJSON, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 interface RevokeInvitationOpts {
+  yes?: boolean;
   json?: boolean;
 }
 
 export async function revokeInvitationCommand(invitationId: string, opts: RevokeInvitationOpts): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
+
+  await confirmOrExit(`Revoke invitation ${invitationId}?`, opts);
 
   try {
     const result = await client.tenant.revokeInvitation({ invitationId });

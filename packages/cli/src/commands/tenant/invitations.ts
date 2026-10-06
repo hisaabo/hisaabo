@@ -20,23 +20,20 @@ export async function listInvitationsCommand(opts: ListInvitationsOpts): Promise
       return;
     }
 
-    const items: unknown[] = Array.isArray(invitations) ? invitations : (invitations?.items ?? invitations?.data ?? []);
+    const items = invitations;
 
     if (items.length === 0) {
       console.log("No pending invitations.");
       return;
     }
 
-    const rows = items.map((item: unknown) => {
-      const inv = item as Record<string, unknown>;
-      return {
-        id: String(inv["id"] ?? "").slice(0, 8) + "...",
-        email: String(inv["email"] ?? "\u2014"),
-        role: String(inv["role"] ?? "\u2014"),
-        invitedBy: String(inv["invitedByName"] ?? "\u2014"),
-        expires: inv["expiresAt"] ? new Date(String(inv["expiresAt"])).toLocaleDateString() : "\u2014",
-      };
-    });
+    const rows = items.map((inv) => ({
+      id: inv.id.slice(0, 8) + "...",
+      email: inv.email,
+      role: inv.role as string,
+      invitedBy: inv.invitedByName ?? "\u2014",
+      expires: inv.expiresAt.toLocaleDateString(),
+    }));
 
     const columns: ColumnDef<typeof rows[number]>[] = [
       { key: "id", header: "ID", align: "left" },

@@ -31,7 +31,7 @@ export function registerBankCommands(program: Command): void {
     .description("Create a new bank account")
     .option("--json", "JSON output")
     .option("--name <name>", "Account name")
-    .option("--type <type>", "savings/current/cash/credit/other")
+    .option("--type <type>", "savings/current/cash/upi/credit_card/payment_gateway")
     .option("--bank <name>", "Bank name")
     .option("--account-number <num>", "Account number")
     .option("--ifsc <code>", "IFSC code")

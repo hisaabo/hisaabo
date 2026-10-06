@@ -7,6 +7,18 @@ set -euo pipefail
 # Reads the version from root package.json, creates a git tag, and pushes
 # both the commit and tag to origin. Must be run from the main branch.
 # Run `pnpm release <version>` first to bump versions.
+#
+# Signed tags: set SIGN_TAG=1 (or pass --sign) to create a GPG/SSH-signed tag
+# (`git tag -s`). Requires user.signingkey to be configured; the script aborts
+# if it is not rather than silently creating an unsigned tag.
+
+SIGN="${SIGN_TAG:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --sign) SIGN=1 ;;
+    *) echo "Error: unknown argument: $arg"; exit 1 ;;
+  esac
+done
 
 # Read version from root package.json
 VERSION=$(node -p "require('./package.json').version")
@@ -63,12 +75,20 @@ if ! git log -1 --pretty=%s | grep -q "bump version to ${VERSION}"; then
 fi
 
 # ─── Tag and push ──────────────────────────────────────────────────────────
-git tag "$TAG"
+if [ "$SIGN" = "1" ]; then
+  if [ -z "$(git config --get user.signingkey || true)" ]; then
+    echo "Error: signed tag requested but git user.signingkey is not configured."
+    exit 1
+  fi
+  git tag -s "$TAG" -m "Release $TAG"
+else
+  git tag "$TAG"
+fi
 git push origin main "$TAG"
 
 echo ""
 echo "Tagged $(git rev-parse --short HEAD) as $TAG and pushed to origin."
 echo "CI will now build and publish release artifacts."
 echo ""
-echo "Track progress: https://github.com/billkitaab/hisaabo/actions"
+echo "Track progress: https://github.com/hisaabo/hisaabo/actions"
 echo ""

@@ -3,6 +3,7 @@ import { HisaaboClient, HisaaboApiError, type InvoiceLineItemInput } from "../..
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 import { formatAmount, formatINR, todayISO } from "../../format.js";
+import { deliveryMethods } from "@hisaabo/shared";
 
 interface CreateOpts {
   json?: boolean;
@@ -16,6 +17,10 @@ interface CreateOpts {
   notes?: string;
   terms?: string;
   yes?: boolean;
+}
+
+function isDeliveryMethod(v: string): v is (typeof deliveryMethods)[number] {
+  return (deliveryMethods as readonly string[]).includes(v);
 }
 
 async function prompt(rl: readline.Interface, question: string): Promise<string> {
@@ -90,7 +95,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
             unitPrice = items.data[0].salePrice;
             lineItems.push({
               itemId: items.data[0].id,
-              description: items.data[0].name,
+              itemName: items.data[0].name,
               quantity: qty,
               unitPrice,
               taxPercent: items.data[0].taxPercent,
@@ -105,13 +110,13 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
           if (matched) {
             lineItems.push({
               itemId: matched.id,
-              description: matched.name,
+              itemName: matched.name,
               quantity: qty,
               unitPrice,
               taxPercent: matched.taxPercent,
             });
           } else {
-            lineItems.push({ description: itemName, quantity: qty, unitPrice });
+            lineItems.push({ itemName, quantity: qty, unitPrice });
           }
         }
       }
@@ -167,7 +172,7 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
         const amount = parseFloat(qty) * parseFloat(unitPrice) * (1 + parseFloat(taxPercent) / 100) * (1 - parseFloat(discountPercent) / 100);
         console.log(`    > ${description}  x${qty}  @${formatAmount(unitPrice)}  ${taxPercent}% tax  = ${formatAmount(String(amount))}\n`);
 
-        lineItems.push({ itemId, description, quantity: qty, unitPrice, taxPercent, discountPercent });
+        lineItems.push({ itemId, itemName: description, quantity: qty, unitPrice, taxPercent, discountPercent });
         itemNum++;
       }
       rl.close();
@@ -230,6 +235,9 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
     }
 
     // ── Create ──────────────────────────────────────────────────────
+    if (deliveryMethod !== undefined && !isDeliveryMethod(deliveryMethod)) {
+      fatalError(`--delivery must be one of: ${deliveryMethods.join(", ")}.`, EXIT.USAGE);
+    }
     const invoice = await client.invoice.create({
       partyId: partyId!,
       type: invoiceType,

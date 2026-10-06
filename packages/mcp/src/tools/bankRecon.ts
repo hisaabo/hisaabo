@@ -12,11 +12,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerBankReconTools(server: McpServer, client: HisaaboClient) {
+export function registerBankReconTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "bank_recon_imports",
@@ -57,7 +57,14 @@ export function registerBankReconTools(server: McpServer, client: HisaaboClient)
         .describe("Import UUID from bank_recon_imports."),
     },
     wrapTool(async (input) => {
-      const result = await client.bankRecon.summary(input.import_id);
+      // The server keys the summary by bank account, so resolve it from the import.
+      let bankAccountId: string | undefined;
+      for (let page = 1; !bankAccountId; page++) {
+        const { data, total, limit } = await client.bankRecon.importList({ page, limit: 100 });
+        bankAccountId = data.find((i) => i.id === input.import_id)?.bankAccountId;
+        if (!bankAccountId && page * limit >= total) throw new Error(`Import not found: ${input.import_id}`);
+      }
+      const result = await client.bankRecon.summary({ bankAccountId, importId: input.import_id });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -90,7 +97,7 @@ export function registerBankReconTools(server: McpServer, client: HisaaboClient)
     {
       import_id: z.string().uuid()
         .describe("Import UUID from bank_recon_imports."),
-      status: z.enum(["all", "matched", "unmatched", "ignored"]).default("all").optional()
+      status: z.enum(["all", "auto_matched", "manual_matched", "unmatched", "created", "ignored"]).default("all").optional()
         .describe("Filter lines by match status."),
       page: z.number().int().min(1).default(1)
         .describe("Page number."),
@@ -100,7 +107,7 @@ export function registerBankReconTools(server: McpServer, client: HisaaboClient)
     wrapTool(async (input) => {
       const result = await client.bankRecon.lines({
         importId: input.import_id,
-        status: input.status,
+        status: input.status === "all" ? undefined : input.status,
         page: input.page,
         limit: input.limit,
       });

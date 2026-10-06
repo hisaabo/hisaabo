@@ -1,7 +1,8 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import type { InputOf } from "../../api-types.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount } from "../../format.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
+import { formatAmount, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface SalesTrendOpts {
@@ -17,34 +18,30 @@ export async function dashboardSalesTrendCommand(opts: SalesTrendOpts): Promise<
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  const input: Record<string, unknown> = {};
-  if (opts.months) input["months"] = opts.months;
-  if (opts.from) input["fromDate"] = opts.from;
-  if (opts.to) input["toDate"] = opts.to;
-  if (opts.granularity) input["granularity"] = opts.granularity;
+  const input: InputOf<"dashboard.salesTrend"> = {};
+  if (opts.months) input.months = opts.months;
+  if (opts.from) input.fromDate = apiFrom(opts.from);
+  if (opts.to) input.toDate = apiTo(opts.to);
+  if (opts.granularity === "week" || opts.granularity === "month" || opts.granularity === "fy") input.granularity = opts.granularity;
 
   try {
-    const data = await client.dashboard.salesTrend(input as Parameters<typeof client.dashboard.salesTrend>[0]);
+    const data = await client.dashboard.salesTrend(input);
 
     if (opts.json) {
       outputJSON(data);
       return;
     }
 
-    const rows: Array<{ period: string; sales: string; collections: string; invoices: string }> = Array.isArray(data)
-      ? data.map((r: Record<string, unknown>) => ({
-          period: String(r["period"] ?? r["month"] ?? "-"),
-          sales: formatAmount(String(r["sales"] ?? r["totalSales"] ?? "0")),
-          collections: formatAmount(String(r["collections"] ?? r["totalCollections"] ?? "0")),
-          invoices: String(r["invoices"] ?? r["invoiceCount"] ?? "0"),
-        }))
-      : [];
+    const rows = data.map((r) => ({
+      period: r.period,
+      sales: formatAmount(r.invoiced),
+      collections: formatAmount(r.collected),
+    }));
 
-    const columns = [
-      { key: "period", header: "Period", align: "left" as const },
-      { key: "sales", header: "Sales ₹", align: "right" as const },
-      { key: "collections", header: "Collection ₹", align: "right" as const },
-      { key: "invoices", header: "Invoices", align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "period", header: "Period", align: "left" },
+      { key: "sales", header: "Sales ₹", align: "right" },
+      { key: "collections", header: "Collection ₹", align: "right" },
     ];
 
     if (opts.format === "tsv") {

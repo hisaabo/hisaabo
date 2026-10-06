@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
-import { formatCurrency, formatQuantity, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, downloadCSV, cn, isHttpUrl } from "@/lib/utils";
 import { apiUrl } from "@/lib/api-url";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -24,7 +24,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useInfiniteList } from "@/hooks/useInfiniteList";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
-import { useCan, useAbility } from "@/hooks/useCan";
+import { useCan, useAbility, useCanCreateDocument } from "@/hooks/useCan";
 import { canModify } from "@hisaabo/shared";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { RecordPaymentPanel } from "@/components/RecordPaymentPanel";
@@ -407,7 +407,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
           {/* Tracking */}
           <div className="text-xs">
             <p className="text-text-tertiary mb-0.5">Tracking</p>
-            {shipment.trackingUrl ? (
+            {isHttpUrl(shipment.trackingUrl) ? (
               <a
                 href={shipment.trackingUrl}
                 target="_blank"
@@ -503,7 +503,12 @@ function InvoiceDetailPanel({
 
   // Must stay above the early return below — they are hooks.
   const canEdit = useCan("update", "Invoice");
-  const canCreateDoc = useCan("create", "Invoice");
+  // Credit notes / sales returns inherit the source invoice's side; sellers
+  // may not issue them against a purchase invoice.
+  const canCreateDoc = useCanCreateDocument(
+    "credit_note",
+    invoice?.type === "purchase" ? "purchase" : "sale",
+  );
   const canRecordPaymentRole = useCan("create", "Payment");
 
   if (!invoiceId) return null;
@@ -901,7 +906,9 @@ function InvoicesPage() {
   const [srSource, setSrSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [exporting, setExporting] = useState(false);
   const dateRange = useDateRange("invoices", "this-month");
-  const canCreate = useCan("create", "Invoice");
+  // Sellers cannot create purchase invoices: the create entry points follow
+  // the active sale/purchase tab.
+  const canCreate = useCanCreateDocument("invoice", type);
   const canUpdate = useCan("update", "Invoice");
   const canRecordPayment = useCan("create", "Payment");
   // Delete is decided per row: role permission plus the API's rule that a

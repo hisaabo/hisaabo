@@ -98,8 +98,8 @@ Reasons:
    server embedded in the API container means Claude Desktop needs access to the API
    container's stdio — which is not how Docker deployments work. A standalone MCP
    server can run on the user's local machine, pointing at `HISAABO_API_URL`.
-2. **Auth boundary**: The MCP server authenticates as a service account (session token)
-   not as the API process itself. Keeping it out of the API container preserves that
+2. **Auth boundary**: The MCP server authenticates with a dedicated API key
+   (`hisaabo_key_...`) not as the API process itself. Keeping it out of the API container preserves that
    boundary.
 3. **Failure isolation**: An MCP server crash does not take down the API.
 
@@ -111,43 +111,55 @@ Reasons:
 
 ---
 
-## ADR-004: Auth Strategy — Session Token in Config File
+## ADR-004: Auth Strategy — Browser Handoff for Humans, API Keys for Automation
 
 ### Status
-Proposed
+Accepted (supersedes the original "session token in config file" proposal)
 
 ### Context
-The existing API uses `session_id` cookies for browser sessions and also accepts
-`Authorization: Bearer <session_id>` headers (see `context.ts` line 15–18). Sessions
-live for 30 days.
-
-Options considered:
-1. Reuse the browser cookie mechanism (can't work in non-browser contexts)
-2. Issue a separate API key type (requires new DB column, new auth path in the API)
-3. Use the existing `Bearer` token path with a stored session ID
+The API accepts `Authorization: Bearer <token>` for non-browser clients. Two kinds
+of bearer credential exist: login session tokens and API keys (`hisaabo_key_...`).
+An earlier version of the CLI called `auth.login` with an email and password and
+stored the returned session token; the MCP server was configured with a copied
+session token. Passwords typed into a CLI and long-lived session tokens pasted into
+agent configs are both undesirable.
 
 ### Decision
-Use option 3: `hisaabo login` calls `auth.login` over tRPC, receives the session ID
-from the response body (not from a cookie), and stores it in `~/.hisaabo/config.json`.
-Subsequent CLI and MCP calls set `Authorization: Bearer <session_id>`.
-
-The API already supports Bearer auth in `createContext`. No API changes are needed.
-
-To get the session ID from the login response without relying on `Set-Cookie`, the
-login procedure needs a **one-line change**: return `{ sessionId }` in the response
-body when a `x-client-type: cli` header is present. This is the only required API
-modification.
+- **Humans (CLI):** `hisaabo login` uses a browser handoff, RFC 8252 loopback
+  redirect with PKCE. The CLI starts a one-shot listener on `127.0.0.1:<random>`,
+  calls `auth.nativeStart` (client `cli`, S256 challenge, random `state`), opens
+  `<web-url>/auth/native?request=<id>`, and after the user signs in on the web app
+  receives a one-time code on the loopback URL. `auth.nativeExchange` (with the code
+  verifier and `X-Hisaabo-Client: cli`) returns a bearer session token. There is no
+  password flow in the CLI. `--web-url` / `HISAABO_WEB_URL` pick the web app.
+- **Automation (CLI and MCP):** API keys. `hisaabo login --token-stdin` (or
+  `HISAABO_TOKEN` + `HISAABO_API_URL`) for the CLI; `HISAABO_API_KEY` for the MCP
+  server. The MCP server refuses anything that is not a `hisaabo_key_...` key unless
+  `HISAABO_ALLOW_SESSION_TOKEN=1`.
+- Keys are created by admins (web: Settings → API Keys, or `hisaabo api-key create
+  --expires-in-days`), expire after 90 days by default (maximum 365), and are revoked
+  when the member is removed or their role changes.
+- Plain `http://` API URLs are refused except for loopback hosts, unless
+  `HISAABO_ALLOW_INSECURE=1`.
 
 ### Consequences
-- Session tokens expire after 30 days. The CLI can detect a 401 and prompt
-  `hisaabo login` again.
-- Config file contains a credential. File permissions must be `0600` (enforced by
-  the CLI on write).
-- No refresh token mechanism — user must re-login after expiry. Acceptable for
-  developer tooling.
-- The MCP server reads the token from an environment variable
-  (`HISAABO_API_KEY`), not the config file, so it works in CI and containerized
-  agent setups without a home directory.
+- Session tokens expire after 30 days; the CLI warns after 25 days and the user runs
+  `hisaabo login` again. No refresh token mechanism.
+- The CLI config file contains a credential. It is written with mode `0600` in a
+  `0700` directory; `HISAABO_TOKEN` avoids writing it at all.
+- The MCP server reads its key from `HISAABO_API_KEY`, not the config file, so it
+  works in CI and containerized agent setups without a home directory.
+- Destructive CLI commands fail closed: they prompt on a TTY and require `--yes`
+  when non-interactive.
+
+### MCP tool exposure policy
+Because an agent reads text that other people can write, the MCP server registers
+tools by tier (`src/lib/toolMeta.ts`): `HISAABO_MCP_MODE` = `readonly` (default),
+`write` or `admin`; admin-tier tools (API keys, sessions, team) additionally need
+`HISAABO_MCP_ENABLE_ADMIN=1`. Destructive tools require `confirm: true` on every call.
+Every tool result is wrapped in an untrusted-data envelope and string fields are
+truncated and stripped of control characters. Prompts only mention tools that are
+registered in the active mode.
 
 ---
 
@@ -333,8 +345,10 @@ hisaabo/
                               shipment_create, shipment_update, shipment_delete
           document.ts       — 6 tools: document_convert and CRUD for
                               document-type–agnostic operations
-          tenant.ts         — 5 tools: tenant_get, tenant_update, tenant_users,
-                              tenant_invite, tenant_remove_user
+          tenant.ts         — 7 tools: tenant_list, tenant_members, tenant_invite_member,
+                              tenant_remove_member, tenant_update_member_role,
+                              tenant_pending_invitations, tenant_revoke_invitation
+                              (all but tenant_list are admin tier)
           apiKey.ts         — 3 tools: api_key_list, api_key_create, api_key_revoke
           store.ts          — 7 tools: store_settings, store_orders, store_order_get,
                               store_order_update_status, and related
@@ -1098,13 +1112,15 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
 #### `src/tools/tenant.ts` — summary
 
 ```typescript
-// Tools registered (5 total):
+// Tools registered (7 total; all but tenant_list are admin tier):
 //
-// tenant_get         — get current tenant profile (name, plan, settings)
-// tenant_update      — update tenant-level settings
-// tenant_users       — list all users in the tenant with their roles
-// tenant_invite      — invite a new user to the tenant by email
-// tenant_remove_user — remove a user from the tenant
+// tenant_list                — organizations the current user belongs to
+// tenant_members             — list all members of the tenant with their roles
+// tenant_invite_member       — invite a user by email (the invitation is emailed; no link returned)
+// tenant_remove_member       — remove a member from the tenant
+// tenant_update_member_role  — change a member's role
+// tenant_pending_invitations — list pending invitations
+// tenant_revoke_invitation   — revoke a pending invitation
 ```
 
 #### `src/tools/apiKey.ts` — summary
@@ -1246,34 +1262,42 @@ function formatError(err: HisaaboError): string {
 ### Initial login (CLI)
 
 ```
-$ hisaabo login
-Email: user@example.com
-Password: ••••••••
+$ hisaabo login --api-url https://api.hisaabo.in
 
--> POST /api/trpc/auth.login
-   Body: { email, password }
-   Header: x-client-type: cli
+-> POST /api/trpc/auth.nativeStart
+   Body: { client: "cli", redirectUri: "http://127.0.0.1:<port>/callback",
+           codeChallenge, codeChallengeMethod: "S256", state }
+<- { requestId, expiresAt }
 
-<- { sessionId: "abc123", user: { id, email, name }, tenantId: "...", businesses: [...] }
+Opens <web-url>/auth/native?request=<requestId> in the browser.
+The user signs in on the web app (magic link) and approves the request.
+The browser is redirected to http://127.0.0.1:<port>/callback?code=...&state=...
+
+-> POST /api/trpc/auth.nativeExchange
+   Body: { requestId, code, codeVerifier }
+   Header: x-hisaabo-client: cli
+<- { user: { id, email, name }, sessionToken }
 
 Prompts: "Select active business:" (if multiple)
 
-Writes ~/.hisaabo/config.json (mode 0600):
+Writes the CLI config (mode 0600):
 {
   "apiUrl": "https://api.hisaabo.in",
-  "token": "abc123",
+  "token": "<session token>",
   "tenantId": "...",
   "businessId": "...",
-  "userEmail": "user@example.com",
-  "businessName": "My Shop"
+  "businessName": "My Shop",
+  "tokenCreatedAt": 1767000000000
 }
 
-Logged in as user@example.com — My Shop
+Signed in as user@example.com
 ```
 
-The `x-client-type: cli` header triggers a one-line addition in the auth router's
-`login` procedure: return `sessionId` in the response body in addition to setting
-the cookie. This is the only required change to the existing API.
+For API keys: `echo "hisaabo_key_..." | hisaabo login --api-url <url> --token-stdin`
+validates the key with `auth.me` and stores it the same way.
+
+`sessionToken` is returned in the response body only to bearer clients
+(`x-hisaabo-client` of `desktop`, `mobile` or `cli`).
 
 ### MCP server startup
 
@@ -1301,7 +1325,7 @@ if any are missing. It does not attempt a lazy login.
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "http://localhost:3000",
-        "HISAABO_API_KEY": "<session-id-from-hisaabo-login>",
+        "HISAABO_API_KEY": "hisaabo_key_...",
         "HISAABO_TENANT_ID": "<tenant-id>",
         "HISAABO_BUSINESS_ID": "<business-id>"
       }
@@ -1310,20 +1334,21 @@ if any are missing. It does not attempt a lazy login.
 }
 ```
 
-The `hisaabo whoami --json` command outputs the tenant ID, business ID, and token
-in a machine-readable format to make config setup easy:
+Create the API key with `hisaabo api-key create --name "Claude Desktop" --expires-in-days 90`
+(or in the web app under Settings → API Keys; admins only). The `hisaabo whoami --json`
+command prints the tenant and business IDs; it never prints the token:
 
 ```bash
 $ hisaabo whoami --json
 {
-  "email": "user@example.com",
-  "businessName": "My Shop",
-  "businessId": "550e8400-e29b-41d4-a716-446655440000",
-  "tenantId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-  "token": "abc123...",
+  "user": { "email": "user@example.com", "role": "owner", "tenantId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8" },
+  "business": { "id": "550e8400-e29b-41d4-a716-446655440000", "name": "My Shop" },
   "apiUrl": "http://localhost:3000"
 }
 ```
+
+The server starts in `readonly` mode. Add `"HISAABO_MCP_MODE": "write"` to the `env`
+block to expose create/update tools; see ADR-004.
 
 ---
 
@@ -1399,16 +1424,19 @@ tool call while still keeping responses bounded. Both are well below the API's m
 
 ## API Changes Required
 
-Only one change to `packages/api` is needed to support this design:
+The original design needed only a response-body session id for the CLI. The shipped
+design uses these existing and added pieces instead:
 
-**`packages/api/src/routers/auth.ts` — login procedure**
-
-When `x-client-type: cli` header is present in the request, include the `sessionId`
-in the JSON response body. The cookie is still set as usual (for browser clients).
-This allows the CLI to extract the session token without parsing cookies.
-
-All other API behavior is unchanged. No new endpoints, no new DB tables, no new
-auth paths.
+- Bearer authentication for `desktop`, `mobile` and `cli` clients
+  (`x-hisaabo-client`); `sessionToken` appears in response bodies only for them.
+- The native login procedures `auth.nativeStart`, `auth.nativeRequestInfo`,
+  `auth.nativeAuthorize` (cookie web session only) and `auth.nativeExchange`, backed
+  by the `native_auth_requests` control table (10 minute request TTL, 2 minute code
+  TTL, single use, PKCE S256).
+- API keys with a default 90 day and maximum 365 day expiry, revoked when the member
+  is removed or their role changes.
+- `tenant.inviteMember` emails the invitation; the invite link is returned only when
+  `returnLink: true` is passed (web Team tab). The CLI and MCP never request it.
 
 ---
 
@@ -1553,7 +1581,7 @@ The inline client is architecturally identical to the design in ADR-001.
 | Convert a delivery challan to an invoice | `document_convert` with `skip_stock_adjustment: true` | Yes |
 | Check bank account balance | `bank_get` or `bank_summary` | Yes |
 | Reconcile a payment with a bank transaction | `payment_reconcile` (payment_id + bank_transaction reference) | Yes |
-| Invite a user to the tenant | `tenant_invite` (email + role) | Yes |
+| Invite a user to the tenant | `tenant_invite_member` (email + role, admin tier) | Yes |
 | Generate an API key for CLI/automation | `api_key_create` (label) | Yes |
 | View store orders awaiting fulfillment | `store_orders` (status: "pending") | Yes |
 | Check a seller's target progress | `target_my` | Yes |

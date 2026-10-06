@@ -1,4 +1,3 @@
-#!/usr/bin/env npx tsx
 /**
  * Feature Parity Scanner
  *
@@ -12,12 +11,19 @@
  *   --scan
  *     Scan all platforms, compare against each other, apply exceptions, and
  *     report gaps. Exits 1 if any true gaps exist (web has a procedure that
- *     mobile does not, and it is not listed in parity-exceptions.yaml).
+ *     mobile/cli/mcp does not, and it is not listed in parity-exceptions.yaml)
+ *     or if any platform references a procedure that does not exist in the API
+ *     (no-such-procedure). CLI-only / MCP-only procedures are reported for
+ *     information but never fail the run.
  *
  *   --validate
- *     Verify that every entry in parity-exceptions.yaml refers to a procedure
- *     that actually exists in the API, and that the platform assignment makes
- *     sense. Exits 1 on hard errors.
+ *     Verify parity-exceptions.yaml. Exits 1 on any of:
+ *       - an entry that names a procedure that does not exist in the API
+ *       - a stale entry: the excluded platform actually uses the procedure
+ *       - an entry without a reason (comment block above it, or inline `# why`)
+ *       - a duplicate entry
+ *       - a platform referencing a procedure that does not exist (no-such-procedure)
+ *     Entries for procedures web no longer uses are reported as warnings.
  *
  *   --changed <files...>
  *     Given a list of changed file paths (from a PR diff), check whether any
@@ -27,11 +33,26 @@
  *   --report
  *     Print a markdown summary of platform coverage.
  *
- * Usage:
- *   npx tsx scripts/check-parity.ts --scan
- *   npx tsx scripts/check-parity.ts --validate
- *   npx tsx scripts/check-parity.ts --changed apps/web/src/foo.tsx packages/api/src/routers/foo.ts
- *   npx tsx scripts/check-parity.ts --report
+ * What is scanned (test files, __tests__, test-utils and *.d.ts are skipped):
+ *   web/mobile  trpc.<router>.<proc>.   ctx.client.<router>.<proc>.query|mutate
+ *               utils.<router>.<proc>.fetch|prefetch|ensureData|...   (WebMCP, hooks)
+ *               utils.<router>.<proc>.invalidate|...  (existence check only)
+ *   cli/mcp     .query("router.proc") / .mutate("router.proc"), plus ctx.client.*
+ *
+ * Exception reasons and the [security] tag
+ * ----------------------------------------
+ * Every entry in parity-exceptions.yaml needs a reason: the comment block
+ * directly above it (a `# --- Section ---` banner is not a reason) or an inline
+ * `- router.proc  # why`. Prefix a reason with `[security]` when the procedure is
+ * excluded from a platform for security rather than UX reasons (credential
+ * management, bulk export/import, member administration). Those entries are
+ * counted separately and must not be removed just to make a gap go away.
+ *
+ * Usage (Node >= 22.6):
+ *   node --experimental-strip-types scripts/check-parity.ts --scan
+ *   node --experimental-strip-types scripts/check-parity.ts --validate
+ *   node --experimental-strip-types scripts/check-parity.ts --changed apps/web/src/foo.tsx packages/api/src/routers/foo.ts
+ *   node --experimental-strip-types scripts/check-parity.ts --report
  */
 
 import * as fs from "node:fs";
@@ -48,11 +69,23 @@ const ROOT = path.resolve(__dirname, "..");
 
 type Platform = "mobile" | "cli" | "mcp";
 
+interface ExceptionMeta {
+  platform: Platform;
+  proc: string;
+  reason: string;
+  security: boolean;
+  line: number;
+}
+
 interface Exceptions {
   schemaVersion: string;
   mobile: Set<string>;
   cli: Set<string>;
   mcp: Set<string>;
+  /** Per-entry metadata (reason, [security] tag, line). */
+  entries: ExceptionMeta[];
+  /** Entries that appear more than once for the same platform. */
+  duplicates: ExceptionMeta[];
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +95,14 @@ interface Exceptions {
 const PLATFORMS: Platform[] = ["mobile", "cli", "mcp"];
 
 function parseExceptions(filePath: string): Exceptions {
-  const result: Exceptions = { schemaVersion: "2.0", mobile: new Set(), cli: new Set(), mcp: new Set() };
+  const result: Exceptions = {
+    schemaVersion: "2.0",
+    mobile: new Set(),
+    cli: new Set(),
+    mcp: new Set(),
+    entries: [],
+    duplicates: [],
+  };
   if (!fs.existsSync(filePath)) return result;
 
   const content = fs.readFileSync(filePath, "utf-8");
@@ -70,11 +110,30 @@ function parseExceptions(filePath: string): Exceptions {
   let inNotApplicable = false;
   let notApplicableIndent = 0;
 
-  for (const rawLine of content.split("\n")) {
-    const line = rawLine.trimEnd();
+  // Reason tracking: the comment block above an entry applies to every entry
+  // that follows until a new comment block or section banner starts.
+  let reason = "";
+  let lastWasEntry = false;
+
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
     const trimmed = line.trim();
 
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    if (trimmed === "") continue;
+
+    if (trimmed.startsWith("#")) {
+      const text = trimmed.replace(/^#+\s*/, "");
+      if (/^-{2,}.*-{2,}$/.test(text)) {
+        // "# --- Section ---" banner: starts a new group, is not itself a reason.
+        reason = "";
+        lastWasEntry = false;
+      } else if (inNotApplicable) {
+        reason = lastWasEntry || reason === "" ? text : `${reason} ${text}`;
+        lastWasEntry = false;
+      }
+      continue;
+    }
 
     if (trimmed.startsWith("schema_version:")) {
       result.schemaVersion = trimmed.split(":")[1].trim().replace(/["']/g, "");
@@ -86,6 +145,8 @@ function parseExceptions(filePath: string): Exceptions {
     if (platformMatch) {
       currentPlatform = platformMatch[1] as Platform;
       inNotApplicable = false;
+      reason = "";
+      lastWasEntry = false;
       continue;
     }
 
@@ -93,6 +154,8 @@ function parseExceptions(filePath: string): Exceptions {
     if (trimmed === "not-applicable:" && currentPlatform) {
       inNotApplicable = true;
       notApplicableIndent = line.length - trimmed.length;
+      reason = "";
+      lastWasEntry = false;
       continue;
     }
 
@@ -100,7 +163,20 @@ function parseExceptions(filePath: string): Exceptions {
     if (inNotApplicable && currentPlatform) {
       const currentIndent = line.length - line.trimStart().length;
       if (trimmed.startsWith("- ") && currentIndent > notApplicableIndent) {
-        result[currentPlatform].add(trimmed.slice(2).trim());
+        const m = trimmed.slice(2).match(/^([\w.]+)\s*(?:#\s*(.*))?$/);
+        const proc = m ? m[1] : trimmed.slice(2).trim();
+        const entryReason = (m?.[2] ?? "").trim() || reason;
+        const meta: ExceptionMeta = {
+          platform: currentPlatform,
+          proc,
+          reason: entryReason,
+          security: /\[security\]/i.test(entryReason),
+          line: i + 1,
+        };
+        if (result[currentPlatform].has(proc)) result.duplicates.push(meta);
+        result[currentPlatform].add(proc);
+        result.entries.push(meta);
+        lastWasEntry = true;
       } else if (!trimmed.startsWith("- ") && currentIndent <= notApplicableIndent && trimmed !== "") {
         inNotApplicable = false;
         // Check if this is a new platform key
@@ -118,60 +194,105 @@ function parseExceptions(filePath: string): Exceptions {
 }
 
 // ---------------------------------------------------------------------------
-// tRPC usage scanner — trpc.router.procedure pattern (web / mobile / desktop)
+// Source walking (production code only)
 // ---------------------------------------------------------------------------
 
-function scanTrpcDotPattern(dir: string): Set<string> {
-  const procedures = new Set<string>();
-  if (!fs.existsSync(dir)) return procedures;
+const SKIP_DIRS = new Set([
+  "node_modules", ".next", "dist", ".expo", "android", "ios", "coverage", "target",
+  "__tests__", "__mocks__", "test-utils",
+]);
+const SOURCE_FILE = /\.(tsx?|jsx?)$/;
+const NON_PRODUCTION_FILE = /(\.(test|spec)\.[cm]?[tj]sx?$)|(\.d\.ts$)/;
 
-  function walk(d: string) {
-    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-      const full = path.join(d, entry.name);
-      if (entry.isDirectory()) {
-        if (["node_modules", ".next", "dist", ".expo", "android", "ios"].includes(entry.name)) continue;
-        walk(full);
-      } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
-        const content = fs.readFileSync(full, "utf-8");
-        for (const m of content.matchAll(/trpc\.(\w+)\.(\w+)\./g)) {
-          procedures.add(`${m[1]}.${m[2]}`);
-        }
-      }
+/**
+ * Remove block and line comments so prose such as "`utils.xyz.list.invalidate()`"
+ * in a doc comment is not mistaken for a procedure call. A `//` preceded by `:`
+ * (a URL scheme) is left alone.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+}
+
+function walkSources(dir: string, visit: (file: string, content: string) => void): void {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      walkSources(full, visit);
+    } else if (SOURCE_FILE.test(entry.name) && !NON_PRODUCTION_FILE.test(entry.name)) {
+      visit(full, stripComments(fs.readFileSync(full, "utf-8")));
     }
   }
+}
 
-  walk(dir);
-  return procedures;
+/**
+ * `used`  — procedures the platform actually calls.
+ * `refs`  — everything that names a procedure, including cache-only references
+ *           such as `utils.x.y.invalidate()`. Used for the no-such-procedure check.
+ */
+interface ScanResult {
+  used: Set<string>;
+  refs: Map<string, string>; // procedure -> first file that references it
+}
+
+// ---------------------------------------------------------------------------
+// tRPC usage scanner — dotted forms (web / mobile / desktop shell / WebMCP)
+//   trpc.router.proc.useQuery(...)
+//   ctx.client.router.proc.query(...)           (WebMCP tools)
+//   utils.router.proc.fetch(...)                (react-query utils)
+//   utils.router.proc.invalidate(...)           (reference only)
+// ---------------------------------------------------------------------------
+
+const UTILS_CALL_METHODS = "fetch|prefetch|ensureData|fetchInfinite|prefetchInfinite";
+const UTILS_REF_METHODS = "invalidate|refetch|cancel|reset|setData|getData|setInfiniteData|getInfiniteData";
+
+function scanTrpcDotPattern(dir: string): ScanResult {
+  const result: ScanResult = { used: new Set(), refs: new Map() };
+  const note = (proc: string, file: string, called: boolean) => {
+    if (called) result.used.add(proc);
+    if (!result.refs.has(proc)) result.refs.set(proc, path.relative(ROOT, file));
+  };
+
+  walkSources(dir, (file, content) => {
+    for (const m of content.matchAll(/\btrpc\.(\w+)\.(\w+)\./g)) note(`${m[1]}.${m[2]}`, file, true);
+    for (const m of content.matchAll(/\bctx\.client\.(\w+)\.(\w+)\.(?:query|mutate)\b/g)) {
+      note(`${m[1]}.${m[2]}`, file, true);
+    }
+    for (const m of content.matchAll(new RegExp(`\\butils\\.(\\w+)\\.(\\w+)\\.(${UTILS_CALL_METHODS})\\b`, "g"))) {
+      note(`${m[1]}.${m[2]}`, file, true);
+    }
+    for (const m of content.matchAll(new RegExp(`\\butils\\.(\\w+)\\.(\\w+)\\.(${UTILS_REF_METHODS})\\b`, "g"))) {
+      note(`${m[1]}.${m[2]}`, file, false);
+    }
+  });
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
 // tRPC usage scanner — string-based pattern used by CLI and MCP clients
 // Matches: .query("router.procedure") or .mutate("router.procedure")
+// (and the dotted ctx.client.* form, should a tool use it)
 // ---------------------------------------------------------------------------
 
-function scanTrpcStringPattern(dir: string): Set<string> {
-  const procedures = new Set<string>();
-  if (!fs.existsSync(dir)) return procedures;
+function scanTrpcStringPattern(dir: string): ScanResult {
+  const result: ScanResult = { used: new Set(), refs: new Map() };
+  const note = (proc: string, file: string) => {
+    result.used.add(proc);
+    if (!result.refs.has(proc)) result.refs.set(proc, path.relative(ROOT, file));
+  };
 
-  function walk(d: string) {
-    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-      const full = path.join(d, entry.name);
-      if (entry.isDirectory()) {
-        if (["node_modules", "dist"].includes(entry.name)) continue;
-        walk(full);
-      } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
-        const content = fs.readFileSync(full, "utf-8");
-        // .query("router.procedure") / .query<T>("router.procedure") / .mutate(...)
-        // Use [^(]* instead of generic matching to handle nested generics like PaginatedResult<T>
-        for (const m of content.matchAll(/\.(query|mutate)[^(]*\(["'](\w+\.\w+)["']/g)) {
-          procedures.add(m[2]);
-        }
-      }
+  walkSources(dir, (file, content) => {
+    // .query("router.procedure") / .query<T>("router.procedure") / .mutate(...)
+    // Use [^(]* instead of generic matching to handle nested generics like PaginatedResult<T>
+    for (const m of content.matchAll(/\.(query|mutate)[^(]*\(["'](\w+\.\w+)["']/g)) note(m[2], file);
+    for (const m of content.matchAll(/\bctx\.client\.(\w+)\.(\w+)\.(?:query|mutate)\b/g)) {
+      note(`${m[1]}.${m[2]}`, file);
     }
-  }
+  });
 
-  walk(dir);
-  return procedures;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,15 +343,23 @@ function extractApiProcedures(): Map<string, string[]> {
     return procs;
   }
 
-  for (const entry of fs.readdirSync(routersDir)) {
+  // Read a file without a prior existence/stat check (avoids a check-then-use race).
+  function tryRead(file: string): string | null {
+    try {
+      return fs.readFileSync(file, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  for (const dirent of fs.readdirSync(routersDir, { withFileTypes: true })) {
+    const entry = dirent.name;
     const fullPath = path.join(routersDir, entry);
 
     // Directory-based router module (e.g. import/)
-    if (fs.statSync(fullPath).isDirectory()) {
-      const indexFile = path.join(fullPath, "index.ts");
-      if (!fs.existsSync(indexFile)) continue;
-
-      const indexContent = fs.readFileSync(indexFile, "utf-8");
+    if (dirent.isDirectory()) {
+      const indexContent = tryRead(path.join(fullPath, "index.ts"));
+      if (indexContent === null) continue;
       const exportMatch = indexContent.match(/export const (\w+Router)/);
       if (!exportMatch) continue;
 
@@ -248,7 +377,8 @@ function extractApiProcedures(): Map<string, string[]> {
     }
 
     if (!entry.endsWith(".ts")) continue;
-    const content = fs.readFileSync(fullPath, "utf-8");
+    const content = tryRead(fullPath);
+    if (content === null) continue;
 
     const procs = extractProcs(content);
 
@@ -296,15 +426,45 @@ interface PlatformUsage {
   mobile: Set<string>;
   cli: Set<string>;
   mcp: Set<string>;
+  /** Every procedure each platform names (incl. cache-only refs) -> first file. */
+  refs: Record<"web" | Platform, Map<string, string>>;
 }
 
 function scanAllPlatforms(): PlatformUsage {
+  const web = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
+  const mobile = scanTrpcDotPattern(path.join(ROOT, "apps/mobile"));
+  const cli = scanTrpcStringPattern(path.join(ROOT, "packages/cli/src"));
+  const mcp = scanTrpcStringPattern(path.join(ROOT, "packages/mcp/src"));
   return {
-    web: scanTrpcDotPattern(path.join(ROOT, "apps/web/src")),
-    mobile: scanTrpcDotPattern(path.join(ROOT, "apps/mobile")),
-    cli: scanTrpcStringPattern(path.join(ROOT, "packages/cli/src")),
-    mcp: scanTrpcStringPattern(path.join(ROOT, "packages/mcp/src")),
+    web: web.used,
+    mobile: mobile.used,
+    cli: cli.used,
+    mcp: mcp.used,
+    refs: { web: web.refs, mobile: mobile.refs, cli: cli.refs, mcp: mcp.refs },
   };
+}
+
+/**
+ * no-such-procedure: a platform names a procedure the API does not define.
+ * That is a runtime NOT_FOUND waiting to happen (renamed/removed procedure, typo).
+ */
+function findNoSuchProcedures(usage: PlatformUsage, allApi: Set<string>): string[] {
+  const offenders: string[] = [];
+  for (const platform of ["web", "mobile", "cli", "mcp"] as const) {
+    for (const [proc, file] of usage.refs[platform]) {
+      if (!allApi.has(proc)) offenders.push(`[${platform}] ${proc}  (${file})`);
+    }
+  }
+  return offenders.sort();
+}
+
+function reportNoSuchProcedures(offenders: string[]): void {
+  if (offenders.length === 0) {
+    console.log("No references to non-existent procedures (no-such-procedure: 0).");
+    return;
+  }
+  console.log(`\nNO-SUCH-PROCEDURE: ${offenders.length} reference(s) to procedures that do not exist in the API:`);
+  for (const o of offenders) console.log(`  [no-such-procedure] ${o}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,10 +567,17 @@ function cmdScan() {
 
   console.log();
 
-  // --- Exit 1 when ANY platform has true gaps — CI should block ---
+  // --- Every procedure a platform names must exist in the API ---
+  const offenders = findNoSuchProcedures(usage, allApi);
+  reportNoSuchProcedures(offenders);
+  console.log();
+
+  // --- Exit 1 when ANY platform has true gaps or a dangling reference — CI should block ---
   const totalGaps = results.reduce((s, r) => s + r.trueGaps.length, 0);
-  if (totalGaps > 0) {
-    console.log(`FAIL: ${totalGaps} total parity gap(s) across all platforms.\n`);
+  if (totalGaps > 0 || offenders.length > 0) {
+    if (totalGaps > 0) console.log(`FAIL: ${totalGaps} total parity gap(s) across all platforms.`);
+    if (offenders.length > 0) console.log(`FAIL: ${offenders.length} reference(s) to procedures that do not exist.`);
+    console.log();
     process.exitCode = 1;
   } else {
     console.log("PASS: All platforms at 100% adjusted parity (or all gaps in exceptions).\n");
@@ -433,35 +600,65 @@ function cmdValidate() {
 
   let errors = 0;
   let warnings = 0;
+  const usage = scanAllPlatforms();
 
   // 1. Every exception must reference a real API procedure.
   console.log("Checking that exceptions reference real API procedures...");
+  let nonexistent = 0;
   for (const platform of PLATFORMS) {
     for (const proc of exceptions[platform]) {
       if (!allApi.has(proc)) {
         console.log(`  ERROR: [${platform}] ${proc} is in parity-exceptions.yaml but does not exist in the API`);
-        errors++;
+        nonexistent++;
       }
     }
   }
-  if (errors === 0) console.log("  All exceptions reference valid API procedures.");
+  errors += nonexistent;
+  if (nonexistent === 0) console.log("  All exceptions reference valid API procedures.");
 
-  // 2. Scan web usage and check for stale exceptions (procedure no longer used on web).
-  console.log("\nChecking for stale exceptions (procedure excluded but web no longer uses it)...");
-  const webUsage = scanTrpcDotPattern(path.join(ROOT, "apps/web/src"));
+  // 2. Stale exceptions.
+  //    a) The excluded platform actually uses the procedure -> the exclusion is wrong. ERROR.
+  //    b) Web does not use the procedure -> the exclusion has no effect. WARNING.
+  console.log("\nChecking for stale exceptions...");
+  let stale = 0;
   for (const platform of PLATFORMS) {
     for (const proc of exceptions[platform]) {
-      if (!webUsage.has(proc)) {
-        console.log(`  WARNING: [${platform}] ${proc} is in exceptions but web does not use it — may be stale`);
+      if (usage[platform].has(proc)) {
+        console.log(`  ERROR: [${platform}] ${proc} is excluded but ${platform} already uses it — remove the exception`);
+        stale++;
+      } else if (!usage.web.has(proc)) {
+        console.log(`  WARNING: [${platform}] ${proc} is excluded but web does not use it — exception has no effect`);
         warnings++;
       }
     }
   }
-  if (warnings === 0) console.log("  No stale exceptions detected.");
+  errors += stale;
+  if (stale === 0) console.log("  No exception contradicts actual platform usage.");
+
+  // 3. Every entry needs a reason; duplicates are errors.
+  console.log("\nChecking that every exception has a reason...");
+  let missing = 0;
+  for (const e of exceptions.entries) {
+    if (!e.reason) {
+      console.log(`  ERROR: parity-exceptions.yaml:${e.line} [${e.platform}] ${e.proc} has no reason (add a comment above it or an inline "# why")`);
+      missing++;
+    }
+  }
+  for (const d of exceptions.duplicates) {
+    console.log(`  ERROR: parity-exceptions.yaml:${d.line} [${d.platform}] ${d.proc} is listed more than once`);
+    missing++;
+  }
+  errors += missing;
+  if (missing === 0) console.log("  Every exception has a reason and appears once.");
+
+  // 4. No platform may reference a procedure that does not exist.
+  console.log("\nChecking for references to non-existent procedures...");
+  const offenders = findNoSuchProcedures(usage, allApi);
+  reportNoSuchProcedures(offenders);
+  errors += offenders.length;
 
   // 3. Check for procedures in API not used anywhere (informational).
   console.log("\nChecking for API procedures not used on any platform...");
-  const usage = scanAllPlatforms();
   const usedAnywhere = new Set([...usage.web, ...usage.mobile, ...usage.cli, ...usage.mcp]);
   let unused = 0;
   for (const proc of allApi) {
@@ -472,8 +669,15 @@ function cmdValidate() {
   }
   if (unused === 0) console.log("  All API procedures are used on at least one platform.");
 
+  // 5. Platform-only procedures (informational): CLI/MCP expose things web does not.
+  for (const platform of ["cli", "mcp"] as const) {
+    const only = [...usage[platform]].filter((p) => !usage.web.has(p));
+    console.log(`\nINFO: ${platform.toUpperCase()}-only procedures (not on web): ${only.length}`);
+  }
+
   const totalExceptions = PLATFORMS.reduce((s, p) => s + exceptions[p].size, 0);
-  console.log(`\n--- Summary: ${totalExceptions} total exceptions (mobile: ${exceptions.mobile.size}, cli: ${exceptions.cli.size}, mcp: ${exceptions.mcp.size}), ${warnings} warnings, ${errors} errors ---`);
+  const securityCount = exceptions.entries.filter((e) => e.security).length;
+  console.log(`\n--- Summary: ${totalExceptions} total exceptions (mobile: ${exceptions.mobile.size}, cli: ${exceptions.cli.size}, mcp: ${exceptions.mcp.size}; ${securityCount} tagged [security]), ${warnings} warnings, ${errors} errors ---`);
 
   if (errors > 0) process.exitCode = 1;
 }
@@ -585,6 +789,15 @@ function cmdReport() {
       lines.push("");
     }
 
+    if (r.platformOnly.length > 0 && (platform === "cli" || platform === "mcp")) {
+      lines.push(`<details><summary>${label}-only procedures, not on web (${r.platformOnly.length}, informational)</summary>`);
+      lines.push("");
+      for (const p of r.platformOnly) lines.push(`- \`${p}\``);
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
+
     if (r.excluded.length > 0) {
       lines.push(`<details><summary>${label} Intentional Exclusions (${r.excluded.length})</summary>`);
       lines.push("");
@@ -595,6 +808,9 @@ function cmdReport() {
     }
   }
 
+  const offenders = findNoSuchProcedures(usage, allApi);
+  lines.push(`- **No-such-procedure references**: ${offenders.length}`);
+  for (const o of offenders) lines.push(`  - \`${o}\``);
   lines.push(`- **Unimplemented** (in API, used nowhere): ${unimplemented.length} procedures`);
   lines.push("");
 
@@ -632,10 +848,10 @@ switch (command) {
     break;
   default:
     console.log(`Usage:
-  npx tsx scripts/check-parity.ts --scan                       Auto-scan all platforms, report gaps (exits 1 if gaps found)
-  npx tsx scripts/check-parity.ts --validate                   Validate parity-exceptions.yaml against API
-  npx tsx scripts/check-parity.ts --changed <files...>         Check changed files for new parity gaps (exits 1 if gaps found)
-  npx tsx scripts/check-parity.ts --report                     Generate markdown parity report
+  node --experimental-strip-types scripts/check-parity.ts --scan                       Auto-scan all platforms, report gaps (exits 1 on gaps or unknown procedures)
+  node --experimental-strip-types scripts/check-parity.ts --validate                   Validate parity-exceptions.yaml against API and platform usage
+  node --experimental-strip-types scripts/check-parity.ts --changed <files...>         Check changed files for new parity gaps (exits 1 if gaps found)
+  node --experimental-strip-types scripts/check-parity.ts --report                     Generate markdown parity report
 `);
     break;
 }

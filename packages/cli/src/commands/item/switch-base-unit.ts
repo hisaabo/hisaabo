@@ -16,10 +16,13 @@ export async function itemSwitchBaseUnitCommand(id: string, opts: SwitchBaseUnit
     fatalError("--unit is required", EXIT.USAGE);
   }
 
-  const conversionFactor = opts.conversionFactor ? parseFloat(opts.conversionFactor) : undefined;
+  if (!opts.conversionFactor) {
+    fatalError("--conversion-factor is required", EXIT.USAGE);
+  }
+  const conversionFactor = parseFloat(opts.conversionFactor);
 
   try {
-    const result = await client.item.switchBaseUnit({ itemId: id, unit: opts.unit, conversionFactor });
+    const result = await client.item.switchBaseUnit({ id, newUnit: opts.unit, conversionFactor });
 
     if (opts.json) {
       outputJSON(result);

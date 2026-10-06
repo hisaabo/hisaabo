@@ -10,13 +10,13 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
 const MEMBER_ROLES = ["admin", "seller_manager", "seller", "accountant"] as const;
 
-export function registerTenantTools(server: McpServer, client: HisaaboClient) {
+export function registerTenantTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "tenant_list",
@@ -61,7 +61,7 @@ export function registerTenantTools(server: McpServer, client: HisaaboClient) {
     [
       "Invite a user to join the current tenant by email address.",
       "Requires admin or owner role in the current tenant.",
-      "The invitation link is valid for 7 days. The raw token is returned exactly once — save it to send via email.",
+      "The invitation is emailed to the recipient and is valid for 7 days. No link is returned.",
       "Available roles: 'admin' (full access), 'seller_manager' (manage sales team), 'seller' (create invoices), 'accountant' (read-only reports).",
     ].join(" "),
     {
@@ -80,7 +80,7 @@ export function registerTenantTools(server: McpServer, client: HisaaboClient) {
             email: input.email,
             role: input.role,
             expiresAt: result.expiresAt,
-            note: "Invitation sent. Deliver the invitation link to the recipient through a secure channel (not this conversation).",
+            note: "Invitation emailed to the recipient.",
           }, null, 2),
         }],
       };

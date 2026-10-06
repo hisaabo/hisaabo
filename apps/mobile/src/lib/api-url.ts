@@ -1,5 +1,14 @@
 import Constants from "expo-constants";
 
+// Release builds must talk to the API over TLS; plain http is only for local
+// development (Metro dev client against localhost, the Android emulator
+// loopback 10.0.2.2, or a LAN dev server).
+function assertSecureApiUrl(url: string): string {
+  if (/^https:\/\//i.test(url)) return url;
+  if (__DEV__ && /^http:\/\//i.test(url)) return url;
+  throw new Error("Insecure API URL: release builds require https://");
+}
+
 export function getApiUrl(): string {
   // Read process.env via a local variable so the babel-preset-expo
   // inline-env-vars plugin does not bake EXPO_PUBLIC_API_URL into the bundle
@@ -19,7 +28,7 @@ export function getApiUrl(): string {
   const envUrl =
     (Constants.expoConfig?.extra?.apiUrl as string | undefined) ||
     env["EXPO_PUBLIC_API_URL"];
-  if (envUrl) return envUrl;
+  if (envUrl) return assertSecureApiUrl(envUrl);
 
   // Production default — the URL every Play Store / App Store user hits.
   // Changing this value is a production-impacting deployment decision.

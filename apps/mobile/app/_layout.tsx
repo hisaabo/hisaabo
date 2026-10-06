@@ -723,6 +723,9 @@ function AuthGateRouter({
 
     const inAuthGroup = segments[0] === "(auth)";
     const inAppGroup = segments[0] === "(app)";
+    // Deep-linked entry points (sign-in callback, magic link, invite) run
+    // their own flow and must not be bounced by the gate redirects.
+    if (segments[0] === "auth" || segments[0] === "invite") return;
 
     if (__DEV__) console.log(`[AuthGateRouter] gate=${authGate}, segments=${segments.join("/")}, token=${token ? "set" : "null"}`);
 

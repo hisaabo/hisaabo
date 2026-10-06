@@ -147,6 +147,27 @@ export const magicLinkTokens = pgTable("magic_link_tokens", {
   index("magic_link_tokens_hash_idx").on(t.tokenHash),
 ]);
 
+// ── Native Auth Requests (system-browser handoff + PKCE) ──────
+
+export const nativeAuthRequests = pgTable("native_auth_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // 'desktop' | 'mobile' | 'cli'
+  client: text("client").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  state: text("state").notNull(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+  // sha256 of the one-time authorization code; the code itself is never stored
+  codeHash: text("code_hash"),
+  authorizedAt: timestamp("authorized_at", { withTimezone: true }),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("native_auth_requests_expires_idx").on(t.expiresAt),
+]);
+
 // ── API Keys ───────────────────────────────────────────────────
 
 export const apiKeys = pgTable("api_keys", {

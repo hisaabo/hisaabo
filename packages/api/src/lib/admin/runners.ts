@@ -14,6 +14,20 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { DbTarget, SqlRunner } from "./stats.js";
 
+const SAFE_DB_NAME = /^[A-Za-z0-9_]+$/;
+const SAFE_HOST = /^[A-Za-z0-9._-]+$/;
+const SAFE_PORT = /^\d{1,5}$/;
+
+/**
+ * Tenant rows come from the database; refuse anything that psql would parse as
+ * a connection string / option or that could redirect the control credentials.
+ */
+export function assertSafeTarget(target: DbTarget): void {
+  if (target.name != null && !SAFE_DB_NAME.test(target.name)) throw new Error("unsafe database name in tenant row");
+  if (target.host && !SAFE_HOST.test(target.host)) throw new Error("unsafe database host in tenant row");
+  if (target.port && !SAFE_PORT.test(target.port)) throw new Error("unsafe database port in tenant row");
+}
+
 // ── Docker compose + psql ───────────────────────────────────────
 
 export interface DockerRunnerOptions {
@@ -47,6 +61,7 @@ export class DockerPsqlRunner implements SqlRunner {
   }
 
   async queryJson(target: DbTarget, sql: string): Promise<unknown> {
+    assertSafeTarget(target);
     const [bin, ...pre] = this.prefix();
     const args = [
       ...pre,
@@ -170,6 +185,7 @@ export class DirectRunner implements SqlRunner {
   }
 
   async queryJson(target: DbTarget, sql: string): Promise<unknown> {
+    assertSafeTarget(target);
     const client = await this.client(this.urlFor(target));
     const rows = await client.unsafe(sql);
     const first = rows[0] as Record<string, unknown> | undefined;

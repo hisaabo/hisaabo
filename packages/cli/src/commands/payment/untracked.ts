@@ -4,16 +4,9 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, paginationFooter, EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount, formatDate } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
-interface UntrackedPayment {
-  id: string;
-  paymentNumber: string;
-  partyName: string;
-  paymentDate: string;
-  amount: string;
-  mode: string;
-  referenceNumber: string | null;
-}
+type UntrackedPayment = OutputOf<"payment.untrackedPayments">["data"][number];
 
 interface UntrackedOpts {
   json?: boolean;
@@ -36,17 +29,17 @@ export async function paymentUntrackedCommand(opts: UntrackedOpts): Promise<void
       return;
     }
 
-    const payments: UntrackedPayment[] = Array.isArray(result) ? result : (result?.data ?? []);
-    const total: number = result?.total ?? payments.length;
-    const resultPage: number = result?.page ?? page;
-    const resultLimit: number = result?.limit ?? limit;
+    const payments: UntrackedPayment[] = result.data;
+    const total: number = result.total;
+    const resultPage: number = result.page;
+    const resultLimit: number = result.limit;
 
     console.log(`\n  Untracked Payments  ${total} total\n`);
 
     const cols: ColumnDef<UntrackedPayment>[] = [
       { key: "paymentNumber", header: "#", width: 12 },
       { key: "partyName", header: "Party", width: 22 },
-      { key: "paymentDate", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
+      { key: "paymentDate", header: "Date", width: 13, format: (v) => formatDate(v as Date | null) },
       { key: "amount", header: "Amount (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "mode", header: "Mode", width: 8 },
       { key: "referenceNumber", header: "Ref#", width: 14, format: (v) => String(v ?? "-") },

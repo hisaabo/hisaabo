@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { fatalError } from "../output.js";
+import { fatalError, installTerminalSanitizer, EXIT } from "../output.js";
+import { setTimeZone, InvalidTimeZoneError } from "../format.js";
 
 import { registerAuthCommands } from "./registrars/auth.js";
 import { registerDashboardCommands } from "./registrars/dashboard.js";
@@ -28,6 +29,8 @@ import { registerEInvoiceCommands } from "./registrars/einvoice.js";
 import { registerEwbCommands } from "./registrars/ewb.js";
 import { registerBackupCommands } from "./registrars/backup.js";
 
+installTerminalSanitizer();
+
 // ── Program ───────────────────────────────────────────────────────────────
 
 const program = new Command();
@@ -38,7 +41,18 @@ const cliVersion = typeof __CLI_VERSION__ !== "undefined" ? __CLI_VERSION__ : "d
 program
   .name("hisaabo")
   .description("Hisaabo CLI — Invoicing and business management")
-  .version(cliVersion);
+  .version(cliVersion)
+  .option("--tz <zone>", "IANA time zone for --from/--to day boundaries (default: HISAABO_TZ, else machine zone)");
+
+// Resolve the time zone once, before any command runs; an invalid --tz/HISAABO_TZ is a usage error.
+program.hook("preAction", (_thisCommand, actionCommand) => {
+  try {
+    setTimeZone(actionCommand.optsWithGlobals<{ tz?: string }>().tz);
+  } catch (err) {
+    if (err instanceof InvalidTimeZoneError) fatalError(err.message, EXIT.USAGE);
+    throw err;
+  }
+});
 
 // ── Register all command groups ───────────────────────────────────────────
 

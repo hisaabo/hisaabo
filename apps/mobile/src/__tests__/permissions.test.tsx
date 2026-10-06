@@ -41,16 +41,16 @@ function withSession(role: string | null | undefined, opts: { isLoading?: boolea
 describe("mobile useCan", () => {
   beforeEach(() => mockUseQuery.mockReset());
 
-  it("returns true for every action while session is still loading", () => {
+  it("returns false for every action while session is still loading", () => {
     withSession(null, { isLoading: true });
     const { result } = renderHook(() => useCan("delete", "Invoice"));
-    expect(result.current).toBe(true);
+    expect(result.current).toBe(false);
   });
 
-  it("returns true for every action when role is missing (graceful degradation)", () => {
+  it("returns false for every action when role is missing (fail closed)", () => {
     withSession(undefined);
     const { result } = renderHook(() => useCan("delete", "Invoice"));
-    expect(result.current).toBe(true);
+    expect(result.current).toBe(false);
   });
 
   it.each([

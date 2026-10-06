@@ -10,7 +10,8 @@
  *   role            create  updateStatus  delete  convert
  *   owner/admin       ✓         ✓           ✓        ✓
  *   seller_manager    ✓         ✓           ✓        ✓
- *   seller            ✓         ✓           ✗        ✓
+ *   seller            ✓*        ✓           ✗        ✓
+ *   (* sale-side only: sellers cannot create debit notes or purchase returns)
  *   accountant        ✗         ✗           ✗        ✗
  *
  * Before these checks existed every tenant member could create, change and
@@ -108,10 +109,23 @@ const FORBIDDEN = { code: "FORBIDDEN" };
 
 describe.each(DOC_ROUTERS)("$key", ({ key, type }) => {
   describe("create", () => {
-    it.each(["owner", "sellerManager", "seller"] as const)("%s can create", async (who) => {
+    it.each(["owner", "sellerManager"] as const)("%s can create", async (who) => {
       const doc = await docs(callers[who], key).create(input(type));
       expect(doc.id).toBeTruthy();
     });
+
+    if (type === "sale" && !["debitNote", "purchaseReturn"].includes(key)) {
+      it("seller can create", async () => {
+        expect((await docs(callers.seller, key).create(input(type))).id).toBeTruthy();
+      });
+    } else {
+      it("seller is forbidden from purchase-side documents", async () => {
+        await expect(docs(callers.seller, key).create(input(type))).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          message: expect.stringContaining("purchase-side"),
+        });
+      });
+    }
 
     it("accountant is forbidden and nothing is created", async () => {
       const before = (await docs(callers.owner, key).list({ page: 1, limit: 1 })).total;

@@ -1,15 +1,64 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+
+// Reverse the stock (and purchase ITC) impact an invoice had at creation.
+// Shared by delete and cancel so both undo exactly the same effects.
+type InvoiceTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
+
+async function reverseInvoiceEffects(
+  tx: InvoiceTx,
+  businessId: string,
+  inv: { id: string; type: "sale" | "purchase"; documentType: string },
+) {
+  const lineItemRows = await tx.select()
+    .from(invoiceItems)
+    .where(eq(invoiceItems.invoiceId, inv.id));
+
+  // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
+  for (const li of lineItemRows) {
+    if (li.variantId) {
+      await tx.update(itemVariants).set({
+        stockQuantity: inv.type === "sale"
+          ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
+          : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(itemVariants.id, li.variantId),
+        sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${businessId})`
+      ));
+    } else if (li.itemId) {
+      const cf = li.conversionFactor ?? "1";
+      await tx.update(items).set({
+        stockQuantity: inv.type === "sale"
+          ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
+          : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
+        updatedAt: new Date(),
+      }).where(and(eq(items.id, li.itemId), eq(items.businessId, businessId)));
+    }
+  }
+
+  // Auto-reverse ITC when a purchase invoice is deleted/cancelled
+  if (inv.type === "purchase" && inv.documentType === "invoice") {
+    await tx.update(itcLedgerEntries)
+      .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
+      .where(and(
+        eq(itcLedgerEntries.invoiceId, inv.id),
+        eq(itcLedgerEntries.businessId, businessId),
+        inArray(itcLedgerEntries.status, ["available", "blocked"]),
+      ));
+  }
+}
 
 export const invoiceRouter = router({
   list: viewerProcedure
@@ -212,6 +261,9 @@ export const invoiceRouter = router({
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
+    if (!canCreateDocumentType(ctx.role, input.documentType, input.type)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
+    }
     const invoice = await ctx.db.transaction(async (tx) => {
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
@@ -222,6 +274,16 @@ export const invoiceRouter = router({
         .limit(1);
       if (!partyCheck) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+
+      if (input.referenceDocumentId) {
+        const [refDoc] = await tx.select({ id: invoices.id })
+          .from(invoices)
+          .where(and(eq(invoices.id, input.referenceDocumentId), eq(invoices.businessId, ctx.businessId)))
+          .limit(1);
+        if (!refDoc) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Referenced document not found in this business" });
+        }
       }
 
       // Composition scheme: block inter-state sale invoices.
@@ -648,31 +710,51 @@ export const invoiceRouter = router({
     .input(z.object({ id: z.string().uuid(), ...updateInvoiceStatusSchema.shape }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Invoice");
-      // Fetch current status before the update for audit metadata
-      const [before] = await ctx.db.select({ status: invoices.status })
-        .from(invoices)
-        .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
-        .limit(1);
 
-      const [invoice] = await ctx.db.update(invoices)
-        .set({ status: input.status, updatedAt: new Date() })
-        .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
-        .returning();
+      const { invoice, fromStatus } = await ctx.db.transaction(async (tx) => {
+        const [before] = await tx.select({
+          id: invoices.id,
+          status: invoices.status,
+          type: invoices.type,
+          documentType: invoices.documentType,
+          totalAmount: invoices.totalAmount,
+          amountPaid: invoices.amountPaid,
+          createdAt: invoices.createdAt,
+          deletedAt: invoices.deletedAt,
+          irn: invoices.irn,
+          eInvoiceStatus: invoices.eInvoiceStatus,
+        })
+          .from(invoices)
+          .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
+          .for("update")
+          .limit(1);
 
-      if (!invoice) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
-      }
+        if (!before || before.deletedAt) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+        }
 
-      // Auto-reverse ITC when a purchase invoice is cancelled
-      if (input.status === "cancelled" && invoice.type === "purchase" && invoice.documentType === "invoice") {
-        await ctx.db.update(itcLedgerEntries)
-          .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
-          .where(and(
-            eq(itcLedgerEntries.invoiceId, input.id),
-            eq(itcLedgerEntries.businessId, ctx.businessId),
-            inArray(itcLedgerEntries.status, ["available", "blocked"]),
-          ));
-      }
+        const transitionError = checkInvoiceStatusTransition(before.status, input.status, before);
+        if (transitionError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: transitionError });
+        }
+
+        const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
+        if (isCancelling) {
+          // Cancelling undoes stock like delete does, so it needs the same permission and rule.
+          requireCan(ctx.ability, "delete", "Invoice");
+          const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: before.status, createdAt: before.createdAt });
+          if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
+          await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
+          await reverseInvoiceEffects(tx, ctx.businessId, before);
+        }
+
+        const [invoice] = await tx.update(invoices)
+          .set({ status: input.status, updatedAt: new Date() })
+          .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
+          .returning();
+
+        return { invoice, fromStatus: before.status };
+      });
 
       logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -680,7 +762,7 @@ export const invoiceRouter = router({
         action: "invoice.updateStatus",
         entityType: "invoice",
         entityId: input.id,
-        metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus: before?.status, toStatus: input.status },
+        metadata: { invoiceNumber: invoice.invoiceNumber, fromStatus, toStatus: input.status },
         ipAddress: ctx.ipAddress,
       });
 
@@ -712,6 +794,8 @@ export const invoiceRouter = router({
           .limit(1);
 
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+        if (existing.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+        if (existing.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit a cancelled invoice." });
         if (existing.status === "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit a paid invoice. Remove payments first." });
 
         // Security: validate partyId belongs to this business before applying the update.
@@ -779,10 +863,42 @@ export const invoiceRouter = router({
             ? money.sum(mergedCharges.map((c) => c.amount))
             : "0.00";
         }
-        if (input.roundOff !== undefined) updates.roundOff = input.roundOff;
+        if (input.roundOff !== undefined) {
+          if (money.compare(input.roundOff, MAX_ROUND_OFF) > 0 || money.compare(input.roundOff, `-${MAX_ROUND_OFF}`) < 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Round off cannot exceed ${MAX_ROUND_OFF} in either direction` });
+          }
+          updates.roundOff = input.roundOff;
+        }
 
         // 4. Handle line items — delete old, insert new, recalculate totals
         if (input.lineItems) {
+          // Recalculate totals using fixed-point arithmetic.
+          // Use merged charges (updates.charges) if charges were modified; otherwise
+          // fall back to existing charges. This ensures shipment-linked charge entries
+          // are included in the total even when the user didn't touch charges.
+          const chargesForTotals = updates.charges !== undefined
+            ? (updates.charges as Array<{ amount: string }> | null) ?? []
+            : (existing.charges as Array<{ amount: string }> | null) ?? [];
+          const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
+          const totalsInput = {
+            lineItems: input.lineItems.map((li) => ({
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              taxPercent: li.taxPercent || "0",
+              discountPercent: li.discountPercent || "0",
+            })),
+            charges: chargesForTotals.length > 0 ? chargesForTotals : undefined,
+            invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
+            invoiceDiscountType: input.invoiceDiscountType || "amount",
+            roundOff: roundOffStr,
+          };
+          const totalsError = validateInvoiceTotals(totalsInput);
+          if (totalsError) throw new TRPCError({ code: "BAD_REQUEST", message: totalsError });
+          const totals = calcInvoiceTotals(totalsInput);
+          if (money.compare(totals.total, existing.amountPaid) < 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice total cannot be less than the amount already paid" });
+          }
+
           // Step 1: Read old line items to reverse their stock impact
           const oldLineItems = await tx.select({
             itemId: invoiceItems.itemId,
@@ -870,27 +986,6 @@ export const invoiceRouter = router({
             }
           }
 
-          // Recalculate totals using fixed-point arithmetic.
-          // Use merged charges (updates.charges) if charges were modified; otherwise
-          // fall back to existing charges. This ensures shipment-linked charge entries
-          // are included in the total even when the user didn't touch charges.
-          const chargesForTotals = updates.charges !== undefined
-            ? (updates.charges as Array<{ amount: string }> | null) ?? []
-            : (existing.charges as Array<{ amount: string }> | null) ?? [];
-          const roundOffStr = input.roundOff !== undefined ? input.roundOff : existing.roundOff;
-          const totals = calcInvoiceTotals({
-            lineItems: input.lineItems.map((li) => ({
-              quantity: li.quantity,
-              unitPrice: li.unitPrice,
-              taxPercent: li.taxPercent || "0",
-              discountPercent: li.discountPercent || "0",
-            })),
-            charges: chargesForTotals.length > 0 ? chargesForTotals : undefined,
-            invoiceDiscount: input.invoiceDiscount || existing.discountAmount || "0",
-            invoiceDiscountType: input.invoiceDiscountType || "amount",
-            roundOff: roundOffStr,
-          });
-
           updates.subtotal = totals.subtotal;
           updates.taxAmount = totals.taxTotal;
           updates.discountAmount = totals.invoiceDiscountAmount;
@@ -924,70 +1019,37 @@ export const invoiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "delete", "Invoice");
 
-      const [inv] = await ctx.db.select({ status: invoices.status, type: invoices.type, documentType: invoices.documentType, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
-        .from(invoices)
-        .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
-        .limit(1);
+      const result = await ctx.db.transaction(async (tx) => {
+        // Row lock + re-check inside the transaction so concurrent deletes
+        // cannot both reverse stock.
+        const [inv] = await tx.select({ id: invoices.id, status: invoices.status, type: invoices.type, documentType: invoices.documentType, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt, amountPaid: invoices.amountPaid, irn: invoices.irn, eInvoiceStatus: invoices.eInvoiceStatus })
+          .from(invoices)
+          .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
+          .for("update")
+          .limit(1);
 
-      if (!inv) return { success: true };
-      if (inv.deletedAt) return { success: true }; // already soft-deleted
+        if (!inv || inv.deletedAt) return null; // missing or already soft-deleted
 
-      // seller_manager: can only delete unpaid invoices created within the last 2 hours
-      if (ctx.role === "seller_manager") {
-        if (inv.status === "paid") {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Cannot delete paid invoices" });
-        }
-        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-        if (inv.createdAt < twoHoursAgo) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Can only delete invoices within 2 hours of creation" });
-        }
-      }
+        // seller_manager: can only delete unpaid invoices created within the last 2 hours
+        const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: inv.status, createdAt: inv.createdAt });
+        if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
 
-      await ctx.db.transaction(async (tx) => {
-        // Reverse stock adjustments made at creation
-        const lineItemRows = await tx.select()
-          .from(invoiceItems)
-          .where(eq(invoiceItems.invoiceId, input.id));
+        await assertNoPaymentsOrActiveIrn(tx, "delete", inv);
 
-        // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
-        for (const li of lineItemRows) {
-          if (li.variantId) {
-            await tx.update(itemVariants).set({
-              stockQuantity: inv.type === "sale"
-                ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
-                : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
-              updatedAt: new Date(),
-            }).where(and(
-              eq(itemVariants.id, li.variantId),
-              sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-            ));
-          } else if (li.itemId) {
-            const cf = li.conversionFactor ?? "1";
-            await tx.update(items).set({
-              stockQuantity: inv.type === "sale"
-                ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
-                : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
-              updatedAt: new Date(),
-            }).where(eq(items.id, li.itemId));
-          }
-        }
-
-        // Auto-reverse ITC when a purchase invoice is deleted
-        if (inv.type === "purchase" && inv.documentType === "invoice") {
-          await tx.update(itcLedgerEntries)
-            .set({ status: "reversed", reversalReason: "invoice_cancelled", updatedAt: new Date() })
-            .where(and(
-              eq(itcLedgerEntries.invoiceId, input.id),
-              eq(itcLedgerEntries.businessId, ctx.businessId),
-              inArray(itcLedgerEntries.status, ["available", "blocked"]),
-            ));
+        // A cancelled invoice already had its stock/ITC reversed when it was cancelled.
+        if (inv.status !== "cancelled") {
+          await reverseInvoiceEffects(tx, ctx.businessId, inv);
         }
 
         // Soft delete
         await tx.update(invoices)
           .set({ deletedAt: new Date(), status: "cancelled" as const, updatedAt: new Date() })
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)));
+
+        return inv;
       });
+
+      if (!result) return { success: true };
 
       await logAudit(ctx.db, {
         businessId: ctx.businessId,
@@ -995,7 +1057,7 @@ export const invoiceRouter = router({
         action: "invoice.delete",
         entityType: "invoice",
         entityId: input.id,
-        metadata: { invoiceNumber: inv.invoiceNumber, previousStatus: inv.status },
+        metadata: { invoiceNumber: result.invoiceNumber, previousStatus: result.status },
         ipAddress: ctx.ipAddress,
       });
 

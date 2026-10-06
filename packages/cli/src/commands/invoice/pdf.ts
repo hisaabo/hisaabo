@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
-import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import { HisaaboClient, HisaaboApiError, requestTimeoutMs } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, EXIT, success } from "../../output.js";
+import { MAX_DOWNLOAD_BYTES, requireUuid, safeFilename, writeFileSafe } from "../../safety.js";
 
 interface PdfOpts {
   output?: string;
@@ -10,6 +11,7 @@ interface PdfOpts {
 }
 
 export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void> {
+  requireUuid(id, "invoice id");
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
@@ -17,12 +19,15 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
   let invoiceNumber = id;
   try {
     const inv = await client.invoice.get(id);
-    invoiceNumber = inv.invoiceNumber;
+    if (inv) invoiceNumber = inv.invoiceNumber;
   } catch {
     // Use id as-is if fetch fails
   }
 
-  // Build PDF URL
+  // Server-supplied number becomes a file name: reduce it to a safe basename
+  const fileName = `${safeFilename(invoiceNumber, "invoice")}.pdf`;
+
+  // Build PDF URL (id is a validated UUID)
   const pdfUrl = `${cfg.apiUrl}/api/invoice/${id}/pdf`;
 
   try {
@@ -33,12 +38,21 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
         "x-tenant-id": cfg.tenantId,
         "x-client-type": "cli",
       },
+      signal: AbortSignal.timeout(requestTimeoutMs()),
     });
 
     if (!res.ok) {
       fatalError(`Failed to download PDF: HTTP ${res.status}`, EXIT.GENERAL);
     }
 
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!/^application\/pdf\b/i.test(contentType)) {
+      fatalError(`Unexpected response type: ${contentType || "none"} (expected application/pdf)`, EXIT.GENERAL);
+    }
+    const declared = Number(res.headers.get("content-length") ?? "0");
+    if (declared > MAX_DOWNLOAD_BYTES) {
+      fatalError("PDF too large to download", EXIT.GENERAL);
+    }
     const buffer = await res.arrayBuffer();
     const bytes = Buffer.from(buffer);
 
@@ -47,15 +61,15 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
     if (opts.output) {
       // If it's a directory, put the file inside it
       if (fs.existsSync(opts.output) && fs.statSync(opts.output).isDirectory()) {
-        outputPath = path.join(opts.output, `${invoiceNumber}.pdf`);
+        outputPath = path.join(opts.output, fileName);
       } else {
         outputPath = opts.output;
       }
     } else {
-      outputPath = `${invoiceNumber}.pdf`;
+      outputPath = fileName;
     }
 
-    fs.writeFileSync(outputPath, bytes);
+    writeFileSafe(outputPath, bytes, { magic: "%PDF-" });
     success(`Saved: ${outputPath} (${Math.round(bytes.length / 1024)} KB)`);
 
     if (opts.open) {

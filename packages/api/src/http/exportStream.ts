@@ -25,6 +25,8 @@ import { controlDb, getTenantDb, tenants, businesses } from "@hisaabo/db";
 import { TABLE_REGISTRY } from "../lib/tableRegistry.js";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import { verifyExportToken } from "../lib/exportToken.js";
+import { getTenantRole, hasRole, OWNER_ROLES } from "../lib/tenant-access.js";
+import { getTenantMemberUserIds, businessTenantScope } from "../lib/tenant-businesses.js";
 import { logger } from "../lib/logger.js";
 import { APP_VERSION, SCHEMA_CHECKSUM } from "../lib/exportManifest.js";
 
@@ -138,6 +140,13 @@ function assertSafeTableName(name: string): void {
   }
 }
 
+function assertUuid(id: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error("Unsafe id in export scope");
+  }
+  return id;
+}
+
 // ── Main export handler ───────────────────────────────────────────────────────
 export function registerExportRoute(app: Hono): void {
   app.get("/api/export/:tenantId", async (c) => {
@@ -157,6 +166,12 @@ export function registerExportRoute(app: Hono): void {
 
     if (tokenPayload.tenantId !== tenantId) {
       return c.json({ error: "Token tenant mismatch" }, 401);
+    }
+
+    // The token may outlive the user's role: re-check at use time.
+    const exporterRole = await getTenantRole(tenantId, tokenPayload.userId);
+    if (!hasRole(exporterRole, OWNER_ROLES)) {
+      return c.json({ error: "Invalid or expired token" }, 401);
     }
 
     // ── Resolve tenant metadata ───────────────────────────────────────────────
@@ -199,7 +214,12 @@ export function registerExportRoute(app: Hono): void {
     }
 
     // ── Get business IDs for this tenant ──────────────────────────────────────
-    const bizRows = await db.select({ id: businesses.id }).from(businesses);
+    // Scoped by creator-membership: in self-hosted mode all tenants share one
+    // database, so an unfiltered select would export other tenants' businesses.
+    const memberIds = await getTenantMemberUserIds(tenantId);
+    const bizRows = memberIds.length === 0
+      ? []
+      : await db.select({ id: businesses.id }).from(businesses).where(businessTenantScope(memberIds));
     const businessIds = bizRows.map((b) => b.id);
 
     // ── Page through each table and write NDJSON files ─────────────────────────
@@ -238,13 +258,14 @@ export function registerExportRoute(app: Hono): void {
 
       try {
         if (scope.type === "businesses") {
-          // Businesses table — export all rows for this tenant (no WHERE filter)
+          // Businesses table — only this tenant's businesses (see businessIds above)
           let offset = 0;
-          let done = false;
+          let done = businessIds.length === 0;
+          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
 
           while (!done) {
             const rows = (await db.execute(
-              sql`SELECT * FROM ${sql.raw(tableName)} ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
+              sql`SELECT * FROM ${sql.raw(tableName)} WHERE id IN (${sql.raw(bizIdList)}) ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
             )) as Array<Record<string, unknown>>;
 
             for (const row of rows) {
@@ -266,7 +287,7 @@ export function registerExportRoute(app: Hono): void {
           // Empty tenant — write empty NDJSON file
         } else if (scope.type === "direct") {
           // Table has a direct business_id column
-          const bizIdList = businessIds.map((id) => `'${id}'`).join(", ");
+          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
           const whereClause = sql.raw(`business_id IN (${bizIdList})`);
 
           let offset = 0;
@@ -298,7 +319,7 @@ export function registerExportRoute(app: Hono): void {
           assertSafeTableName(scope.parentTable);
           assertSafeTableName(scope.parentFk);
 
-          const bizIdList = businessIds.map((id) => `'${id}'`).join(", ");
+          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
           const whereClause = sql.raw(
             `${scope.parentFk} IN (SELECT id FROM ${scope.parentTable} WHERE business_id IN (${bizIdList}))`,
           );

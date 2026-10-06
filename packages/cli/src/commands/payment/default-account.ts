@@ -30,16 +30,10 @@ export async function paymentDefaultAccountCommand(opts: DefaultAccountOpts): Pr
     console.log(`\n  Recommended Bank Account`);
     console.log(`  ${sep}`);
 
-    if (typeof result === "object" && result !== null) {
-      const acct = result as Record<string, unknown>;
-      if (acct["id"]) console.log(`  ID          : ${acct["id"]}`);
-      if (acct["accountName"]) console.log(`  Account     : ${acct["accountName"]}`);
-      if (acct["bankName"]) console.log(`  Bank        : ${acct["bankName"]}`);
-      if (acct["accountNumber"]) console.log(`  Number      : ${acct["accountNumber"]}`);
-      if (acct["ifsc"]) console.log(`  IFSC        : ${acct["ifsc"]}`);
-    } else {
-      console.log(`  ${String(result)}`);
-    }
+    console.log(`  ID          : ${result.id}`);
+    console.log(`  Account     : ${result.accountName}`);
+    console.log(`  Type        : ${result.accountType}`);
+    console.log(`  Balance     : ${result.currentBalance}`);
 
     console.log();
 

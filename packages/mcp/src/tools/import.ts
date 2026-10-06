@@ -12,11 +12,14 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerImportTools(server: McpServer, client: HisaaboClient) {
+/** Inline records per call; larger imports belong in the CLI/UI where the user can review them. */
+const MAX_IMPORT_RECORDS = 500;
+
+export function registerImportTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "import_parties",
@@ -54,8 +57,8 @@ export function registerImportTools(server: McpServer, client: HisaaboClient) {
           .describe("State name."),
         pincode: z.string().optional()
           .describe("PIN code."),
-      })).min(1).max(5000)
-        .describe("Array of party records to import. Max 5000 per call."),
+      })).min(1).max(MAX_IMPORT_RECORDS)
+        .describe("Array of party records to import. Max 500 per call."),
     },
     wrapTool(async (input) => {
       const result = await client.import.importParties({
@@ -115,8 +118,8 @@ export function registerImportTools(server: McpServer, client: HisaaboClient) {
           .describe("SKU / product code."),
         category: z.string().optional()
           .describe("Category name for grouping."),
-      })).min(1).max(5000)
-        .describe("Array of item records to import. Max 5000 per call."),
+      })).min(1).max(MAX_IMPORT_RECORDS)
+        .describe("Array of item records to import. Max 500 per call."),
     },
     wrapTool(async (input) => {
       const result = await client.import.importItems({
@@ -198,8 +201,8 @@ export function registerImportTools(server: McpServer, client: HisaaboClient) {
             .describe("If provided, links to an existing inventory item by name."),
         })).optional()
           .describe("Line items. Optional — if omitted, a single line item using total_amount is created."),
-      })).min(1).max(1000)
-        .describe("Array of invoice records. Max 1000 per call."),
+      })).min(1).max(MAX_IMPORT_RECORDS)
+        .describe("Array of invoice records. Max 500 per call."),
     },
     wrapTool(async (input) => {
       const result = await client.import.importInvoices({
@@ -259,7 +262,7 @@ export function registerImportTools(server: McpServer, client: HisaaboClient) {
           .describe("Payment amount as decimal string."),
         mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).default("cash")
           .describe("Payment mode."),
-        payment_date: z.string().optional()
+        payment_date: z.string()
           .describe("Payment date (YYYY-MM-DD or DD/MM/YYYY)."),
         payment_number: z.string().optional()
           .describe("Original payment number from source system."),
@@ -269,8 +272,8 @@ export function registerImportTools(server: McpServer, client: HisaaboClient) {
           .describe("Notes about this payment."),
         invoice_numbers: z.array(z.string()).optional()
           .describe("Explicit invoice numbers to allocate this payment against."),
-      })).min(1).max(5000)
-        .describe("Array of payment records. Max 5000 per call."),
+      })).min(1).max(MAX_IMPORT_RECORDS)
+        .describe("Array of payment records. Max 500 per call."),
     },
     wrapTool(async (input) => {
       const result = await client.import.importPayments({

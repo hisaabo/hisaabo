@@ -1,6 +1,11 @@
 import { Command } from "commander";
 import type { DocTypeConfig } from "../../commands/document/factory.js";
 
+const CONVERT_TARGET_TYPES = [
+  "invoice", "quotation", "credit_note", "debit_note", "delivery_challan",
+  "proforma", "sales_return", "purchase_return",
+] as const;
+
 const DOC_TYPES: DocTypeConfig[] = [
   {
     cmd: "quotation",
@@ -90,6 +95,7 @@ export function registerDocumentCommands(program: Command): void {
       .option("--rate <n>", "Rate per item (repeatable)", (v, a: string[]) => [...a, v], [] as string[])
       .option("--notes <text>", "Notes")
       .option("--discount <pct>", "Discount percent")
+      .option("--type <type>", "sale or purchase (default: sale)")
       .option("-y, --yes", "Skip confirmation")
       .action(async (opts) => {
         const { docCreateCommand } = await import("../../commands/document/factory.js");
@@ -136,27 +142,18 @@ export function registerDocumentCommands(program: Command): void {
       const cfg = requireAuth();
       const client = new HisaaboClient(cfg);
 
-      if (!opts.yes && process.stdin.isTTY) {
-        const readline = await import("readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const answer = await new Promise<string>((resolve) => {
-          rl.question(
-            `  Convert ${opts.fromType} ${opts.fromId} → ${opts.toType}? (y/N): `,
-            resolve,
-          );
-        });
-        rl.close();
-        if (answer.trim().toLowerCase() !== "y") {
-          console.log("  Cancelled.");
-          process.exit(EXIT.SUCCESS);
-        }
+      const { confirmOrExit } = await import("../../safety.js");
+      await confirmOrExit(`  Convert ${opts.fromType} ${opts.fromId} → ${opts.toType}?`, opts);
+
+      const targetType = String(opts.toType).replace(/-/g, "_");
+      if (!(CONVERT_TARGET_TYPES as readonly string[]).includes(targetType)) {
+        fatalError(`--to-type must be one of: ${CONVERT_TARGET_TYPES.join(", ")}.`, EXIT.USAGE);
       }
 
       try {
         const result = await client.document.convert({
-          fromType: opts.fromType,
-          fromId: opts.fromId,
-          toType: opts.toType,
+          sourceDocumentId: opts.fromId,
+          targetDocumentType: targetType as (typeof CONVERT_TARGET_TYPES)[number],
         });
 
         if (opts.json) {
@@ -164,8 +161,8 @@ export function registerDocumentCommands(program: Command): void {
           return;
         }
 
-        const newId = result.id ?? result.documentId ?? "(unknown)";
-        const newNum = result.documentNumber ?? result.number ?? newId;
+        const newId = result.id;
+        const newNum = result.invoiceNumber;
         success(`Converted: ${opts.fromType} → ${opts.toType}  ${newNum}`);
         console.log(`  New ID:  ${newId}\n`);
 

@@ -19,7 +19,7 @@ export const apiKeyEndpoints: EndpointGroup = {
           {
             id: "key-uuid-1",
             name: "MCP Agent — Production",
-            keyPrefix: "hisaabo_key_abc12345",
+            keyPrefix: "hisaabo_key_EXAMPLE1",
             lastUsedAt: "2026-04-08T09:15:00.000Z",
             expiresAt: "2026-07-08T00:00:00.000Z",
             createdAt: "2026-04-01T10:00:00.000Z",
@@ -27,7 +27,7 @@ export const apiKeyEndpoints: EndpointGroup = {
           {
             id: "key-uuid-2",
             name: "CI/CD Pipeline",
-            keyPrefix: "hisaabo_key_xyz98765",
+            keyPrefix: "hisaabo_key_EXAMPLE2",
             lastUsedAt: null,
             expiresAt: null,
             createdAt: "2026-04-05T14:30:00.000Z",
@@ -73,8 +73,8 @@ for key in keys:
         example: {
           id: "key-uuid",
           name: "MCP Agent — Production",
-          key: "hisaabo_key_abc123def456ghi789jkl012mno345pqrst678",
-          keyPrefix: "hisaabo_key_abc12345",
+          key: "hisaabo_key_EXAMPLE_INVITATION_TOKENrst678",
+          keyPrefix: "hisaabo_key_EXAMPLE1",
           expiresAt: "2026-07-08T00:00:00.000Z",
         },
       },

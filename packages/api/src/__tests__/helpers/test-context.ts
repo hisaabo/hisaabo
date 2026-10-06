@@ -49,6 +49,8 @@ export interface TestContextOptions {
    * the withPermissions() middleware ignores this field.
    */
   ability?: AppAbility;
+  /** Extra request headers (e.g. `x-hisaabo-client`, `cookie`). */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -64,6 +66,7 @@ export function createTestContext(opts: TestContextOptions = {}): Context {
   const headers = new Headers({
     "content-type": "application/json",
     ...(opts.businessId ? { "x-business-id": opts.businessId } : {}),
+    ...opts.headers,
   });
 
   const req = new Request("http://localhost:3000/api/trpc/test", {

@@ -18,7 +18,7 @@ export async function itemLowStockCountCommand(opts: LowStockCountOpts): Promise
       return;
     }
 
-    const count = typeof result === "number" ? result : (result?.count ?? 0);
+    const count = result;
     process.stdout.write(`\n  ${count} item${count === 1 ? "" : "s"} below low-stock threshold\n\n`);
 
   } catch (e) {

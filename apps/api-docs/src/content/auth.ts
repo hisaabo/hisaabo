@@ -22,7 +22,7 @@ export const authEndpoints: EndpointGroup = {
         description: "Authenticated user object and session token. An HttpOnly `session_id` cookie is also set automatically.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: "Rahul Sharma" },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
         },
       },
       codeExamples: {
@@ -72,7 +72,7 @@ session_token = data["sessionToken"]`,
         description: "Authenticated user object with session token.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: "Rahul Sharma" },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
         },
       },
       codeExamples: {
@@ -150,7 +150,7 @@ httpx.post(
         description: "Authenticated user with session token and profile completion flag.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: null },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
           isNewUser: true,
           needsProfile: true,
         },
@@ -513,6 +513,86 @@ httpx.post(
         "The session cache is invalidated immediately \u2014 the revoked session will fail on the next API call.",
       ],
       relatedEndpoints: ["auth-list-sessions", "auth-logout"],
+    },
+    {
+      id: "auth-native-start",
+      method: "mutation",
+      path: "auth.nativeStart",
+      title: "Start Native Sign-In",
+      description: "Begin a browser handoff for a desktop, mobile or CLI client (RFC 8252 with PKCE). The client opens `{WEB_URL}/auth/native?request=<requestId>` in the system browser; after the user signs in and approves, the web app redirects a one-time code to `redirectUri`.",
+      auth: "public",
+      input: [
+        { name: "client", type: "enum", required: true, description: "Calling client", enumValues: ["desktop", "mobile", "cli"] },
+        { name: "redirectUri", type: "string", required: true, description: "Desktop and CLI: `http://127.0.0.1:<port>/callback` (port 1024-65535). Mobile: `{APP_URL}/auth/native/callback`." },
+        { name: "codeChallenge", type: "string", required: true, description: "base64url(SHA-256(codeVerifier)), exactly 43 characters" },
+        { name: "codeChallengeMethod", type: "string", required: true, description: "Must be `S256`" },
+        { name: "state", type: "string", required: true, description: "Random value (16-128 chars of A-Z a-z 0-9 _ -) echoed back on the redirect" },
+      ],
+      output: {
+        description: "The request id to put in the browser URL, valid for 10 minutes.",
+        example: { requestId: "7b6f1c0e-2d9a-4e57-9d52-0a9c1e3f4b10", expiresAt: "2026-04-15T05:40:00.000Z" },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.nativeStart \\
+  -H "Content-Type: application/json" \\
+  -d '{"json":{"client":"cli","redirectUri":"http://127.0.0.1:53682/callback","codeChallenge":"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM","codeChallengeMethod":"S256","state":"n0t-a-real-state-value"}}'`,
+        javascript: `const { requestId } = await trpc.auth.nativeStart.mutate({
+  client: "cli",
+  redirectUri: "http://127.0.0.1:53682/callback",
+  codeChallenge,
+  codeChallengeMethod: "S256",
+  state,
+});`,
+        python: `import httpx
+
+resp = httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.nativeStart",
+    json={"json": {"client": "cli", "redirectUri": "http://127.0.0.1:53682/callback",
+                   "codeChallenge": challenge, "codeChallengeMethod": "S256", "state": state}},
+)`,
+      },
+      gotchas: [
+        "Strictly rate limited. A redirect URI that does not match the client's rules is rejected.",
+        "The browser page requires a normal web sign-in (cookie session) and an explicit approval before a code is issued.",
+      ],
+      relatedEndpoints: ["auth-native-exchange"],
+    },
+    {
+      id: "auth-native-exchange",
+      method: "mutation",
+      path: "auth.nativeExchange",
+      title: "Exchange Native Sign-In Code",
+      description: "Trade the one-time code delivered to the redirect URI for a bearer session token. The `codeVerifier` proves this is the client that called `auth.nativeStart`.",
+      auth: "public",
+      input: [
+        { name: "requestId", type: "string (uuid)", required: true, description: "The id returned by `auth.nativeStart`" },
+        { name: "code", type: "string", required: true, description: "The code from the redirect (valid for 2 minutes, single use)" },
+        { name: "codeVerifier", type: "string", required: true, description: "The PKCE verifier (43-128 chars of A-Z a-z 0-9 - . _ ~)" },
+      ],
+      output: {
+        description: "The signed-in user and a bearer session token.",
+        example: { user: { id: "usr_abc123", email: "rahul@myshop.in", name: "Rahul Sharma" }, sessionToken: "..." },
+      },
+      codeExamples: {
+        curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.nativeExchange \\
+  -H "Content-Type: application/json" \\
+  -H "X-Hisaabo-Client: cli" \\
+  -d '{"json":{"requestId":"7b6f1c0e-2d9a-4e57-9d52-0a9c1e3f4b10","code":"CODE","codeVerifier":"VERIFIER"}}'`,
+        javascript: `const { sessionToken } = await trpc.auth.nativeExchange.mutate({ requestId, code, codeVerifier });`,
+        python: `import httpx
+
+resp = httpx.post(
+    "https://api.hisaabo.in/api/trpc/auth.nativeExchange",
+    headers={"X-Hisaabo-Client": "cli"},
+    json={"json": {"requestId": request_id, "code": code, "codeVerifier": verifier}},
+)`,
+      },
+      gotchas: [
+        "The `X-Hisaabo-Client` header must equal the `client` given to `auth.nativeStart`.",
+        "Every failure returns the same generic BAD_REQUEST (\"Invalid or expired sign-in request\").",
+        "`sessionToken` is returned only to bearer clients (desktop, mobile, cli); send it as `Authorization: Bearer <token>`.",
+      ],
+      relatedEndpoints: ["auth-native-start"],
     },
   ],
 };

@@ -513,7 +513,7 @@ describe("downloadCSV() — generates and triggers download of a BOM-prefixed CS
     expect(content).toContain('say ""hello""');
   });
 
-  it("includes the header row as the first line (no quotes on headers per implementation)", () => {
+  it("includes the header row as the first line (RFC 4180 quoted)", () => {
     const getCapture = installBlobSpy();
     downloadCSV(
       "parties",
@@ -522,7 +522,7 @@ describe("downloadCSV() — generates and triggers download of a BOM-prefixed CS
     );
     const { content } = getCapture();
     const lines = content.replace("\uFEFF", "").split("\n");
-    expect(lines[0]).toBe("Party Name,GSTIN,State");
+    expect(lines[0]).toBe('"Party Name","GSTIN","State"');
   });
 
   it("handles numeric cell values by converting them to strings before wrapping", () => {
@@ -532,13 +532,21 @@ describe("downloadCSV() — generates and triggers download of a BOM-prefixed CS
     expect(content).toContain('"75000"');
   });
 
+  it("neutralises spreadsheet formula injection in cells", () => {
+    const getCapture = installBlobSpy();
+    downloadCSV("inj", ["Name"], [["=HYPERLINK(\"http://evil\")"], ["@SUM(A1)"]]);
+    const { content } = getCapture();
+    expect(content).toContain("\"'=HYPERLINK(");
+    expect(content).toContain("\"'@SUM(A1)\"");
+  });
+
   it("handles an empty rows array — produces only the header line", () => {
     const getCapture = installBlobSpy();
     downloadCSV("empty-export", ["Name", "Amount"], []);
     const { content } = getCapture();
     const lines = content.replace("\uFEFF", "").split("\n").filter(Boolean);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe("Name,Amount");
+    expect(lines[0]).toBe('"Name","Amount"');
   });
 
   it("sets the Blob MIME type to text/csv with utf-8 charset", () => {
