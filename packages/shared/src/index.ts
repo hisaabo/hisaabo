@@ -21,3 +21,4 @@ export type {
   ModifyAffordance,
   ModifiableRecord,
 } from "./permissions.js";
+export { csvCell, csvRow, stripControlChars } from "./sanitize.js";
