@@ -25,9 +25,9 @@
     "release:tag": "bash scripts/release-tag.sh"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "oxlint": "^1.56.0",
-    "turbo": "^2.3.0",
+    "@playwright/test": "^1.63.0",
+    "oxlint": "^1.86.0",
+    "turbo": "^2.11.7",
     "typescript": "^5.7.0"
   },
   "packageManager": "pnpm@9.15.0",
