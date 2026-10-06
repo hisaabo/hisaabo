@@ -6,9 +6,8 @@ const VALID_ROLES = ["admin", "seller_manager", "seller", "accountant"] as const
 type TenantRole = typeof VALID_ROLES[number];
 
 interface InviteResult {
-  inviteToken?: string;
-  inviteLink?: string;
-  message?: string;
+  expiresAt?: string | Date;
+  inviteUrl?: string;
 }
 
 interface InviteOpts {
@@ -34,15 +33,9 @@ export async function tenantInviteCommand(email: string, opts: InviteOpts): Prom
       return;
     }
 
-    success(`Invited ${email} as ${role}`);
-    if (result.inviteLink) {
-      console.log(`  Invite link: ${result.inviteLink}`);
-    } else if (result.inviteToken) {
-      console.log(`  Invite token: ${result.inviteToken}`);
-    }
-    if (result.message) {
-      console.log(`  ${result.message}`);
-    }
+    success(`Invited ${email} as ${role} (invitation emailed)`);
+    if (result.inviteUrl) console.log(`  Invite link: ${result.inviteUrl}`);
+    if (result.expiresAt) console.log(`  Expires: ${new Date(result.expiresAt).toISOString()}`);
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

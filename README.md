@@ -163,7 +163,8 @@ Add to Claude Desktop's `claude_desktop_config.json`:
 
 ```bash
 npm install -g @hisaabo/cli
-hisaabo login --api-url https://your-hisaabo-instance.com
+hisaabo login --api-url https://your-hisaabo-instance.com   # opens your browser to sign in
+# CI / scripts: echo "$HISAABO_API_KEY" | hisaabo login --api-url https://your-hisaabo-instance.com --token-stdin
 
 hisaabo dashboard --json | jq '{revenue, outstanding, overdueCount}'
 hisaabo invoice list --this-month --format csv > invoices.csv
@@ -436,7 +437,7 @@ pnpm dev
 | API | http://localhost:3000 |
 | Online store | http://localhost:5174 |
 
-Create an account on first visit. The setup wizard creates your first business with a seeded Chart of Accounts.
+The first account created on a fresh self-hosted server becomes the owner; after that sign-up is by invitation only unless you set `ALLOW_OPEN_SIGNUP=true`. The setup wizard creates your first business with a seeded Chart of Accounts.
 
 ### 2. Try the API immediately
 
@@ -450,11 +451,11 @@ curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
 
 ```bash
 npm install -g @hisaabo/cli
-hisaabo login --api-url https://your-hisaabo-instance.com
-hisaabo whoami --json  # Copy token, tenantId, businessId
+hisaabo login --api-url https://your-hisaabo-instance.com   # browser sign-in
+hisaabo whoami --json  # confirm the active business and tenant
 ```
 
-Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
+For the MCP server, create a dedicated API key in Settings > API Keys and use it as `HISAABO_TOKEN`. Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
 
 ---
 
@@ -669,7 +670,7 @@ Key guidelines:
 - Use the `money` module from `packages/shared` for all monetary arithmetic
 - All input validation in `packages/shared/src/validators.ts` as Zod schemas
 - No component libraries -- pure Tailwind CSS
-- New features ship with tests and a `feature-parity.yaml` update
+- New features ship with tests; check platform coverage with `node --experimental-strip-types scripts/check-parity.ts --scan` (exceptions live in `parity-exceptions.yaml`)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 

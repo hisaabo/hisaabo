@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerPrompts } from "../prompts/index.js";
+import { registerPrompts, renderSteps } from "../prompts/index.js";
+import { registerTools } from "../server.js";
+import { TOOL_META } from "../lib/toolMeta.js";
+import type { ToolPolicy } from "../lib/policy.js";
+import { throwingClient } from "./helpers.js";
 
 describe("registerPrompts", () => {
   it("registers without throwing", () => {
@@ -65,5 +69,40 @@ describe("registerPrompts", () => {
   it("does not reference removed tools", async () => {
     const res = await prompts().inventory_health.callback({});
     expect(res.messages[0].content.text).not.toContain("item_categories");
+  });
+
+  describe("mode-aware prompts", () => {
+    const modes: Array<[string, ToolPolicy]> = [
+      ["readonly", { mode: "readonly", adminEnabled: false }],
+      ["write", { mode: "write", adminEnabled: false }],
+      ["admin", { mode: "admin", adminEnabled: true }],
+    ];
+    const ARGS: Record<string, Record<string, string>> = {
+      party_deep_dive: { party_name: "Acme" },
+      gst_filing_prep: { month: "3", year: "2025" },
+      month_close: { month: "3", year: "2025" },
+    };
+
+    for (const [label, policy] of modes) {
+      it(`only references tools registered in ${label} mode`, async () => {
+        const server = new McpServer({ name: "test", version: "0.0.1" });
+        const registry = registerTools(server, throwingClient(), policy);
+        const registered = new Set(registry.registered.map((t) => t.name));
+        const all = (server as unknown as { _registeredPrompts: Record<string, Prompt> })._registeredPrompts;
+        expect(Object.keys(all)).toHaveLength(6);
+        for (const [name, prompt] of Object.entries(all)) {
+          const text = (await prompt.callback(ARGS[name] ?? {})).messages[0].content.text;
+          const referenced = [...text.matchAll(/`([a-z0-9]+(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]!).filter((t) => t in TOOL_META);
+          expect(referenced.length).toBeGreaterThan(0);
+          for (const tool of referenced) expect(registered.has(tool), `${name} references ${tool}`).toBe(true);
+        }
+      });
+    }
+
+    it("drops steps for unavailable tools and renumbers", () => {
+      const text = "Intro\n1. Call `invoice_list` now.\n2. Call `invoice_create` now.\n3. Call `party_list` now.\nEnd";
+      const out = renderSteps(text, new Set(["invoice_list", "party_list"]));
+      expect(out).toBe("Intro\n1. Call `invoice_list` now.\n2. Call `party_list` now.\nEnd");
+    });
   });
 });

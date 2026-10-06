@@ -46,7 +46,7 @@ export function registerTools(
   const registry = createToolRegistry(server, policy);
   registerAllTools(registry, client);
   registerResources(server, client);
-  registerPrompts(server);
+  registerPrompts(server, new Set(registry.registered.map((t) => t.name)));
   return registry;
 }
 

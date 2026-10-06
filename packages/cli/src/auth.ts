@@ -2,6 +2,15 @@ import { HisaaboClient, HisaaboApiError, type AuthUser } from "./client.js";
 import { getConfig, setConfig, clearConfig, requireAuth, getConfigPath } from "./config.js";
 import { fatalError, EXIT, outputJSON, success, warn, sanitizeTerminal } from "./output.js";
 import { validateApiUrl } from "./url.js";
+import {
+  buildAuthorizeUrl,
+  generatePkce,
+  generateState,
+  openBrowser,
+  redirectUriFor,
+  resolveWebUrl,
+  startCallbackServer,
+} from "./native-login.js";
 
 /**
  * Authenticate using a long-lived API key (hisaabo_key_...).
@@ -102,39 +111,72 @@ function persistSession(apiUrl: string, token: string, business: BusinessSummary
 // Type aliases used locally (mirrors what the client returns)
 type BusinessSummary = { id: string; name: string; gstin?: string | null; gstRegistrationType?: string | null };
 
-export async function login(apiUrl: string, email: string, password: string): Promise<void> {
-  const base = validateApiUrl(apiUrl);
+export interface BrowserLoginOptions {
+  apiUrl: string;
+  webUrl?: string;
+}
 
-  // Use a temporary client without auth for login
-  const client = new HisaaboClient({
-    apiUrl: base,
-    token: "",
-    tenantId: "",
-    businessId: "",
+/**
+ * Browser handoff (RFC 8252 loopback + PKCE): the user signs in on the web
+ * app, which redirects a one-time code to a 127.0.0.1 listener started here.
+ */
+export async function loginWithBrowser(opts: BrowserLoginOptions): Promise<void> {
+  const base = validateApiUrl(opts.apiUrl);
+  const webUrl = resolveWebUrl(base, opts.webUrl);
+  if (!webUrl) {
+    fatalError(
+      "Cannot determine the web app URL for this server. Pass --web-url <url> (or set HISAABO_WEB_URL).",
+      EXIT.USAGE,
+    );
+  }
+
+  const { verifier, challenge } = generatePkce();
+  const state = generateState();
+  const listener = await startCallbackServer(state).catch((e) => {
+    return fatalError("Could not start the local callback server: " + String(e instanceof Error ? e.message : e), EXIT.GENERAL);
   });
 
+  const client = new HisaaboClient({ apiUrl: base, token: "", tenantId: "", businessId: "" });
   try {
-    const result = await client.auth.login({ email, password });
-    const token = result.sessionId;
-    const authedClient = new HisaaboClient({ apiUrl: base, token, tenantId: "", businessId: "" });
-    const me = await authedClient.auth.me().catch(() => undefined);
+    const started = await client.auth.nativeStart({
+      redirectUri: redirectUriFor(listener.port),
+      codeChallenge: challenge,
+      state,
+    });
 
+    const url = buildAuthorizeUrl(webUrl, started.requestId);
+    console.log("\n  Opening your browser to sign in to Hisaabo...");
+    console.log("  If it does not open, visit this URL:\n\n    " + url + "\n");
+    console.log("  Waiting for sign-in (times out in 5 minutes)...");
+    if (!(await openBrowser(url))) warn("Could not open a browser automatically; open the URL above manually.");
+
+    const callback = await listener.result;
+    const session = await client.auth.nativeExchange({
+      requestId: started.requestId,
+      code: callback.code,
+      codeVerifier: verifier,
+    });
+
+    const token = session.sessionToken;
+    const me = await new HisaaboClient({ apiUrl: base, token, tenantId: "", businessId: "" }).auth.me().catch(() => undefined);
     const businesses = await listBusinessesOrExit(base, token);
     const selected = await selectBusiness(businesses);
-
     persistSession(base, token, selected, me?.tenantId);
 
-    success(`Active business: ${selected.name}`);
+    success(`Signed in as ${session.user.name ?? session.user.email} (${session.user.email})`);
+    console.log("  Active business: " + sanitizeTerminal(selected.name));
     console.log("  Config saved to " + getConfigPath());
     console.log("\n  You can switch businesses anytime with:");
-    console.log("    hisaabo business switch\n");
+    console.log("    hisaabo switch\n");
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;
-      if (err.code === "unauthorized") fatalError("Invalid email or password.", EXIT.AUTH);
       if (err.code === "network_error") fatalError("Cannot reach server: " + err.message, EXIT.NETWORK);
+      if (err.code === "validation_failed") fatalError("Sign-in was rejected. Run `hisaabo login` again.", EXIT.AUTH);
     }
     fatalError(String(e instanceof Error ? e.message : e), EXIT.GENERAL);
+  } finally {
+    listener.close();
   }
 }
 

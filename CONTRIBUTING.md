@@ -93,6 +93,7 @@ Open a GitHub issue with the `enhancement` label. Describe:
    ```bash
    pnpm typecheck
    pnpm lint
+   node --experimental-strip-types scripts/check-parity.ts --validate   # platform parity (web vs mobile/CLI/MCP)
    pnpm build
    ```
 4. **Open a PR** against `main` with a clear description of what changed and why

@@ -602,7 +602,7 @@ export class HisaaboClient {
         return c.query<unknown[]>("tenant.members");
       },
       inviteMember(email: string, role: string) {
-        return c.mutate<{ token: string; expiresAt: Date }>("tenant.inviteMember", { email, role });
+        return c.mutate<{ expiresAt: Date; inviteUrl?: string }>("tenant.inviteMember", { email, role });
       },
       removeMember(userId: string) {
         return c.mutate<{ success: boolean }>("tenant.removeMember", { userId });
@@ -1690,6 +1690,8 @@ export interface StoreSettings {
   storeDeliveryNote: string | null;
   storeWhatsappNumber: string | null;
   storeAllowNegativeStock: boolean;
+  storeRequirePhoneOtp: boolean;
+  phoneOtpAvailable: boolean;
   storeOrderPrefix: string;
   nextStoreOrderNumber: number;
   currency: string;
@@ -1704,6 +1706,7 @@ export interface StoreSettingsUpdateInput {
   storeDeliveryNote?: string | null;
   storeWhatsappNumber?: string | null;
   storeAllowNegativeStock?: boolean;
+  storeRequirePhoneOtp?: boolean;
   storeOrderPrefix?: string;
 }
 

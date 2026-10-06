@@ -343,16 +343,16 @@ for m in members:
       method: "mutation",
       path: "tenant.inviteMember",
       title: "Invite Member",
-      description: "Send an invitation to join the current organization. The invitation is emailed to the specified address with a unique, one-time token. Only owners and admins can invite members. Enforces team member limits based on the organization's plan.",
+      description: "Send an invitation to join the current organization. The invitation is emailed to the specified address with a unique, one-time link. Only owners and admins can invite members. Enforces team member limits based on the organization's plan.",
       auth: "protected",
       input: [
         { name: "email", type: "string (email)", required: true, description: "Email address to invite" },
         { name: "role", type: "enum", required: false, description: "Role to assign when invitation is accepted", default: "seller", enumValues: ["admin", "seller_manager", "seller", "accountant"] },
+        { name: "returnLink", type: "boolean", required: false, description: "Also return the invitation URL in the response. Used by the web Team tab; the CLI and MCP server never set it.", default: "false" },
       ],
       output: {
-        description: "The raw invitation token (for the email link) and expiration date.",
+        description: "The invitation expiry. `inviteUrl` is present only when `returnLink` is true; no raw token is returned.",
         example: {
-          token: "abc123def456ghi789jkl012mno345pq",
           expiresAt: "2026-04-15T05:30:00.000Z",
         },
       },
@@ -374,14 +374,14 @@ resp = httpx.post(
     json={"json": {"email": "priya@guptaenterprises.in", "role": "seller"}},
 )
 data = resp.json()["result"]["data"]["json"]
-print("Token:", data["token"])`,
+print("Expires:", data["expiresAt"])`,
       },
       gotchas: [
         "Only owners, superadmins, and admins can invite members. Returns FORBIDDEN otherwise.",
         "Returns CONFLICT if the email is already a member of the organization.",
         "Returns CONFLICT if a pending (unexpired) invitation for this email already exists.",
         "Invitations expire after 7 days. The token is a 32-character nanoid with ~192 bits of entropy.",
-        "The token is hashed (SHA-256) before storage — only the raw token sent via email can be used to accept.",
+        "The token is hashed (SHA-256) before storage — only the link sent via email can be used to accept. The response never contains the raw token.",
         "If RESEND_API_KEY is not configured, the invitation email is skipped (but the invitation is still created).",
         "Enforces team member plan limits before creating the invitation.",
       ],

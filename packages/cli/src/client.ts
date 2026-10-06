@@ -1,6 +1,6 @@
 /**
  * HisaaboClient — thin fetch wrapper over the tRPC HTTP API.
- * CLI variant: adds x-client-type: "cli" header.
+ * CLI variant: adds x-client-type and X-Hisaabo-Client: "cli" headers.
  */
 
 import superjson from "superjson";
@@ -103,10 +103,11 @@ export class HisaaboClient {
 
   private buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
-      "Authorization": `Bearer ${this.config.token}`,
       "x-tenant-id": this.config.tenantId,
       "x-client-type": "cli",
+      "X-Hisaabo-Client": "cli",
     };
+    if (this.config.token) headers["Authorization"] = `Bearer ${this.config.token}`;
     // Only include x-business-id when a business is selected — tenant-level
     // operations (backup export/restore) work without one.
     if (this.config.businessId) {
@@ -209,13 +210,18 @@ export class HisaaboClient {
   get auth() {
     const c = this;
     return {
-      login(input: { email: string; password: string }) {
-        // The API returns `sessionToken`; older servers used `sessionId`.
-        return c.mutate<{ sessionToken?: string; sessionId?: string; user: { id: string; email: string; name: string | null } }>("auth.login", input)
+      nativeStart(input: { redirectUri: string; codeChallenge: string; state: string }) {
+        return c.mutate<{ requestId: string; expiresAt: string | Date }>("auth.nativeStart", {
+          client: "cli",
+          codeChallengeMethod: "S256",
+          ...input,
+        });
+      },
+      nativeExchange(input: { requestId: string; code: string; codeVerifier: string }) {
+        return c.mutate<{ sessionToken?: string; user: { id: string; email: string; name: string | null } }>("auth.nativeExchange", input)
           .then((r) => {
-            const sessionId = r.sessionToken ?? r.sessionId;
-            if (!sessionId) throw new HisaaboApiError({ code: "api_error", message: "Login response did not include a session" });
-            return { sessionId, user: r.user };
+            if (!r.sessionToken) throw new HisaaboApiError({ code: "api_error", message: "Sign-in response did not include a session" });
+            return { sessionToken: r.sessionToken, user: r.user };
           });
       },
       logout() {
@@ -238,9 +244,6 @@ export class HisaaboClient {
       },
       logoutAll() {
         return c.mutate<any>("auth.logoutAll", {});
-      },
-      register(input: any) {
-        return c.mutate<any>("auth.register", input);
       },
       updateName(input: { name: string }) {
         return c.mutate<any>("auth.updateName", input);

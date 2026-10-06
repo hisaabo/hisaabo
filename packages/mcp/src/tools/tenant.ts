@@ -61,7 +61,7 @@ export function registerTenantTools(server: ToolServer, client: HisaaboClient) {
     [
       "Invite a user to join the current tenant by email address.",
       "Requires admin or owner role in the current tenant.",
-      "The invitation link is valid for 7 days. The raw token is returned exactly once — save it to send via email.",
+      "The invitation is emailed to the recipient and is valid for 7 days. No link is returned.",
       "Available roles: 'admin' (full access), 'seller_manager' (manage sales team), 'seller' (create invoices), 'accountant' (read-only reports).",
     ].join(" "),
     {
@@ -80,7 +80,7 @@ export function registerTenantTools(server: ToolServer, client: HisaaboClient) {
             email: input.email,
             role: input.role,
             expiresAt: result.expiresAt,
-            note: "Invitation sent. Deliver the invitation link to the recipient through a secure channel (not this conversation).",
+            note: "Invitation emailed to the recipient.",
           }, null, 2),
         }],
       };

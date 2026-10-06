@@ -7,7 +7,7 @@ import { parseCsv } from "../../csv.js";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_ROWS = 5000;
-const DEFAULT_SOURCE = "mybillbook"; // what the API assumes when `source` is omitted
+const DEFAULT_SOURCE = "hisaabo";
 
 interface ImportOpts {
   json?: boolean;

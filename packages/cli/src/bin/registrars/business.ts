@@ -47,7 +47,6 @@ export function registerBusinessCommands(program: Command): void {
     .option("--state <state>", "State")
     .option("--phone <phone>", "Phone number")
     .option("--email <email>", "Email address")
-    .option("--financial-year-start <month>", "Financial year start month (1–12)")
     .option("--json", "JSON output")
     .action(async (opts) => {
       const { businessUpdateCommand } = await import("../../commands/business/update.js");

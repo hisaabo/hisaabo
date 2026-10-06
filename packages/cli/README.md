@@ -22,12 +22,12 @@ npm install -g @hisaabo/cli
 hisaabo login --api-url https://your-hisaabo-instance.com
 ```
 
-You'll be prompted for email and password, then asked to pick a business if you have more than one.
+Your browser opens so you can sign in to the Hisaabo web app (magic link); the CLI receives a one-time code on a local 127.0.0.1 callback and exchanges it using PKCE. The URL is also printed for headless machines. You are then asked to pick a business if you have more than one. On a self-hosted server whose web app is not at the default hosted address, pass `--web-url https://your-web-app` (or set `HISAABO_WEB_URL`).
 
 **Log in with an API key (for scripts and CI):**
 
 ```bash
-hisaabo login --api-url https://your-hisaabo-instance.com --token hisaabo_key_abc123...
+echo "hisaabo_key_abc123..." | hisaabo login --api-url https://your-hisaabo-instance.com --token-stdin
 ```
 
 Generate API keys at Settings > API Keys in the Hisaabo web app.
@@ -46,7 +46,7 @@ hisaabo whoami
 
 | Command | Description |
 |---|---|
-| `hisaabo login` | Authenticate with email/password or API key |
+| `hisaabo login` | Sign in via browser, or with an API key (`--token-stdin`) |
 | `hisaabo logout` | Clear saved credentials |
 | `hisaabo whoami` | Show current user and active business |
 | `hisaabo switch` | Switch active business |
@@ -57,6 +57,7 @@ hisaabo whoami
 |---|---|
 | `hisaabo business list` | List all businesses under your account |
 | `hisaabo business switch` | Switch active business |
+| `hisaabo business sequence --type <type> --next-number <n>` | Set the next document number (invoice, payment, quotation, credit_note, delivery_challan, proforma; cannot go backwards) |
 
 ### Dashboard
 
@@ -181,6 +182,8 @@ hisaabo whoami
 |---|---|
 | `import parties <file>` | Bulk import parties from JSON or CSV |
 | `import items <file>` | Bulk import items from JSON or CSV |
+
+`--source` defaults to `hisaabo` (the Hisaabo export format); use `--source mybillbook` for myBillBook files.
 
 ### Backup & Restore
 

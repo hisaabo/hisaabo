@@ -16,7 +16,7 @@ export function registerImportCommands(program: Command): void {
     .description("Import parties from JSON or CSV file")
     .option("--json", "JSON output")
     .option("--format <format>", "json or csv (auto-detected from extension)")
-    .option("--source <source>", "Import source adapter (default: mybillbook, the API default; or hisaabo)")
+    .option("--source <source>", "Import source adapter (default: hisaabo; or mybillbook)")
     .action(async (file, opts) => {
       await importPartiesCommand(file, { json: opts.json, format: opts.format, source: opts.source });
     });
@@ -26,7 +26,7 @@ export function registerImportCommands(program: Command): void {
     .description("Import items from JSON or CSV file")
     .option("--json", "JSON output")
     .option("--format <format>", "json or csv (auto-detected from extension)")
-    .option("--source <source>", "Import source adapter (default: mybillbook, the API default; or hisaabo)")
+    .option("--source <source>", "Import source adapter (default: hisaabo; or mybillbook)")
     .action(async (file, opts) => {
       await importItemsCommand(file, { json: opts.json, format: opts.format, source: opts.source });
     });
@@ -36,7 +36,7 @@ export function registerImportCommands(program: Command): void {
     .description("Import invoices from JSON or CSV file")
     .option("--json", "JSON output")
     .option("--format <format>", "json or csv (auto-detected from extension)")
-    .option("--source <source>", "Import source adapter (default: mybillbook, the API default; or hisaabo)")
+    .option("--source <source>", "Import source adapter (default: hisaabo; or mybillbook)")
     .action(async (file, opts) => {
       await importInvoicesCommand(file, { json: opts.json, format: opts.format, source: opts.source });
     });
@@ -46,7 +46,7 @@ export function registerImportCommands(program: Command): void {
     .description("Import payments from JSON or CSV file")
     .option("--json", "JSON output")
     .option("--format <format>", "json or csv (auto-detected from extension)")
-    .option("--source <source>", "Import source adapter (default: mybillbook, the API default; or hisaabo)")
+    .option("--source <source>", "Import source adapter (default: hisaabo; or mybillbook)")
     .action(async (file, opts) => {
       await importPaymentsCommand(file, { json: opts.json, format: opts.format, source: opts.source });
     });

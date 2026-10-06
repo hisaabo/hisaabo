@@ -9,7 +9,6 @@ interface BusinessUpdateOpts {
   state?: string;
   phone?: string;
   email?: string;
-  financialYearStart?: string;
   json?: boolean;
 }
 
@@ -25,13 +24,6 @@ export async function businessUpdateCommand(opts: BusinessUpdateOpts): Promise<v
   if (opts.state !== undefined) payload["state"] = opts.state;
   if (opts.phone !== undefined) payload["phone"] = opts.phone;
   if (opts.email !== undefined) payload["email"] = opts.email;
-  if (opts.financialYearStart !== undefined) {
-    const month = parseInt(opts.financialYearStart, 10);
-    if (isNaN(month) || month < 1 || month > 12) {
-      fatalError("--financial-year-start must be a month number (1–12).", EXIT.USAGE);
-    }
-    payload["financialYearStart"] = month;
-  }
 
   if (Object.keys(payload).length === 0) {
     fatalError("No fields to update. Pass at least one option (--name, --gstin, etc.).", EXIT.USAGE);

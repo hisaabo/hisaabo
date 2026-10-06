@@ -20,7 +20,7 @@ If you are self-hosting Hisaabo, you do not need the mobile app. The web app (`a
 
 The mobile app gives business owners and their teams on-the-go access to core Hisaabo features. It uses Expo Router for file-based navigation and communicates with the same Hono + tRPC API as the web app, authenticated via Bearer tokens stored in `expo-secure-store`.
 
-Feature coverage vs. the web app is tracked in [feature-parity.yaml](../../feature-parity.yaml) at the monorepo root.
+Feature coverage vs. the web app is checked with `node --experimental-strip-types scripts/check-parity.ts --scan` from the monorepo root (intentional gaps are listed in `parity-exceptions.yaml`).
 
 ---
 
