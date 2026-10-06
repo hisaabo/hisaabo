@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, notInArray, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
@@ -16,6 +16,18 @@ type PaymentTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 function assertAllocationsFitPayment(allocations: Array<{ amount: string }>, paymentAmount: string) {
   if (money.compare(money.sum(allocations.map((a) => a.amount)), paymentAmount) > 0) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Allocations exceed the payment amount" });
+  }
+}
+
+// Fail with a clean NOT_FOUND before any payment row is written; otherwise an
+// unknown invoice id surfaces as a foreign-key violation (HTTP 500).
+async function assertInvoicesExist(tx: PaymentTx, businessId: string, invoiceIds: string[]) {
+  const ids = [...new Set(invoiceIds)];
+  if (ids.length === 0) return;
+  const found = await tx.select({ id: invoices.id }).from(invoices)
+    .where(and(inArray(invoices.id, ids), eq(invoices.businessId, businessId)));
+  if (found.length !== ids.length) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
   }
 }
 
@@ -257,6 +269,11 @@ export const paymentRouter = router({
         await assertBankAccountUsable(tx, ctx.ability, ctx.businessId, input.bankAccountId);
       }
       if (input.allocations?.length) assertAllocationsFitPayment(input.allocations, input.amount);
+      await assertInvoicesExist(
+        tx,
+        ctx.businessId,
+        input.allocations?.length ? input.allocations.map((a) => a.invoiceId) : input.invoiceId ? [input.invoiceId] : [],
+      );
 
       // Atomically generate payment number
       const [biz] = await tx.select({
@@ -594,6 +611,10 @@ export const paymentRouter = router({
       const primaryInvoiceId = input.allocations?.length
         ? input.allocations[0].invoiceId
         : existing.invoiceId;
+
+      if (input.allocations?.length) {
+        await assertInvoicesExist(tx, ctx.businessId, input.allocations.map((a) => a.invoiceId));
+      }
 
       const [result] = await tx.update(payments)
         .set({

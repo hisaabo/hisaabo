@@ -91,6 +91,9 @@ afterAll(async () => {
 // auth.register
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Session ids are never exposed by the API; clients refer to a session by sha256(id).
+const hashSessionId = (id: string) => createHash("sha256").update(id).digest("hex");
+
 describe("auth.register", () => {
   const db = getControlDb();
 
@@ -725,7 +728,7 @@ describe("auth.revokeSession", () => {
 
     // From session A, revoke session B
     const callerA = callerWithSession(sessionA.id, user.id, user.email, tenant.id);
-    const result = await callerA.auth.revokeSession({ sessionId: sessionB.id });
+    const result = await callerA.auth.revokeSession({ sessionId: hashSessionId(sessionB.id) });
     expect(result.success).toBe(true);
 
     // Verify session B is gone from DB — createContext will return user:null
@@ -754,7 +757,7 @@ describe("auth.revokeSession", () => {
 
     const caller = callerWithSession(session.id, user.id, user.email);
     await expect(
-      caller.auth.revokeSession({ sessionId: session.id }),
+      caller.auth.revokeSession({ sessionId: hashSessionId(session.id) }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
       message: "Cannot revoke your current session. Use logout instead.",
@@ -770,7 +773,7 @@ describe("auth.revokeSession", () => {
     // User 1 tries to revoke User 2's session
     const caller1 = callerWithSession(session1.id, user1.id, user1.email);
     await expect(
-      caller1.auth.revokeSession({ sessionId: session2.id }),
+      caller1.auth.revokeSession({ sessionId: hashSessionId(session2.id) }),
     ).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "Session not found",

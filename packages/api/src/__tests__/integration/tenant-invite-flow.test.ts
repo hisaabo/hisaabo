@@ -438,10 +438,9 @@ describe("tenant.pendingInvitations", () => {
     expect(emails).toContain("pending.charlie@kiran.in");
   });
 
-  it("sellers can also list pending invitations (read-only)", async () => {
+  it("sellers cannot list pending invitations — invitee emails are admin-only", async () => {
     const caller = callerForTenant(sellerSession.id, seller, tenant1.id);
-    const pending = await caller.tenant.pendingInvitations();
-    expect(pending.length).toBeGreaterThanOrEqual(2);
+    await expect(caller.tenant.pendingInvitations()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("requires tenantId in context — BAD_REQUEST without tenant", async () => {
