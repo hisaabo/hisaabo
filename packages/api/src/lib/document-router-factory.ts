@@ -25,6 +25,7 @@ import { requireCan } from "./permissions.js";
 import { logAudit } from "./audit.js";
 import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
 import { buildBusinessDateFilter } from "./business-date.js";
+import { reverseDocumentStockEffect } from "./document-stock-reversal.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -273,6 +274,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
             });
             return {
               itemId: li.itemId || null,
+              // Persist the variant so cancel/delete can restore variant stock
+              variantId: li.variantId || null,
               itemName: li.itemName,
               description: li.description || null,
               quantity: li.quantity,
@@ -497,6 +500,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
           if (input.status === "cancelled") {
             await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
+            // Cancel undoes the stock effect exactly like delete (once: the
+            // before.status === input.status early-return above and the
+            // transition check prevent re-cancelling, and delete skips
+            // cancelled docs).
+            await reverseDocumentStockEffect(tx, ctx.businessId, before.id, config.stockEffect);
           }
 
           const [updated] = await tx
@@ -553,35 +561,11 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: doc.status, createdAt: doc.createdAt });
           if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
 
-          // Reverse stock effects on delete (using stored conversionFactor)
-          if (config.stockEffect !== "none") {
-            const lineItems = await tx
-              .select()
-              .from(invoiceItems)
-              .where(eq(invoiceItems.invoiceId, input.id));
-
-            // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
-            for (const li of lineItems) {
-              if (li.variantId) {
-                await tx.update(itemVariants).set({
-                  stockQuantity: config.stockEffect === "decrement"
-                    ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
-                    : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
-                  updatedAt: new Date(),
-                }).where(and(
-                  eq(itemVariants.id, li.variantId),
-                  sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-                ));
-              } else if (li.itemId) {
-                const cf = li.conversionFactor ?? "1";
-                await tx.update(items).set({
-                  stockQuantity: config.stockEffect === "decrement"
-                    ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
-                    : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
-                  updatedAt: new Date(),
-                }).where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
-              }
-            }
+          // Reverse stock effects on delete (using stored conversionFactor).
+          // A cancelled document already had its stock reversed when it was
+          // cancelled — don't reverse twice.
+          if (doc.status !== "cancelled") {
+            await reverseDocumentStockEffect(tx, ctx.businessId, doc.id, config.stockEffect);
           }
 
           // Soft delete: set deletedAt + cancel the document

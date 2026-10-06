@@ -159,16 +159,9 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
       // ── Refresh / session token path (legacy Bearer) ──────────────────────
       // Mobile clients send the long-lived session ID directly as Bearer.
       // Legacy desktop clients (pre-access-token) also use this path.
-      // Log a warning so we can track adoption of the new access-token flow.
+      // Desktop clients legitimately send the refresh token as Bearer, so
+      // this is the normal path and is deliberately not logged.
       const sessionId = rawBearerToken;
-      const clientHeader = opts.req.headers.get("x-hisaabo-client");
-      if (clientHeader === "desktop") {
-        // Desktop client sending a refresh token directly — not an access token.
-        // This is the legacy path; warn so we can observe roll-out.
-        logger.warn({ hint: "legacy-refresh-bearer" },
-          "Desktop client sent refresh token as Bearer (expected access token). " +
-          "Client may be running an outdated build.");
-      }
 
       // Check session cache first
       let cacheHit = false;

@@ -155,7 +155,8 @@ describe("auth.nativeAuthorize", () => {
     const r = await start("desktop");
     const { redirectUrl } = await authedCaller(user, "cookie").auth.nativeAuthorize({ requestId: r.requestId });
     const parsed = parseRedirect(redirectUrl);
-    expect(parsed.base).toBe(r.redirectUri.replace(/\/callback$/, "/callback"));
+    // the redirect goes to exactly the redirect URI registered at nativeStart (no rewriting)
+    expect(parsed.base).toBe(r.redirectUri);
     expect(parsed.state).toBe(r.state);
     expect(parsed.code).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
