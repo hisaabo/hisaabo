@@ -25,7 +25,7 @@
     "@trpc/react-query": "^11.0.0",
     "dayjs": "^1.11.20",
     "expo": "~55.0.17",
-    "expo-build-properties": "~55.0.0",
+    "expo-build-properties": "~57.0.22",
     "expo-clipboard": "~55.0.13",
     "expo-constants": "~55.0.15",
     "expo-contacts": "~55.0.13",
