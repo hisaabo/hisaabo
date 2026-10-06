@@ -343,15 +343,23 @@ function extractApiProcedures(): Map<string, string[]> {
     return procs;
   }
 
-  for (const entry of fs.readdirSync(routersDir)) {
+  // Read a file without a prior existence/stat check (avoids a check-then-use race).
+  function tryRead(file: string): string | null {
+    try {
+      return fs.readFileSync(file, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  for (const dirent of fs.readdirSync(routersDir, { withFileTypes: true })) {
+    const entry = dirent.name;
     const fullPath = path.join(routersDir, entry);
 
     // Directory-based router module (e.g. import/)
-    if (fs.statSync(fullPath).isDirectory()) {
-      const indexFile = path.join(fullPath, "index.ts");
-      if (!fs.existsSync(indexFile)) continue;
-
-      const indexContent = fs.readFileSync(indexFile, "utf-8");
+    if (dirent.isDirectory()) {
+      const indexContent = tryRead(path.join(fullPath, "index.ts"));
+      if (indexContent === null) continue;
       const exportMatch = indexContent.match(/export const (\w+Router)/);
       if (!exportMatch) continue;
 
@@ -369,7 +377,8 @@ function extractApiProcedures(): Map<string, string[]> {
     }
 
     if (!entry.endsWith(".ts")) continue;
-    const content = fs.readFileSync(fullPath, "utf-8");
+    const content = tryRead(fullPath);
+    if (content === null) continue;
 
     const procs = extractProcs(content);
 

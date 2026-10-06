@@ -8,6 +8,7 @@
  */
 import fs from "fs";
 import path from "path";
+import postgres from "postgres";
 
 // ── Shared API interface ─────────────────────────────────────────
 
@@ -268,11 +269,28 @@ export async function updateInvoiceStatus(
   invoiceId: string,
   status: string,
 ): Promise<void> {
-  await api.mutate(
-    "invoice.updateStatus",
-    { id: invoiceId, status },
-    { "x-business-id": businessId },
-  );
+  const headers = { "x-business-id": businessId };
+  if (status === "paid" || status === "partial") {
+    // The API refuses to set paid/partial directly: record a payment instead
+    // (full amount -> paid, half -> partial); it moves the status itself.
+    const inv = await api.query<{ status: string; partyId: string; totalAmount: string }>(
+      "invoice.getById",
+      { id: invoiceId },
+      headers,
+    );
+    if (inv.status === "draft") {
+      await api.mutate("invoice.updateStatus", { id: invoiceId, status: "sent" }, headers);
+    }
+    const total = parseFloat(inv.totalAmount);
+    const amount = (status === "paid" ? total : Math.floor(total / 2)).toFixed(2);
+    await api.mutate(
+      "payment.create",
+      { invoiceId, partyId: inv.partyId, amount, mode: "cash" },
+      headers,
+    );
+    return;
+  }
+  await api.mutate("invoice.updateStatus", { id: invoiceId, status }, headers);
 }
 
 /**
@@ -350,12 +368,18 @@ export async function sendInvite(
   email: string,
   role: "admin" | "seller_manager" | "seller" | "accountant",
 ): Promise<InviteResult> {
-  return api.mutate<InviteResult>("tenant.inviteMember", { email, role });
+  // The API only returns the invite link on request; the token is its last path segment.
+  const res = await api.mutate<{ inviteUrl?: string }>("tenant.inviteMember", { email, role, returnLink: true });
+  const token = res.inviteUrl?.split("/invite/")[1];
+  if (!token) throw new Error("tenant.inviteMember did not return an inviteUrl");
+  return { token };
 }
 
 /**
- * Register a new user via the auth.register tRPC endpoint.
- * Returns the session token set via cookie header.
+ * Register a new user via the auth.register tRPC endpoint (the e2e stand-in
+ * for the magic-link sign-in, which needs an inbox). On a fresh self-hosted DB
+ * the first user is allowed; later users need a pending invitation (or
+ * ALLOW_OPEN_SIGNUP=true). Returns the session token set via cookie header.
  */
 export async function registerUser(
   baseUrl: string,
@@ -382,9 +406,50 @@ export async function registerUser(
   }
   // Extract session cookie from Set-Cookie header
   const setCookies = res.headers.getSetCookie?.() ?? [];
-  const sessionCookie = setCookies.find((c) => c.startsWith("session="));
+  const sessionCookie = setCookies.find((c) => c.startsWith("session_id="));
   const sessionToken = sessionCookie?.split("=")[1]?.split(";")[0] ?? "";
+  if (!sessionToken) throw new Error("auth.register did not set a session_id cookie");
   return { sessionToken };
+}
+
+/**
+ * Mark a user's email as verified directly in the control DB. Invitation
+ * acceptance requires a verified email (normally proven by signing in with a
+ * magic link, which needs an inbox), so e2e users registered through
+ * auth.register are verified here. Uses DATABASE_URL (same DB as the API).
+ */
+export async function markEmailVerified(email: string): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is required to mark an e2e user's email as verified");
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`update users set email_verified = true where lower(email) = ${email.toLowerCase()}`;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+/**
+ * Playwright storageState (cookies only) for a session token returned by
+ * registerUser. The web app is served from localhost, and cookies are not
+ * port-scoped, so one cookie covers both the web origin and the API.
+ */
+export function sessionStorageState(sessionToken: string) {
+  return {
+    cookies: [
+      {
+        name: "session_id",
+        value: sessionToken,
+        domain: "localhost",
+        path: "/",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax" as const,
+        expires: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+      },
+    ],
+    origins: [],
+  };
 }
 
 /**

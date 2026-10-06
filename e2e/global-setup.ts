@@ -1,17 +1,14 @@
 /**
  * global-setup.ts — Authenticate once, persist session for all tests.
  *
- * Registers a test user via the UI, creates a business via tRPC API,
- * then saves the browser storage state (cookies) so all test projects
- * can reuse the session without logging in again.
- *
- * Login page flow: magic-link (default) → password-login → register
- * Business creation: done via API (more reliable than filling the complex form)
+ * Registers a test user via the auth.register API (no password UI exists),
+ * creates a business via tRPC API, then saves the browser storage state
+ * (session cookie) so all test projects reuse the session without logging in.
  */
 import { test as setup, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
-import type { GlobalSeed } from "./helpers/seed";
+import { registerUser, sessionStorageState, type GlobalSeed } from "./helpers/seed";
 
 const AUTH_FILE = path.join(__dirname, ".auth", "user.json");
 const SEED_FILE = path.join(__dirname, ".auth", "seed.json");
@@ -24,29 +21,19 @@ setup("authenticate", async ({ page, request }) => {
   const email = `e2e-${Date.now()}@test.hisaabo.in`;
   const password = "Test@1234!";
   const name = "E2E Test User";
+  const apiUrl = process.env.API_URL ?? "http://localhost:3000";
 
-  // ── Step 1: Register via UI ───────────────────────────────────
-  await page.goto("/login");
-
-  // magic-link → password-login → register
-  await page.getByText("Use password instead").click();
-  await page.getByText("Create one").click();
-  await expect(page.getByText("Create your account")).toBeVisible();
-
-  await page.getByPlaceholder("Your name").fill(name);
-  await page.getByPlaceholder("you@yourcompany.com").fill(email);
-  await page.getByPlaceholder("Min 8 characters").fill(password);
-  await page.getByPlaceholder("Repeat password").fill(password);
-  await page.getByRole("button", { name: "Create account" }).click();
-
-  // Wait for redirect away from login
-  await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
+  // ── Step 1: Create the user + session via the API ─────────────
+  // The UI has no password sign-in any more and magic links need an inbox, so
+  // we register through auth.register (still supported server-side) and reuse
+  // its session. The first user on a FRESH self-hosted DB becomes the owner
+  // without an invitation, so run against an empty database (as CI does); a
+  // reused DB needs a reset first.
+  const { sessionToken } = await registerUser(apiUrl, { email, password, name });
+  await page.context().addCookies(sessionStorageState(sessionToken).cookies);
+  const cookieHeader = `session_id=${sessionToken}`;
 
   // ── Step 2: Create business via API ───────────────────────────
-  // Extract cookies from the browser context to use in API calls
-  const cookies = await page.context().cookies();
-  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  const apiUrl = process.env.API_URL ?? "http://localhost:3000";
 
   const createBizRes = await request.post(`${apiUrl}/api/trpc/business.create`, {
     headers: {

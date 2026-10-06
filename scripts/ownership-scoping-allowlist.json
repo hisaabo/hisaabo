@@ -1,6 +1,8 @@
 {
   "_comment": "Procedures that accept a client-supplied identifier but legitimately do not reference ctx.businessId/ctx.tenantId. Each key is `<namespace>.<procedure>`; each value is a one-line justification. See scripts/check-ownership-scoping.ts. Adding an entry here is a deliberate IDOR-safety waiver — only add genuine false positives (id IS the scope, scoping delegated to a helper, control-plane/unauthenticated endpoint).",
   "allow": {
+    "auth.nativeAuthorize": "Pre-tenant control-plane endpoint: the native-auth request id is the scope and the request is bound to the caller's own cookie session (ctx.user.id); bearer/API-key callers are rejected.",
+    "auth.nativeRequestInfo": "Pre-tenant control-plane endpoint: the unguessable native-auth request id is the scope; returns only non-sensitive consent-page info and NOT_FOUND for expired/consumed ids (the code exchange itself requires PKCE).",
     "auth.revokeSession": "Control-plane sessions table; scoped by ctx.user.id (eq(sessions.userId, ...)), not by business/tenant.",
     "selfExport.request": "Scopes on input.tenantId by validating the caller is an owner-role member of that tenant via controlDb tenantMembers.",
     "selfImport.request": "Scopes on input.tenantId by validating the caller is an owner-role member of that tenant via controlDb tenantMembers.",

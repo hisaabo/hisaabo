@@ -59,6 +59,14 @@ exceptions:
       # register-UI concern, not a mobile flow.
       - pos.catalog
 
+      # --- Auth ---
+      # [security] Native-auth consent endpoints render in the browser (web consent
+      # page) for a cookie web session; mobile only consumes the resulting code.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Mobile signs in through the browser hand-off, not an in-app magic-link form.
+      - auth.sendMagicLink
+
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
       - selfExport.request
@@ -297,6 +305,13 @@ exceptions:
 
       # --- Auth ---
       # Browser-only flows requiring email verification links / callbacks.
+      # [security] Native-auth consent endpoints (browser hand-off for cookie web
+      # sessions only). The CLI starts the flow via nativeStart/exchange but the
+      # consent page itself is web-only.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Signup/config copy is a UI concern; the CLI has no signup screen.
+      - system.config
       - auth.requestEmailChange
       - auth.sendMagicLink
       - auth.verifyMagicLink
@@ -383,6 +398,12 @@ exceptions:
       # --- Auth ---
       # MCP runs as a pre-authenticated server-side agent. It does not
       # manage user sessions, login flows, or account registration.
+      # [security] Native-auth consent endpoints are the browser hand-off that mints
+      # a one-time code for a cookie web session; an agent must never drive them.
+      - auth.nativeAuthorize
+      - auth.nativeRequestInfo
+      # Signup/config copy is a UI concern; agents have no signup screen.
+      - system.config
       - auth.completeProfile
       - auth.login
       - auth.logout

@@ -3,7 +3,7 @@
  *
  * For each role (seller, accountant), this test:
  *   1. Invites a user with that role (via owner's API)
- *   2. Registers the invited user via UI
+ *   2. Registers the invited user via the API
  *   3. Visits the invite link to accept
  *   4. Verifies which sidebar nav items are visible vs. hidden
  *   5. Verifies which routes are accessible vs. redirected
@@ -12,6 +12,7 @@
  * because the free plan limits to 3 team members total.
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
@@ -52,7 +53,7 @@ const ROLE_NAV_HIDDEN: Record<string, string[]> = {
 };
 
 /**
- * Helper: invite a user, register them via UI, accept the invite via
+ * Helper: invite a user, register them via the API, accept the invite via
  * the /invite/:token page, and return the authenticated page.
  */
 async function createRoleUser(
@@ -73,28 +74,20 @@ async function createRoleUser(
   }
 
   // Step 1: Owner sends invite via API
-  const invite = await api.mutate<{ token: string }>("tenant.inviteMember", {
+  const invited = await api.mutate<{ inviteUrl?: string }>("tenant.inviteMember", {
     email,
     role,
+    returnLink: true,
   });
+  const invite = { token: invited.inviteUrl?.split("/invite/")[1] };
+  if (!invite.token) throw new Error("tenant.inviteMember did not return an inviteUrl");
 
-  // Step 2: Register the new user via UI in a fresh context
-  const context = await browser.newContext();
+  // Step 2: Register the invited user via the API (no password UI) and
+  // load the resulting session cookie into a fresh browser context.
+  const { sessionToken } = await registerUser(API_URL, { email, password, name });
+  await markEmailVerified(email); // invite acceptance requires a verified email
+  const context = await browser.newContext({ storageState: sessionStorageState(sessionToken) });
   const page = await context.newPage();
-
-  await page.goto("/login");
-  await page.getByText("Use password instead").click();
-  await page.getByText("Create one").click();
-  await expect(page.getByText("Create your account")).toBeVisible();
-
-  await page.getByPlaceholder("Your name").fill(name);
-  await page.getByPlaceholder("you@yourcompany.com").fill(email);
-  await page.getByPlaceholder("Min 8 characters").fill(password);
-  await page.getByPlaceholder("Repeat password").fill(password);
-  await page.getByRole("button", { name: "Create account" }).click();
-
-  // Wait for redirect — user has a pending invite so may land differently
-  await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
 
   // Step 3: Visit the invite acceptance page
   await page.goto(`/invite/${invite.token}`);
@@ -110,7 +103,11 @@ async function createRoleUser(
   if (isJoined) {
     // Click "Continue with [org]"
     await page.getByText(/continue with/i).first().click();
-    await expect(page).toHaveURL(/\/(invoices|dashboard|items|parties)/, { timeout: 10_000 });
+    // Roles with report access land on the dashboard at "/"; sellers on /invoices.
+    await expect(page).toHaveURL(
+      (u) => /^\/(invoices|dashboard|items|parties|settings)?\/?$/.test(u.pathname),
+      { timeout: 10_000 },
+    );
   } else {
     // Already redirected into the app — wait for a known page
     await expect(page).toHaveURL(/\/(invoices|dashboard|items|parties|settings)/, { timeout: 10_000 });
