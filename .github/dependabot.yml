@@ -1,0 +1,61 @@
+# Dependabot version updates. Weekly, grouped so each ecosystem produces at most
+# a couple of PRs instead of one per package. Security advisories open their own
+# (ungrouped) PRs regardless of this schedule.
+version: 2
+
+updates:
+  # JavaScript / TypeScript (pnpm workspace — lockfile at the repo root)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  # GitHub Actions (workflows pin actions by commit SHA; Dependabot bumps the SHA + version comment)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: [dependencies, ci]
+
+  # Container base images (Dockerfile, Dockerfile.once, Dockerfile.backup)
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-base-images:
+        patterns: ["*"]
+    labels: [dependencies, docker]
+
+  # Images referenced from docker-compose*.yml
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-compose-images:
+        patterns: ["*"]
+    labels: [dependencies, docker]
+
+  # Rust (Tauri desktop shell)
+  - package-ecosystem: cargo
+    directory: "/apps/desktop/src-tauri"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, desktop]

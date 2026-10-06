@@ -1,6 +1,6 @@
 FROM postgres:16-alpine
 
-RUN apk add --no-cache bash rclone age
+RUN apk add --no-cache bash rclone age openssl
 
 COPY scripts/backup.sh /usr/local/bin/backup.sh
 COPY scripts/restore-db.sh /usr/local/bin/restore-db.sh

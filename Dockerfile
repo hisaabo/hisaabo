@@ -75,6 +75,12 @@ RUN node --check packages/api/dist/server.js && \
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+# Persistent object storage (item images, STORAGE_DRIVER=local). The API runs as
+# the unprivileged `node` user (uid 1000); this is the only path it needs to
+# write besides the OS temp dir. Mount a volume at /storage to persist it.
+RUN mkdir -p /storage/objects && chown -R node:node /storage
+VOLUME ["/storage"]
+
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="Hisaabo API"
 LABEL org.opencontainers.image.description="Invoicing and business management API"
@@ -86,8 +92,12 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HISAABO_VERSION=${VERSION}
+ENV STORAGE_LOCAL_DIR=/storage/objects
+
+# Drop root: application code under /app stays root-owned and read-only to it.
+USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider "http://localhost:3000/health?deep=true" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

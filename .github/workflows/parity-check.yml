@@ -7,101 +7,134 @@ on:
       - "packages/api/**"
       - "packages/cli/**"
       - "packages/mcp/**"
+      - "packages/shared/**"
+      - "scripts/**"
       - "parity-exceptions.yaml"
+      - ".github/workflows/parity-check.yml"
 
+# Least privilege: the only write scope (PR comments) is granted to the job.
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: parity-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   parity-check:
     name: Check Feature Parity
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+
+    env:
+      # scripts/check-parity.ts runs directly on Node (type stripping) — no tsx.
+      PARITY: node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-parity.ts
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
-
-      - name: Install tsx
-        run: npm install -g tsx
+          # --experimental-strip-types needs Node >= 22.6
+          node-version: 22
 
       - name: Get changed files
         id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
-          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} > /tmp/changed-files.txt
-          FILES=$(cat /tmp/changed-files.txt | tr '\n' ' ')
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
 
-          echo "touches_api=$(grep -c 'packages/api/src/routers/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
-          echo "touches_web=$(grep -c 'apps/web/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
-          echo "touches_mobile=$(grep -c 'apps/mobile/' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
-          echo "touches_exceptions=$(grep -c 'parity-exceptions.yaml' /tmp/changed-files.txt || true)" >> $GITHUB_OUTPUT
+          {
+            echo "touches_api=$(grep -c 'packages/api/src/routers/' "$RUNNER_TEMP/changed-files.txt" || true)"
+            echo "touches_web=$(grep -c 'apps/web/' "$RUNNER_TEMP/changed-files.txt" || true)"
+            echo "touches_mobile=$(grep -c 'apps/mobile/' "$RUNNER_TEMP/changed-files.txt" || true)"
+            echo "touches_exceptions=$(grep -c 'parity-exceptions.yaml' "$RUNNER_TEMP/changed-files.txt" || true)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate exceptions file
         id: validate
         run: |
           set +e
-          OUTPUT=$(npx tsx scripts/check-parity.ts --validate 2>&1)
+          $PARITY --validate > "$RUNNER_TEMP/validate.txt" 2>&1
           EXIT_CODE=$?
-          echo "$OUTPUT"
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          cat "$RUNNER_TEMP/validate.txt"
+          # Random delimiter: script output must never be able to terminate the
+          # multi-line value early and inject further outputs.
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "output<<$DELIM"
+            cat "$RUNNER_TEMP/validate.txt"
+            echo "$DELIM"
+            echo "exit_code=$EXIT_CODE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Scan tRPC coverage
         id: scan
         run: |
           set +e
-          OUTPUT=$(npx tsx scripts/check-parity.ts --scan 2>&1)
+          $PARITY --scan > "$RUNNER_TEMP/scan.txt" 2>&1
           SCAN_EXIT=$?
-          echo "$OUTPUT"
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "exit_code=$SCAN_EXIT" >> $GITHUB_OUTPUT
+          cat "$RUNNER_TEMP/scan.txt"
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "output<<$DELIM"
+            cat "$RUNNER_TEMP/scan.txt"
+            echo "$DELIM"
+            echo "exit_code=$SCAN_EXIT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check changed files for parity gaps
         id: changed_check
         run: |
           set +e
-          # Read files from temp file to avoid bash issues with parentheses in Expo paths
-          OUTPUT=$(xargs npx tsx scripts/check-parity.ts --changed < /tmp/changed-files.txt 2>&1)
-          echo "$OUTPUT"
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Generate report
-        id: report
-        run: |
-          set +e
-          OUTPUT=$(npx tsx scripts/check-parity.ts --report 2>&1)
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Newline-delimited so paths with spaces/parentheses (Expo routes) survive.
+          xargs -d '\n' $PARITY --changed < "$RUNNER_TEMP/changed-files.txt" > "$RUNNER_TEMP/changed.txt" 2>&1
+          cat "$RUNNER_TEMP/changed.txt"
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "output<<$DELIM"
+            cat "$RUNNER_TEMP/changed.txt"
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Post PR comment
-        if: always()
-        uses: actions/github-script@v7
+        # Fork PRs get a read-only token; skip the comment there (the job still fails/passes on the checks).
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          # Step outputs are passed as environment variables and read from
+          # process.env — never interpolated into the script source, so script
+          # output (which can contain PR-controlled strings) cannot inject code.
+          VALIDATE_OUTPUT: ${{ steps.validate.outputs.output }}
+          SCAN_OUTPUT: ${{ steps.scan.outputs.output }}
+          CHANGED_OUTPUT: ${{ steps.changed_check.outputs.output }}
+          SCAN_EXIT: ${{ steps.scan.outputs.exit_code }}
+          TOUCHES_API: ${{ steps.changed.outputs.touches_api }}
+          TOUCHES_WEB: ${{ steps.changed.outputs.touches_web }}
+          TOUCHES_MOBILE: ${{ steps.changed.outputs.touches_mobile }}
+          TOUCHES_EXCEPTIONS: ${{ steps.changed.outputs.touches_exceptions }}
         with:
           script: |
-            const validateOutput = `${{ steps.validate.outputs.output }}`.trim();
-            const scanOutput = `${{ steps.scan.outputs.output }}`.trim();
-            const changedOutput = `${{ steps.changed_check.outputs.output }}`.trim();
-            const hasGaps = '${{ steps.scan.outputs.exit_code }}' === '1';
+            const env = process.env;
+            const validateOutput = (env.VALIDATE_OUTPUT || '').trim();
+            const scanOutput = (env.SCAN_OUTPUT || '').trim();
+            const changedOutput = (env.CHANGED_OUTPUT || '').trim();
+            const hasGaps = env.SCAN_EXIT === '1';
 
-            const touchesApi = '${{ steps.changed.outputs.touches_api }}' !== '0';
-            const touchesWeb = '${{ steps.changed.outputs.touches_web }}' !== '0';
-            const touchesMobile = '${{ steps.changed.outputs.touches_mobile }}' !== '0';
-            const touchesExceptions = '${{ steps.changed.outputs.touches_exceptions }}' !== '0';
+            const touches = (v) => (v || '0') !== '0';
+            const touchesApi = touches(env.TOUCHES_API);
+            const touchesWeb = touches(env.TOUCHES_WEB);
+            const touchesMobile = touches(env.TOUCHES_MOBILE);
+            const touchesExceptions = touches(env.TOUCHES_EXCEPTIONS);
 
             let body = `## Feature Parity Report\n\n`;
 
@@ -113,7 +146,7 @@ jobs:
             body += `**PR touches**: ${areas.join(', ') || 'None of the tracked areas'}\n\n`;
 
             if (hasGaps) {
-              body += `> **PARITY GAPS FOUND** — web procedures exist that mobile does not implement and are not in \`parity-exceptions.yaml\`. See scan output below.\n\n`;
+              body += `> **PARITY CHECK FAILED** — web procedures exist that mobile/CLI/MCP do not implement and are not in \`parity-exceptions.yaml\`, or a platform references a procedure that does not exist in the API. See scan output below.\n\n`;
             }
 
             if (changedOutput && !changedOutput.includes('No parity gaps')) {
@@ -121,15 +154,13 @@ jobs:
             }
 
             // Validation summary line
-            const validateLines = validateOutput.split('\n');
-            const summaryLine = validateLines.find(l => l.includes('Summary:'));
+            const summaryLine = validateOutput.split('\n').find(l => l.includes('Summary:'));
             if (summaryLine) {
               body += `### Exceptions Validation\n\n${summaryLine.trim()}\n\n`;
             }
 
             // Scan: show parity percentage lines
-            const scanLines = scanOutput.split('\n');
-            const parityLines = scanLines.filter(l => l.includes('parity'));
+            const parityLines = scanOutput.split('\n').filter(l => l.includes('parity'));
             if (parityLines.length > 0) {
               body += `### tRPC Coverage\n\n${parityLines.join('\n').trim()}\n\n`;
             }

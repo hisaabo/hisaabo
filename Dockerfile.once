@@ -57,6 +57,7 @@ RUN apk add --no-cache \
       flock \
       curl \
       age \
+      openssl \
     && mkdir -p /storage/pgdata /storage/run /storage/backups /storage/wal_archive \
     && chown -R postgres:postgres /storage/pgdata /storage/run /storage/wal_archive
 
@@ -66,8 +67,15 @@ RUN case "${TARGETARCH}" in \
       arm64) S6_ARCH="aarch64" ;; \
       *) S6_ARCH="${TARGETARCH}" ;; \
     esac && \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" | tar -C / -Jxpf - && \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" | tar -C / -Jxpf -
+    S6_BASE="https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}" && \
+    mkdir -p /tmp/s6 && cd /tmp/s6 && \
+    for f in "s6-overlay-noarch.tar.xz" "s6-overlay-${S6_ARCH}.tar.xz"; do \
+      curl -fsSLO "${S6_BASE}/${f}" && \
+      curl -fsSLO "${S6_BASE}/${f}.sha256" && \
+      sha256sum -c "${f}.sha256" && \
+      tar -C / -Jxpf "${f}" || exit 1 ; \
+    done && \
+    cd / && rm -rf /tmp/s6
 
 # ── Node setup ───────────────────────────────────────────────
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
@@ -233,6 +241,7 @@ RUN mkdir -p /hooks
 COPY <<'PREBACKUP' /hooks/pre-backup
 #!/bin/sh
 set -e
+umask 077
 SOCKETDIR="/storage/run"
 
 echo "[backup] Discovering databases..."
@@ -251,9 +260,17 @@ for db in $DATABASES; do
 
   if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
     echo "[backup] Encrypting ${db}.dump..."
-    echo "$BACKUP_ENCRYPTION_KEY" | age -e -p -o "${DUMP_FILE}.age" "$DUMP_FILE"
+    # `age -p` cannot take a passphrase non-interactively; use openssl with the
+    # key passed via the environment (never argv).
+    export BACKUP_ENCRYPTION_KEY
+    if ! openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+        -pass env:BACKUP_ENCRYPTION_KEY -in "$DUMP_FILE" -out "${DUMP_FILE}.enc"; then
+      rm -f "$DUMP_FILE" "${DUMP_FILE}.enc"
+      echo "[backup] ERROR: encryption of ${db} failed; plaintext dump removed" >&2
+      exit 1
+    fi
     rm -f "$DUMP_FILE"
-    ENC_SIZE=$(du -h "${DUMP_FILE}.age" | cut -f1)
+    ENC_SIZE=$(du -h "${DUMP_FILE}.enc" | cut -f1)
     echo "[backup] ${db}: dumped ${SIZE} -> encrypted ${ENC_SIZE}"
   else
     echo "[backup] ${db}: dumped ${SIZE}"
@@ -277,7 +294,7 @@ BACKUP_DIR="/storage/backups"
 TARGET_DB="${RESTORE_DB:-}"
 
 # Check if any dumps exist
-DUMP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' -o -name '*.dump.age' 2>/dev/null | wc -l)
+DUMP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' -o -name '*.dump.enc' -o -name '*.dump.age' 2>/dev/null | wc -l)
 if [ "$DUMP_COUNT" -eq 0 ]; then
   echo "[restore] No dump files found in $BACKUP_DIR, skipping"
   exit 0
@@ -296,7 +313,28 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Decrypt encrypted dumps (.dump.age)
+# Decrypt encrypted dumps (.dump.enc: openssl, non-interactive)
+for enc_file in "$BACKUP_DIR"/*.dump.enc; do
+  [ -f "$enc_file" ] || continue
+  BASENAME=$(basename "$enc_file" .dump.enc)
+
+  if [ -n "$TARGET_DB" ] && [ "$BASENAME" != "$TARGET_DB" ]; then
+    continue
+  fi
+
+  if [ -z "$BACKUP_ENCRYPTION_KEY" ]; then
+    echo "[restore] ERROR: ${BASENAME}.dump.enc found but BACKUP_ENCRYPTION_KEY is not set"
+    exit 1
+  fi
+
+  echo "[restore] Decrypting ${BASENAME}.dump.enc..."
+  export BACKUP_ENCRYPTION_KEY
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+    -pass env:BACKUP_ENCRYPTION_KEY -in "$enc_file" -out "$BACKUP_DIR/${BASENAME}.dump"
+  rm -f "$enc_file"
+done
+
+# Decrypt legacy age dumps (.dump.age; age prompts for the passphrase on the terminal)
 for age_file in "$BACKUP_DIR"/*.dump.age; do
   [ -f "$age_file" ] || continue
   BASENAME=$(basename "$age_file" .dump.age)
@@ -314,7 +352,7 @@ for age_file in "$BACKUP_DIR"/*.dump.age; do
   fi
 
   echo "[restore] Decrypting ${BASENAME}.dump.age..."
-  echo "$BACKUP_ENCRYPTION_KEY" | age -d -o "$DUMP_FILE" "$age_file"
+  age -d -o "$DUMP_FILE" "$age_file"
   rm -f "$age_file"
 done
 

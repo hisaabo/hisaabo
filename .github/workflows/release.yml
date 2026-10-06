@@ -5,9 +5,11 @@ on:
     tags:
       - "v*"
 
+# Least privilege: read-only by default. Jobs that publish or sign request
+# exactly the extra scopes they need (id-token for npm Trusted Publishing and
+# cosign keyless signing, packages for GHCR, contents:write for release assets).
 permissions:
   contents: read
-  id-token: write  # npm Trusted Publishing (OIDC) for CLI/MCP jobs — no NPM_TOKEN secret needed
 
 concurrency:
   group: release-${{ github.ref }}
@@ -27,22 +29,24 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       mcp: ${{ steps.filter.outputs.mcp }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Get previous tag
         id: prev
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # Get the tag before the current one
-          PREV=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          PREV=$(git tag --sort=-version:refname | grep -vxF "$REF_NAME" | head -1)
           if [ -z "$PREV" ]; then
             # First tag ever — use the initial commit so everything builds
             PREV=$(git rev-list --max-parents=0 HEAD)
           fi
           echo "ref=$PREV" >> "$GITHUB_OUTPUT"
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           base: ${{ steps.prev.outputs.ref }}
@@ -84,48 +88,91 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write  # cosign keyless signing (Sigstore OIDC) — this job only
+    env:
+      REF_NAME: ${{ github.ref_name }}
+      IMAGE_OWNER: ${{ github.repository_owner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # `latest` only moves for stable releases (no pre-release suffix such as
+      # -beta.1 / -rc.1 in the version).
+      - name: Compute image tags
+        id: tags
+        run: |
+          API="ghcr.io/${IMAGE_OWNER}/hisaabo-api"
+          ONCE="ghcr.io/${IMAGE_OWNER}/hisaabo"
+          API_TAGS="${API}:${REF_NAME}"
+          ONCE_TAGS="${ONCE}:${REF_NAME}"
+          if [[ "$REF_NAME" != *-* ]]; then
+            API_TAGS="${API_TAGS},${API}:latest"
+            ONCE_TAGS="${ONCE_TAGS},${ONCE}:latest"
+          else
+            echo "Pre-release ${REF_NAME}: not tagging latest"
+          fi
+          {
+            echo "api=${API_TAGS}"
+            echo "once=${ONCE_TAGS}"
+            echo "api_image=${API}"
+            echo "once_image=${ONCE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push API image
-        uses: docker/build-push-action@v5
+        id: build_api
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           push: true
           build-args: VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/hisaabo-api:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/hisaabo-api:latest
+          tags: ${{ steps.tags.outputs.api }}
           platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
+      - name: Sign API image (cosign, keyless)
+        env:
+          IMAGE: ${{ steps.tags.outputs.api_image }}
+          DIGEST: ${{ steps.build_api.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
       - name: Build & push ONCE image
-        uses: docker/build-push-action@v5
+        id: build_once
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: Dockerfile.once
           push: true
           build-args: VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/hisaabo:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/hisaabo:latest
+          tags: ${{ steps.tags.outputs.once }}
           platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha,scope=once
           cache-to: type=gha,mode=max,scope=once
+
+      - name: Sign ONCE image (cosign, keyless)
+        env:
+          IMAGE: ${{ steps.tags.outputs.once_image }}
+          DIGEST: ${{ steps.build_once.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   # ── Web & Store deploy to Cloudflare Pages on push to main ─────
   # (handled by deploy-web.yml and deploy-store.yml — no need to duplicate here)
@@ -150,22 +197,23 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: apps/desktop/src-tauri
 
@@ -181,12 +229,14 @@ jobs:
         run: node -e "const fs=require('fs'),f='apps/desktop/src-tauri/tauri.conf.json',c=JSON.parse(fs.readFileSync(f));c.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
 
       - name: Build Tauri
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ""
+          # Tauri updater-bundle signing key, supplied from repository secrets.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           # Apply the production CSP overlay (strips localhost:3000 —
@@ -195,7 +245,7 @@ jobs:
           args: "--config src-tauri/tauri.conf.prod.json"
           tagName: ${{ github.ref_name }}
           releaseName: "Hisaabo ${{ github.ref_name }}"
-          releaseBody: "Desktop builds for ${{ github.ref_name }}. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."
+          releaseBody: "Desktop builds for ${{ github.ref_name }}. These installers are NOT code-signed or notarized (no Apple Developer ID or Windows Authenticode certificate is configured): macOS Gatekeeper and Windows SmartScreen will warn on first launch. Verify the download against the release page before running it. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."
           releaseDraft: true
           prerelease: false
 
@@ -209,16 +259,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -232,15 +282,67 @@ jobs:
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --clean
 
+      # Release APKs must be signed with the project's release keystore. Expo's
+      # prebuilt Gradle project would otherwise fall back to the public debug
+      # keystore, producing an APK anyone could re-sign. Required secrets:
+      #   ANDROID_KEYSTORE_BASE64      base64 of the .jks/.keystore file
+      #   ANDROID_KEYSTORE_PASSWORD    keystore password
+      #   ANDROID_KEY_ALIAS            key alias
+      #   ANDROID_KEY_PASSWORD         key password
+      - name: Prepare release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [ -n "${!v}" ] || missing+=("$v")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Android release signing not configured::Missing repository secret(s): ${missing[*]}. A release APK must not be built with the debug keystore. Add the secrets (see comment above this step) and re-run."
+            exit 1
+          fi
+          umask 077
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
       - name: Build APK
         working-directory: apps/mobile/android
-        run: ./gradlew assembleRelease --no-daemon
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$ANDROID_KEYSTORE_PATH" \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+
+      - name: Verify APK is not debug-signed
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          APK=$(ls apps/mobile/android/app/build/outputs/apk/release/*.apk | head -1)
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          echo "$CERTS"
+          if echo "$CERTS" | grep -q "CN=Android Debug"; then
+            echo "::error::Release APK is signed with the Android debug key — refusing to publish."
+            exit 1
+          fi
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Rename APK
-        run: mv apps/mobile/android/app/build/outputs/apk/release/*.apk apps/mobile/android/app/build/outputs/apk/release/hisaabo-${{ github.ref_name }}.apk
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: mv apps/mobile/android/app/build/outputs/apk/release/*.apk "apps/mobile/android/app/build/outputs/apk/release/hisaabo-${REF_NAME}.apk"
 
       - name: Upload APK to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           draft: true
           files: apps/mobile/android/app/build/outputs/apk/release/hisaabo-${{ github.ref_name }}.apk
@@ -253,14 +355,17 @@ jobs:
     if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write  # npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       # Node 24 ships with npm 11.x, which satisfies Trusted Publishing's
       # npm >= 11.5.1 requirement without a separate upgrade step.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
@@ -299,14 +404,17 @@ jobs:
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write  # npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       # Node 24 ships with npm 11.x, which satisfies Trusted Publishing's
       # npm >= 11.5.1 requirement without a separate upgrade step.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
@@ -343,7 +451,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -362,9 +470,11 @@ jobs:
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           CLI_RESULT: ${{ needs.cli.result }}
           MCP_RESULT: ${{ needs.mcp.result }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           # Get commits since last tag
-          PREV=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          PREV=$(git tag --sort=-version:refname | grep -vxF "$REF_NAME" | head -1)
           if [ -z "$PREV" ]; then
             COMMITS=$(git log --oneline -20)
           else
@@ -411,8 +521,22 @@ jobs:
           ## Docker
 
           \`\`\`bash
-          docker pull ghcr.io/hisaabo/hisaabo:${{ github.ref_name }}
+          docker pull ghcr.io/hisaabo/hisaabo:${REF_NAME}
           \`\`\`
+
+          Images are signed with cosign (keyless) and carry SLSA provenance and an SBOM:
+
+          \`\`\`bash
+          cosign verify ghcr.io/hisaabo/hisaabo:${REF_NAME} \\
+            --certificate-identity-regexp '^https://github.com/${REPOSITORY}/.github/workflows/release.yml@' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+
+          ## Signing status
+
+          - **Docker images:** signed (cosign, keyless).
+          - **Android APK:** signed with the project release keystore.
+          - **Desktop installers (Windows/macOS/Linux):** **NOT code-signed or notarized.** No Apple Developer ID or Windows Authenticode certificate is configured, so Gatekeeper and SmartScreen will show warnings. Only install builds downloaded from this release page.
 
           ## Commits
 
@@ -427,7 +551,7 @@ jobs:
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
       - name: Create or update release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "Hisaabo ${{ github.ref_name }}"

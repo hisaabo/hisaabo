@@ -54,7 +54,7 @@ The fields fail2ban relies on:
 |---------|------------------------------------------------------------------|
 | `sec`   | Always `true` for ban-worthy events. Filter sentinel.            |
 | `event` | One of the values listed below — used to scope jails.            |
-| `ip`    | Client IP (Cloudflare `cf-connecting-ip` first, then XFF last).  |
+| `ip`    | Client IP as derived by the API from `TRUST_PROXY_HOPS` / `TRUST_CLOUDFLARE` (see below). |
 | `path`  | Request path (helpful for triage; not part of the regex).        |
 | `reason`| Free-form sub-reason (`bad_password`, `phone`, etc.).            |
 
@@ -72,6 +72,26 @@ The fields fail2ban relies on:
 
 If you add new event types in `packages/api/src/lib/logger.ts`, update
 the regex in `filter.d/hisaabo-api.conf` to include them.
+
+## Prerequisite: correct client IPs
+
+fail2ban bans exactly the `ip` the API logs, so a wrong client IP means either
+no protection (attacker spoofs a fresh IP per request) or banning the wrong
+host (every client shows up as your proxy and one bad actor bans everyone).
+The API only trusts forwarding headers as configured:
+
+- `TRUST_PROXY_HOPS=N` (default `1`): number of trusted proxies appending to
+  `X-Forwarded-For`; the client IP is the Nth entry from the right. Use `1` with
+  a single nginx/Caddy/load balancer in front, `0` if the API port is exposed
+  directly (forwarding headers are then ignored).
+- `TRUST_CLOUDFLARE=true`: also honour `cf-connecting-ip`. Only when the origin
+  is reachable exclusively through Cloudflare.
+
+Verify after changing the proxy topology:
+`curl -H 'X-Forwarded-For: 1.2.3.4' https://your-api/...` must NOT make `1.2.3.4`
+appear as the `ip` in `journalctl CONTAINER_TAG=hisaabo-api`. Also see
+`ignoreip` and the firewall-chain choice (INPUT vs DOCKER-USER) in
+`jail.d/hisaabo.local`.
 
 ## Install (Debian/Ubuntu host)
 
@@ -117,12 +137,14 @@ You should see the number of matches and the IPs that would be banned.
 
 ## Cloudflare in front?
 
-If the API is behind Cloudflare, fail2ban sees the Docker host's view of
-the connection (Cloudflare edge IPs) at the TCP layer — but the
-**application** log line carries the real client IP from
-`cf-connecting-ip`. Our filter extracts that. The IP fail2ban bans is the
-real client; if you also use Cloudflare's firewall, mirror the bans into a
-WAF rule (out of scope here).
+If the API is behind Cloudflare, fail2ban's firewall rules see Cloudflare edge
+IPs at the TCP layer, so an iptables/nftables ban of the *client* IP does not
+stop traffic that arrives via Cloudflare (the packets come from Cloudflare, not
+the banned address). With `TRUST_CLOUDFLARE=true` the **application** log line
+carries the real client IP from `cf-connecting-ip`; to enforce bans, mirror them
+into a Cloudflare WAF/IP-access rule with a custom fail2ban action using the
+Cloudflare API (see fail2ban's `cloudflare` action). Without `TRUST_CLOUDFLARE`
+the API ignores `cf-connecting-ip` and logs whatever `TRUST_PROXY_HOPS` yields.
 
 ## ONCE host (`Dockerfile.once`)
 

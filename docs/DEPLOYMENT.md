@@ -77,6 +77,11 @@
 | `EMAIL_FROM` | No | From address for emails | `Hisaabo <noreply@hisaabo.in>` |
 | `MULTI_TENANT` | No | Enable multi-tenancy | `true` |
 | `CONTROL_DATABASE_URL` | No | Separate control DB (multi-tenant only) | `postgresql://...` |
+| `TRUST_PROXY_HOPS` | No | Number of trusted reverse proxies in front of the API (default `1`; `0` = API exposed directly, forwarding headers ignored). Drives client-IP detection for rate limiting and audit logs | `1` |
+| `TRUST_CLOUDFLARE` | No | `true` to honour `cf-connecting-ip`; only when the API is reachable exclusively via Cloudflare | `false` |
+| `EXPORT_SECRET` | No | Optional dedicated secret for signing import tokens (falls back to `SESSION_SECRET`) | |
+| `TURNSTILE_SECRET_KEY` | Yes (store) | Cloudflare Turnstile secret for the public store | `0x4AAA...` |
+| `BACKUP_ENCRYPTION_KEY` | With offsite backup | Passphrase for backup encryption; offsite upload is refused without it | |
 
 ### GitHub Actions Secrets
 
@@ -113,7 +118,13 @@ cp .env.prod.example .env.prod
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
-5. Verify health:
+5. Put a TLS reverse proxy in front. `docker-compose.prod.yml` publishes the API on
+   the host loopback only (`127.0.0.1:3000`); expose 80/443 through Caddy, nginx
+   (`nginx/nginx.conf`) or a Cloudflare Tunnel running on the same host. Keep
+   `TRUST_PROXY_HOPS=1` for exactly one proxy, or `0` if you deliberately expose
+   the API port directly (set `API_BIND=0.0.0.0`).
+
+6. Verify health (from the host):
 
 ```bash
 curl http://localhost:3000/health
@@ -172,12 +183,13 @@ The `docker-compose.prod.yml` is compatible with Kamal's deploy model:
 The `nginx/nginx.conf` provides:
 
 - Upstream keepalive connections to the API container
-- Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+- Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy; HSTS only when the edge proxy reports `X-Forwarded-Proto: https`), `server_tokens off`
 - Gzip compression for JSON responses
-- Path-based routing (`/api/*`, `/store/*`, `/health`)
-- Appropriate timeouts for PDF generation endpoints (30s) and tRPC (120s)
-- 10MB request body limit for bulk import operations
-- Catalog response caching (60s) for store routes
+- Path-based routing (`/api/trpc/*`, `/api/*`, `/store/*`, `/webhooks/*`, `/health`)
+- Per-IP `limit_req` zones (stricter for auth procedures) and a per-IP `limit_conn` cap; header/body timeouts against slow clients
+- Per-location body limits: 10MB for tRPC/API (bulk imports), 64KB for auth, 256KB for the public store, 1MB for webhooks and as the default
+- Overwrites `X-Forwarded-For` with the connecting address and strips `CF-Connecting-IP` (no client-supplied forwarding headers reach the API). nginx does not cache store responses.
+- Documented `real_ip` blocks (top of the file) for when a TLS proxy or Cloudflare sits in front of nginx
 
 ### TLS Termination
 
