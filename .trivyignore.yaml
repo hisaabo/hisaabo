@@ -19,3 +19,21 @@ misconfigurations:
       which switches to the unprivileged `backup` user for the job. backup.sh,
       its credentials (rclone.conf, /etc/backup.env, log, dumps) are owned by
       that user with mode 0600/0700 and umask 077.
+
+# Expo/Metro development-toolchain advisories, accepted for pnpm audit too
+# (see SECURITY.md "Accepted dependency advisories"). image-size is only
+# reachable via apps/mobile > expo > metro; the fix is image-size 2.x, a major
+# Metro does not support. Not part of any shipped image or server runtime.
+vulnerabilities:
+  - id: CVE-2025-71329
+    paths:
+      - pnpm-lock.yaml
+    statement: >-
+      image-size 1.2.1 via Expo/Metro dev toolchain only; fix requires 2.x
+      which Metro does not support. Re-check on Expo/Metro upgrades.
+  - id: CVE-2025-71330
+    paths:
+      - pnpm-lock.yaml
+    statement: >-
+      image-size 1.2.1 via Expo/Metro dev toolchain only; fix requires 2.x
+      which Metro does not support. Re-check on Expo/Metro upgrades.

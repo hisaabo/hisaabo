@@ -64,6 +64,14 @@ COPY packages/shared/package.json packages/shared/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
+# npm/corepack/pnpm are build-time only: the base image's global copies (and the corepack-prepared pnpm) carry unfixable CVEs and the runtime only needs `node`.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+           /usr/local/bin/pnpm /usr/local/bin/pnpx \
+           /root/.cache /root/.local/share/pnpm /root/.npm \
+           "${COREPACK_HOME:-/nonexistent}" \
+    && for b in npm npx pnpm pnpx corepack; do ! command -v "$b" >/dev/null || { echo "FATAL: $b still present" >&2; exit 1; }; done
+
 # ── Guard: no build tooling in the runtime image ──────────────
 # esbuild/drizzle-kit/tsx ship Go/native binaries that Trivy flags and that the
 # runtime never needs (migrations run from the pre-bundled dist/migrate.mjs).
