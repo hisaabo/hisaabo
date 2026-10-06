@@ -37,18 +37,18 @@ export async function storeOrderGetCommand(
     process.stdout.write(`  Status:    ${formatStatus(order.status)}\n`);
     process.stdout.write(`  Total:     ₹${formatAmount(order.totalAmount)}\n`);
 
-    if (order.shippingAddress) {
-      process.stdout.write(`  Address:   ${order.shippingAddress}\n`);
+    if (order.deliveryAddress) {
+      process.stdout.write(`  Address:   ${order.deliveryAddress}\n`);
     }
-    if (order.notes) {
-      process.stdout.write(`  Notes:     ${order.notes}\n`);
+    if (order.deliveryNotes) {
+      process.stdout.write(`  Notes:     ${order.deliveryNotes}\n`);
     }
 
-    if (order.items && order.items.length > 0) {
+    if (order.lineItems.length > 0) {
       process.stdout.write(`\n  Items:\n`);
-      for (const item of order.items) {
+      for (const item of order.lineItems) {
         process.stdout.write(
-          `    • ${item.name}  qty: ${item.quantity}  ₹${formatAmount(item.price)}\n`,
+          `    • ${item.itemName}  qty: ${item.quantity}  ₹${formatAmount(item.unitPrice)}\n`,
         );
       }
     }

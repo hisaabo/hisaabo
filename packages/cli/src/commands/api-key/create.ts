@@ -31,8 +31,8 @@ export async function apiKeyCreateCommand(opts: ApiKeyCreateOpts): Promise<void>
       return;
     }
 
-    const key = String(result?.key ?? result?.apiKey ?? result?.token ?? "");
-    const id = String(result?.id ?? "");
+    const key = String(result.key);
+    const id = String(result.id);
 
     // Security banner — key is shown ONLY ONCE
     if (hasColor()) {

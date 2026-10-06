@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
+import { formatAmount, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface PaymentModesOpts {
@@ -41,38 +41,18 @@ export async function dashboardPaymentModesCommand(opts: PaymentModesOpts): Prom
   else if (opts.thisFy)  { fromDate = fyStart();    toDate = todayISO(); }
 
   try {
-    const data = await client.dashboard.paymentModeBreakdown({ fromDate, toDate });
+    const data = await client.dashboard.paymentModeBreakdown({ fromDate: apiFrom(fromDate), toDate: apiTo(toDate) });
 
     if (opts.json) {
       outputJSON(data);
       return;
     }
 
-    // data can be an array of { mode, amount, count } or an object keyed by mode
-    type ModeRow = { mode: string; amount: number; count: number };
-    let modes: ModeRow[] = [];
-
-    if (Array.isArray(data)) {
-      modes = data.map((r: Record<string, unknown>) => ({
-        mode:   String(r["mode"] ?? r["paymentMode"] ?? r["method"] ?? "-"),
-        amount: parseFloat(String(r["amount"] ?? r["totalAmount"] ?? "0")),
-        count:  parseInt(String(r["count"] ?? r["paymentCount"] ?? "0"), 10),
-      }));
-    } else if (data && typeof data === "object") {
-      const obj = data as Record<string, unknown>;
-      for (const [key, val] of Object.entries(obj)) {
-        if (typeof val === "object" && val !== null) {
-          const entry = val as Record<string, unknown>;
-          modes.push({
-            mode:   key,
-            amount: parseFloat(String(entry["amount"] ?? entry["totalAmount"] ?? "0")),
-            count:  parseInt(String(entry["count"] ?? "0"), 10),
-          });
-        } else if (typeof val === "string" || typeof val === "number") {
-          modes.push({ mode: key, amount: parseFloat(String(val)), count: 0 });
-        }
-      }
-    }
+    const modes = data.map((r) => ({
+      mode:   r.mode as string,
+      amount: parseFloat(r.total),
+      count:  r.count,
+    }));
 
     // Sort descending by amount
     modes.sort((a, b) => b.amount - a.amount);
@@ -89,11 +69,11 @@ export async function dashboardPaymentModesCommand(opts: PaymentModesOpts): Prom
       };
     });
 
-    const columns = [
-      { key: "mode",   header: "Payment Mode", align: "left" as const },
-      { key: "amount", header: "Amount ₹",     align: "right" as const },
-      { key: "count",  header: "Count",         align: "right" as const },
-      { key: "pct",    header: "% of Total",    align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "mode",   header: "Payment Mode", align: "left" },
+      { key: "amount", header: "Amount ₹",     align: "right" },
+      { key: "count",  header: "Count",         align: "right" },
+      { key: "pct",    header: "% of Total",    align: "right" },
     ];
 
     if (opts.format === "tsv") {

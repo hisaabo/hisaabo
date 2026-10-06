@@ -16,7 +16,7 @@ import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
-const ACCOUNT_TYPES = ["savings", "current", "cash", "credit", "other"] as const;
+const ACCOUNT_TYPES = ["savings", "current", "cash", "upi", "credit_card", "payment_gateway"] as const;
 
 export function registerBankAccountTools(server: ToolServer, client: HisaaboClient) {
 
@@ -74,7 +74,7 @@ export function registerBankAccountTools(server: ToolServer, client: HisaaboClie
       account_name: z.string().min(1).max(200)
         .describe("Display name, e.g. 'HDFC Current Account' or 'Petty Cash'."),
       account_type: z.enum(ACCOUNT_TYPES)
-        .describe("'savings', 'current', 'cash' (petty cash/physical cash), 'credit', or 'other'."),
+        .describe("'savings', 'current', 'cash' (petty cash/physical cash), 'upi', 'credit_card', or 'payment_gateway'."),
       account_number: z.string().max(34).optional()
         .describe("Bank account number (not required for cash accounts)."),
       ifsc: z.string().max(11).optional()

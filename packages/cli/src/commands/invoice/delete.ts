@@ -9,8 +9,9 @@ export async function invoiceDeleteCommand(id: string, opts: { yes?: boolean; js
 
   try {
     const inv = await client.invoice.get(id);
+    if (!inv) fatalError(`Invoice not found: ${id}`, EXIT.NOT_FOUND);
 
-    await confirmOrExit(`  Delete ${inv.invoiceNumber} (${inv.partyName}, ${inv.totalAmount})?`, opts);
+    await confirmOrExit(`  Delete ${inv.invoiceNumber} (${inv.party?.name ?? "-"}, ${inv.totalAmount})?`, opts);
 
     const result = await client.invoice.delete(id);
 

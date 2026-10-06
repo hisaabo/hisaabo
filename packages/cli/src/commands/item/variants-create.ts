@@ -16,33 +16,43 @@ export async function itemVariantsCreateCommand(itemId: string, opts: VariantsCr
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  let parsedAttributes: Record<string, unknown> | undefined;
+  let parsedAttributes: Record<string, string> | undefined;
   if (opts.attributes) {
     try {
-      parsedAttributes = JSON.parse(opts.attributes) as Record<string, unknown>;
+      const raw: unknown = JSON.parse(opts.attributes);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !Object.values(raw).every((v) => typeof v === "string")) {
+        throw new Error("not a string map");
+      }
+      parsedAttributes = raw as Record<string, string>;
     } catch {
-      fatalError("--attributes must be valid JSON", EXIT.USAGE);
+      fatalError('--attributes must be a JSON object of string values, e.g. \'{"size":"M"}\'', EXIT.USAGE);
     }
   }
 
-  const data: Record<string, unknown> = { itemId };
-  if (opts.sku !== undefined) data["sku"] = opts.sku;
-  if (opts.salePrice !== undefined) data["salePrice"] = opts.salePrice;
-  if (opts.purchasePrice !== undefined) data["purchasePrice"] = opts.purchasePrice;
-  if (opts.stock !== undefined) data["stockQuantity"] = opts.stock;
-  if (opts.lowStockAlert !== undefined) data["lowStockAlert"] = opts.lowStockAlert;
-  if (parsedAttributes !== undefined) data["attributes"] = parsedAttributes;
+  if (parsedAttributes === undefined) {
+    fatalError("--attributes is required (JSON object, e.g. '{\"size\":\"M\"}')", EXIT.USAGE);
+  }
 
   try {
-    const result = await client.item.createVariant(data);
+    const result = await client.item.createVariant({
+      itemId,
+      variant: {
+        attributeValues: parsedAttributes,
+        sku: opts.sku,
+        salePrice: opts.salePrice,
+        purchasePrice: opts.purchasePrice,
+        stockQuantity: opts.stock,
+        lowStockAlert: opts.lowStockAlert,
+      },
+    });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    success(`Created variant: ${result?.id ?? "OK"}`);
-    if (result?.sku) console.log(`  SKU: ${result.sku}`);
+    success(`Created variant: ${result.id}`);
+    if (result.sku) console.log(`  SKU: ${result.sku}`);
     console.log();
 
   } catch (e) {

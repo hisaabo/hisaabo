@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
-import { formatAmount, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
+import { formatAmount, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface TopItemsOpts {
@@ -27,9 +27,9 @@ export async function dashboardTopItemsCommand(opts: TopItemsOpts): Promise<void
   try {
     const data = await client.dashboard.topSellingItems({
       limit: opts.limit,
-      itemType: opts.type,
-      fromDate,
-      toDate,
+      itemType: opts.type === "product" || opts.type === "service" ? opts.type : undefined,
+      fromDate: apiFrom(fromDate),
+      toDate: apiTo(toDate),
     });
 
     if (opts.json) {
@@ -37,20 +37,18 @@ export async function dashboardTopItemsCommand(opts: TopItemsOpts): Promise<void
       return;
     }
 
-    const rows: Array<{ item: string; qty: string; revenue: string; type: string }> = Array.isArray(data)
-      ? data.map((r: Record<string, unknown>) => ({
-          item: String(r["itemName"] ?? r["name"] ?? "-"),
-          qty: String(r["totalQuantity"] ?? r["qty"] ?? r["quantity"] ?? "-"),
-          revenue: formatAmount(String(r["totalRevenue"] ?? r["revenue"] ?? "0")),
-          type: String(r["itemType"] ?? r["type"] ?? "-"),
-        }))
-      : [];
+    const rows = data.map((r) => ({
+      item: r.itemName,
+      qty: r.totalQty,
+      revenue: formatAmount(r.totalAmount),
+      type: r.unit ?? "-",
+    }));
 
-    const columns = [
-      { key: "item", header: "Item", align: "left" as const },
-      { key: "type", header: "Type", align: "left" as const },
-      { key: "qty", header: "Qty Sold", align: "right" as const },
-      { key: "revenue", header: "Revenue ₹", align: "right" as const },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "item", header: "Item", align: "left" },
+      { key: "type", header: "Unit", align: "left" },
+      { key: "qty", header: "Qty Sold", align: "right" },
+      { key: "revenue", header: "Revenue ₹", align: "right" },
     ];
 
     if (opts.format === "tsv") {

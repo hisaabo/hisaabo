@@ -1,7 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, hasColor, termWidth } from "../../output.js";
-import { formatINR, formatDate, fyStart, todayISO, monthStart, monthEnd } from "../../format.js";
+import { formatINR, formatDate, fyStart, todayISO, monthStart, monthEnd, apiFrom, apiTo } from "../../format.js";
 import chalk from "chalk";
 
 interface ProfitLossOpts {
@@ -81,23 +81,21 @@ export async function dashboardProfitLossCommand(opts: ProfitLossOpts): Promise<
   else if (opts.thisFy) { fromDate = fyStart(); toDate = todayISO(); }
 
   try {
-    const data = await client.dashboard.profitAndLoss({ fromDate, toDate });
+    const data = await client.dashboard.profitAndLoss({ fromDate: apiFrom(fromDate), toDate: apiTo(toDate) });
 
     if (opts.json) {
       outputJSON(data);
       return;
     }
 
-    const pl = data as Record<string, unknown>;
+    const revenue      = parseFloat(data.revenue);
+    const cogs         = parseFloat(data.cogs);
+    const grossProfit  = parseFloat(data.grossProfit);
+    const opex         = parseFloat(data.totalExpenses);
+    const netProfit    = parseFloat(data.netProfit);
 
-    const revenue      = parseFloat(String(pl["revenue"] ?? pl["totalRevenue"] ?? pl["sales"] ?? "0"));
-    const cogs         = parseFloat(String(pl["cogs"] ?? pl["costOfGoodsSold"] ?? pl["purchases"] ?? "0"));
-    const grossProfit  = parseFloat(String(pl["grossProfit"] ?? String(revenue - cogs)));
-    const opex         = parseFloat(String(pl["operatingExpenses"] ?? pl["expenses"] ?? pl["totalExpenses"] ?? "0"));
-    const netProfit    = parseFloat(String(pl["netProfit"] ?? pl["profit"] ?? String(grossProfit - opex)));
-
-    const grossMargin = revenue > 0 ? ((grossProfit / revenue) * 100).toFixed(1) + "%" : "-";
-    const netMargin   = revenue > 0 ? ((netProfit / revenue) * 100).toFixed(1) + "%" : "-";
+    const grossMargin = revenue > 0 ? `${data.grossMarginPercent}%` : "-";
+    const netMargin   = revenue > 0 ? `${data.netMarginPercent}%` : "-";
 
     const width = Math.min(termWidth() - 2, 52);
     const innerW = width - 2;

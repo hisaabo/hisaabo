@@ -21,24 +21,21 @@ export async function listSessionsCommand(opts: ListSessionsOpts): Promise<void>
       return;
     }
 
-    const items: unknown[] = Array.isArray(sessions) ? sessions : (sessions?.items ?? sessions?.data ?? []);
+    const items = sessions;
 
     if (items.length === 0) {
       console.log(opts.expired ? "No expired sessions." : "No active sessions.");
       return;
     }
 
-    const rows = items.map((item: unknown) => {
-      const s = item as Record<string, unknown>;
-      return {
-        id: String(s["id"] ?? "").slice(0, 12) + "...",
-        device: s["userAgent"] ? parseUA(String(s["userAgent"])) : "Unknown",
-        ip: String(s["ipAddress"] ?? "\u2014"),
-        lastUsed: s["lastUsedAt"] ? timeAgo(String(s["lastUsedAt"])) : "\u2014",
-        created: s["createdAt"] ? new Date(String(s["createdAt"])).toLocaleDateString() : "\u2014",
-        current: s["isCurrent"] ? "\u2713" : "",
-      };
-    });
+    const rows = items.map((s) => ({
+      id: s.id.slice(0, 12) + "...",
+      device: s.userAgent ? parseUA(s.userAgent) : "Unknown",
+      ip: s.ipAddress ?? "\u2014",
+      lastUsed: s.lastUsedAt ? timeAgo(s.lastUsedAt) : "\u2014",
+      created: s.createdAt.toLocaleDateString(),
+      current: s.isCurrent ? "\u2713" : "",
+    }));
 
     const columns: ColumnDef<typeof rows[number]>[] = [
       { key: "id", header: "ID", align: "left" },
@@ -80,8 +77,8 @@ function parseUA(ua: string): string {
   return os ? `${browser} / ${os}` : browser;
 }
 
-function timeAgo(date: string): string {
-  const diff = Date.now() - new Date(date).getTime();
+function timeAgo(date: Date): string {
+  const diff = Date.now() - date.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "now";
   if (mins < 60) return `${mins}m ago`;

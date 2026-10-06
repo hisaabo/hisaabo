@@ -83,7 +83,7 @@ function registerDocTypeTools(
     `List ${label} documents for the active business. Supports filtering by party, date range, and status.`,
     listInput,
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).list({
+      const result = await client[nsKey].list({
         type: input.type,
         status: input.status,
         partyId: input.party_id,
@@ -110,7 +110,7 @@ function registerDocTypeTools(
         .describe(`${label} UUID from ${prefix}_list.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).getById(input.document_id);
+      const result = await client[nsKey].getById(input.document_id);
       return {
         content: [{
           type: "text" as const,
@@ -129,7 +129,7 @@ function registerDocTypeTools(
     ].join(" "),
     createInput,
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).create({
+      const result = await client[nsKey].create({
         partyId: input.party_id,
         type: input.type,
         invoiceDate: input.document_date,
@@ -158,7 +158,7 @@ function registerDocTypeTools(
         .describe(`New status. Allowed: ${allowedStatuses.join(", ")}.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).updateStatus(input.document_id, input.status);
+      const result = await client[nsKey].updateStatus(input.document_id, input.status);
       return {
         content: [{
           type: "text" as const,
@@ -179,7 +179,7 @@ function registerDocTypeTools(
         .describe(`${label} UUID to delete.`),
     },
     wrapTool(async (input) => {
-      const result = await (client[nsKey] as any).delete(input.document_id);
+      const result = await client[nsKey].delete(input.document_id);
       return {
         content: [{
           type: "text" as const,
@@ -211,7 +211,7 @@ export function registerDocumentTools(server: ToolServer, client: HisaaboClient)
     wrapTool(async (input) => {
       const result = await client.document.convert({
         sourceId: input.source_id,
-        targetType: input.target_type as any,
+        targetType: input.target_type,
       });
       return {
         content: [{

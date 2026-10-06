@@ -14,20 +14,18 @@ export function registerItcCommands(program: Command): void {
     .command("dashboard")
     .description("ITC summary dashboard")
     .option("--json", "JSON output")
-    .option("--from <date>", "From date")
-    .option("--to <date>", "To date")
+    .option("--period <YYYY-MM>", "Return period (default: current month)")
     .action(async (opts) => {
-      await itcDashboardCommand(opts);
+      await itcDashboardCommand({ json: opts.json, period: opts.period });
     });
 
   itc
     .command("ledger")
     .description("ITC ledger — all eligible purchase credits")
     .option("--json", "JSON output")
-    .option("--from <date>", "From date")
-    .option("--to <date>", "To date")
+    .option("--period <YYYY-MM>", "Return period (default: all periods)")
     .action(async (opts) => {
-      await itcLedgerCommand(opts);
+      await itcLedgerCommand({ json: opts.json, period: opts.period });
     });
 
   itc
@@ -42,8 +40,10 @@ export function registerItcCommands(program: Command): void {
     .command("block <invoiceId>")
     .description("Mark ITC for an invoice as blocked")
     .option("--json", "JSON output")
+    .option("--reason <reason>", "Block reason (motor_vehicle, food_beverage, personal, membership, travel_benefits, works_contract, construction, telecom, other)")
+    .option("--notes <text>", "Free-text notes")
     .action(async (invoiceId: string, opts) => {
-      await itcBlockCommand(invoiceId, { json: opts.json });
+      await itcBlockCommand(invoiceId, { json: opts.json, reason: opts.reason, notes: opts.notes });
     });
 
   itc

@@ -45,6 +45,7 @@ export function registerItemCommands(program: Command): void {
       const client = new HisaaboClient(cfg);
       try {
         const it = await client.item.get(id);
+        if (!it) fatalError(`Item not found: ${id}`, EXIT.NOT_FOUND);
         if (opts.json) { outputJSON(it); return; }
         console.log(`\n  ${it.name} (${it.itemType})`);
         console.log("  " + "─".repeat(40));

@@ -9,6 +9,7 @@ export async function partyDeleteCommand(id: string, opts: { yes?: boolean; json
 
   try {
     const party = await client.party.get(id);
+    if (!party) fatalError(`Party not found: ${id}`, EXIT.NOT_FOUND);
 
     await confirmOrExit(`  Delete ${party.name}?`, opts);
 

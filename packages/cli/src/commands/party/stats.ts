@@ -1,7 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
-import { formatINR } from "../../format.js";
 
 interface StatsOpts {
   json?: boolean;
@@ -12,20 +11,17 @@ export async function partyStatsCommand(id: string, opts: StatsOpts): Promise<vo
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.party.getStats({ partyId: id });
+    const result = await client.party.getStats({ id });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    console.log(`\n  Party Stats: ${result?.partyName ?? id}`);
+    console.log(`\n  Party Stats: ${id}`);
     console.log("  " + "─".repeat(40));
-    console.log(`  Invoices:    ${result?.invoiceCount ?? 0}`);
-    console.log(`  Payments:    ${result?.paymentCount ?? 0}`);
-    console.log(`  Invoiced:    ${formatINR(String(result?.totalInvoiced ?? "0"))}`);
-    console.log(`  Paid:        ${formatINR(String(result?.totalPaid ?? "0"))}`);
-    console.log(`  Outstanding: ${formatINR(String(result?.outstanding ?? "0"))}`);
+    console.log(`  Invoices:    ${result.invoiceCount}`);
+    console.log(`  Payments:    ${result.paymentCount}`);
     console.log();
 
   } catch (e) {

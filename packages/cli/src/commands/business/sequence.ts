@@ -10,13 +10,17 @@ interface BusinessSequenceOpts {
 
 const DOCUMENT_TYPES = ["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"] as const;
 
+function isDocumentType(v: string | undefined): v is (typeof DOCUMENT_TYPES)[number] {
+  return v !== undefined && (DOCUMENT_TYPES as readonly string[]).includes(v);
+}
+
 export async function businessSequenceCommand(opts: BusinessSequenceOpts): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
   // "sale" was the previous spelling of the invoice counter
   const documentType = opts.type === "sale" ? "invoice" : opts.type;
-  if (!documentType || !(DOCUMENT_TYPES as readonly string[]).includes(documentType)) {
+  if (!isDocumentType(documentType)) {
     fatalError(`--type must be one of: ${DOCUMENT_TYPES.join(", ")}.`, EXIT.USAGE);
   }
   if (opts.nextNumber === undefined || !/^\d+$/.test(opts.nextNumber) || parseInt(opts.nextNumber, 10) < 1) {

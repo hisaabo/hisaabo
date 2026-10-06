@@ -19,7 +19,7 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
   let invoiceNumber = id;
   try {
     const inv = await client.invoice.get(id);
-    invoiceNumber = inv.invoiceNumber;
+    if (inv) invoiceNumber = inv.invoiceNumber;
   } catch {
     // Use id as-is if fetch fails
   }

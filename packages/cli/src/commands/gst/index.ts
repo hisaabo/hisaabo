@@ -40,12 +40,9 @@ export async function gstR1Command(opts: GstOpts): Promise<void> {
     console.log(`\n GSTR-1 Summary                        ${quarterLabel}FY ${year}-${String(year + 1).slice(2)}`);
     console.log(` ${"═".repeat(60)}\n`);
 
-    if (report.summary && typeof report.summary === "object") {
-      const s = report.summary as Record<string, unknown>;
-      if (s["totalTaxableValue"]) console.log(`  Total Taxable:    ${formatAmount(String(s["totalTaxableValue"]))}`);
-      if (s["totalTax"]) console.log(`  Total Tax:         ${formatAmount(String(s["totalTax"]))}`);
-      if (s["totalInvoices"]) console.log(`  Total Invoices:    ${s["totalInvoices"]}`);
-    }
+    console.log(`  Total Taxable:    ${formatAmount(report.totalTaxableValue)}`);
+    console.log(`  Total Tax:         ${formatAmount(report.totalTax)}`);
+    console.log(`  Total Invoices:    ${report.invoiceCount}`);
     console.log();
     console.log("  Use --json for full report data.");
     console.log("  Use: hisaabo gst r1-csv to download GSTN-compatible CSV.\n");
@@ -76,11 +73,16 @@ export async function gstR3bCommand(opts: GstOpts): Promise<void> {
     console.log(`\n GSTR-3B Summary                       ${month}/${year}`);
     console.log(` ${"═".repeat(60)}\n`);
 
-    if (report.summary && typeof report.summary === "object") {
-      const s = report.summary as Record<string, unknown>;
-      Object.entries(s).forEach(([k, v]) => {
-        console.log(`  ${k.padEnd(28)}: ${String(v ?? "-")}`);
-      });
+    const rows: Array<[string, number]> = [
+      ["Outward taxable value", report.outwardSupplies.taxable.taxableValue],
+      ["Outward tax (IGST)", report.outwardSupplies.taxable.igst],
+      ["Outward tax (CGST)", report.outwardSupplies.taxable.cgst],
+      ["Outward tax (SGST)", report.outwardSupplies.taxable.sgst],
+      ["Eligible ITC (total)", report.itc.total],
+      ["Net tax payable (total)", report.netTax.total],
+    ];
+    for (const [label, value] of rows) {
+      console.log(`  ${label.padEnd(28)}: ${formatAmount(value)}`);
     }
     console.log();
 
@@ -119,8 +121,14 @@ export async function gstR9Command(financialYear: string, opts: GstOpts): Promis
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
+  // "2023-24" -> start year 2023 (the server keys GSTR-9 by FY start year)
+  const startYear = /^\d{4}(-\d{2})?$/.test(financialYear) ? Number(financialYear.slice(0, 4)) : NaN;
+  if (!Number.isInteger(startYear)) {
+    fatalError("Financial year must look like 2023-24.", EXIT.USAGE);
+  }
+
   try {
-    const report = await client.gst.gstr9({ financialYear });
+    const report = await client.gst.gstr9({ financialYear: startYear });
 
     if (opts.json) {
       outputJSON(report);
@@ -130,13 +138,11 @@ export async function gstR9Command(financialYear: string, opts: GstOpts): Promis
     console.log(`\n GSTR-9 Annual Return — FY ${financialYear}`);
     console.log(` ${"═".repeat(60)}\n`);
 
-    const r = report as Record<string, unknown>;
-    if (r["summary"] && typeof r["summary"] === "object") {
-      const s = r["summary"] as Record<string, unknown>;
-      if (s["totalTurnover"]) console.log(`  Total Turnover:   ${formatAmount(String(s["totalTurnover"]))}`);
-      if (s["totalTax"]) console.log(`  Total Tax:         ${formatAmount(String(s["totalTax"]))}`);
-      if (s["totalITC"]) console.log(`  Total ITC:         ${formatAmount(String(s["totalITC"]))}`);
-    }
+    const t = report.partIITotals;
+    const itc = report.table6.netItc;
+    console.log(`  Total Turnover:   ${formatAmount(t.taxableValue)}`);
+    console.log(`  Total Tax:         ${formatAmount(t.cgst + t.sgst + t.igst + t.cess)}`);
+    console.log(`  Total ITC:         ${formatAmount(itc.cgst + itc.sgst + itc.igst + itc.cess)}`);
     console.log();
     console.log("  Use --json for full GSTR-9 data.\n");
 
@@ -162,9 +168,7 @@ export async function gstr2bUploadsCommand(opts: GstOpts): Promise<void> {
       return;
     }
 
-    const uploads = Array.isArray(result) ? result
-      : Array.isArray(result?.data) ? result.data
-      : [];
+    const uploads = result.uploads;
 
     console.log("\n GSTR-2B Uploads\n");
     console.log(` ${"═".repeat(60)}\n`);
@@ -174,11 +178,11 @@ export async function gstr2bUploadsCommand(opts: GstOpts): Promise<void> {
       return;
     }
 
-    for (const up of uploads as Array<Record<string, unknown>>) {
-      const id = String(up["id"] ?? "-").slice(0, 8);
-      const period = String(up["period"] ?? up["returnPeriod"] ?? "-").padEnd(10);
-      const date = formatDate(String(up["uploadedAt"] ?? up["createdAt"] ?? ""));
-      const records = String(up["totalRecords"] ?? up["records"] ?? "-").padStart(8);
+    for (const up of uploads) {
+      const id = up.id.slice(0, 8);
+      const period = up.returnPeriod.padEnd(10);
+      const date = formatDate(up.uploadedAt);
+      const records = String(up.totalRecords).padStart(8);
       console.log(`  ${id}  ${period} ${date.padEnd(13)} Records: ${records}`);
     }
     console.log();

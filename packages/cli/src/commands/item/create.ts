@@ -2,6 +2,7 @@ import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { units } from "@hisaabo/shared";
 
 interface CreateOpts {
   json?: boolean;
@@ -15,6 +16,10 @@ interface CreateOpts {
   category?: string;
   type?: string;
   yes?: boolean;
+}
+
+function isUnit(v: string): v is (typeof units)[number] {
+  return (units as readonly string[]).includes(v);
 }
 
 async function prompt(rl: readline.Interface, q: string): Promise<string> {
@@ -71,6 +76,7 @@ export async function itemCreateCommand(opts: CreateOpts): Promise<void> {
   }
 
   if (!name) fatalError("--name is required", EXIT.USAGE);
+  if (!isUnit(unit)) fatalError(`--unit must be one of: ${units.join(", ")}.`, EXIT.USAGE);
 
   try {
     const item = await client.item.create({

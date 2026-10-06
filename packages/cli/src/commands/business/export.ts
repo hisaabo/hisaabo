@@ -22,14 +22,9 @@ export async function businessExportCommand(opts: BusinessExportOpts): Promise<v
       return;
     }
 
-    if (result?.url) {
-      success("Export complete.");
-      process.stdout.write(`  Download URL: ${result.url}\n`);
-    } else if (result?.status === "processing" || result?.queued) {
-      success("Export queued. You will be notified when the export is ready.");
-    } else {
-      success("Export initiated successfully.");
-    }
+    // The server returns the CSV contents inline, one string per dataset.
+    success(`Export complete: ${Object.keys(result).join(", ")}.`);
+    process.stdout.write("  Use --json to output the CSV contents.\n");
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;

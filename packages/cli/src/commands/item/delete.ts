@@ -9,6 +9,7 @@ export async function itemDeleteCommand(id: string, opts: { yes?: boolean; json?
 
   try {
     const item = await client.item.get(id);
+    if (!item) fatalError(`Item not found: ${id}`, EXIT.NOT_FOUND);
 
     await confirmOrExit(`  Delete ${item.name}?`, opts);
 

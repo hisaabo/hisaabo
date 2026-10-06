@@ -4,16 +4,9 @@ import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount, formatDate } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
-interface UnpaidInvoice {
-  id: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  totalAmount: string;
-  paidAmount: string;
-  outstandingAmount: string;
-  status: string;
-}
+type UnpaidInvoice = OutputOf<"payment.unpaidInvoices">[number];
 
 interface UnpaidOpts {
   json?: boolean;
@@ -32,7 +25,7 @@ export async function paymentUnpaidInvoicesCommand(partyId: string, opts: Unpaid
       return;
     }
 
-    const invoices: UnpaidInvoice[] = Array.isArray(result) ? result : (result?.data ?? []);
+    const invoices: UnpaidInvoice[] = result;
 
     if (invoices.length === 0) {
       console.log("\n  No unpaid invoices for this party.\n");
@@ -43,10 +36,10 @@ export async function paymentUnpaidInvoicesCommand(partyId: string, opts: Unpaid
 
     const cols: ColumnDef<UnpaidInvoice>[] = [
       { key: "invoiceNumber", header: "Invoice #", width: 14 },
-      { key: "invoiceDate", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
+      { key: "invoiceDate", header: "Date", width: 13, format: (v) => formatDate(v as Date | null) },
       { key: "totalAmount", header: "Total (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "paidAmount", header: "Paid (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "outstandingAmount", header: "Outstanding (₹)", align: "right", width: 16, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "amountPaid", header: "Paid (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "balance", header: "Outstanding (₹)", align: "right", width: 16, format: (v) => formatAmount(String(v ?? "0")) },
       { key: "status", header: "Status", width: 10, format: (v) => String(v ?? "").toUpperCase() },
     ];
 

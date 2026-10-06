@@ -13,12 +13,10 @@ export function registerJournalCommands(program: Command): void {
     .command("list")
     .description("List journal entries")
     .option("--json", "JSON output")
-    .option("--page <n>", "Page number", parseInt)
-    .option("--limit <n>", "Results per page", parseInt)
     .option("--from <date>", "From date")
     .option("--to <date>", "To date")
     .action(async (opts) => {
-      await journalListCommand(opts);
+      await journalListCommand({ json: opts.json, from: opts.from, to: opts.to });
     });
 
   journal

@@ -33,7 +33,11 @@ export function registerEInvoiceTools(server: ToolServer, client: HisaaboClient)
         .describe("End date in YYYY-MM-DD format."),
     },
     wrapTool(async (input) => {
-      const result = await client.eInvoice.dashboard({ fromDate: input.from_date, toDate: input.to_date });
+      const result = await client.eInvoice.dashboard({
+        // The server expects full ISO datetimes; widen YYYY-MM-DD to the whole day.
+        fromDate: input.from_date ? `${input.from_date}T00:00:00.000Z` : undefined,
+        toDate: input.to_date ? `${input.to_date}T23:59:59.999Z` : undefined,
+      });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };

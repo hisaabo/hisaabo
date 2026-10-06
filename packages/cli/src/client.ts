@@ -4,6 +4,7 @@
  */
 
 import superjson from "superjson";
+import type { InputArgs, InputOf, MutationPath, OutputOf, QueryPath } from "./api-types.js";
 
 export interface ClientConfig {
   apiUrl: string;
@@ -163,7 +164,8 @@ export class HisaaboClient {
     return superjson.deserialize(data as Parameters<typeof superjson.deserialize>[0]) as T;
   }
 
-  async query<T>(path: string, input?: unknown): Promise<T> {
+  async query<P extends QueryPath>(path: P, ...args: InputArgs<P>): Promise<OutputOf<P>> {
+    const input: unknown = args[0];
     const maxRetries = 2;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -175,7 +177,7 @@ export class HisaaboClient {
           headers: this.buildHeaders(),
           signal: AbortSignal.timeout(requestTimeoutMs()),
         });
-        return await this.unwrap<T>(res);
+        return await this.unwrap<OutputOf<P>>(res);
       } catch (e) {
         // Auto-retry on rate limit for idempotent reads
         if (e instanceof HisaaboApiError && e.hisaaboError.code === "rate_limited" && attempt < maxRetries) {
@@ -190,7 +192,8 @@ export class HisaaboClient {
     throw new HisaaboApiError({ code: "api_error", message: "Max retries exceeded" });
   }
 
-  async mutate<T>(path: string, input: unknown): Promise<T> {
+  async mutate<P extends MutationPath>(path: P, ...args: InputArgs<P>): Promise<OutputOf<P>> {
+    const input: unknown = args[0];
     try {
       const res = await fetch(`${this.config.apiUrl}/api/trpc/${path}`, {
         method: "POST",
@@ -198,7 +201,7 @@ export class HisaaboClient {
         body: JSON.stringify(superjson.serialize(input)),
         signal: AbortSignal.timeout(requestTimeoutMs()),
       });
-      return await this.unwrap<T>(res);
+      return await this.unwrap<OutputOf<P>>(res);
     } catch (e) {
       if (e instanceof HisaaboApiError) throw e;
       throw new HisaaboApiError({ code: "network_error", message: String(e instanceof Error ? e.message : e) });
@@ -211,48 +214,43 @@ export class HisaaboClient {
     const c = this;
     return {
       nativeStart(input: { redirectUri: string; codeChallenge: string; state: string }) {
-        return c.mutate<{ requestId: string; expiresAt: string | Date }>("auth.nativeStart", {
+        return c.mutate("auth.nativeStart", {
           client: "cli",
           codeChallengeMethod: "S256",
           ...input,
         });
       },
       nativeExchange(input: { requestId: string; code: string; codeVerifier: string }) {
-        return c.mutate<{ sessionToken?: string; user: { id: string; email: string; name: string | null } }>("auth.nativeExchange", input)
+        return c.mutate("auth.nativeExchange", input)
           .then((r) => {
             if (!r.sessionToken) throw new HisaaboApiError({ code: "api_error", message: "Sign-in response did not include a session" });
             return { sessionToken: r.sessionToken, user: r.user };
           });
       },
       logout() {
-        return c.mutate<{ success: boolean }>("auth.logout", {});
+        return c.mutate("auth.logout");
       },
       me() {
         // The API returns { user, tenantId, tenantName, role }; flatten it.
-        return c.query<{
-          user: { id: string; email: string; name: string | null } | null;
-          tenantId: string | null;
-          tenantName: string | null;
-          role: string | null;
-        }>("auth.me").then((r): AuthUser => {
+        return c.query("auth.me").then((r): AuthUser => {
           if (!r.user) throw new HisaaboApiError({ code: "unauthorized", message: "Not authenticated" });
           return { ...r.user, role: r.role ?? "", tenantId: r.tenantId, tenantName: r.tenantName };
         });
       },
-      completeProfile(input: { name: string }) {
-        return c.mutate<any>("auth.completeProfile", input);
+      completeProfile(input: InputOf<"auth.completeProfile">) {
+        return c.mutate("auth.completeProfile", input);
       },
       logoutAll() {
-        return c.mutate<any>("auth.logoutAll", {});
+        return c.mutate("auth.logoutAll");
       },
-      updateName(input: { name: string }) {
-        return c.mutate<any>("auth.updateName", input);
+      updateName(input: InputOf<"auth.updateName">) {
+        return c.mutate("auth.updateName", input);
       },
-      listSessions(input: { expired: boolean }) {
-        return c.query<any>("auth.listSessions", input);
+      listSessions(input?: InputOf<"auth.listSessions">) {
+        return c.query("auth.listSessions", input);
       },
-      revokeSession(input: { sessionId: string }) {
-        return c.mutate<any>("auth.revokeSession", input);
+      revokeSession(input: InputOf<"auth.revokeSession">) {
+        return c.mutate("auth.revokeSession", input);
       },
     };
   }
@@ -263,25 +261,25 @@ export class HisaaboClient {
     const c = this;
     return {
       list() {
-        return c.query<BusinessSummary[]>("business.list");
+        return c.query("business.list");
       },
       get(id: string) {
-        return c.query<BusinessDetail>("business.getById", { id });
+        return c.query("business.getById", { id });
       },
-      create(input: any) {
-        return c.mutate<any>("business.create", input);
+      create(input: InputOf<"business.create">) {
+        return c.mutate("business.create", input);
       },
-      update(id: string, data: Record<string, unknown>) {
-        return c.mutate<any>("business.update", { id, data });
+      update(id: string, data: InputOf<"business.update">["data"]) {
+        return c.mutate("business.update", { id, data });
       },
-      updateSequenceNumber(input: { documentType: string; newNumber: number }) {
-        return c.mutate<any>("business.updateSequenceNumber", input);
+      updateSequenceNumber(input: InputOf<"business.updateSequenceNumber">) {
+        return c.mutate("business.updateSequenceNumber", input);
       },
-      auditTrail(input?: { page?: number; limit?: number }) {
-        return c.query<any>("business.auditTrail", input);
+      auditTrail(input: InputOf<"business.auditTrail">) {
+        return c.query("business.auditTrail", input);
       },
       exportData() {
-        return c.mutate<any>("business.exportData", {});
+        return c.mutate("business.exportData");
       },
     };
   }
@@ -292,22 +290,22 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: InvoiceListInput) {
-        return c.query<PaginatedResult<InvoiceSummary>>("invoice.list", input);
+        return c.query("invoice.list", input);
       },
       get(id: string) {
-        return c.query<InvoiceDetail>("invoice.getById", { id });
+        return c.query("invoice.getById", { id });
       },
       create(input: InvoiceCreateInput) {
-        return c.mutate<InvoiceDetail>("invoice.create", input);
+        return c.mutate("invoice.create", input);
       },
-      update(input: any) {
-        return c.mutate<any>("invoice.update", input);
+      update(input: InputOf<"invoice.update">) {
+        return c.mutate("invoice.update", input);
       },
       updateStatus(id: string, status: InvoiceStatus) {
-        return c.mutate<InvoiceSummary>("invoice.updateStatus", { id, status });
+        return c.mutate("invoice.updateStatus", { id, status });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("invoice.delete", { id });
+        return c.mutate("invoice.delete", { id });
       },
     };
   }
@@ -318,34 +316,34 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: PartyListInput) {
-        return c.query<PaginatedResult<PartySummary>>("party.list", input);
+        return c.query("party.list", input);
       },
       get(id: string) {
-        return c.query<PartyDetail>("party.getById", { id });
+        return c.query("party.getById", { id });
       },
       create(input: PartyCreateInput) {
-        return c.mutate<PartySummary>("party.create", input);
+        return c.mutate("party.create", input);
       },
-      update(id: string, data: Partial<PartyCreateInput>) {
-        return c.mutate<PartyDetail>("party.update", { id, data });
+      update(id: string, data: InputOf<"party.update">["data"]) {
+        return c.mutate("party.update", { id, data });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("party.delete", { id });
+        return c.mutate("party.delete", { id });
       },
       ledger(partyId: string, input?: LedgerInput) {
-        return c.query<LedgerResult>("party.ledger", { partyId, ...input });
+        return c.query("party.ledger", { partyId, ...input });
       },
-      ledgerReport(input: any) {
-        return c.query<any>("party.ledgerReport", input);
+      ledgerReport(input: InputOf<"party.ledgerReport">) {
+        return c.query("party.ledgerReport", input);
       },
-      getStats(input: any) {
-        return c.query<any>("party.getStats", input);
+      getStats(input: InputOf<"party.getStats">) {
+        return c.query("party.getStats", input);
       },
-      topItems(input: any) {
-        return c.query<any>("party.topItems", input);
+      topItems(input: InputOf<"party.topItems">) {
+        return c.query("party.topItems", input);
       },
-      merge(input: any) {
-        return c.mutate<any>("party.merge", input);
+      merge(input: InputOf<"party.merge">) {
+        return c.mutate("party.merge", input);
       },
     };
   }
@@ -356,58 +354,58 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: ItemListInput) {
-        return c.query<PaginatedResult<ItemSummary>>("item.list", input);
+        return c.query("item.list", input);
       },
       get(id: string) {
-        return c.query<ItemDetail>("item.getById", { id });
+        return c.query("item.getById", { id });
       },
       create(input: ItemCreateInput) {
-        return c.mutate<ItemSummary>("item.create", input);
+        return c.mutate("item.create", input);
       },
-      update(id: string, data: Partial<ItemCreateInput>) {
-        return c.mutate<ItemDetail>("item.update", { id, data });
+      update(id: string, data: InputOf<"item.update">["data"]) {
+        return c.mutate("item.update", { id, data });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("item.delete", { id });
+        return c.mutate("item.delete", { id });
       },
       adjustStock(input: StockAdjustInput) {
-        return c.mutate<ItemSummary>("item.adjustStock", input);
+        return c.mutate("item.adjustStock", input);
       },
-      createVariant(input: any) {
-        return c.mutate<any>("item.createVariant", input);
+      createVariant(input: InputOf<"item.createVariant">) {
+        return c.mutate("item.createVariant", input);
       },
-      updateVariant(input: any) {
-        return c.mutate<any>("item.updateVariant", input);
+      updateVariant(input: InputOf<"item.updateVariant">) {
+        return c.mutate("item.updateVariant", input);
       },
-      deleteVariant(input: any) {
-        return c.mutate<any>("item.deleteVariant", input);
+      deleteVariant(input: InputOf<"item.deleteVariant">) {
+        return c.mutate("item.deleteVariant", input);
       },
-      listVariants(input: any) {
-        return c.query<any>("item.listVariants", input);
+      listVariants(input: InputOf<"item.listVariants">) {
+        return c.query("item.listVariants", input);
       },
-      merge(input: any) {
-        return c.mutate<any>("item.merge", input);
+      merge(input: InputOf<"item.merge">) {
+        return c.mutate("item.merge", input);
       },
-      switchBaseUnit(input: any) {
-        return c.mutate<any>("item.switchBaseUnit", input);
+      switchBaseUnit(input: InputOf<"item.switchBaseUnit">) {
+        return c.mutate("item.switchBaseUnit", input);
       },
-      renameUnit(input: any) {
-        return c.mutate<any>("item.renameUnit", input);
+      renameUnit(input: InputOf<"item.renameUnit">) {
+        return c.mutate("item.renameUnit", input);
       },
-      stockAdjustmentHistory(input: any) {
-        return c.query<any>("item.stockAdjustmentHistory", input);
+      stockAdjustmentHistory(input: InputOf<"item.stockAdjustmentHistory">) {
+        return c.query("item.stockAdjustmentHistory", input);
       },
       lowStockCount() {
-        return c.query<any>("item.lowStockCount");
+        return c.query("item.lowStockCount");
       },
-      priceHistory(input: any) {
-        return c.query<any>("item.priceHistory", input);
+      priceHistory(input: InputOf<"item.priceHistory">) {
+        return c.query("item.priceHistory", input);
       },
-      salesStats(input: any) {
-        return c.query<any>("item.salesStats", input);
+      salesStats(input: InputOf<"item.salesStats">) {
+        return c.query("item.salesStats", input);
       },
-      stockMovements(input: any) {
-        return c.query<any>("item.stockMovements", input);
+      stockMovements(input: InputOf<"item.stockMovements">) {
+        return c.query("item.stockMovements", input);
       },
     };
   }
@@ -418,31 +416,31 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: PaymentListInput) {
-        return c.query<PaginatedResult<PaymentSummary>>("payment.list", input);
+        return c.query("payment.list", input);
       },
       getById(id: string) {
-        return c.query<PaymentDetail | null>("payment.getById", { id });
+        return c.query("payment.getById", { id });
       },
       create(input: PaymentCreateInput) {
-        return c.mutate<PaymentSummary>("payment.create", input);
+        return c.mutate("payment.create", input);
       },
       update(input: PaymentUpdateInput) {
-        return c.mutate<PaymentSummary>("payment.update", input);
+        return c.mutate("payment.update", input);
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("payment.delete", { id });
+        return c.mutate("payment.delete", { id });
       },
-      unpaidInvoices(input: any) {
-        return c.query<any>("payment.unpaidInvoices", input);
+      unpaidInvoices(input: InputOf<"payment.unpaidInvoices">) {
+        return c.query("payment.unpaidInvoices", input);
       },
-      untrackedPayments(input: any) {
-        return c.query<any>("payment.untrackedPayments", input);
+      untrackedPayments(input: InputOf<"payment.untrackedPayments">) {
+        return c.query("payment.untrackedPayments", input);
       },
-      defaultAccount(input?: any) {
-        return c.query<any>("payment.defaultAccount", input);
+      defaultAccount(input?: InputOf<"payment.defaultAccount">) {
+        return c.query("payment.defaultAccount", input);
       },
-      assignAccount(input: any) {
-        return c.mutate<any>("payment.assignAccount", input);
+      assignAccount(input: InputOf<"payment.assignAccount">) {
+        return c.mutate("payment.assignAccount", input);
       },
     };
   }
@@ -453,19 +451,19 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: ExpenseListInput) {
-        return c.query<PaginatedResult<ExpenseSummary>>("expense.list", input);
+        return c.query("expense.list", input);
       },
       create(input: ExpenseCreateInput) {
-        return c.mutate<ExpenseSummary>("expense.create", input);
+        return c.mutate("expense.create", input);
       },
-      update(id: string, data: Partial<ExpenseCreateInput>) {
-        return c.mutate<ExpenseSummary>("expense.update", { id, data });
+      update(id: string, data: InputOf<"expense.update">["data"]) {
+        return c.mutate("expense.update", { id, data });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("expense.delete", { id });
+        return c.mutate("expense.delete", { id });
       },
       categories() {
-        return c.query<string[]>("expense.categories");
+        return c.query("expense.categories");
       },
     };
   }
@@ -476,43 +474,43 @@ export class HisaaboClient {
     const c = this;
     return {
       summary(input?: DashboardInput) {
-        return c.query<DashboardSummary>("dashboard.summary", input);
+        return c.query("dashboard.summary", input);
       },
-      salesTrend(input: { months?: number; fromDate?: string; toDate?: string; granularity?: string }) {
-        return c.query<any>("dashboard.salesTrend", input);
+      salesTrend(input: InputOf<"dashboard.salesTrend">) {
+        return c.query("dashboard.salesTrend", input);
       },
-      topOutstanding(input?: { limit?: number }) {
-        return c.query<any>("dashboard.topOutstanding", input);
+      topOutstanding(input: InputOf<"dashboard.topOutstanding">) {
+        return c.query("dashboard.topOutstanding", input);
       },
-      topCustomers(input?: { limit?: number; fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.topCustomers", input);
+      topCustomers(input: InputOf<"dashboard.topCustomers">) {
+        return c.query("dashboard.topCustomers", input);
       },
-      topSellingItems(input?: { limit?: number; itemType?: string; fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.topSellingItems", input);
+      topSellingItems(input: InputOf<"dashboard.topSellingItems">) {
+        return c.query("dashboard.topSellingItems", input);
       },
-      expensesByCategory(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.expensesByCategory", input);
+      expensesByCategory(input: InputOf<"dashboard.expensesByCategory">) {
+        return c.query("dashboard.expensesByCategory", input);
       },
-      invoiceStatusBreakdown(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.invoiceStatusBreakdown", input);
+      invoiceStatusBreakdown(input: InputOf<"dashboard.invoiceStatusBreakdown">) {
+        return c.query("dashboard.invoiceStatusBreakdown", input);
       },
-      profitAndLoss(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.profitAndLoss", input);
+      profitAndLoss(input: InputOf<"dashboard.profitAndLoss">) {
+        return c.query("dashboard.profitAndLoss", input);
       },
       receivablesAging() {
-        return c.query<any>("dashboard.receivablesAging");
+        return c.query("dashboard.receivablesAging");
       },
-      paymentModeBreakdown(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.paymentModeBreakdown", input);
+      paymentModeBreakdown(input: InputOf<"dashboard.paymentModeBreakdown">) {
+        return c.query("dashboard.paymentModeBreakdown", input);
       },
-      collectionEfficiency(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.collectionEfficiency", input);
+      collectionEfficiency(input: InputOf<"dashboard.collectionEfficiency">) {
+        return c.query("dashboard.collectionEfficiency", input);
       },
       monthlyComparison() {
-        return c.query<any>("dashboard.monthlyComparison");
+        return c.query("dashboard.monthlyComparison");
       },
-      shippingSummary(input?: { fromDate?: string; toDate?: string }) {
-        return c.query<any>("dashboard.shippingSummary", input);
+      shippingSummary(input?: InputOf<"dashboard.shippingSummary">) {
+        return c.query("dashboard.shippingSummary", input);
       },
     };
   }
@@ -523,19 +521,19 @@ export class HisaaboClient {
     const c = this;
     return {
       gstr1(input: GstReportInput) {
-        return c.query<GstReportResult>("gst.gstr1", input);
+        return c.query("gst.gstr1", input);
       },
-      gstr3b(input: GstReportInput) {
-        return c.query<GstReportResult>("gst.gstr3b", input);
+      gstr3b(input: InputOf<"gst.gstr3b">) {
+        return c.query("gst.gstr3b", input);
       },
-      gstr1CSV(input: GstReportInput) {
-        return c.query<{ csv: string; filename: string }>("gst.gstr1CSV", input);
+      gstr1CSV(input: InputOf<"gst.gstr1CSV">) {
+        return c.query("gst.gstr1CSV", input);
       },
-      gstr9(input: { financialYear: string }) {
-        return c.query<any>("gst.gstr9", input);
+      gstr9(input: InputOf<"gst.gstr9">) {
+        return c.query("gst.gstr9", input);
       },
-      gstr2bUploads(input?: Record<string, unknown>) {
-        return c.query<any>("gstr2b.uploads", input ?? {});
+      gstr2bUploads(input?: InputOf<"gstr2b.uploads">) {
+        return c.query("gstr2b.uploads", input ?? {});
       },
     };
   }
@@ -546,19 +544,19 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: ShipmentListInput) {
-        return c.query<PaginatedResult<ShipmentSummary>>("shipment.list", input);
+        return c.query("shipment.list", input);
       },
       get(id: string) {
-        return c.query<ShipmentDetail | null>("shipment.getById", { id });
+        return c.query("shipment.getById", { id });
       },
       create(input: ShipmentCreateInput) {
-        return c.mutate<ShipmentDetail>("shipment.create", input);
+        return c.mutate("shipment.create", input);
       },
       update(input: ShipmentUpdateInput) {
-        return c.mutate<ShipmentDetail>("shipment.update", input);
+        return c.mutate("shipment.update", input);
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("shipment.delete", { id });
+        return c.mutate("shipment.delete", { id });
       },
     };
   }
@@ -569,34 +567,34 @@ export class HisaaboClient {
     const c = this;
     return {
       list() {
-        return c.query<BankAccountSummary[]>("bankAccount.list");
+        return c.query("bankAccount.list");
       },
       get(id: string) {
-        return c.query<BankAccountDetail | null>("bankAccount.getById", { id });
+        return c.query("bankAccount.getById", { id });
       },
       create(input: BankAccountCreateInput) {
-        return c.mutate<BankAccountSummary>("bankAccount.create", input);
+        return c.mutate("bankAccount.create", input);
       },
-      update(id: string, data: Partial<BankAccountCreateInput>) {
-        return c.mutate<BankAccountSummary>("bankAccount.update", { id, data });
+      update(id: string, data: InputOf<"bankAccount.update">["data"]) {
+        return c.mutate("bankAccount.update", { id, data });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("bankAccount.delete", { id });
+        return c.mutate("bankAccount.delete", { id });
       },
       transfer(input: BankTransferInput) {
-        return c.mutate<BankTransferResult>("bankAccount.transfer", input);
+        return c.mutate("bankAccount.transfer", input);
       },
       listTransactions(input: BankTransactionListInput) {
-        return c.query<PaginatedResult<BankTransactionRow>>("bankAccount.listTransactions", input);
+        return c.query("bankAccount.listTransactions", input);
       },
       summary() {
-        return c.query<BankSummary>("bankAccount.summary");
+        return c.query("bankAccount.summary");
       },
       getGatewayConfig(bankAccountId: string) {
-        return c.query<GatewayConfig | null>("bankAccount.getGatewayConfig", { bankAccountId });
+        return c.query("bankAccount.getGatewayConfig", { bankAccountId });
       },
       upsertGatewayConfig(input: UpsertGatewayConfigInput) {
-        return c.mutate<GatewayConfig>("bankAccount.upsertGatewayConfig", input);
+        return c.mutate("bankAccount.upsertGatewayConfig", input);
       },
     };
   }
@@ -607,64 +605,64 @@ export class HisaaboClient {
     const c = this;
     return {
       daybook(input: DaybookInput) {
-        return c.query<DaybookResult>("reports.daybook", input);
+        return c.query("reports.daybook", input);
       },
       outstanding(input: OutstandingInput) {
-        return c.query<OutstandingResult>("reports.outstanding", input);
+        return c.query("reports.outstanding", input);
       },
       taxSummary(input: TaxSummaryInput) {
-        return c.query<TaxSummaryResult>("reports.taxSummary", input);
+        return c.query("reports.taxSummary", input);
       },
       itemSales(input: ItemSalesInput) {
-        return c.query<ItemSalesResult>("reports.itemSales", input);
+        return c.query("reports.itemSales", input);
       },
       stockSummary(input: StockSummaryInput) {
-        return c.query<StockSummaryResult>("reports.stockSummary", input);
+        return c.query("reports.stockSummary", input);
       },
       partyStatement(input: PartyStatementInput) {
-        return c.query<PartyStatementResult>("reports.partyStatement", input);
+        return c.query("reports.partyStatement", input);
       },
       paymentSummary(input: PaymentSummaryInput) {
-        return c.query<PaymentSummaryResult>("reports.paymentSummary", input);
+        return c.query("reports.paymentSummary", input);
       },
-      salesRegister(input: { fromDate: string; toDate: string; partyId?: string }) {
-        return c.query<any>("reports.salesRegister", input);
+      salesRegister(input: InputOf<"reports.salesRegister">) {
+        return c.query("reports.salesRegister", input);
       },
-      purchaseRegister(input: { fromDate: string; toDate: string; partyId?: string }) {
-        return c.query<any>("reports.purchaseRegister", input);
+      purchaseRegister(input: InputOf<"reports.purchaseRegister">) {
+        return c.query("reports.purchaseRegister", input);
       },
-      cashFlowForecast(input?: Record<string, unknown>) {
-        return c.query<any>("reports.cashFlowForecast", input ?? {});
+      cashFlowForecast(input?: InputOf<"reports.cashFlowForecast">) {
+        return c.query("reports.cashFlowForecast", input ?? {});
       },
-      collectionEfficiency(input: { fromDate: string; toDate: string }) {
-        return c.query<any>("reports.collectionEfficiency", input);
+      collectionEfficiency(input: InputOf<"reports.collectionEfficiency">) {
+        return c.query("reports.collectionEfficiency", input);
       },
-      trialBalance(input?: Record<string, unknown>) {
-        return c.query<any>("reports.trialBalance", input ?? {});
+      trialBalance(input: InputOf<"reports.trialBalance">) {
+        return c.query("reports.trialBalance", input);
       },
-      balanceSheet(input?: Record<string, unknown>) {
-        return c.query<any>("reports.balanceSheet", input ?? {});
+      balanceSheet(input: InputOf<"reports.balanceSheet">) {
+        return c.query("reports.balanceSheet", input);
       },
-      profitAndLoss(input?: Record<string, unknown>) {
-        return c.query<any>("reports.profitAndLoss", input ?? {});
+      profitAndLoss(input: InputOf<"reports.profitAndLoss">) {
+        return c.query("reports.profitAndLoss", input);
       },
-      cashFlowStatement(input?: Record<string, unknown>) {
-        return c.query<any>("reports.cashFlowStatement", input ?? {});
+      cashFlowStatement(input: InputOf<"reports.cashFlowStatement">) {
+        return c.query("reports.cashFlowStatement", input);
       },
-      generalLedger(input: { accountId: string; fromDate?: string; toDate?: string }) {
-        return c.query<any>("reports.generalLedger", input);
+      generalLedger(input: InputOf<"reports.generalLedger">) {
+        return c.query("reports.generalLedger", input);
       },
-      comparativeTrialBalance(input?: Record<string, unknown>) {
-        return c.query<any>("reports.comparativeTrialBalance", input ?? {});
+      comparativeTrialBalance(input: InputOf<"reports.comparativeTrialBalance">) {
+        return c.query("reports.comparativeTrialBalance", input);
       },
-      comparativeBalanceSheet(input?: Record<string, unknown>) {
-        return c.query<any>("reports.comparativeBalanceSheet", input ?? {});
+      comparativeBalanceSheet(input: InputOf<"reports.comparativeBalanceSheet">) {
+        return c.query("reports.comparativeBalanceSheet", input);
       },
-      comparativeProfitAndLoss(input?: Record<string, unknown>) {
-        return c.query<any>("reports.comparativeProfitAndLoss", input ?? {});
+      comparativeProfitAndLoss(input: InputOf<"reports.comparativeProfitAndLoss">) {
+        return c.query("reports.comparativeProfitAndLoss", input);
       },
-      tallyExport(input?: Record<string, unknown>) {
-        return c.query<any>("reports.tallyExport", input ?? {});
+      tallyExport(input: InputOf<"reports.tallyExport">) {
+        return c.query("reports.tallyExport", input);
       },
     };
   }
@@ -675,34 +673,34 @@ export class HisaaboClient {
     const c = this;
     return {
       getSettings() {
-        return c.query<StoreSettings>("store.getSettings");
+        return c.query("store.getSettings");
       },
       updateSettings(input: StoreSettingsUpdateInput) {
-        return c.mutate<StoreSettings>("store.updateSettings", input);
+        return c.mutate("store.updateSettings", input);
       },
       listOrders(input: StoreOrderListInput) {
-        return c.query<PaginatedResult<StoreOrderSummary>>("store.listOrders", input);
+        return c.query("store.listOrders", input);
       },
       getOrder(id: string) {
-        return c.query<StoreOrderDetail | null>("store.getOrder", { id });
+        return c.query("store.getOrder", { id });
       },
-      updateOrder(input: { orderId: string; status: "preparing" | "ready" | "delivered" }) {
-        return c.mutate<{ success: boolean; status: string }>("store.updateOrderStatus", input);
+      updateOrder(input: InputOf<"store.updateOrderStatus">) {
+        return c.mutate("store.updateOrderStatus", input);
       },
-      confirmOrder(input: any) {
-        return c.mutate<any>("store.confirmOrder", input);
+      confirmOrder(input: InputOf<"store.confirmOrder">) {
+        return c.mutate("store.confirmOrder", input);
       },
-      cancelOrder(input: any) {
-        return c.mutate<any>("store.cancelOrder", input);
+      cancelOrder(input: InputOf<"store.cancelOrder">) {
+        return c.mutate("store.cancelOrder", input);
       },
-      checkSlug(input: any) {
-        return c.query<any>("store.checkSlug", input);
+      checkSlug(input: InputOf<"store.checkSlug">) {
+        return c.query("store.checkSlug", input);
       },
-      listStoreItems(input: any) {
-        return c.query<any>("store.listStoreItems", input);
+      listStoreItems(input: InputOf<"store.listStoreItems">) {
+        return c.query("store.listStoreItems", input);
       },
-      bulkToggleItems(input: any) {
-        return c.mutate<any>("store.bulkToggleItems", input);
+      bulkToggleItems(input: InputOf<"store.bulkToggleItems">) {
+        return c.mutate("store.bulkToggleItems", input);
       },
     };
   }
@@ -713,22 +711,22 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: TargetListInput) {
-        return c.query<TargetRow[]>("target.list", input);
+        return c.query("target.list", input);
       },
       create(input: TargetCreateInput) {
-        return c.mutate<TargetRow>("target.create", input);
+        return c.mutate("target.create", input);
       },
       getProgress(id: string) {
-        return c.query<TargetWithProgress>("target.getProgress", { id });
+        return c.query("target.getProgress", { id });
       },
       update(input: TargetUpdateInput) {
-        return c.mutate<TargetRow>("target.update", input);
+        return c.mutate("target.update", input);
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("target.delete", { id });
+        return c.mutate("target.delete", { id });
       },
       myTargets() {
-        return c.query<TargetWithProgress[]>("target.myTargets");
+        return c.query("target.myTargets");
       },
     };
   }
@@ -739,28 +737,28 @@ export class HisaaboClient {
     const c = this;
     return {
       list() {
-        return c.query<any>("tenant.list");
+        return c.query("tenant.list");
       },
-      select(input: any) {
-        return c.mutate<any>("tenant.select", input);
+      select(input: InputOf<"tenant.select">) {
+        return c.mutate("tenant.select", input);
       },
       members() {
-        return c.query<any>("tenant.members");
+        return c.query("tenant.members");
       },
-      inviteMember(input: any) {
-        return c.mutate<any>("tenant.inviteMember", input);
+      inviteMember(input: InputOf<"tenant.inviteMember">) {
+        return c.mutate("tenant.inviteMember", input);
       },
-      removeMember(input: any) {
-        return c.mutate<any>("tenant.removeMember", input);
+      removeMember(input: InputOf<"tenant.removeMember">) {
+        return c.mutate("tenant.removeMember", input);
       },
-      updateMemberRole(input: any) {
-        return c.mutate<any>("tenant.updateMemberRole", input);
+      updateMemberRole(input: InputOf<"tenant.updateMemberRole">) {
+        return c.mutate("tenant.updateMemberRole", input);
       },
       pendingInvitations() {
-        return c.query<any>("tenant.pendingInvitations");
+        return c.query("tenant.pendingInvitations");
       },
-      revokeInvitation(input: { invitationId: string }) {
-        return c.mutate<any>("tenant.revokeInvitation", input);
+      revokeInvitation(input: InputOf<"tenant.revokeInvitation">) {
+        return c.mutate("tenant.revokeInvitation", input);
       },
     };
   }
@@ -770,8 +768,8 @@ export class HisaaboClient {
   get document() {
     const c = this;
     return {
-      convert(input: any) {
-        return c.mutate<any>("document.convert", input);
+      convert(input: InputOf<"document.convert">) {
+        return c.mutate("document.convert", input);
       },
     };
   }
@@ -781,20 +779,20 @@ export class HisaaboClient {
   get quotation() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("quotation.list", input);
+      list(input: InputOf<"quotation.list">) {
+        return c.query("quotation.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("quotation.getById", input);
+      getById(input: InputOf<"quotation.getById">) {
+        return c.query("quotation.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("quotation.create", input);
+      create(input: InputOf<"quotation.create">) {
+        return c.mutate("quotation.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("quotation.updateStatus", input);
+      updateStatus(input: InputOf<"quotation.updateStatus">) {
+        return c.mutate("quotation.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("quotation.delete", input);
+      delete(input: InputOf<"quotation.delete">) {
+        return c.mutate("quotation.delete", input);
       },
     };
   }
@@ -804,20 +802,20 @@ export class HisaaboClient {
   get creditNote() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("creditNote.list", input);
+      list(input: InputOf<"creditNote.list">) {
+        return c.query("creditNote.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("creditNote.getById", input);
+      getById(input: InputOf<"creditNote.getById">) {
+        return c.query("creditNote.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("creditNote.create", input);
+      create(input: InputOf<"creditNote.create">) {
+        return c.mutate("creditNote.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("creditNote.updateStatus", input);
+      updateStatus(input: InputOf<"creditNote.updateStatus">) {
+        return c.mutate("creditNote.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("creditNote.delete", input);
+      delete(input: InputOf<"creditNote.delete">) {
+        return c.mutate("creditNote.delete", input);
       },
     };
   }
@@ -827,20 +825,20 @@ export class HisaaboClient {
   get debitNote() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("debitNote.list", input);
+      list(input: InputOf<"debitNote.list">) {
+        return c.query("debitNote.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("debitNote.getById", input);
+      getById(input: InputOf<"debitNote.getById">) {
+        return c.query("debitNote.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("debitNote.create", input);
+      create(input: InputOf<"debitNote.create">) {
+        return c.mutate("debitNote.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("debitNote.updateStatus", input);
+      updateStatus(input: InputOf<"debitNote.updateStatus">) {
+        return c.mutate("debitNote.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("debitNote.delete", input);
+      delete(input: InputOf<"debitNote.delete">) {
+        return c.mutate("debitNote.delete", input);
       },
     };
   }
@@ -850,20 +848,20 @@ export class HisaaboClient {
   get deliveryChallan() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("deliveryChallan.list", input);
+      list(input: InputOf<"deliveryChallan.list">) {
+        return c.query("deliveryChallan.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("deliveryChallan.getById", input);
+      getById(input: InputOf<"deliveryChallan.getById">) {
+        return c.query("deliveryChallan.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("deliveryChallan.create", input);
+      create(input: InputOf<"deliveryChallan.create">) {
+        return c.mutate("deliveryChallan.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("deliveryChallan.updateStatus", input);
+      updateStatus(input: InputOf<"deliveryChallan.updateStatus">) {
+        return c.mutate("deliveryChallan.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("deliveryChallan.delete", input);
+      delete(input: InputOf<"deliveryChallan.delete">) {
+        return c.mutate("deliveryChallan.delete", input);
       },
     };
   }
@@ -873,20 +871,20 @@ export class HisaaboClient {
   get proforma() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("proforma.list", input);
+      list(input: InputOf<"proforma.list">) {
+        return c.query("proforma.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("proforma.getById", input);
+      getById(input: InputOf<"proforma.getById">) {
+        return c.query("proforma.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("proforma.create", input);
+      create(input: InputOf<"proforma.create">) {
+        return c.mutate("proforma.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("proforma.updateStatus", input);
+      updateStatus(input: InputOf<"proforma.updateStatus">) {
+        return c.mutate("proforma.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("proforma.delete", input);
+      delete(input: InputOf<"proforma.delete">) {
+        return c.mutate("proforma.delete", input);
       },
     };
   }
@@ -896,20 +894,20 @@ export class HisaaboClient {
   get salesReturn() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("salesReturn.list", input);
+      list(input: InputOf<"salesReturn.list">) {
+        return c.query("salesReturn.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("salesReturn.getById", input);
+      getById(input: InputOf<"salesReturn.getById">) {
+        return c.query("salesReturn.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("salesReturn.create", input);
+      create(input: InputOf<"salesReturn.create">) {
+        return c.mutate("salesReturn.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("salesReturn.updateStatus", input);
+      updateStatus(input: InputOf<"salesReturn.updateStatus">) {
+        return c.mutate("salesReturn.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("salesReturn.delete", input);
+      delete(input: InputOf<"salesReturn.delete">) {
+        return c.mutate("salesReturn.delete", input);
       },
     };
   }
@@ -919,20 +917,20 @@ export class HisaaboClient {
   get purchaseReturn() {
     const c = this;
     return {
-      list(input: any) {
-        return c.query<any>("purchaseReturn.list", input);
+      list(input: InputOf<"purchaseReturn.list">) {
+        return c.query("purchaseReturn.list", input);
       },
-      getById(input: any) {
-        return c.query<any>("purchaseReturn.getById", input);
+      getById(input: InputOf<"purchaseReturn.getById">) {
+        return c.query("purchaseReturn.getById", input);
       },
-      create(input: any) {
-        return c.mutate<any>("purchaseReturn.create", input);
+      create(input: InputOf<"purchaseReturn.create">) {
+        return c.mutate("purchaseReturn.create", input);
       },
-      updateStatus(input: any) {
-        return c.mutate<any>("purchaseReturn.updateStatus", input);
+      updateStatus(input: InputOf<"purchaseReturn.updateStatus">) {
+        return c.mutate("purchaseReturn.updateStatus", input);
       },
-      delete(input: any) {
-        return c.mutate<any>("purchaseReturn.delete", input);
+      delete(input: InputOf<"purchaseReturn.delete">) {
+        return c.mutate("purchaseReturn.delete", input);
       },
     };
   }
@@ -943,37 +941,37 @@ export class HisaaboClient {
     const c = this;
     return {
       list(input: RecurringInvoiceListInput) {
-        return c.query<PaginatedResult<RecurringInvoiceSummary>>("recurringInvoice.list", input);
+        return c.query("recurringInvoice.list", input);
       },
       getById(id: string) {
-        return c.query<RecurringInvoiceDetail>("recurringInvoice.getById", { id });
+        return c.query("recurringInvoice.getById", { id });
       },
       create(input: RecurringInvoiceCreateInput) {
-        return c.mutate<RecurringInvoiceDetail>("recurringInvoice.create", input);
+        return c.mutate("recurringInvoice.create", input);
       },
-      update(id: string, data: Partial<RecurringInvoiceCreateInput>) {
-        return c.mutate<RecurringInvoiceDetail>("recurringInvoice.update", { id, data });
+      update(id: string, data: InputOf<"recurringInvoice.update">["data"]) {
+        return c.mutate("recurringInvoice.update", { id, data });
       },
       delete(id: string) {
-        return c.mutate<{ success: boolean }>("recurringInvoice.delete", { id });
+        return c.mutate("recurringInvoice.delete", { id });
       },
       pause(id: string) {
-        return c.mutate<{ success: boolean }>("recurringInvoice.pause", { id });
+        return c.mutate("recurringInvoice.pause", { id });
       },
       resume(id: string) {
-        return c.mutate<{ success: boolean }>("recurringInvoice.resume", { id });
+        return c.mutate("recurringInvoice.resume", { id });
       },
       runNow(id: string) {
-        return c.mutate<{ success: boolean; invoiceId?: string }>("recurringInvoice.runNow", { id });
+        return c.mutate("recurringInvoice.runNow", { id });
       },
       executionHistory(templateId: string, page?: number, limit?: number) {
-        return c.query<PaginatedResult<RecurringInvoiceExecution>>("recurringInvoice.executionHistory", { templateId, page, limit });
+        return c.query("recurringInvoice.executionHistory", { templateId, page, limit });
       },
       planUsage() {
-        return c.query<RecurringInvoicePlanUsage>("recurringInvoice.planUsage");
+        return c.query("recurringInvoice.planUsage");
       },
       suggestions() {
-        return c.query<RecurringInvoiceSuggestion[]>("recurringInvoice.suggestions");
+        return c.query("recurringInvoice.suggestions");
       },
     };
   }
@@ -984,13 +982,13 @@ export class HisaaboClient {
     const c = this;
     return {
       list() {
-        return c.query<any>("apiKey.list");
+        return c.query("apiKey.list");
       },
-      create(input: any) {
-        return c.mutate<any>("apiKey.create", input);
+      create(input: InputOf<"apiKey.create">) {
+        return c.mutate("apiKey.create", input);
       },
-      revoke(input: any) {
-        return c.mutate<any>("apiKey.revoke", input);
+      revoke(input: InputOf<"apiKey.revoke">) {
+        return c.mutate("apiKey.revoke", input);
       },
     };
   }
@@ -1001,16 +999,16 @@ export class HisaaboClient {
     const c = this;
     return {
       importParties(input: ImportPartiesInput) {
-        return c.mutate<ImportResult>("import.importParties", input);
+        return c.mutate("import.importParties", input);
       },
       importItems(input: ImportItemsInput) {
-        return c.mutate<ImportItemsResult>("import.importItems", input);
+        return c.mutate("import.importItems", input);
       },
       importInvoices(input: ImportInvoicesInput) {
-        return c.mutate<ImportResult>("import.importInvoices", input);
+        return c.mutate("import.importInvoices", input);
       },
       importPayments(input: ImportPaymentsInput) {
-        return c.mutate<ImportResult>("import.importPayments", input);
+        return c.mutate("import.importPayments", input);
       },
     };
   }
@@ -1020,35 +1018,35 @@ export class HisaaboClient {
   get journal() {
     const c = this;
     return {
-      list(input?: Record<string, unknown>) {
-        return c.query<any>("journal.list", input ?? {});
+      list(input: InputOf<"journal.list">) {
+        return c.query("journal.list", input);
       },
       getById(id: string) {
-        return c.query<any>("journal.getById", { id });
+        return c.query("journal.getById", { id });
       },
-      create(input: Record<string, unknown>) {
-        return c.mutate<any>("journal.create", input);
+      create(input: InputOf<"journal.create">) {
+        return c.mutate("journal.create", input);
       },
-      update(input: Record<string, unknown>) {
-        return c.mutate<any>("journal.update", input);
+      update(input: InputOf<"journal.update">) {
+        return c.mutate("journal.update", input);
       },
       void(id: string) {
-        return c.mutate<any>("journal.void", { id });
+        return c.mutate("journal.void", { id });
       },
       delete(id: string) {
-        return c.mutate<any>("journal.delete", { id });
+        return c.mutate("journal.delete", { id });
       },
       templateList() {
-        return c.query<any>("journal.templateList");
+        return c.query("journal.templateList");
       },
-      templateCreate(input: Record<string, unknown>) {
-        return c.mutate<any>("journal.templateCreate", input);
+      templateCreate(input: InputOf<"journal.templateCreate">) {
+        return c.mutate("journal.templateCreate", input);
       },
       templateDelete(id: string) {
-        return c.mutate<any>("journal.templateDelete", { id });
+        return c.mutate("journal.templateDelete", { id });
       },
-      createFromTemplate(input: Record<string, unknown>) {
-        return c.mutate<any>("journal.createFromTemplate", input);
+      createFromTemplate(input: InputOf<"journal.createFromTemplate">) {
+        return c.mutate("journal.createFromTemplate", input);
       },
     };
   }
@@ -1058,26 +1056,26 @@ export class HisaaboClient {
   get itc() {
     const c = this;
     return {
-      dashboard(input?: Record<string, unknown>) {
-        return c.query<any>("itc.dashboard", input ?? {});
+      dashboard(input?: InputOf<"itc.dashboard">) {
+        return c.query("itc.dashboard", input ?? {});
       },
-      ledger(input?: Record<string, unknown>) {
-        return c.query<any>("itc.ledger", input ?? {});
+      ledger(input: InputOf<"itc.ledger">) {
+        return c.query("itc.ledger", input);
       },
       agingAlerts() {
-        return c.query<any>("itc.agingAlerts");
+        return c.query("itc.agingAlerts");
       },
-      markBlocked(input: Record<string, unknown>) {
-        return c.mutate<any>("itc.markBlocked", input);
+      markBlocked(input: InputOf<"itc.markBlocked">) {
+        return c.mutate("itc.markBlocked", input);
       },
-      markEligible(input: Record<string, unknown>) {
-        return c.mutate<any>("itc.markEligible", input);
+      markEligible(input: InputOf<"itc.markEligible">) {
+        return c.mutate("itc.markEligible", input);
       },
-      recordUtilization(input: Record<string, unknown>) {
-        return c.mutate<any>("itc.recordUtilization", input);
+      recordUtilization(input: InputOf<"itc.recordUtilization">) {
+        return c.mutate("itc.recordUtilization", input);
       },
-      gstr3bTable4(input?: Record<string, unknown>) {
-        return c.query<any>("itc.gstr3bTable4", input ?? {});
+      gstr3bTable4(input: InputOf<"itc.gstr3bTable4">) {
+        return c.query("itc.gstr3bTable4", input);
       },
     };
   }
@@ -1087,47 +1085,47 @@ export class HisaaboClient {
   get bankRecon() {
     const c = this;
     return {
-      importList(input?: Record<string, unknown>) {
-        return c.query<any>("bankRecon.importList", input ?? {});
+      importList(input: InputOf<"bankRecon.importList">) {
+        return c.query("bankRecon.importList", input);
       },
       importDetail(importId: string) {
-        return c.query<any>("bankRecon.importDetail", { importId });
+        return c.query("bankRecon.importDetail", { importId });
       },
-      summary(importId: string) {
-        return c.query<any>("bankRecon.summary", { importId });
+      summary(input: InputOf<"bankRecon.summary">) {
+        return c.query("bankRecon.summary", input);
       },
-      lines(input: Record<string, unknown>) {
-        return c.query<any>("bankRecon.lines", input);
+      lines(input: InputOf<"bankRecon.lines">) {
+        return c.query("bankRecon.lines", input);
       },
       ruleList() {
-        return c.query<any>("bankRecon.ruleList");
+        return c.query("bankRecon.ruleList");
       },
-      ruleCreate(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.ruleCreate", input);
+      ruleCreate(input: InputOf<"bankRecon.ruleCreate">) {
+        return c.mutate("bankRecon.ruleCreate", input);
       },
-      ruleUpdate(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.ruleUpdate", input);
+      ruleUpdate(input: InputOf<"bankRecon.ruleUpdate">) {
+        return c.mutate("bankRecon.ruleUpdate", input);
       },
       ruleDelete(id: string) {
-        return c.mutate<any>("bankRecon.ruleDelete", { id });
+        return c.mutate("bankRecon.ruleDelete", { id });
       },
       templateList() {
-        return c.query<any>("bankRecon.templateList");
+        return c.query("bankRecon.templateList");
       },
-      confirmMatch(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.confirmMatch", input);
+      confirmMatch(input: InputOf<"bankRecon.confirmMatch">) {
+        return c.mutate("bankRecon.confirmMatch", input);
       },
-      manualMatch(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.manualMatch", input);
+      manualMatch(input: InputOf<"bankRecon.manualMatch">) {
+        return c.mutate("bankRecon.manualMatch", input);
       },
-      unmatch(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.unmatch", input);
+      unmatch(input: InputOf<"bankRecon.unmatch">) {
+        return c.mutate("bankRecon.unmatch", input);
       },
-      createExpense(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.createExpense", input);
+      createExpense(input: InputOf<"bankRecon.createExpense">) {
+        return c.mutate("bankRecon.createExpense", input);
       },
-      ignoreLine(input: Record<string, unknown>) {
-        return c.mutate<any>("bankRecon.ignoreLine", input);
+      ignoreLine(input: InputOf<"bankRecon.ignoreLine">) {
+        return c.mutate("bankRecon.ignoreLine", input);
       },
     };
   }
@@ -1137,23 +1135,23 @@ export class HisaaboClient {
   get eInvoice() {
     const c = this;
     return {
-      dashboard(input?: Record<string, unknown>) {
-        return c.query<any>("eInvoice.dashboard", input ?? {});
+      dashboard(input: InputOf<"eInvoice.dashboard">) {
+        return c.query("eInvoice.dashboard", input);
       },
-      generate(input: Record<string, unknown>) {
-        return c.mutate<any>("eInvoice.generate", input);
+      generate(input: InputOf<"eInvoice.generate">) {
+        return c.mutate("eInvoice.generate", input);
       },
-      cancel(input: Record<string, unknown>) {
-        return c.mutate<any>("eInvoice.cancel", input);
+      cancel(input: InputOf<"eInvoice.cancel">) {
+        return c.mutate("eInvoice.cancel", input);
       },
-      retryFailed(input: Record<string, unknown>) {
-        return c.mutate<any>("eInvoice.retryFailed", input);
+      retryFailed(input: InputOf<"eInvoice.retryFailed">) {
+        return c.mutate("eInvoice.retryFailed", input);
       },
-      bulkRetry(input?: Record<string, unknown>) {
-        return c.mutate<any>("eInvoice.bulkRetry", input ?? {});
+      bulkRetry() {
+        return c.mutate("eInvoice.bulkRetry");
       },
       getStatus(invoiceId: string) {
-        return c.query<any>("eInvoice.getStatus", { invoiceId });
+        return c.query("eInvoice.getStatus", { invoiceId });
       },
     };
   }
@@ -1163,26 +1161,26 @@ export class HisaaboClient {
   get ewayBill() {
     const c = this;
     return {
-      dashboard(input?: Record<string, unknown>) {
-        return c.query<any>("ewayBill.dashboard", input ?? {});
+      dashboard(input: InputOf<"ewayBill.dashboard">) {
+        return c.query("ewayBill.dashboard", input);
       },
-      generate(input: Record<string, unknown>) {
-        return c.mutate<any>("ewayBill.generate", input);
+      generate(input: InputOf<"ewayBill.generate">) {
+        return c.mutate("ewayBill.generate", input);
       },
-      cancel(input: Record<string, unknown>) {
-        return c.mutate<any>("ewayBill.cancel", input);
+      cancel(input: InputOf<"ewayBill.cancel">) {
+        return c.mutate("ewayBill.cancel", input);
       },
-      updateVehicle(input: Record<string, unknown>) {
-        return c.mutate<any>("ewayBill.updateVehicle", input);
+      updateVehicle(input: InputOf<"ewayBill.updateVehicle">) {
+        return c.mutate("ewayBill.updateVehicle", input);
       },
-      extend(input: Record<string, unknown>) {
-        return c.mutate<any>("ewayBill.extend", input);
+      extend(input: InputOf<"ewayBill.extend">) {
+        return c.mutate("ewayBill.extend", input);
       },
       getByInvoice(invoiceId: string) {
-        return c.query<any>("ewayBill.getByInvoice", { invoiceId });
+        return c.query("ewayBill.getByInvoice", { invoiceId });
       },
-      expiringList(input?: Record<string, unknown>) {
-        return c.query<any>("ewayBill.expiringList", input ?? {});
+      expiringList() {
+        return c.query("ewayBill.expiringList");
       },
     };
   }
@@ -1192,20 +1190,20 @@ export class HisaaboClient {
   get gstr2b() {
     const c = this;
     return {
-      uploads(input?: Record<string, unknown>) {
-        return c.query<any>("gstr2b.uploads", input ?? {});
+      uploads(input?: InputOf<"gstr2b.uploads">) {
+        return c.query("gstr2b.uploads", input ?? {});
       },
-      records(input: Record<string, unknown>) {
-        return c.query<any>("gstr2b.records", input);
+      records(input: InputOf<"gstr2b.records">) {
+        return c.query("gstr2b.records", input);
       },
-      summary(input: Record<string, unknown>) {
-        return c.query<any>("gstr2b.summary", input);
+      summary(input: InputOf<"gstr2b.summary">) {
+        return c.query("gstr2b.summary", input);
       },
-      missingInBooks(input: Record<string, unknown>) {
-        return c.query<any>("gstr2b.missingInBooks", input);
+      missingInBooks(input: InputOf<"gstr2b.missingInBooks">) {
+        return c.query("gstr2b.missingInBooks", input);
       },
-      missingIn2B(input: Record<string, unknown>) {
-        return c.query<any>("gstr2b.missingIn2B", input);
+      missingIn2B(input: InputOf<"gstr2b.missingIn2B">) {
+        return c.query("gstr2b.missingIn2B", input);
       },
     };
   }
@@ -1215,17 +1213,17 @@ export class HisaaboClient {
   get account() {
     const c = this;
     return {
-      list(input?: Record<string, unknown>) {
-        return c.query<any>("account.list", input ?? {});
+      list() {
+        return c.query("account.list");
       },
-      create(input: Record<string, unknown>) {
-        return c.mutate<any>("account.create", input);
+      create(input: InputOf<"account.create">) {
+        return c.mutate("account.create", input);
       },
-      update(input: Record<string, unknown>) {
-        return c.mutate<any>("account.update", input);
+      update(input: InputOf<"account.update">) {
+        return c.mutate("account.update", input);
       },
       delete(id: string) {
-        return c.mutate<any>("account.delete", { id });
+        return c.mutate("account.delete", { id });
       },
     };
   }
@@ -1236,7 +1234,7 @@ export class HisaaboClient {
     const c = this;
     return {
       maintenanceStatus() {
-        return c.query<MaintenanceStatus>("system.maintenanceStatus");
+        return c.query("system.maintenanceStatus");
       },
     };
   }
@@ -1246,8 +1244,8 @@ export class HisaaboClient {
   get selfExport() {
     const c = this;
     return {
-      request(input: { tenantId: string }) {
-        return c.mutate<{ token: string; url: string; expiresAt: string }>("selfExport.request", input);
+      request(input: InputOf<"selfExport.request">) {
+        return c.mutate("selfExport.request", input);
       },
     };
   }
@@ -1257,8 +1255,8 @@ export class HisaaboClient {
   get selfImport() {
     const c = this;
     return {
-      request(input: { tenantId: string }) {
-        return c.mutate<{ token: string; url: string; expiresAt: string }>("selfImport.request", input);
+      request(input: InputOf<"selfImport.request">) {
+        return c.mutate("selfImport.request", input);
       },
     };
   }
@@ -1266,12 +1264,6 @@ export class HisaaboClient {
 
 // ── Type definitions ───────────────────────────────────────────────────────
 
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-}
 
 export interface AuthUser {
   id: string;
@@ -1282,867 +1274,154 @@ export interface AuthUser {
   tenantName?: string | null;
 }
 
-export interface MaintenanceStatus {
-  enabled: boolean;
-  message: string;
-  startsAt: string | null;
-  endsAt: string | null;
-}
-
-export type InvoiceStatus =
-  | "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
-
-export type DocumentType =
-  | "invoice" | "quotation" | "credit_note" | "debit_note"
-  | "delivery_challan" | "proforma" | "sales_return" | "purchase_return";
-
-export interface InvoiceSummary {
-  id: string;
-  invoiceNumber: string;
-  partyName: string;
-  partyId: string;
-  type: "sale" | "purchase";
-  documentType: DocumentType;
-  status: InvoiceStatus;
-  invoiceDate: string;
-  dueDate: string | null;
-  totalAmount: string;
-  amountPaid: string;
-  balanceDue: string;
-  totalAdjusted?: string;
-  relatedDocuments?: Array<{ id: string; documentType: string; invoiceNumber: string; totalAmount: string; status: string }>;
-}
-
-export interface LineItem {
-  id?: string;
-  itemId?: string | null;
-  itemName: string;
-  description?: string | null;
-  quantity: string;
-  unitPrice: string;
-  taxPercent: string;
-  discountPercent: string;
-  amount: string;
-  selectedUnit?: string | null;
-  variantId?: string | null;
-}
-
-export interface InvoiceDetail extends InvoiceSummary {
-  notes: string | null;
-  termsAndConditions: string | null;
-  lineItems: LineItem[];
-  charges?: Array<{ label: string; amount: string }>;
-  invoiceDiscount: string;
-  roundOff: string;
-  deliveryMethod?: string | null;
-  createdByName?: string | null;
-  createdAt?: string;
-}
-
-export interface InvoiceListInput {
-  type?: "sale" | "purchase" | null;
-  status?: InvoiceStatus | InvoiceStatus[] | null;
-  documentType?: DocumentType;
-  partyId?: string | null;
-  fromDate?: string | null;
-  toDate?: string | null;
-  itemId?: string | null;
-  search?: string | null;
-  sortBy?: "date" | "amount" | "number" | null;
-  sortDir?: "asc" | "desc" | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface InvoiceLineItemInput {
-  itemId?: string;
-  itemName: string;
-  description?: string;
-  quantity: string;
-  unitPrice: string;
-  taxPercent?: string;
-  discountPercent?: string;
-  selectedUnit?: string | null;
-  variantId?: string | null;
-}
-
-export interface InvoiceCreateInput {
-  partyId: string;
-  type: "sale" | "purchase";
-  documentType?: DocumentType;
-  invoiceDate?: string;
-  dueDate?: string;
-  notes?: string;
-  termsAndConditions?: string;
-  additionalCharges?: string;
-  charges?: Array<{ label: string; amount: string }>;
-  invoiceDiscount?: string;
-  invoiceDiscountType?: "amount" | "percent";
-  roundOff?: string;
-  referenceDocumentId?: string;
-  deliveryMethod?: string;
-  lineItems: InvoiceLineItemInput[];
-}
-
-export interface PartySummary {
-  id: string;
-  name: string;
-  type: "customer" | "supplier";
-  phone: string | null;
-  email: string | null;
-  gstin: string | null;
-  balance: string;
-  city: string | null;
-  category: string | null;
-}
-
-export interface PartyDetail extends PartySummary {
-  billingAddress: string | null;
-  shippingAddress: string | null;
-  pan: string | null;
-  state: string | null;
-  creditPeriodDays: number | null;
-  creditLimit: string | null;
-  contactPersonName: string | null;
-  openingBalance: string;
-}
-
-export interface PartyListInput {
-  type?: "customer" | "supplier" | null;
-  filter?: "all" | "customer" | "supplier" | "outstanding" | "overdue" | null;
-  search?: string | null;
-  category?: string | null;
-  sortBy?: "name" | "balance" | null;
-  sortDir?: "asc" | "desc" | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface PartyCreateInput {
-  type: "customer" | "supplier";
-  name: string;
-  phone?: string;
-  email?: string;
-  gstin?: string;
-  pan?: string;
-  billingAddress?: string;
-  shippingAddress?: string;
-  city?: string;
-  state?: string;
-  stateCode?: string;
-  pincode?: string;
-  openingBalance?: string;
-  category?: string;
-  creditPeriodDays?: number;
-  creditLimit?: string;
-  contactPersonName?: string;
-}
-
-export interface LedgerEntry {
-  date: string;
-  description: string;
-  debit: string;
-  credit: string;
-  balance: string;
-  referenceType: string;
-  referenceId: string;
-}
-
-export interface LedgerResult {
-  partyName: string;
-  partyType: string;
-  openingBalance: string;
-  closingBalance: string;
-  entries: LedgerEntry[];
-}
-
-export interface LedgerInput {
-  fromDate?: string;
-  toDate?: string;
-  page?: number;
-  limit?: number;
-}
-
-export interface ItemSummary {
-  id: string;
-  name: string;
-  sku: string | null;
-  unit: string;
-  salePrice: string | null;
-  purchasePrice: string | null;
-  taxPercent: string;
-  stockQuantity: string;
-  lowStockAlert: string | null;
-  category: string | null;
-  itemType: "product" | "service";
-}
-
-export interface ItemDetail extends ItemSummary {
-  description: string | null;
-  hsn: string | null;
-  itemMode: "simple" | "alt_units" | "variants";
-  taxInclusive: boolean;
-  unitVariants?: Array<{
-    unit: string;
-    conversionFactor: number;
-    salePrice: string;
-    purchasePrice?: string;
-  }>;
-  variants?: Array<{
-    id: string;
-    attributeValues: Record<string, string>;
-    sku?: string;
-    salePrice?: string;
-    purchasePrice?: string;
-    stockQuantity: string;
-  }>;
-}
-
-export interface ItemListInput {
-  search?: string | null;
-  category?: string | null;
-  itemType?: "product" | "service" | null;
-  lowStock?: boolean | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface ItemCreateInput {
-  name: string;
-  unit?: string;
-  salePrice?: string;
-  purchasePrice?: string;
-  taxPercent?: string;
-  stockQuantity?: string;
-  lowStockAlert?: string;
-  description?: string;
-  hsn?: string;
-  sku?: string;
-  itemType?: "product" | "service";
-  category?: string;
-}
-
-export interface StockAdjustInput {
-  itemId: string;
-  quantity: string;
-  reason?: string;
-}
-
-export interface PaymentSummary {
-  id: string;
-  paymentNumber: string;
-  amount: string;
-  discount: string;
-  mode: string;
-  paymentDate: string;
-  referenceNumber: string | null;
-  notes: string | null;
-  partyName: string;
-  partyId: string;
-  invoiceId: string | null;
-}
-
-export interface PaymentDetail extends PaymentSummary {
-  bankAccountId: string | null;
-  linkedInvoices: Array<{
-    invoiceId: string;
-    invoiceNumber: string;
-    invoiceDate: string;
-    totalAmount: string;
-    amountPaid: string;
-    status: string;
-    amount: string;
-  }>;
-}
-
-export interface PaymentListInput {
-  partyId?: string | null;
-  invoiceId?: string | null;
-  fromDate?: string | null;
-  toDate?: string | null;
-  search?: string | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface PaymentCreateInput {
-  partyId: string;
-  amount: string;
-  mode: "cash" | "bank" | "upi" | "cheque" | "other";
-  invoiceId?: string;
-  discount?: string;
-  referenceNumber?: string;
-  paymentDate?: string;
-  notes?: string;
-  bankAccountId?: string;
-  allocations?: Array<{ invoiceId: string; amount: string }>;
-}
-
-export interface PaymentUpdateInput {
-  id: string;
-  amount?: string;
-  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
-  discount?: string;
-  referenceNumber?: string | null;
-  paymentDate?: string;
-  notes?: string | null;
-  bankAccountId?: string | null;
-  allocations?: Array<{ invoiceId: string; amount: string }>;
-}
-
-export interface ExpenseSummary {
-  id: string;
-  category: string;
-  description: string | null;
-  amount: string;
-  mode: string;
-  expenseDate: string;
-  referenceNumber: string | null;
-}
-
-export interface ExpenseListInput {
-  category?: string | null;
-  fromDate?: string | null;
-  toDate?: string | null;
-  search?: string | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface ExpenseCreateInput {
-  category: string;
-  amount: string;
-  mode: "cash" | "bank" | "upi" | "cheque" | "other";
-  description?: string;
-  expenseDate?: string;
-  referenceNumber?: string;
-}
-
-export interface DashboardInput {
-  fromDate?: string;
-  toDate?: string;
-}
-
-export interface DashboardSummary {
-  totalSales: string;
-  totalPurchases: string;
-  totalExpenses: string;
-  receivable: string;
-  payable: string;
-  cashInHand: string;
-  recentInvoices: Array<{
-    id: string;
-    invoiceNumber: string;
-    partyName: string;
-    totalAmount: string;
-    status: string;
-    invoiceDate: string;
-  }>;
-}
-
-export interface BusinessSummary {
-  id: string;
-  name: string;
-  legalName: string | null;
-  gstin: string | null;
-  gstRegistrationType: string;
-}
-
-export interface BusinessDetail extends BusinessSummary {
-  pan: string;
-  phone: string;
-  email: string | null;
-  address: string;
-  city: string | null;
-  state: string | null;
-  stateCode: string | null;
-  pincode: string | null;
-  invoicePrefix: string;
-  currency: string;
-  financialYearStart: number;
-}
-
-export interface GstReportInput {
-  month: number;
-  year: number;
-}
-
-export interface GstReportResult {
-  period: string;
-  b2b?: unknown;
-  b2c?: unknown;
-  summary?: unknown;
-  [key: string]: unknown;
-}
-
-export type ShipmentStatus = "pending" | "shipped" | "in_transit" | "delivered" | "returned";
-
-export interface ShipmentSummary {
-  id: string;
-  invoiceId: string | null;
-  partyId: string | null;
-  carrier: string | null;
-  mode: string | null;
-  trackingNumber: string | null;
-  trackingUrl: string | null;
-  cost: string;
-  weight: string | null;
-  status: ShipmentStatus;
-  shipmentDate: string | null;
-  estimatedDelivery: string | null;
-  actualDelivery: string | null;
-  notes: string | null;
-  createdAt: string;
-  invoiceNumber: string | null;
-  partyName: string | null;
-}
-
-export interface ShipmentDetail extends ShipmentSummary {
-  businessId: string;
-  shippingAddress: string | null;
-  shippingCity: string | null;
-  shippingPincode: string | null;
-  updatedAt: string;
-}
-
-export interface ShipmentListInput {
-  status?: ShipmentStatus | null;
-  invoiceId?: string | null;
-  partyId?: string | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface ShipmentCreateInput {
-  invoiceId?: string;
-  partyId?: string;
-  carrier?: string;
-  mode?: string;
-  trackingNumber?: string;
-  trackingUrl?: string;
-  cost?: string;
-  weight?: string;
-  shippingAddress?: string;
-  shippingCity?: string;
-  shippingPincode?: string;
-  status?: ShipmentStatus;
-  shipmentDate?: string;
-  estimatedDelivery?: string;
-  notes?: string;
-}
-
-export interface ShipmentUpdateInput {
-  id: string;
-  carrier?: string;
-  mode?: string;
-  trackingNumber?: string;
-  trackingUrl?: string;
-  cost?: string;
-  weight?: string;
-  status?: ShipmentStatus;
-  shipmentDate?: string;
-  estimatedDelivery?: string;
-  actualDelivery?: string;
-  notes?: string;
-}
-
-export type BankAccountType = "savings" | "current" | "cash" | "credit" | "other" | "payment_gateway";
-
-export interface GatewayChargeRate {
-  type: "percentage" | "flat";
-  value: string;
-}
-
-export interface GatewayChargeConfig {
-  credit_card?: GatewayChargeRate;
-  debit_card?: GatewayChargeRate;
-  upi?: GatewayChargeRate;
-  net_banking?: GatewayChargeRate;
-  wallet?: GatewayChargeRate;
-  default?: GatewayChargeRate;
-}
-
-export interface GatewayConfig {
-  id: string;
-  businessId: string;
-  bankAccountId: string;
-  settlementAccountId: string;
-  chargeConfig: GatewayChargeConfig;
-  expenseCategory: string;
-  autoSettle: boolean;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface UpsertGatewayConfigInput {
-  bankAccountId: string;
-  settlementAccountId: string;
-  chargeConfig: GatewayChargeConfig;
-  expenseCategory?: string;
-  autoSettle?: boolean;
-}
-
-export interface BankAccountSummary {
-  id: string;
-  accountName: string;
-  accountNumber: string | null;
-  ifsc: string | null;
-  bankName: string | null;
-  accountType: BankAccountType;
-  openingBalance: string;
-  currentBalance: string;
-  isDefault: boolean;
-  createdAt: string;
-}
-
-export interface BankAccountDetail extends BankAccountSummary {
-  recentTransactions: BankTransactionRow[];
-}
-
-export interface BankTransactionRow {
-  id: string;
-  businessId: string;
-  bankAccountId: string;
-  type: "deposit" | "withdrawal" | "transfer";
-  amount: string;
-  description: string | null;
-  referenceType: string | null;
-  referenceId: string | null;
-  transactionDate: string;
-  createdAt: string;
-  balanceAfter: string;
-}
-
-export interface BankAccountCreateInput {
-  accountName: string;
-  accountNumber?: string;
-  ifsc?: string;
-  bankName?: string;
-  accountType: BankAccountType;
-  openingBalance?: string;
-  isDefault?: boolean;
-}
-
-export interface BankTransferInput {
-  fromAccountId: string;
-  toAccountId: string;
-  amount: string;
-  description?: string;
-  transactionDate?: string;
-}
-
-export interface BankTransferResult {
-  withdrawal: BankTransactionRow;
-  deposit: BankTransactionRow;
-}
-
-export interface BankTransactionListInput {
-  bankAccountId: string;
-  fromDate?: string;
-  toDate?: string;
-  type?: "deposit" | "withdrawal" | "transfer";
-  page?: number;
-  limit?: number;
-}
-
-export interface BankSummary {
-  totalBalance: string;
-  cashInHand: string;
-  bankBalance: string;
-  accountCount: number;
-}
-
-export interface DaybookInput {
-  fromDate: string;
-  toDate: string;
-  typeFilter?: "all" | "invoices" | "payments" | "expenses";
-}
-
-export interface DaybookEntry {
-  id: string;
-  time: string;
-  entryType: "invoice" | "payment" | "expense";
-  number: string | null;
-  partyOrCategory: string;
-  debit: string;
-  credit: string;
-  mode: string | null;
-  status: string | null;
-  meta: Record<string, string | null>;
-}
-
-export interface DaybookResult {
-  entries: DaybookEntry[];
-  summary: {
-    totalSalesInvoiced: string;
-    totalPurchaseInvoiced: string;
-    totalPaymentsReceived: string;
-    totalPaymentsMade: string;
-    totalExpenses: string;
-    netCashMovement: string;
-  };
-}
-
-export interface OutstandingInput {
-  type?: "receivable" | "payable" | "both";
-  asOfDate?: string;
-}
-
-export interface OutstandingResult {
-  receivables: unknown | null;
-  payables: unknown | null;
-}
-
-export interface TaxSummaryInput {
-  fromDate: string;
-  toDate: string;
-  type?: "sales" | "purchases" | "both";
-}
-
-export interface TaxSummaryResult {
-  rows: unknown[];
-  summary: unknown;
-}
-
-export interface ItemSalesInput {
-  fromDate: string;
-  toDate: string;
-  category?: string;
-  itemType?: "product" | "service";
-  sortBy?: "revenue" | "quantity" | "invoices" | "margin";
-  compareToPrevious?: boolean;
-}
-
-export interface ItemSalesResult {
-  rows: unknown[];
-  summary: unknown;
-  [key: string]: unknown;
-}
-
-export interface StockSummaryInput {
-  category?: string;
-  showZeroStock?: boolean;
-}
-
-export interface StockSummaryResult {
-  rows: unknown[];
-  summary: unknown;
-  [key: string]: unknown;
-}
-
-export interface PartyStatementInput {
-  partyId: string;
-  fromDate?: string;
-  toDate?: string;
-}
-
-export interface PartyStatementResult {
-  [key: string]: unknown;
-}
-
-export interface PaymentSummaryInput {
-  fromDate: string;
-  toDate: string;
-  type?: "received" | "made" | "both";
-  bankAccountId?: string;
-}
-
-export interface PaymentSummaryResult {
-  [key: string]: unknown;
-}
-
-export interface StoreSettings {
-  storeEnabled: boolean;
-  storeSlug: string | null;
-  storeName: string | null;
-  storeDescription: string | null;
-  [key: string]: unknown;
-}
-
-export interface StoreSettingsUpdateInput {
-  storeEnabled?: boolean;
-  storeSlug?: string;
-  storeName?: string;
-  storeDescription?: string;
-  [key: string]: unknown;
-}
-
-export interface StoreOrderSummary {
-  id: string;
-  orderNumber: string;
-  customerName: string;
-  totalAmount: string;
-  status: string;
-  createdAt: string;
-}
-
-export interface StoreOrderDetail extends StoreOrderSummary {
-  items: Array<{ name: string; quantity: number; price: string }>;
-  shippingAddress: string | null;
-  notes: string | null;
-}
-
-export interface StoreOrderListInput {
-  status?: string | null;
-  page?: number;
-  limit?: number;
-}
-
-export type TargetType = "order_count" | "order_value" | "item_quantity";
-export type TargetPeriod = "daily" | "weekly" | "monthly" | "quarterly" | "custom";
-
-export interface TargetRow {
-  id: string;
-  type: TargetType;
-  period: TargetPeriod;
-  targetValue: string;
-  startDate: string;
-  endDate: string | null;
-  assignedToId: string | null;
-  itemId: string | null;
-  notes: string | null;
-}
-
-export interface TargetWithProgress extends TargetRow {
-  currentValue: string;
-  percentComplete: number;
-}
-
-export interface TargetListInput {
-  type?: TargetType | null;
-  period?: TargetPeriod | null;
-  page?: number;
-  limit?: number;
-}
-
-export interface TargetCreateInput {
-  type: TargetType;
-  period: TargetPeriod;
-  targetValue: string;
-  startDate: string;
-  endDate?: string;
-  assignedToId?: string;
-  itemId?: string;
-  notes?: string;
-}
-
-export interface TargetUpdateInput {
-  id: string;
-  targetValue?: string;
-  endDate?: string;
-  notes?: string;
-}
-
-export interface ImportPartiesInput {
-  source?: string;
-  parties: Array<Record<string, unknown>>;
-}
-
-export interface ImportItemsInput {
-  source?: string;
-  items: Array<Record<string, unknown>>;
-}
-
-export interface ImportInvoicesInput {
-  source?: string;
-  invoices: Array<Record<string, unknown>>;
-}
-
-export interface ImportPaymentsInput {
-  source?: string;
-  payments: Array<Record<string, unknown>>;
-}
-
-export interface ImportResult {
-  imported: number;
-  skipped: number;
-  errors: Array<{ row: number; message: string }>;
-}
-
-export interface ImportItemsResult extends ImportResult {
-  created: number;
-}
+
+export type InvoiceStatus = InputOf<"invoice.updateStatus">["status"];
+
+export type DocumentType = InputOf<"document.convert">["targetDocumentType"];
+
+export type InvoiceSummary = OutputOf<"invoice.list">["data"][number];
+
+
+
+export type InvoiceListInput = InputOf<"invoice.list">;
+
+export type InvoiceLineItemInput = InputOf<"invoice.create">["lineItems"][number];
+
+export type InvoiceCreateInput = InputOf<"invoice.create">;
+
+export type PartySummary = OutputOf<"party.list">["data"][number];
+
+
+export type PartyListInput = InputOf<"party.list">;
+
+export type PartyCreateInput = InputOf<"party.create">;
+
+
+export type LedgerInput = Omit<InputOf<"party.ledger">, "partyId">;
+
+export type ItemSummary = OutputOf<"item.list">["data"][number];
+
+
+export type ItemListInput = InputOf<"item.list">;
+
+export type ItemCreateInput = InputOf<"item.create">;
+
+export type StockAdjustInput = InputOf<"item.adjustStock">;
+
+export type PaymentSummary = OutputOf<"payment.list">["data"][number];
+
+
+export type PaymentListInput = InputOf<"payment.list">;
+
+export type PaymentCreateInput = InputOf<"payment.create">;
+
+export type PaymentUpdateInput = InputOf<"payment.update">;
+
+export type ExpenseSummary = OutputOf<"expense.list">["data"][number];
+
+export type ExpenseListInput = InputOf<"expense.list">;
+
+export type ExpenseCreateInput = InputOf<"expense.create">;
+
+export type DashboardInput = InputOf<"dashboard.summary">;
+
+
+
+export type GstReportInput = InputOf<"gst.gstr1">;
+
+
+
+export type ShipmentSummary = OutputOf<"shipment.list">["data"][number];
+
+
+export type ShipmentListInput = InputOf<"shipment.list">;
+
+export type ShipmentCreateInput = InputOf<"shipment.create">;
+
+export type ShipmentUpdateInput = InputOf<"shipment.update">;
+
+
+export type GatewayChargeConfig = InputOf<"bankAccount.upsertGatewayConfig">["chargeConfig"];
+export type GatewayChargeRate = NonNullable<GatewayChargeConfig[keyof GatewayChargeConfig]>;
+
+export type UpsertGatewayConfigInput = InputOf<"bankAccount.upsertGatewayConfig">;
+
+export type BankAccountSummary = OutputOf<"bankAccount.list">[number];
+
+
+export type BankTransactionRow = OutputOf<"bankAccount.listTransactions">["data"][number];
+
+export type BankAccountCreateInput = InputOf<"bankAccount.create">;
+
+export type BankTransferInput = InputOf<"bankAccount.transfer">;
+
+
+export type BankTransactionListInput = InputOf<"bankAccount.listTransactions">;
+
+
+export type DaybookInput = InputOf<"reports.daybook">;
+
+export type DaybookEntry = OutputOf<"reports.daybook">["entries"][number];
+
+
+export type OutstandingInput = InputOf<"reports.outstanding">;
+
+
+export type TaxSummaryInput = InputOf<"reports.taxSummary">;
+
+
+export type ItemSalesInput = InputOf<"reports.itemSales">;
+
+
+export type StockSummaryInput = InputOf<"reports.stockSummary">;
+
+
+export type PartyStatementInput = InputOf<"reports.partyStatement">;
+
+
+export type PaymentSummaryInput = InputOf<"reports.paymentSummary">;
+
+
+
+export type StoreSettingsUpdateInput = InputOf<"store.updateSettings">;
+
+export type StoreOrderSummary = OutputOf<"store.listOrders">["data"][number];
+
+
+export type StoreOrderListInput = InputOf<"store.listOrders">;
+
+
+export type TargetRow = OutputOf<"target.list">[number];
+
+
+export type TargetListInput = InputOf<"target.list">;
+
+export type TargetCreateInput = InputOf<"target.create">;
+
+export type TargetUpdateInput = InputOf<"target.update">;
+
+export type ImportPartiesInput = InputOf<"import.importParties">;
+
+export type ImportItemsInput = InputOf<"import.importItems">;
+
+export type ImportInvoicesInput = InputOf<"import.importInvoices">;
+
+export type ImportPaymentsInput = InputOf<"import.importPayments">;
+
+
 
 // ── Recurring Invoice types ───────────────────────────────────────────────
 
-export type RecurringInvoiceStatus = "active" | "paused" | "completed" | "expired";
-export type RecurringInvoiceFrequency = "weekly" | "biweekly" | "monthly" | "quarterly" | "half_yearly" | "yearly" | "custom";
 
-export interface RecurringInvoiceSummary {
-  id: string;
-  name: string;
-  partyName: string;
-  type: "sale" | "purchase";
-  frequency: RecurringInvoiceFrequency;
-  status: RecurringInvoiceStatus;
-  nextRunDate: string | null;
-  lastRunDate: string | null;
-  totalRuns: number;
-  maxRuns: number | null;
-  startDate: string;
-  endDate: string | null;
-  createdAt: string;
-}
+export type RecurringInvoiceSummary = OutputOf<"recurringInvoice.list">["data"][number];
 
-export interface RecurringInvoiceLineItem {
-  itemName: string;
-  description?: string | null;
-  quantity: string;
-  unitPrice: string;
-  taxPercent?: string;
-  discountPercent?: string;
-}
 
-export interface RecurringInvoiceDetail extends RecurringInvoiceSummary {
-  partyId: string;
-  customIntervalDays: number | null;
-  lineItems: RecurringInvoiceLineItem[];
-  notes: string | null;
-}
 
-export interface RecurringInvoiceListInput {
-  status?: RecurringInvoiceStatus;
-  page?: number;
-  limit?: number;
-}
+export type RecurringInvoiceListInput = InputOf<"recurringInvoice.list">;
 
-export interface RecurringInvoiceCreateInput {
-  partyId: string;
-  name: string;
-  type: "sale" | "purchase";
-  frequency: RecurringInvoiceFrequency;
-  customIntervalDays?: number;
-  lineItems: Array<{
-    itemName: string;
-    quantity: string;
-    unitPrice: string;
-    taxPercent?: string;
-    discountPercent?: string;
-  }>;
-  startDate: string;
-  endDate?: string;
-  maxRuns?: number;
-  notes?: string;
-}
+export type RecurringInvoiceCreateInput = InputOf<"recurringInvoice.create">;
 
-export interface RecurringInvoiceExecution {
-  id: string;
-  invoiceNumber: string;
-  status: string;
-  errorMessage: string | null;
-  executedAt: string;
-}
+export type RecurringInvoiceExecution = OutputOf<"recurringInvoice.executionHistory">["data"][number];
 
-export interface RecurringInvoicePlanUsage {
-  runsThisMonth: number;
-  totalTemplates: number;
-}
 
-export interface RecurringInvoiceSuggestion {
-  partyId: string;
-  partyName: string;
-  frequency: string;
-  confidence: number;
-  reason: string;
-}
+export type RecurringInvoiceSuggestion = OutputOf<"recurringInvoice.suggestions">[number];

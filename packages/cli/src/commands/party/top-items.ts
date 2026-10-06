@@ -5,17 +5,14 @@ import {
   EXIT, type ColumnDef,
 } from "../../output.js";
 import { formatAmount } from "../../format.js";
+import type { OutputOf } from "../../api-types.js";
 
 interface TopItemsOpts {
   json?: boolean;
   format?: string;
 }
 
-interface TopItem {
-  itemName: string;
-  quantity: string;
-  revenue: string;
-}
+type TopItem = OutputOf<"party.topItems">[number];
 
 export async function partyTopItemsCommand(id: string, opts: TopItemsOpts): Promise<void> {
   const cfg = requireAuth();
@@ -29,14 +26,14 @@ export async function partyTopItemsCommand(id: string, opts: TopItemsOpts): Prom
       return;
     }
 
-    const items: TopItem[] = Array.isArray(result?.items) ? result.items : (Array.isArray(result) ? result : []);
+    const items: TopItem[] = result;
 
-    console.log(`\n  Top Items for Party: ${result?.partyName ?? id}\n`);
+    console.log(`\n  Top Items for Party: ${id}\n`);
 
     const cols: ColumnDef<TopItem>[] = [
       { key: "itemName", header: "Item", width: 30 },
-      { key: "quantity", header: "Quantity", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "revenue", header: "Revenue (₹)", align: "right", width: 14, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "totalQuantity", header: "Quantity", align: "right", width: 12, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "totalAmount", header: "Revenue (₹)", align: "right", width: 14, format: (v) => formatAmount(String(v ?? "0")) },
     ];
 
     if (opts.format === "tsv") outputTSV(items, cols);

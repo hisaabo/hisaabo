@@ -13,10 +13,7 @@ export async function storeOrderCancelCommand(
   await confirmOrExit(`  Cancel order ${id}? This cannot be undone.`, opts);
 
   try {
-    const input: Record<string, unknown> = { orderId: id };
-    if (opts.reason) input["reason"] = opts.reason;
-
-    const result = await client.store.cancelOrder(input);
+    const result = await client.store.cancelOrder({ orderId: id, reason: opts.reason || undefined });
 
     if (opts.json) {
       outputJSON(result);

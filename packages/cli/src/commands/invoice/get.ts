@@ -10,6 +10,7 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
 
   try {
     const inv = await client.invoice.get(id);
+    if (!inv) fatalError(`Invoice not found: ${id}`, EXIT.NOT_FOUND);
 
     if (opts.json) {
       outputJSON(inv);
@@ -42,7 +43,7 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
     process.stdout.write(`\n ┌${"─".repeat(inner + 2)}┐\n`);
     process.stdout.write(`│ ${hasColor() ? chalk.bold(title) : title}${" ".repeat(topPad)}${statusBadge} │\n`);
     divider();
-    line(`Party:    ${inv.partyName}`);
+    line(`Party:    ${inv.party?.name ?? "-"}`);
     line(`Date:     ${formatDate(inv.invoiceDate)}`);
     if (inv.dueDate) line(`Due:      ${formatDate(inv.dueDate)}`);
     if (inv.createdByName) line(`Created:  ${inv.createdByName}${inv.createdAt ? ` (${formatDate(inv.createdAt)})` : ""}`);
@@ -60,7 +61,7 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
       const qty = item.quantity.padStart(5);
       const rate = formatAmount(item.unitPrice).padStart(10);
       const tax = `${item.taxPercent}%`.padStart(5);
-      const amt = formatAmount(item.amount).padStart(12);
+      const amt = formatAmount(item.totalAmount).padStart(12);
       process.stdout.write(`│   ${idx}  ${desc} ${qty} ${rate} ${tax} ${amt}   │\n`);
     });
 
@@ -68,12 +69,9 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
     divider();
 
     // Totals
-    const subtotal = inv.lineItems.reduce((s, i) => s + parseFloat(i.amount), 0);
-    const _tax = parseFloat(inv.totalAmount) - subtotal - parseFloat(inv.roundOff ?? "0") + parseFloat(inv.invoiceDiscount ?? "0");
-
-    line(`Subtotal:`, formatAmount(String(subtotal)).padStart(16));
-    if (parseFloat(inv.invoiceDiscount ?? "0") !== 0)
-      line(`Discount:`, ("-" + formatAmount(inv.invoiceDiscount)).padStart(16));
+    line(`Subtotal:`, formatAmount(inv.subtotal).padStart(16));
+    if (parseFloat(inv.discountAmount) !== 0)
+      line(`Discount:`, ("-" + formatAmount(inv.discountAmount)).padStart(16));
     if (inv.charges && inv.charges.length > 0) {
       inv.charges.forEach((c) => line(`${c.label}:`, formatAmount(c.amount).padStart(16)));
     }
@@ -84,9 +82,9 @@ export async function invoiceGetCommand(id: string, opts: { json?: boolean }): P
     line(`Paid:`, formatAmount(inv.amountPaid).padStart(16));
     if (inv.totalAdjusted && parseFloat(inv.totalAdjusted) > 0)
       line(`Adjusted:`, ("-" + formatAmount(inv.totalAdjusted)).padStart(16));
-    const balance = inv.totalAdjusted && parseFloat(inv.totalAdjusted) > 0
-      ? String(parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - parseFloat(inv.totalAdjusted))
-      : inv.balanceDue;
+    const balance = String(
+      parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid) - (inv.totalAdjusted ? parseFloat(inv.totalAdjusted) : 0),
+    );
     line(`Balance:`, formatAmount(balance).padStart(16));
     if (inv.status === "adjusted")
       line(`(Settled via credit note / sales return)`);

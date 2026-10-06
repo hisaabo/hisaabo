@@ -102,7 +102,7 @@ export function registerGstTools(server: ToolServer, client: HisaaboClient) {
         .describe("Financial year in YYYY-YY format, e.g. '2023-24'."),
     },
     wrapTool(async (input) => {
-      const result = await client.gst.gstr9({ financialYear: input.financial_year });
+      const result = await client.gst.gstr9({ financialYear: Number(input.financial_year.slice(0, 4)) });
       return {
         content: [{
           type: "text" as const,

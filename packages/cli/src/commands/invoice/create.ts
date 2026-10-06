@@ -3,6 +3,7 @@ import { HisaaboClient, HisaaboApiError, type InvoiceLineItemInput } from "../..
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 import { formatAmount, formatINR, todayISO } from "../../format.js";
+import { deliveryMethods } from "@hisaabo/shared";
 
 interface CreateOpts {
   json?: boolean;
@@ -16,6 +17,10 @@ interface CreateOpts {
   notes?: string;
   terms?: string;
   yes?: boolean;
+}
+
+function isDeliveryMethod(v: string): v is (typeof deliveryMethods)[number] {
+  return (deliveryMethods as readonly string[]).includes(v);
 }
 
 async function prompt(rl: readline.Interface, question: string): Promise<string> {
@@ -230,6 +235,9 @@ export async function invoiceCreateCommand(opts: CreateOpts): Promise<void> {
     }
 
     // ── Create ──────────────────────────────────────────────────────
+    if (deliveryMethod !== undefined && !isDeliveryMethod(deliveryMethod)) {
+      fatalError(`--delivery must be one of: ${deliveryMethods.join(", ")}.`, EXIT.USAGE);
+    }
     const invoice = await client.invoice.create({
       partyId: partyId!,
       type: invoiceType,

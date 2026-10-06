@@ -31,7 +31,7 @@ export async function itemStockCommand(id: string, adjustment: string, opts: Sto
 
     const adj = parseFloat(adjustment);
     const dir = adj >= 0 ? "+" : "";
-    success(`Stock adjusted: ${updated.name}  ${dir}${formatAmount(adjustment)} → ${formatAmount(updated.stockQuantity)}`);
+    success(`Stock adjusted: ${id}  ${dir}${formatAmount(adjustment)} → ${formatAmount(updated.newStock)}`);
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

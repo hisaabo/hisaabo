@@ -1,10 +1,11 @@
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError, type BankAccountSummary, type BankTransactionRow } from "../../client.js";
+import { bankAccountTypes } from "@hisaabo/shared";
 import { requireAuth } from "../../config.js";
 import {
   fatalError, outputJSON, outputTable, paginationFooter, EXIT, success, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate, formatINR } from "../../format.js";
+import { formatAmount, formatDate, formatINR, apiFrom, apiTo } from "../../format.js";
 
 async function prompt(rl: readline.Interface, q: string): Promise<string> {
   return new Promise((resolve) => rl.question(q, resolve));
@@ -99,7 +100,7 @@ export async function bankCreateCommand(opts: {
   const isNonInteractive = !process.stdin.isTTY || opts.yes;
 
   let name = opts.name;
-  let accountType = (opts.type ?? "current") as "savings" | "current" | "cash" | "credit" | "other";
+  let accountType = opts.type ?? "current";
   let bankName = opts.bank;
   let accountNumber = opts.accountNumber;
   let ifsc = opts.ifsc;
@@ -108,8 +109,8 @@ export async function bankCreateCommand(opts: {
   if (!isNonInteractive) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     if (!name) name = (await prompt(rl, "  Account Name: ")).trim();
-    const typeStr = await prompt(rl, "  Type (savings/current/cash/credit/other) [current]: ");
-    accountType = (typeStr.trim() || "current") as typeof accountType;
+    const typeStr = await prompt(rl, "  Type (savings/current/cash/upi/credit_card/payment_gateway) [current]: ");
+    accountType = typeStr.trim() || "current";
     const bankStr = await prompt(rl, "  Bank Name: ");
     if (bankStr.trim()) bankName = bankStr.trim();
     const numStr = await prompt(rl, "  Account Number: ");
@@ -122,11 +123,14 @@ export async function bankCreateCommand(opts: {
   }
 
   if (!name) fatalError("--name is required", EXIT.USAGE);
+  if (!(bankAccountTypes as readonly string[]).includes(accountType)) {
+    fatalError(`--type must be one of: ${bankAccountTypes.join(", ")}.`, EXIT.USAGE);
+  }
 
   try {
     const account = await client.bankAccount.create({
       accountName: name,
-      accountType,
+      accountType: accountType as (typeof bankAccountTypes)[number],
       bankName,
       accountNumber,
       ifsc,
@@ -210,8 +214,8 @@ export async function bankTransactionsCommand(accountId: string, opts: {
   try {
     const result = await client.bankAccount.listTransactions({
       bankAccountId: accountId,
-      fromDate: opts.from,
-      toDate: opts.to,
+      fromDate: apiFrom(opts.from),
+      toDate: apiTo(opts.to),
       page,
       limit,
     });

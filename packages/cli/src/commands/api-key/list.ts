@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor } from "../../output.js";
+import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, type ColumnDef } from "../../output.js";
 import { formatDate, formatRelativeDate } from "../../format.js";
 import chalk from "chalk";
 
@@ -21,33 +21,32 @@ export async function apiKeyListCommand(opts: ApiKeyListOpts): Promise<void> {
       return;
     }
 
-    const items: unknown[] = Array.isArray(keys) ? keys : (keys?.items ?? keys?.data ?? []);
+    const items = keys;
 
     if (items.length === 0) {
       process.stdout.write("\n  No API keys found.\n  Use: hisaabo api-key create --name <name>\n\n");
       return;
     }
 
-    const rows = items.map((item: unknown) => {
-      const k = item as Record<string, unknown>;
-      const rawKey = String(k["keyPrefix"] ?? k["prefix"] ?? k["key"] ?? "");
+    const rows = items.map((k) => {
+      const rawKey = k.keyPrefix;
       // Show key prefix safely: hisaabo_key_abc... (first 20 chars)
       const displayKey = rawKey.length > 20 ? rawKey.slice(0, 20) + "..." : rawKey || "-";
       return {
-        name: String(k["name"] ?? "-"),
+        name: k.name,
         prefix: displayKey,
-        created: formatDate(String(k["createdAt"] ?? "")),
-        lastUsed: k["lastUsedAt"] ? formatRelativeDate(String(k["lastUsedAt"])) : "Never",
-        id: String(k["id"] ?? "-"),
+        created: formatDate(k.createdAt),
+        lastUsed: k.lastUsedAt ? formatRelativeDate(k.lastUsedAt) : "Never",
+        id: k.id,
       };
     });
 
-    const columns = [
-      { key: "name", header: "Name", align: "left" as const },
-      { key: "prefix", header: "Key Prefix", align: "left" as const },
-      { key: "created", header: "Created", align: "left" as const },
-      { key: "lastUsed", header: "Last Used", align: "left" as const },
-      { key: "id", header: "ID", align: "left" as const, width: 36 },
+    const columns: ColumnDef<(typeof rows)[number]>[] = [
+      { key: "name", header: "Name", align: "left" },
+      { key: "prefix", header: "Key Prefix", align: "left" },
+      { key: "created", header: "Created", align: "left" },
+      { key: "lastUsed", header: "Last Used", align: "left" },
+      { key: "id", header: "ID", align: "left", width: 36 },
     ];
 
     if (opts.format === "tsv") {

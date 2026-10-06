@@ -16,7 +16,7 @@ export async function itemRenameUnitCommand(id: string, opts: RenameUnitOpts): P
   if (!opts.new) fatalError("--new is required", EXIT.USAGE);
 
   try {
-    const result = await client.item.renameUnit({ itemId: id, oldUnit: opts.old, newUnit: opts.new });
+    const result = await client.item.renameUnit({ id, oldUnit: opts.old, newUnit: opts.new });
 
     if (opts.json) {
       outputJSON(result);

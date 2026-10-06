@@ -1,6 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { outputJSON, EXIT, fatalError, success } from "../../output.js";
+import type { InputOf } from "../../api-types.js";
 
 export async function storeUpdateSettingsCommand(opts: {
   slug?: string;
@@ -12,20 +13,20 @@ export async function storeUpdateSettingsCommand(opts: {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  const data: Record<string, unknown> = {};
-  if (opts.slug !== undefined) data["storeSlug"] = opts.slug;
-  if (opts.tagline !== undefined) data["storeTagline"] = opts.tagline;
+  const data: InputOf<"store.updateSettings"> = {};
+  if (opts.slug !== undefined) data.storeSlug = opts.slug;
+  if (opts.tagline !== undefined) data.storeTagline = opts.tagline;
   if (opts.enabled !== undefined) {
     if (opts.enabled !== "true" && opts.enabled !== "false") {
       fatalError("--enabled must be 'true' or 'false'", EXIT.USAGE);
     }
-    data["storeEnabled"] = opts.enabled === "true";
+    data.storeEnabled = opts.enabled === "true";
   }
   if (opts.requirePhoneOtp !== undefined) {
     if (opts.requirePhoneOtp !== "true" && opts.requirePhoneOtp !== "false") {
       fatalError("--require-phone-otp must be 'true' or 'false'", EXIT.USAGE);
     }
-    data["storeRequirePhoneOtp"] = opts.requirePhoneOtp === "true";
+    data.storeRequirePhoneOtp = opts.requirePhoneOtp === "true";
   }
 
   if (Object.keys(data).length === 0) {
@@ -42,11 +43,9 @@ export async function storeUpdateSettingsCommand(opts: {
 
     success("Store settings updated");
     console.log(`  Enabled:  ${result.storeEnabled ? "Yes" : "No"}`);
-    const otp = (result as { storeRequirePhoneOtp?: boolean }).storeRequirePhoneOtp;
-    if (otp !== undefined) console.log(`  SMS OTP:  ${otp ? "Required" : "Off"}`);
+    console.log(`  SMS OTP:  ${result.storeRequirePhoneOtp ? "Required" : "Off"}`);
     if (result.storeSlug) console.log(`  Slug:     ${result.storeSlug}`);
-    if (result.storeName) console.log(`  Name:     ${result.storeName}`);
-    if (result.storeDescription) console.log(`  About:    ${result.storeDescription}`);
+    if (result.storeTagline) console.log(`  Tagline:  ${result.storeTagline}`);
     console.log();
 
   } catch (e) {

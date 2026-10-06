@@ -9,6 +9,7 @@ export async function businessGetCommand(opts: { json?: boolean }): Promise<void
 
   try {
     const biz = await client.business.get(cfg.businessId);
+    if (!biz) fatalError(`Business not found: ${cfg.businessId}`, EXIT.NOT_FOUND);
 
     if (opts.json) {
       outputJSON(biz);

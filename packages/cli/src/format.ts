@@ -40,24 +40,24 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 /**
  * Format ISO date string as "dd MMM yyyy" (en-IN style).
  */
-export function formatDate(date: string | null | undefined): string {
+export function formatDate(date: string | Date | null | undefined): string {
   if (!date) return "-";
   try {
     const d = new Date(date);
-    if (isNaN(d.getTime())) return date;
+    if (isNaN(d.getTime())) return String(date);
     const day = String(d.getDate()).padStart(2, "0");
     const month = MONTHS[d.getMonth()];
     const year = d.getFullYear();
     return `${day} ${month} ${year}`;
   } catch {
-    return date;
+    return String(date);
   }
 }
 
 /**
  * Relative date — "Today", "Yesterday", "2d ago", etc.
  */
-export function formatRelativeDate(date: string | null | undefined): string {
+export function formatRelativeDate(date: string | Date | null | undefined): string {
   if (!date) return "-";
   try {
     const d = new Date(date);
@@ -69,7 +69,7 @@ export function formatRelativeDate(date: string | null | undefined): string {
     if (diff < 365) return `${Math.floor(diff / 30)}mo ago`;
     return `${Math.floor(diff / 365)}y ago`;
   } catch {
-    return date ?? "-";
+    return date ? String(date) : "-";
   }
 }
 
@@ -178,4 +178,23 @@ export function deliveryMethodLabel(method: string): string {
     post: "Post",
   };
   return map[method] ?? method;
+}
+
+/**
+ * Widen a plain `YYYY-MM-DD` date to a full ISO datetime for server fields
+ * validated with `z.string().datetime()`. Anything else is passed through.
+ */
+export function toApiDateTime(date: string, edge: "start" | "end" = "start"): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  return edge === "start" ? `${date}T00:00:00.000Z` : `${date}T23:59:59.999Z`;
+}
+
+/** Start-of-day datetime for an optional `--from` date (see {@link toApiDateTime}). */
+export function apiFrom(date: string | undefined): string | undefined {
+  return date === undefined ? undefined : toApiDateTime(date, "start");
+}
+
+/** End-of-day datetime for an optional `--to` date (see {@link toApiDateTime}). */
+export function apiTo(date: string | undefined): string | undefined {
+  return date === undefined ? undefined : toApiDateTime(date, "end");
 }

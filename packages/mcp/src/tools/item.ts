@@ -482,7 +482,7 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(withPaginationMeta(result as any), null, 2),
+          text: JSON.stringify(withPaginationMeta(result), null, 2),
         }],
       };
     })

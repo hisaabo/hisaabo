@@ -1,6 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import type { InputOf } from "../../api-types.js";
 
 interface VariantsUpdateOpts {
   sku?: string;
@@ -16,29 +17,33 @@ export async function itemVariantsUpdateCommand(variantId: string, opts: Variant
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  let parsedAttributes: Record<string, unknown> | undefined;
+  let parsedAttributes: Record<string, string> | undefined;
   if (opts.attributes) {
     try {
-      parsedAttributes = JSON.parse(opts.attributes) as Record<string, unknown>;
+      const raw: unknown = JSON.parse(opts.attributes);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !Object.values(raw).every((v) => typeof v === "string")) {
+        throw new Error("not a string map");
+      }
+      parsedAttributes = raw as Record<string, string>;
     } catch {
-      fatalError("--attributes must be valid JSON", EXIT.USAGE);
+      fatalError('--attributes must be a JSON object of string values, e.g. \'{"size":"M"}\'', EXIT.USAGE);
     }
   }
 
-  const data: Record<string, unknown> = { variantId };
-  if (opts.sku !== undefined) data["sku"] = opts.sku;
-  if (opts.salePrice !== undefined) data["salePrice"] = opts.salePrice;
-  if (opts.purchasePrice !== undefined) data["purchasePrice"] = opts.purchasePrice;
-  if (opts.stock !== undefined) data["stockQuantity"] = opts.stock;
-  if (opts.lowStockAlert !== undefined) data["lowStockAlert"] = opts.lowStockAlert;
-  if (parsedAttributes !== undefined) data["attributes"] = parsedAttributes;
+  const data: InputOf<"item.updateVariant">["data"] = {};
+  if (opts.sku !== undefined) data.sku = opts.sku;
+  if (opts.salePrice !== undefined) data.salePrice = opts.salePrice;
+  if (opts.purchasePrice !== undefined) data.purchasePrice = opts.purchasePrice;
+  if (opts.stock !== undefined) data.stockQuantity = opts.stock;
+  if (opts.lowStockAlert !== undefined) data.lowStockAlert = opts.lowStockAlert;
+  if (parsedAttributes !== undefined) data.attributeValues = parsedAttributes;
 
-  if (Object.keys(data).length === 1) {
+  if (Object.keys(data).length === 0) {
     fatalError("No fields to update. Provide at least one option.", EXIT.USAGE);
   }
 
   try {
-    const result = await client.item.updateVariant(data);
+    const result = await client.item.updateVariant({ variantId, data });
 
     if (opts.json) {
       outputJSON(result);

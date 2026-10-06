@@ -262,7 +262,7 @@ export function registerImportTools(server: ToolServer, client: HisaaboClient) {
           .describe("Payment amount as decimal string."),
         mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).default("cash")
           .describe("Payment mode."),
-        payment_date: z.string().optional()
+        payment_date: z.string()
           .describe("Payment date (YYYY-MM-DD or DD/MM/YYYY)."),
         payment_number: z.string().optional()
           .describe("Original payment number from source system."),

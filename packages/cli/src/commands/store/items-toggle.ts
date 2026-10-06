@@ -18,10 +18,12 @@ export async function storeItemsToggleCommand(opts: {
   const disableIds = opts.disable ? opts.disable.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
   try {
-    const result = await client.store.bulkToggleItems({ enable: enableIds, disable: disableIds });
+    // The server toggles one direction per call.
+    const enabled = enableIds.length > 0 ? await client.store.bulkToggleItems({ itemIds: enableIds, storeEnabled: true }) : null;
+    const disabled = disableIds.length > 0 ? await client.store.bulkToggleItems({ itemIds: disableIds, storeEnabled: false }) : null;
 
     if (opts.json) {
-      outputJSON(result);
+      outputJSON({ enabled, disabled });
       return;
     }
 

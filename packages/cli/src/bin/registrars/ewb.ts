@@ -12,26 +12,25 @@ export function registerEwbCommands(program: Command): void {
     .command("dashboard")
     .description("E-way bill summary dashboard")
     .option("--json", "JSON output")
-    .option("--from <date>", "From date")
-    .option("--to <date>", "To date")
     .action(async (opts) => {
-      await ewbDashboardCommand(opts);
+      await ewbDashboardCommand({ json: opts.json });
     });
 
   ewb
     .command("generate <invoiceId>")
     .description("Generate an e-way bill for an invoice")
     .option("--json", "JSON output")
+    .requiredOption("--vehicle <number>", "Vehicle registration number (e.g. MH12AB1234)")
+    .requiredOption("--distance <km>", "Approximate distance in km (1-4000)", (v) => parseInt(v, 10))
     .action(async (invoiceId: string, opts) => {
-      await ewbGenerateCommand(invoiceId, { json: opts.json });
+      await ewbGenerateCommand(invoiceId, { json: opts.json, vehicle: opts.vehicle, distance: opts.distance });
     });
 
   ewb
     .command("expiring")
-    .description("List e-way bills expiring soon")
+    .description("List e-way bills expiring within the next 24 hours")
     .option("--json", "JSON output")
-    .option("--days <n>", "Within N days (default: 3)", parseInt)
     .action(async (opts) => {
-      await ewbExpiringCommand({ json: opts.json, days: opts.days });
+      await ewbExpiringCommand({ json: opts.json });
     });
 }

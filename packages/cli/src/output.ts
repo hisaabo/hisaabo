@@ -119,7 +119,8 @@ export function outputJSON(data: unknown): void {
 // ── Table output ──────────────────────────────────────────────────────────
 
 export interface ColumnDef<T extends object> {
-  key: keyof T | string;
+  /** A property of the row, or a dotted path into a nested object (e.g. "party.name"). */
+  key: (keyof T & string) | `${string}.${string}`;
   header: string;
   width?: number;
   align?: "left" | "right";

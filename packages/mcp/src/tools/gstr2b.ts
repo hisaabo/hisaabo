@@ -15,6 +15,23 @@ import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
+/** Tool periods are MMYYYY ("032024"); the server keys uploads by "YYYY-MM". */
+function toReturnPeriod(period: string): string {
+  return `${period.slice(2)}-${period.slice(0, 2)}`;
+}
+
+/** records / missingInBooks take an upload id, so resolve the latest upload for the period. */
+async function uploadIdForPeriod(client: HisaaboClient, period: string): Promise<string> {
+  const returnPeriod = toReturnPeriod(period);
+  for (let page = 1; ; page++) {
+    const { uploads, total, limit } = await client.gstr2b.uploads({ page, limit: 50 });
+    const hit = uploads.find((u) => u.returnPeriod === returnPeriod);
+    if (hit) return hit.id;
+    if (page * limit >= total) break;
+  }
+  throw new Error(`No GSTR-2B upload found for period ${period}.`);
+}
+
 export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
@@ -25,11 +42,13 @@ export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
       "Use gstr2b_summary with a period to see reconciliation status.",
     ].join(" "),
     {
-      financial_year: z.string().optional()
-        .describe("Financial year filter, e.g. '2023-24'."),
+      page: z.number().int().min(1).optional()
+        .describe("Page number (default 1)."),
+      limit: z.number().int().min(1).max(50).optional()
+        .describe("Results per page (default 20)."),
     },
     wrapTool(async (input) => {
-      const result = await client.gstr2b.uploads({ financialYear: input.financial_year });
+      const result = await client.gstr2b.uploads({ page: input.page, limit: input.limit });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -53,7 +72,7 @@ export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const result = await client.gstr2b.records({
-        period: input.period,
+        uploadId: await uploadIdForPeriod(client, input.period),
         page: input.page,
         limit: input.limit,
       });
@@ -74,7 +93,7 @@ export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
         .describe("Return period in MMYYYY format, e.g. '032024' for March 2024."),
     },
     wrapTool(async (input) => {
-      const result = await client.gstr2b.summary({ period: input.period });
+      const result = await client.gstr2b.summary({ returnPeriod: toReturnPeriod(input.period) });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -97,7 +116,7 @@ export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const result = await client.gstr2b.missingInBooks({
-        period: input.period,
+        uploadId: await uploadIdForPeriod(client, input.period),
         page: input.page,
         limit: input.limit,
       });
@@ -124,7 +143,7 @@ export function registerGstr2bTools(server: ToolServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const result = await client.gstr2b.missingIn2B({
-        period: input.period,
+        returnPeriod: toReturnPeriod(input.period),
         page: input.page,
         limit: input.limit,
       });

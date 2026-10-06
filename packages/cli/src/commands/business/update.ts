@@ -1,6 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, success, outputJSON, EXIT } from "../../output.js";
+import type { InputOf } from "../../api-types.js";
 
 interface BusinessUpdateOpts {
   name?: string;
@@ -17,13 +18,13 @@ export async function businessUpdateCommand(opts: BusinessUpdateOpts): Promise<v
   const client = new HisaaboClient(cfg);
 
   // Build update payload — only include provided fields
-  const payload: Record<string, unknown> = {};
-  if (opts.name !== undefined) payload["name"] = opts.name;
-  if (opts.gstin !== undefined) payload["gstin"] = opts.gstin;
-  if (opts.address !== undefined) payload["address"] = opts.address;
-  if (opts.state !== undefined) payload["state"] = opts.state;
-  if (opts.phone !== undefined) payload["phone"] = opts.phone;
-  if (opts.email !== undefined) payload["email"] = opts.email;
+  const payload: InputOf<"business.update">["data"] = {};
+  if (opts.name !== undefined) payload.name = opts.name;
+  if (opts.gstin !== undefined) payload.gstin = opts.gstin;
+  if (opts.address !== undefined) payload.address = opts.address;
+  if (opts.state !== undefined) payload.state = opts.state;
+  if (opts.phone !== undefined) payload.phone = opts.phone;
+  if (opts.email !== undefined) payload.email = opts.email;
 
   if (Object.keys(payload).length === 0) {
     fatalError("No fields to update. Pass at least one option (--name, --gstin, etc.).", EXIT.USAGE);

@@ -1,6 +1,6 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
-import { fatalError, outputJSON, outputTable, outputTSV, outputCSV, EXIT, hasColor, termWidth } from "../../output.js";
+import { fatalError, outputJSON, outputTSV, outputCSV, EXIT, hasColor, termWidth, type ColumnDef } from "../../output.js";
 import { formatAmount } from "../../format.js";
 import chalk from "chalk";
 
@@ -27,61 +27,21 @@ export async function dashboardReceivablesAgingCommand(opts: ReceivablesAgingOpt
       return;
     }
 
-    // Normalize data: could be an object with bucket keys, or an array of { bucket, amount, count }
-    type AgingRow = { bucket: string; amount: number; count: number };
-    const BUCKETS = [
-      { key: "current",  label: "Current (not due)" },
-      { key: "1_30",     label: "1–30 days" },
-      { key: "31_60",    label: "31–60 days" },
-      { key: "61_90",    label: "61–90 days" },
-      { key: "90_plus",  label: "90+ days" },
+    const bucketData = [
+      { bucket: "Current (not due)", amount: parseFloat(data.summary.current) },
+      { bucket: "31–60 days", amount: parseFloat(data.summary.days31_60) },
+      { bucket: "61–90 days", amount: parseFloat(data.summary.days61_90) },
+      { bucket: "90+ days", amount: parseFloat(data.summary.days90Plus) },
     ];
-
-    let bucketData: AgingRow[] = [];
-
-    if (Array.isArray(data)) {
-      bucketData = data.map((r: Record<string, unknown>) => ({
-        bucket: String(r["bucket"] ?? r["range"] ?? r["label"] ?? "-"),
-        amount: parseFloat(String(r["amount"] ?? r["totalAmount"] ?? "0")),
-        count:  parseInt(String(r["count"] ?? r["invoiceCount"] ?? "0"), 10),
-      }));
-    } else if (data && typeof data === "object") {
-      const obj = data as Record<string, unknown>;
-      for (const { key, label } of BUCKETS) {
-        const entry = (obj[key] ?? obj[label]) as Record<string, unknown> | undefined;
-        if (entry != null) {
-          bucketData.push({
-            bucket: label,
-            amount: parseFloat(String(entry["amount"] ?? entry["totalAmount"] ?? "0")),
-            count:  parseInt(String(entry["count"] ?? entry["invoiceCount"] ?? "0"), 10),
-          });
-        }
-      }
-      // Fallback: top-level numeric fields keyed by bucket name
-      if (bucketData.length === 0) {
-        for (const { key, label } of BUCKETS) {
-          const val = obj[key];
-          if (val != null) {
-            bucketData.push({
-              bucket: label,
-              amount: parseFloat(String(val)),
-              count: 0,
-            });
-          }
-        }
-      }
-    }
 
     if (opts.format === "tsv" || opts.format === "csv") {
       const rows = bucketData.map((r) => ({
         bucket: r.bucket,
         amount: formatAmount(r.amount),
-        count:  String(r.count || "-"),
       }));
-      const columns = [
-        { key: "bucket", header: "Aging Bucket", align: "left" as const },
-        { key: "amount", header: "Amount ₹",     align: "right" as const },
-        { key: "count",  header: "Invoices",      align: "right" as const },
+      const columns: ColumnDef<(typeof rows)[number]>[] = [
+        { key: "bucket", header: "Aging Bucket", align: "left" },
+        { key: "amount", header: "Amount ₹",     align: "right" },
       ];
       if (opts.format === "tsv") outputTSV(rows, columns);
       else outputCSV(rows, columns);
@@ -118,8 +78,8 @@ export async function dashboardReceivablesAgingCommand(opts: ReceivablesAgingOpt
       let coloredLabel = label;
       if (hasColor()) {
         const idx = bucketData.indexOf(row);
-        const colors = [chalk.green, chalk.yellow, chalk.yellow, chalk.red, chalk.red];
-        const labelColors = [chalk.green, chalk.yellow, chalk.yellow, chalk.red, (s: string) => chalk.bold(chalk.red(s))];
+        const colors = [chalk.green, chalk.yellow, chalk.red, chalk.red];
+        const labelColors = [chalk.green, chalk.yellow, chalk.red, (s: string) => chalk.bold(chalk.red(s))];
         const colorFn = colors[idx] ?? chalk.white;
         const labelFn = labelColors[idx] ?? chalk.white;
         coloredBar   = colorFn(bar);
@@ -138,25 +98,6 @@ export async function dashboardReceivablesAgingCommand(opts: ReceivablesAgingOpt
     process.stdout.write(totalLine + "\n");
     process.stdout.write("  └" + "─".repeat(innerW) + "┘\n\n");
 
-    if (bucketData.length === 0) {
-      process.stdout.write("  No receivables data available.\n\n");
-    }
-
-    // Also show table for invoices count if we have it
-    if (bucketData.some((r) => r.count > 0)) {
-      const rows = bucketData.map((r) => ({
-        bucket: r.bucket,
-        amount: formatAmount(r.amount),
-        count:  String(r.count),
-      }));
-      const columns = [
-        { key: "bucket", header: "Aging Bucket", align: "left" as const },
-        { key: "amount", header: "Amount ₹",     align: "right" as const },
-        { key: "count",  header: "Invoices",      align: "right" as const },
-      ];
-      outputTable(rows, columns);
-      process.stdout.write("\n");
-    }
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

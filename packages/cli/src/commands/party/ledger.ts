@@ -1,10 +1,13 @@
-import { HisaaboClient, HisaaboApiError, type LedgerEntry } from "../../client.js";
+import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import type { OutputOf } from "../../api-types.js";
 import { requireAuth } from "../../config.js";
 import {
   fatalError, outputJSON, outputTable, outputTSV, outputCSV,
   EXIT, type ColumnDef,
 } from "../../output.js";
-import { formatAmount, formatDate, formatINR } from "../../format.js";
+import { formatAmount, formatDate, formatINR, apiFrom, apiTo } from "../../format.js";
+
+type LedgerEntry = OutputOf<"party.ledger">["data"][number];
 
 interface LedgerOpts {
   json?: boolean;
@@ -21,8 +24,8 @@ export async function partyLedgerCommand(partyId: string, opts: LedgerOpts): Pro
 
   try {
     const result = await client.party.ledger(partyId, {
-      fromDate: opts.from,
-      toDate: opts.to,
+      fromDate: apiFrom(opts.from),
+      toDate: apiTo(opts.to),
       page: opts.page ?? 1,
       limit: opts.limit ?? 50,
     });
@@ -32,24 +35,25 @@ export async function partyLedgerCommand(partyId: string, opts: LedgerOpts): Pro
       return;
     }
 
-    console.log(`\n  Ledger: ${result.partyName} (${result.partyType})`);
+    console.log(`\n  Ledger: ${partyId}`);
     console.log("  " + "═".repeat(60));
     console.log(`  Opening Balance: ${formatINR(result.openingBalance)}\n`);
 
     const cols: ColumnDef<LedgerEntry>[] = [
       { key: "date", header: "Date", width: 13, format: (v) => formatDate(String(v ?? "")) },
-      { key: "description", header: "Description", width: 25 },
+      { key: "documentNumber", header: "Number", width: 25 },
       { key: "debit", header: "Debit (₹)", align: "right", width: 13, format: (v) => parseFloat(String(v ?? "0")) !== 0 ? formatAmount(String(v)) : "-" },
       { key: "credit", header: "Credit (₹)", align: "right", width: 13, format: (v) => parseFloat(String(v ?? "0")) !== 0 ? formatAmount(String(v)) : "-" },
-      { key: "balance", header: "Balance (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
-      { key: "referenceType", header: "Type", width: 10 },
+      { key: "runningBalance", header: "Balance (₹)", align: "right", width: 13, format: (v) => formatAmount(String(v ?? "0")) },
+      { key: "type", header: "Type", width: 10 },
     ];
 
-    if (opts.format === "tsv") outputTSV(result.entries, cols);
-    else if (opts.format === "csv") outputCSV(result.entries, cols);
-    else outputTable(result.entries, cols);
+    if (opts.format === "tsv") outputTSV(result.data, cols);
+    else if (opts.format === "csv") outputCSV(result.data, cols);
+    else outputTable(result.data, cols);
 
-    console.log(`\n  Closing Balance: ${formatINR(result.closingBalance)}\n`);
+    const closingBalance = result.data[result.data.length - 1]?.runningBalance ?? result.openingBalance;
+    console.log(`\n  Closing Balance: ${formatINR(closingBalance)}\n`);
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {

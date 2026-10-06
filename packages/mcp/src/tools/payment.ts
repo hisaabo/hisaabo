@@ -20,6 +20,8 @@ import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 import { paymentModes } from "@hisaabo/shared";
 
 const PAYMENT_MODES = paymentModes;
+/** payment.untrackedPayments only filters on these modes (server enum). */
+const UNTRACKED_MODES = ["cash", "bank", "upi", "cheque", "other"] as const;
 
 export function registerPaymentTools(server: ToolServer, client: HisaaboClient) {
 
@@ -258,7 +260,7 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
     {
       search: z.string().max(200).optional()
         .describe("Search by payment number or party name."),
-      mode: z.enum(PAYMENT_MODES).optional()
+      mode: z.enum(UNTRACKED_MODES).optional()
         .describe("Filter by payment mode."),
       from_date: z.string().datetime().optional()
         .describe("Start date (ISO 8601)."),
@@ -279,7 +281,7 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify(withPaginationMeta(result as any), null, 2),
+          text: JSON.stringify(withPaginationMeta(result), null, 2),
         }],
       };
     })

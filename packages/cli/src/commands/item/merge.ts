@@ -18,7 +18,7 @@ export async function itemMergeCommand(sourceId: string, targetId: string, opts:
   const conversionFactor = opts.conversionFactor ? parseFloat(opts.conversionFactor) : undefined;
 
   try {
-    const result = await client.item.merge({ sourceId, targetId, conversionFactor });
+    const result = await client.item.merge({ sourceId, targetId, stockConversionFactor: conversionFactor });
 
     if (opts.json) {
       outputJSON(result);

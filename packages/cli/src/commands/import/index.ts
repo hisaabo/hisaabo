@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import { HisaaboClient, HisaaboApiError, type ImportResult } from "../../client.js";
+import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import type { InputOf } from "../../api-types.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success, warn } from "../../output.js";
 import { parseCsv } from "../../csv.js";
@@ -13,6 +14,14 @@ interface ImportOpts {
   json?: boolean;
   format?: string;
   source?: string;
+}
+
+/** What every import procedure returns (some add more fields). */
+interface ImportResult {
+  created: number;
+  skipped: number;
+  total: number;
+  errors?: string[];
 }
 
 function readInputFile(filePath: string): string {
@@ -93,9 +102,9 @@ async function runImport(
       return;
     }
 
-    success(`Imported: ${result.imported} ${label}`);
+    success(`Imported: ${result.created} ${label}`);
     if (result.skipped > 0) warn(`Skipped: ${result.skipped}`);
-    result.errors.forEach((e) => console.error(`  Row ${e.row}: ${e.message}`));
+    (result.errors ?? []).forEach((e) => console.error(`  ${e}`));
 
   } catch (e) {
     if (e instanceof HisaaboApiError) {
@@ -108,18 +117,24 @@ async function runImport(
   }
 }
 
+// Rows come straight from a user-supplied CSV/JSON file; the server validates
+// every field, so the rows are cast to the procedure's input type here.
 export function importPartiesCommand(filePath: string, opts: ImportOpts): Promise<void> {
-  return runImport("parties", filePath, opts, (c, parties, source) => c.import.importParties({ source, parties }));
+  return runImport("parties", filePath, opts, (c, parties, source) =>
+    c.import.importParties({ source, parties: parties as InputOf<"import.importParties">["parties"] }));
 }
 
 export function importItemsCommand(filePath: string, opts: ImportOpts): Promise<void> {
-  return runImport("items", filePath, opts, (c, items, source) => c.import.importItems({ source, items }));
+  return runImport("items", filePath, opts, (c, items, source) =>
+    c.import.importItems({ source, items: items as InputOf<"import.importItems">["items"] }));
 }
 
 export function importInvoicesCommand(filePath: string, opts: ImportOpts): Promise<void> {
-  return runImport("invoices", filePath, opts, (c, invoices, source) => c.import.importInvoices({ source, invoices }));
+  return runImport("invoices", filePath, opts, (c, invoices, source) =>
+    c.import.importInvoices({ source, invoices: invoices as InputOf<"import.importInvoices">["invoices"] }));
 }
 
 export function importPaymentsCommand(filePath: string, opts: ImportOpts): Promise<void> {
-  return runImport("payments", filePath, opts, (c, payments, source) => c.import.importPayments({ source, payments }));
+  return runImport("payments", filePath, opts, (c, payments, source) =>
+    c.import.importPayments({ source, payments: payments as InputOf<"import.importPayments">["payments"] }));
 }

@@ -37,24 +37,17 @@ function isUuid(value: string): boolean {
 
 // ── Tenant resolution ─────────────────────────────────────────────────────────
 
-interface TenantEntry {
-  id: string;
-  name: string;
-  slug: string;
-  role: string;
-}
-
 async function resolveTenant(client: HisaaboClient, slugOrId: string): Promise<{ id: string; slug: string }> {
   if (isUuid(slugOrId)) {
     return { id: slugOrId, slug: slugOrId };
   }
 
-  const tenants = await client.tenant.list() as TenantEntry[];
-  const match = tenants.find((t) => t.slug === slugOrId);
+  const tenants = await client.tenant.list();
+  const match = tenants.find((t) => t.tenantSlug === slugOrId);
   if (!match) {
     fatalError(`Tenant "${slugOrId}" not found. Run: hisaabo tenant list`, EXIT.NOT_FOUND);
   }
-  return { id: match.id, slug: match.slug };
+  return { id: match.tenantId, slug: match.tenantSlug };
 }
 
 // ── Progress display ──────────────────────────────────────────────────────────

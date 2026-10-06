@@ -12,24 +12,19 @@ export async function itemSalesStatsCommand(id: string, opts: SalesStatsOpts): P
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.item.salesStats({ itemId: id });
+    const result = await client.item.salesStats({ id });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    console.log(`\n  Sales Stats: ${result?.itemName ?? id}`);
+    console.log(`\n  Sales Stats: ${id}`);
     console.log("  " + "─".repeat(40));
-    console.log(`  Total Sold:    ${formatAmount(String(result?.totalQuantitySold ?? "0"))} units`);
-    console.log(`  Total Revenue: ${formatINR(String(result?.totalRevenue ?? "0"))}`);
-    console.log(`  Avg Price:     ${formatINR(String(result?.avgSalePrice ?? "0"))}`);
-    if (result?.invoiceCount !== undefined) {
-      console.log(`  Invoices:      ${result.invoiceCount}`);
-    }
-    if (result?.lastSoldDate) {
-      console.log(`  Last Sold:     ${result.lastSoldDate}`);
-    }
+    console.log(`  Total Sold:    ${formatAmount(result.totalSaleQty)} units`);
+    console.log(`  Total Revenue: ${formatINR(result.totalSaleAmount)}`);
+    console.log(`  Avg Price:     ${formatINR(result.avgNetPrice)}`);
+    console.log(`  Invoices:      ${result.saleInvoiceCount}`);
     console.log();
 
   } catch (e) {

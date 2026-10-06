@@ -18,10 +18,7 @@ export async function storeCheckSlugCommand(
       return;
     }
 
-    const available =
-      typeof result === "object" && result !== null
-        ? (result as Record<string, unknown>)["available"]
-        : result;
+    const available = result.available;
 
     if (available) {
       if (hasColor()) {
