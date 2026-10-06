@@ -29,4 +29,4 @@ tauri-plugin-deep-link = "2"
 # macOS: Keychain. Windows: Credential Manager.
 # We deliberately do NOT fall back to plaintext storage if init fails —
 # see save_session_token() for the rationale.
-keyring = "3"
+keyring = "4"
