@@ -22,7 +22,7 @@ export const authEndpoints: EndpointGroup = {
         description: "Authenticated user object and session token. An HttpOnly `session_id` cookie is also set automatically.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: "Rahul Sharma" },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
         },
       },
       codeExamples: {
@@ -72,7 +72,7 @@ session_token = data["sessionToken"]`,
         description: "Authenticated user object with session token.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: "Rahul Sharma" },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
         },
       },
       codeExamples: {
@@ -150,7 +150,7 @@ httpx.post(
         description: "Authenticated user with session token and profile completion flag.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: null },
-          sessionToken: "sess_VbK2mQ9xP4nR7wA1...",
+          sessionToken: "sess_EXAMPLE_REPLACE_ME",
           isNewUser: true,
           needsProfile: true,
         },

@@ -18,7 +18,7 @@ export const backupEndpoints: EndpointGroup = {
       output: {
         description: "A signed download token and a relative URL. Resolve the URL against your API base (e.g. https://api.hisaabo.in) before downloading.",
         example: {
-          token: "eyJhbGciOiJIUzI1NiIs...",
+          token: "EXAMPLE_EXPORT_TOKEN",
           url: "/api/export/550e8400-e29b-41d4-a716-446655440000?token=eyJhbGci...",
           expiresAt: "2026-04-16T10:05:00.000Z",
         },
@@ -63,7 +63,7 @@ const blob = await response.blob();
       output: {
         description: "A signed upload token and URL.",
         example: {
-          token: "eyJhbGciOiJIUzI1NiIs...",
+          token: "EXAMPLE_EXPORT_TOKEN",
           url: "/api/selfImport/550e8400-e29b-41d4-a716-446655440000?token=eyJhbGci...",
           expiresAt: "2026-04-16T10:15:00.000Z",
         },

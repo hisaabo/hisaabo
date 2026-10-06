@@ -406,7 +406,7 @@ print("Expires:", data["expiresAt"])`,
       },
       codeExamples: {
         curl: `# Token comes from the /invite/:token URL
-curl "https://api.hisaabo.in/api/trpc/tenant.peekInvitation?input=%7B%22json%22%3A%7B%22token%22%3A%22abc123def456ghi789jkl012mno345pq%22%7D%7D"`,
+curl "https://api.hisaabo.in/api/trpc/tenant.peekInvitation?input=%7B%22json%22%3A%7B%22token%22%3A%22EXAMPLE_INVITATION_TOKEN%22%7D%7D"`,
         javascript: `// Extract token from URL: /invite/abc123def456...
 const token = params.token;
 
@@ -418,7 +418,7 @@ if (preview) {
 }`,
         python: `import httpx, json, urllib.parse
 
-params = urllib.parse.quote(json.dumps({"json": {"token": "abc123def456ghi789jkl012mno345pq"}}))
+params = urllib.parse.quote(json.dumps({"json": {"token": "EXAMPLE_INVITATION_TOKEN"}}))
 resp = httpx.get(f"https://api.hisaabo.in/api/trpc/tenant.peekInvitation?input={params}")
 preview = resp.json()["result"]["data"]["json"]`,
       },
@@ -451,9 +451,9 @@ preview = resp.json()["result"]["data"]["json"]`,
         curl: `curl -X POST https://api.hisaabo.in/api/trpc/tenant.acceptInvitation \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
-  -d '{"json":{"token":"abc123def456ghi789jkl012mno345pq"}}'`,
+  -d '{"json":{"token":"EXAMPLE_INVITATION_TOKEN"}}'`,
         javascript: `const result = await trpc.tenant.acceptInvitation.mutate({
-  token: "abc123def456ghi789jkl012mno345pq",
+  token: "EXAMPLE_INVITATION_TOKEN",
 });
 console.log("Joined:", result.tenantName);
 // Session is now pointed at the joined organization`,
@@ -462,7 +462,7 @@ console.log("Joined:", result.tenantName);
 resp = httpx.post(
     "https://api.hisaabo.in/api/trpc/tenant.acceptInvitation",
     headers={"Authorization": f"Bearer {session_token}"},
-    json={"json": {"token": "abc123def456ghi789jkl012mno345pq"}},
+    json={"json": {"token": "EXAMPLE_INVITATION_TOKEN"}},
 )
 data = resp.json()["result"]["data"]["json"]`,
       },
