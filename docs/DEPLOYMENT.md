@@ -55,6 +55,9 @@
 | Variable | Description | Example |
 |---|---|---|
 | `VITE_API_URL` | API server URL (build-time) | `https://api.hisaabo.in` |
+| `VITE_ANDROID_APP_CERT_SHA256` | Comma-separated SHA-256 fingerprints of your Android signing certificate(s); written into `/.well-known/assetlinks.json` so mobile sign-in app links verify | `AB:CD:...` |
+| `VITE_APPLE_TEAM_ID` | Apple developer team ID; written into `/.well-known/apple-app-site-association` | `ABCDE12345` |
+| `VITE_TURNSTILE_SITE_KEY` | Turnstile site key used by the sign-in page | `0x4AAA...` |
 
 ### Cloudflare Pages (Store)
 
@@ -70,7 +73,9 @@
 | `PORT` | No | API port (default 3000) | `3000` |
 | `NODE_ENV` | Yes | Environment | `production` |
 | `CORS_ORIGINS` | Yes | Comma-separated allowed origins | `https://app.hisaabo.in,https://store.hisaabo.in` |
-| `APP_URL` | Yes | Frontend URL (for magic links) | `https://app.hisaabo.in` |
+| `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
+| `API_PUBLIC_URL` | Yes (production) | Public base URL of the API. Startup fails in production without a valid `http(s)` URL | `https://api.hisaabo.in` |
+| `ALLOW_OPEN_SIGNUP` | No | Self-hosted only. By default signup is invite-only after the first owner; `true` restores open signup | `false` |
 | `ENCRYPTION_KEY` | Yes | AES-256-GCM key for field-level encryption (64-char hex). Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | `a1b2c3...` |
 | `ENCRYPTION_KEY_PREVIOUS` | No | Previous encryption key — set only during key rotation | |
 | `RESEND_API_KEY` | Yes | Email service API key (magic links, invites) | `re_xxx` |
@@ -80,7 +85,11 @@
 | `TRUST_PROXY_HOPS` | No | Number of trusted reverse proxies in front of the API (default `1`; `0` = API exposed directly, forwarding headers ignored). Drives client-IP detection for rate limiting and audit logs | `1` |
 | `TRUST_CLOUDFLARE` | No | `true` to honour `cf-connecting-ip`; only when the API is reachable exclusively via Cloudflare | `false` |
 | `EXPORT_SECRET` | No | Optional dedicated secret for signing import tokens (falls back to `SESSION_SECRET`) | |
-| `TURNSTILE_SECRET_KEY` | Yes (store) | Cloudflare Turnstile secret for the public store | `0x4AAA...` |
+| `TURNSTILE_SECRET_KEY` | Yes (production) | Cloudflare Turnstile secret. Required for every sign-in request (web, desktop, mobile, CLI) and for the public store; there is no client-header bypass | `0x4AAA...` |
+| `SMS_PROVIDER` | No | Store phone OTP provider: `console` (dev only) or `webhook`. Needed before a store can enable phone OTP | `webhook` |
+| `SMS_WEBHOOK_URL` | With `SMS_PROVIDER=webhook` | Endpoint that receives `{ "to": "+91...", "message": "..." }` | `https://sms.example.com/send` |
+| `SMS_WEBHOOK_SECRET` | With `SMS_PROVIDER=webhook` | HMAC-SHA256 key; each request carries `X-Hisaabo-Signature` (hex of the body HMAC) | |
+| `SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP` | No | `true` rejects carrier webhooks that lack a valid timestamp (optional by default) | `false` |
 | `BACKUP_ENCRYPTION_KEY` | With offsite backup | Passphrase for backup encryption; offsite upload is refused without it | |
 
 ### GitHub Actions Secrets
@@ -108,6 +117,8 @@ cp .env.prod.example .env.prod
    - Generate an `ENCRYPTION_KEY`: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
    - Set `CORS_ORIGINS` and `APP_URL` to your domain
    - Set `RESEND_API_KEY` for email delivery
+   - Set `API_PUBLIC_URL` (required in production) and the Turnstile keys
+   - Signup is invite-only after the first owner; invite teammates from Settings → Team, or set `ALLOW_OPEN_SIGNUP=true`
 
 3. Update `docker-compose.prod.yml`:
    - Replace `ghcr.io/OWNER/hisaabo-api:latest` with your actual GHCR image path
@@ -217,3 +228,22 @@ logging:
 ```
 
 This caps each container at ~50 MB and gives fail2ban a JSON file under `/var/lib/docker/containers/<id>/` to tail (use `backend = polling` instead of `systemd` in the jail).
+
+## Native app sign-in
+
+Desktop, mobile and the CLI do not show a password or magic-link form. They open `${APP_URL}/auth/native` in the system browser (PKCE), and the browser returns a one-time code to the app: a loopback `http://127.0.0.1:<port>/callback` for desktop and CLI, and the verified app link `${APP_URL}/auth/native/callback` for mobile. Requirements:
+
+- `APP_URL` must be the public web origin, served over HTTPS.
+- The web build must publish the well-known files. Set `VITE_ANDROID_APP_CERT_SHA256` and `VITE_APPLE_TEAM_ID` when building the web app; without them the build emits placeholders and logs a warning, and mobile app links will not verify.
+- `/.well-known/apple-app-site-association` must be served as `application/json` (the generated `_headers` does this on Cloudflare Pages; do the same on other hosts).
+- The nginx config rate-limits `auth.nativeStart` and `auth.nativeExchange` with the other credential procedures.
+
+## ONCE all-in-one image
+
+`Dockerfile.once` bundles PostgreSQL 16 and the API under s6-overlay. Persistent state lives in `/storage` (`pgdata`, `run`, `backups`, `wal_archive`, `secrets`).
+
+- **Database password:** PostgreSQL uses `scram-sha-256` for the local socket, `127.0.0.1` and `::1`; `trust` is never used. A random password is generated on first boot and kept at `/storage/secrets/pg_app_password` (mode `0600`). The API, migrations and the `/hooks/pre-backup` and `/hooks/post-restore` hooks read it automatically, so no configuration is needed.
+- **Upgrading an existing install:** on the first boot of the new image the password is created and applied and `pg_hba.conf` is rewritten; the previous file is kept as `/storage/pgdata/pg_hba.conf.bak.<timestamp>`. Later boots change nothing.
+- **Connecting by hand:** `docker exec -it <container> sh -c 'PGPASSWORD=$(cat /storage/secrets/pg_app_password) psql -h /storage/run -U postgres hisaabo'`.
+- **Backups:** ONCE backs up all of `/storage`, which includes the password file and the database. Treat backups as sensitive.
+- **Rotation:** delete `/storage/secrets/pg_app_password` and restart the container; a new password is generated and applied.

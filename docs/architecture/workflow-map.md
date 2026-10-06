@@ -19,7 +19,7 @@ This document maps every workflow in the Hisaabo application — verified agains
 | superadmin / owner | Everything — full manage on all resources |
 | admin | Everything — full manage on all resources |
 | seller_manager | Create/read/update invoices, parties, items, payments; read expenses/bank/reports; manage store and sales targets |
-| seller | Create/read invoices (own, within 2h edit window); read parties/items; create payments (own) |
+| seller | Create/read/edit sale-side invoices (no edit time limit; purchase-side documents are blocked by the API); read parties/items; create payments |
 | accountant | Read invoices/parties/items; manage payments, expenses, bank accounts, transactions; read reports |
 
 ---
@@ -29,11 +29,11 @@ This document maps every workflow in the Hisaabo application — verified agains
 | ID | Workflow | Platform | Roles | Status |
 |---|---|---|---|---|
 | WF-01 | First-time Setup | Web, Mobile | All | Approved |
-| WF-02 | Password / Magic Link Login | Web, Mobile | All | Approved |
+| WF-02 | Magic Link / Browser Sign-in | Web, Desktop, Mobile, CLI | All | Approved |
 | WF-03 | Mobile Biometric / PIN Unlock | Mobile | All | Approved |
 | WF-04 | Create Sale Invoice | Web, Mobile | superadmin, admin, seller_manager, seller | Approved |
 | WF-05 | Create Purchase Invoice | Web, Mobile | superadmin, admin, seller_manager | Approved |
-| WF-06 | Edit Invoice | Web, Mobile | superadmin, admin, seller_manager, seller (own, <2h) | Approved |
+| WF-06 | Edit Invoice | Web, Mobile | superadmin, admin, seller_manager, seller (sale-side only, no time limit) | Approved |
 | WF-07 | Record Payment (Single Invoice) | Web, Mobile | superadmin, admin, seller_manager, seller, accountant | Approved |
 | WF-08 | Record Multi-Invoice Payment | Web, Mobile | superadmin, admin, seller_manager, accountant | Approved |
 | WF-09 | Share Invoice PDF | Web, Mobile | superadmin, admin, seller_manager, seller | Approved |
@@ -85,7 +85,7 @@ This document maps every workflow in the Hisaabo application — verified agains
 ### Happy path
 
 1. User lands on `/login` (web) or the login screen (mobile).
-2. Registers with email + password (or receives a magic link — see WF-02).
+2. Enters their email and receives a magic link (see WF-02). On a self-hosted server, only the first user (who becomes owner) can sign up freely; everyone else needs an invitation unless `ALLOW_OPEN_SIGNUP=true`.
 3. On first magic link verification, `verifyMagicLink` returns `needsProfile: true` when `user.name` is null.
 4. Web redirects to `/auth/complete-profile` (detected in root layout: `!session.user.name`). Mobile redirects to `/(auth)/verify` which reads `needsProfile`.
 5. User enters display name. `auth.completeProfile` is called → name saved → session cache invalidated.
@@ -99,9 +99,9 @@ This document maps every workflow in the Hisaabo application — verified agains
 
 ### Branch conditions
 
-- **Password registration vs magic link**: Password registration completes name in the form. Magic link registration creates a nameless user requiring the complete-profile step.
+- **Magic link registration** creates a nameless user, which requires the complete-profile step. There is no password registration UI; `auth.register` remains an API-only endpoint.
 - **GST registered?**: If `gstRegistrationType !== "unregistered"` and GSTIN provided, invoice PDFs render as full GST invoices; reports show GST terminology. If unregistered, UI shows "Sales Report" / "Tax Summary" labels instead.
-- **Multi-tenant mode**: If `MULTI_TENANT=true`, a new tenant is created for the user's org. If `MULTI_TENANT=false` (default self-hosted), the user joins the shared "Default Organization" tenant. The first joiner gets `owner` role; subsequent users get `member`.
+- **Multi-tenant mode**: If `MULTI_TENANT=true`, a new tenant is created for the user's org. If `MULTI_TENANT=false` (default self-hosted), the user joins the shared "Default Organization" tenant. The first joiner gets `owner` role; subsequent users must hold an invitation (`ALLOW_OPEN_SIGNUP=true` restores open joining) and get the invited role.
 - **Has existing data?**: Import wizard shown post-setup. Skippable.
 
 ### Failure modes
@@ -119,11 +119,11 @@ This document maps every workflow in the Hisaabo application — verified agains
 
 ---
 
-## WF-02: Password / Magic Link Login
+## WF-02: Magic Link / Browser Sign-in
 
 **Trigger**: User navigates to `/login` (web) or opens login screen (mobile)
 **Roles**: All
-**Platform**: Web, Mobile
+**Platform**: Web, Desktop, Mobile, CLI
 
 ### Happy path — magic link
 
@@ -135,30 +135,27 @@ This document maps every workflow in the Hisaabo application — verified agains
 6. If new user (`isNewUser: true` or `needsProfile: true`) → redirect to `/auth/complete-profile`.
 7. If existing user → redirect to `/` (dashboard).
 
-### Happy path — password login
+### Happy path — native apps (desktop, mobile, CLI)
 
-1. User enters email + password. Client calls `auth.login`.
-2. API fetches user, verifies Argon2id hash (65536 kib memory, 3 time, 4 parallelism).
-3. Checks user has at least one tenant membership (enforced separately from password check).
-4. Creates session cookie. Returns user object.
-5. Root layout detects session → renders app.
+Native clients never show a password or magic-link form. They sign in through the system browser (RFC 8252) with PKCE:
 
-### Happy path — password registration (web + mobile)
+1. The app generates a PKCE verifier, challenge and `state`, and calls `auth.nativeStart` with its client type (`desktop`, `mobile` or `cli`) and redirect URI: a loopback `http://127.0.0.1:<port>/callback` for desktop and CLI, or the verified app link `${APP_URL}/auth/native/callback` for mobile.
+2. The app opens `${APP_URL}/auth/native?request=<requestId>` in the system browser (Custom Tabs / SFSafariViewController on mobile).
+3. The web page signs the user in through the normal web flow (magic link, Turnstile required), shows a consent screen, and calls `auth.nativeAuthorize`, then redirects to the app with a one-time code (2-minute lifetime).
+4. The app calls `auth.nativeExchange` with the code and the PKCE verifier and `X-Hisaabo-Client` set to its client type, and receives a bearer `sessionToken`.
 
-1. User fills name, email, password, confirmPassword.
-2. Client calls `auth.register`. Duplicate check → hash password → insert user → assign tenant → create session.
-3. Mobile navigates to `/(app)/(home)` via `router.replace`. Web root layout detects session and redirects.
+`sessionToken` is returned in a response body only to bearer clients (`desktop`, `mobile`, `cli`); web sessions use the HttpOnly cookie. The `X-Hisaabo-Client` header no longer bypasses Turnstile.
 
 ### Branch conditions
 
 - **Multiple tenants**: If user belongs to multiple tenants, `session.tenantId` is null after login. Root layout calls `tenant.list`; if exactly one tenant returned, auto-selects it via `tenant.select`. If multiple, a `<TenantPicker>` modal is shown (web). Mobile app layout does the same auto-select via `useEffect`.
 - **No business after login**: Root layout redirects to `/settings` for business creation (WF-01 step 6+).
-- **Mobile: token in Bearer header**: Mobile stores session token in SecureStore (via `expo-secure-store`), sends it as `Authorization: Bearer <token>` header (since cookies are not used in native apps).
+- **Mobile: token in Bearer header**: Mobile stores the session token in SecureStore (via `expo-secure-store`) and sends it as `Authorization: Bearer <token>` with `X-Hisaabo-Client: mobile` (cookies are not used in native apps).
 
 ### Failure modes
 
-- **Wrong password**: `auth.login` returns `UNAUTHORIZED` with message "Invalid email or password" (deliberately vague — does not reveal whether email exists).
-- **No org membership**: `auth.login` returns `FORBIDDEN` if the user has no tenant membership. This can happen if a user was removed from all tenants.
+- **Uninvited email on a self-hosted server**: `sendMagicLink` still returns `{ success: true }` but sends nothing; `verifyMagicLink` for a new email without an invitation returns `FORBIDDEN` ("Sign-up on this server is by invitation only").
+- **Invalid native sign-in request**: `nativeExchange` returns one generic `BAD_REQUEST` ("Invalid or expired sign-in request") for every failure.
 - **Magic link expired/used**: `verifyMagicLink` returns `BAD_REQUEST`. User sees "Invalid, expired, or already used link. Please request a new one."
 - **Rate limit on magic link**: Silently capped at 5 requests per email per 15 minutes. Extra requests return `{ success: true }` but no email is sent. User is not notified of rate limit (anti-enumeration).
 - **Network failure**: tRPC query fails. Web shows inline error message. Mobile shows error banner.
@@ -314,7 +311,7 @@ All other steps, failure modes, and observable states are identical to WF-04.
 ## WF-06: Edit Invoice
 
 **Trigger**: User opens an invoice and clicks "Edit" (web) or "Edit" button (mobile)
-**Roles**: superadmin, admin, seller_manager; seller (own invoices within 2 hours of creation only)
+**Roles**: superadmin, admin, seller_manager, seller (sale-side documents only; no edit time limit)
 **Platform**: Web, Mobile
 
 ### Happy path
@@ -338,7 +335,9 @@ All other steps, failure modes, and observable states are identical to WF-04.
 ### Branch conditions
 
 - **Paid invoice**: Cannot be edited. User must delete payment allocations first (via payment detail).
-- **Seller time window**: The API `memberProcedure` does not enforce the 2-hour window directly — the frontend and permissions check handle this. This is noted as a gap in `SECURITY_PENDING.md`.
+- **No seller time window**: There is no edit time limit for any role. The only record-level time rule is on delete: a `seller_manager` may delete an invoice only while it is unpaid and less than 2 hours old.
+- **Seller and purchase-side documents**: The API rejects sellers creating or editing purchase invoices, purchase returns and debit notes.
+- **Status transitions**: Non-invoice document types enforce a per-type allow-list of status transitions.
 - **Line items unchanged**: If `input.lineItems` is not provided, stock adjustments are skipped — only metadata (date, notes, etc.) is updated.
 
 ### Failure modes
@@ -1158,9 +1157,9 @@ This prevents duplicate numbers under concurrent load. Numbers are never reused 
 
 | # | Gap | Severity | Notes |
 |---|---|---|---|
-| G-01 | `inviteMember` does not send invitation email — returns raw token only | High | Admin must manually share the link |
+| G-01 | `inviteMember` returns the invite link only when asked (`returnLink: true`, web Team tab) | Low | The CLI and MCP never receive the link; there is no raw `token` field |
 | G-02 | `overdue` invoice status is not automatically set by a background job | Medium | Manual status change required |
-| G-03 | Seller 2-hour edit window is enforced in UI only, not fully in API | Medium | API `memberProcedure` does not check creation timestamp + userId |
+| G-03 | ~~Seller 2-hour edit window~~ — resolved by decision | Closed | No edit limit applies. `seller_manager` may delete only unpaid invoices created <2h ago (enforced in the API); sellers cannot touch purchase-side documents; delete is blocked while payments are allocated or an active IRN exists |
 | G-04 | Store order notification: no push/webhook when a new order arrives | Medium | Business must poll the order list |
 | G-05 | Concurrent double-payment race condition on invoices | Medium | Two simultaneous payments could both pass the overpayment guard |
 | G-06 | Delivery challan → invoice double-counts stock decrement | Medium | Both challan creation and invoice creation decrement stock |

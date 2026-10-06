@@ -105,7 +105,7 @@ The only exception is the accountant: the Invoices tab shows a read-only list wi
 
 **Status**: Proposed
 
-**Context**: The settings page (`apps/web/src/routes/settings.tsx`) renders a nav with tabs: Business, Documents, Appearance, Account, Store, Team, Data. A `seller` has no business for editing business info, but they do need to update their own profile (name, password). Blocking settings entirely would prevent password changes.
+**Context**: The settings page (`apps/web/src/routes/settings.tsx`) renders a nav with tabs: Business, Documents, Appearance, Account, Store, Team, Data. A `seller` has no business for editing business info, but they do need to update their own profile (name, email). Blocking settings entirely would prevent profile changes.
 
 **Decision**: The Settings nav (`apps/web/src/components/settings/SettingsNav.tsx`) filters its tab list based on role. `seller` and `accountant` see only: Account (profile), Appearance. `seller_manager` additionally sees Store (if the business has a store). `admin` and `superadmin` see everything. On mobile, the settings screen applies the same filter to its menu items.
 
@@ -118,17 +118,27 @@ The five canonical roles and their read-right summary:
 | Capability | admin/superadmin | seller_manager | seller | accountant |
 |------------|-----------------|----------------|--------|------------|
 | See all business financials | Yes | No | No | Yes (read) |
-| Create / edit invoices | Yes | Yes | Own, <2hrs | No |
-| Delete invoices | Yes | Unpaid, <2hrs | No | No |
+| Create / edit sale-side documents | Yes | Yes | Yes (no edit time limit) | No |
+| Create purchase-side documents (purchase invoice, purchase return, debit note) | Yes | Yes | No (blocked by the API) | No |
+| Delete invoices | Yes | Unpaid and created <2h ago | No | No |
 | Manage parties | Yes | create/read/update | create/read | read |
 | Manage items | Yes | create/read/update | read | read |
-| Record payments | Yes | Yes | Own invoices | Full CRUD |
+| Record payments | Yes | Yes | Yes (create) | Full CRUD |
 | View expenses | Yes | read | No | Full CRUD |
 | Cash & Bank | Yes | read | No | Full CRUD |
 | GST Returns | Yes | read | No | read |
 | Sales targets | manage | read own team | read own | No |
 | Team management | Yes | No | No | No |
 | Settings | Full | Store + Profile | Profile only | Profile only |
+
+Document rules enforced by the API (the UI mirrors them but is not the source of truth):
+
+- There is no edit time limit for any role that may edit invoices. Edits are blocked only by document state (for example a paid invoice cannot be edited until its payments are removed).
+- `seller` cannot create, update or convert into purchase-side documents (purchase invoice, purchase return, debit note); the API rejects them with "Sellers cannot create purchase-side documents". Tax and discount fields stay editable on sale-side documents.
+- `seller_manager` may delete only an invoice that is unpaid and was created less than 2 hours ago; admin/owner can delete any eligible invoice.
+- An invoice cannot be deleted while payments are allocated to it or while it has an active e-invoice IRN, for any role.
+- Non-invoice document types (quotation, proforma, delivery challan, credit note, debit note, and so on) each have their own allowed status transitions; a transition outside the type's list is rejected.
+- Team and API Keys settings are admin/owner only, on web as on mobile and in the API.
 
 The raw DB role returned by `auth.me` maps to canonical roles via `mapDbRole`:
 
@@ -690,7 +700,7 @@ NOT called: `invoice.create`, `invoice.update`, `invoice.delete`, `target.*`, `t
 
 | Settings Tab | admin | seller_manager | seller | accountant |
 |--------------|-------|----------------|--------|------------|
-| Account (profile, password) | Yes | Yes | Yes | Yes |
+| Account (profile) | Yes | Yes | Yes | Yes |
 | Appearance (theme) | Yes | Yes | Yes | Yes |
 | Business (name, GSTIN, address) | Yes | No | No | No |
 | Documents (invoice templates, prefix) | Yes | No | No | No |

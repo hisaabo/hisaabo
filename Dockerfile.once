@@ -9,7 +9,12 @@
 #   container's PostgreSQL via a Unix socket on the shared volume,
 #   then takes over PG ownership when the old container dies.
 #
-# Persistent data: /storage/pgdata, /storage/run, /storage/backups
+# Persistent data: /storage/pgdata, /storage/run, /storage/backups, /storage/secrets
+#
+# PostgreSQL requires scram-sha-256 password auth (also over the Unix socket).
+# A random password is generated on first boot into
+# /storage/secrets/pg_app_password (0600); older trust-auth installs are
+# migrated on the next boot (previous pg_hba.conf kept as pg_hba.conf.bak.*).
 # ONCE backup hooks: /hooks/pre-backup, /hooks/post-restore
 
 # ── Stage 1: Build API ────────────────────────────────────────
@@ -99,6 +104,10 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY scripts/postgresql-wal.conf /etc/postgresql/wal.conf
 COPY scripts/postgresql-tuning.conf /etc/postgresql/tuning.conf
 
+# Password auth bootstrap (random scram-sha-256 password in /storage/secrets)
+COPY scripts/once-pg-auth.sh /usr/local/bin/once-pg-auth
+RUN chmod 755 /usr/local/bin/once-pg-auth
+
 # ── Smoke test: catch module resolution errors at build time ──
 RUN node --check packages/api/dist/server.js && \
     node -e "import('file:///app/packages/api/dist/server.js').catch(e => { \
@@ -141,18 +150,12 @@ exec flock "$LOCKFILE" /bin/sh -c '
   # Remove stale socket files left by the old container
   rm -f "$SOCKETDIR/.s.PGSQL.5432" "$SOCKETDIR/.s.PGSQL.5432.lock"
 
-  # Initialize data directory if empty
-  if [ ! -f "$PGDATA/PG_VERSION" ]; then
-    echo "[postgres] Initializing new database cluster..."
-    su-exec postgres /usr/libexec/postgresql16/initdb \
-      -D "$PGDATA" --auth=trust --no-locale --encoding=UTF8
-    # Allow local + socket connections (container-internal only)
-    echo "local all all trust" >> "$PGDATA/pg_hba.conf"
-    echo "host all all 127.0.0.1/32 trust" >> "$PGDATA/pg_hba.conf"
-  fi
-
   # Remove stale PID file (safe — we hold the flock, so no other PG is running)
   rm -f "$PGDATA/postmaster.pid"
+
+  # Init the cluster if empty, set the random app password and enforce
+  # scram-sha-256 in pg_hba.conf (also migrates older trust-auth installs).
+  /usr/local/bin/once-pg-auth prepare || exit 1
 
   echo "[postgres] Starting PostgreSQL..."
   exec su-exec postgres /usr/libexec/postgresql16/postgres \
@@ -182,6 +185,10 @@ COPY <<'PGREADY' /etc/s6-overlay/s6-rc.d/postgres-ready/up
 #!/bin/sh
 set -e
 SOCKETDIR="/storage/run"
+
+/usr/local/bin/once-pg-auth ensure-secret
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
 
 echo "[pg-ready] Waiting for PostgreSQL (own or delegated)..."
 
@@ -217,19 +224,23 @@ COPY <<'APIRUN' /etc/s6-overlay/s6-rc.d/api/run
 set -e
 SOCKETDIR="/storage/run"
 
+/usr/local/bin/once-pg-auth ensure-secret
+DB_PASSWORD="$(cat /storage/secrets/pg_app_password)"
+DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@/hisaabo?host=$SOCKETDIR"
+export DATABASE_URL
+unset DB_PASSWORD
+
 # Run migrations (idempotent — safe even if old container is still serving)
 # Advisory lock inside migrate.mjs prevents conflicts during rolling deploys.
 echo "[api] Running database migrations..."
-if ! DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  node /app/packages/db/dist/migrate.mjs; then
+if ! node /app/packages/db/dist/migrate.mjs; then
   echo "[api] FATAL: Migration failed — refusing to start with inconsistent DB"
   exit 1
 fi
 
 # Start API — connects to PG via Unix socket
 echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
-exec env DATABASE_URL="postgresql://postgres@/hisaabo?host=$SOCKETDIR" \
-  node packages/api/dist/server.js
+exec node packages/api/dist/server.js
 APIRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
 
@@ -243,6 +254,8 @@ COPY <<'PREBACKUP' /hooks/pre-backup
 set -e
 umask 077
 SOCKETDIR="/storage/run"
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
 
 echo "[backup] Discovering databases..."
 DATABASES=$(psql -h "$SOCKETDIR" -U postgres -Atc \
@@ -289,6 +302,8 @@ COPY <<'POSTRESTORE' /hooks/post-restore
 set -e
 SOCKETDIR="/storage/run"
 BACKUP_DIR="/storage/backups"
+PGPASSWORD="$(cat /storage/secrets/pg_app_password)"
+export PGPASSWORD
 
 # If RESTORE_DB is set, only restore that specific database
 TARGET_DB="${RESTORE_DB:-}"
@@ -404,7 +419,7 @@ ENV PORT=80
 ENV HISAABO_VERSION=${VERSION}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
-# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
+# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, API_PUBLIC_URL (required), RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
 
 EXPOSE 80
 

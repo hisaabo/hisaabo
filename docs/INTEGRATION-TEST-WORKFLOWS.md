@@ -2455,7 +2455,10 @@ STEP 1: Build image
 STEP 2: First boot (fresh data dir)
   ACTION: docker run -v hisaabo-data:/storage -p 3000:3000 hisaabo-once
   ASSERT:
-    - PostgreSQL initialized: "[postgres] Initializing new database cluster..."
+    - PostgreSQL initialized: "[pg-auth] Initializing new database cluster..."
+    - Password generated: /storage/secrets/pg_app_password exists, mode 0600
+    - pg_hba.conf contains no `trust` entries (scram-sha-256 only)
+    - Connecting without a password fails; with the password succeeds
     - flock acquired: "[postgres] Lock acquired - we own PostgreSQL"
     - Database created: "hisaabo" database exists
     - Migrations run: "[api] Running database migrations..."
