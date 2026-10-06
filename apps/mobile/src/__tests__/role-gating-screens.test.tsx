@@ -97,6 +97,27 @@ describe("list screens — create FAB follows `create` permission", () => {
   });
 });
 
+// ── Invoices list: purchase tab FAB ────────────────────────────────────────
+
+describe("Invoices list — purchase tab create FAB", () => {
+  it("seller: FAB on the sale tab, none on the purchase tab", () => {
+    renderAs("seller", InvoicesScreen);
+    expect(fabCount()).toBe(1);
+    screen.unmount();
+    stub.params.type = "purchase";
+    renderAs("seller", InvoicesScreen);
+    expect(fabCount()).toBe(0);
+  });
+
+  it.each(["seller_manager", "admin"])("%s: FAB on the purchase tab opens create?type=purchase", (role) => {
+    stub.params.type = "purchase";
+    renderAs(role, InvoicesScreen);
+    expect(fabCount()).toBe(1);
+    fireEvent.press(screen.UNSAFE_getByType(FAB));
+    expect(stub.router.push).toHaveBeenCalledWith("/(invoices)/create?type=purchase");
+  });
+});
+
 // ── Party detail ───────────────────────────────────────────────────────────
 
 describe("Party detail — edit / merge / delete", () => {

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import {
   defineAbilityFor,
+  canCreateDocumentType,
   type Action,
   type Resource,
   type Ability,
@@ -23,4 +24,19 @@ export function useCan(action: Action, resource: Resource): boolean {
   const { data: session } = trpc.auth.me.useQuery(undefined);
   if (!session?.role) return false;
   return defineAbilityFor(session.role).can(action, resource);
+}
+
+// useCanCreateDocument — role gate for creating a document of `documentType`
+// on the given sale/purchase side. Mirrors the API rule that sellers cannot
+// create purchase-side documents (purchase invoices, purchase returns, debit
+// notes, or any document flagged side "purchase"). Requires create:Invoice too.
+// Fails closed while the session loads.
+export function useCanCreateDocument(
+  documentType: string,
+  side?: "sale" | "purchase",
+): boolean {
+  const { data: session } = trpc.auth.me.useQuery(undefined);
+  if (!session?.role) return false;
+  if (!defineAbilityFor(session.role).can("create", "Invoice")) return false;
+  return canCreateDocumentType(session.role, documentType, side);
 }

@@ -571,18 +571,58 @@ describe("Delivery challan detail — status (update:Invoice) / convert (create:
     stub.data["deliveryChallan.getById"] = invoiceDoc("draft");
   });
 
-  it("seller sees Mark as Sent, Mark as Delivered and Convert to Invoice", () => {
+  it("seller sees Mark as Sent, Cancel Challan and Convert to Invoice on a draft", () => {
     renderAs("seller", ChallanDetailScreen);
     expect(has("Mark as Sent")).toBe(true);
-    expect(has("Mark as Delivered")).toBe(true);
+    expect(has("Cancel Challan")).toBe(true);
     expect(has("Convert to Invoice")).toBe(true);
+    // 'delivered' is not a delivery_challan status — the API never accepted it.
+    expect(has("Mark as Delivered")).toBe(false);
   });
 
   it("accountant sees none of them", () => {
     renderAs("accountant", ChallanDetailScreen);
     expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(false);
     expect(has("Mark as Delivered")).toBe(false);
     expect(has("Convert to Invoice")).toBe(false);
+  });
+
+  it("a sent challan can only be cancelled (sent -> cancelled)", () => {
+    stub.data["deliveryChallan.getById"] = invoiceDoc("sent");
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(true);
+    expect(has("Mark as Delivered")).toBe(false);
+  });
+
+  it("a cancelled challan is terminal: no status actions, no convert", () => {
+    stub.data["deliveryChallan.getById"] = invoiceDoc("cancelled");
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Mark as Sent")).toBe(false);
+    expect(has("Cancel Challan")).toBe(false);
+    expect(has("Mark as Delivered")).toBe(false);
+    expect(has("Convert to Invoice")).toBe(false);
+  });
+
+  it("Cancel Challan sends status 'cancelled' (never 'delivered')", () => {
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    renderAs("seller", ChallanDetailScreen);
+    fireEvent.press(screen.getByText("Cancel Challan"));
+    const buttons = alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    buttons.find((b) => b.text === "Cancel Challan")!.onPress!();
+    alert.mockRestore();
+    expect(stub.mutations["deliveryChallan.updateStatus"]).toEqual([{ id: "doc-1", status: "cancelled" }]);
+  });
+
+  it("a purchase-side challan hides Convert to Invoice from a seller but not a seller_manager", () => {
+    stub.data["deliveryChallan.getById"] = { ...invoiceDoc("draft"), type: "purchase" };
+    renderAs("seller", ChallanDetailScreen);
+    expect(has("Convert to Invoice")).toBe(false);
+    expect(has("Mark as Sent")).toBe(true);
+    screen.unmount();
+    renderAs("seller_manager", ChallanDetailScreen);
+    expect(has("Convert to Invoice")).toBe(true);
   });
 });
 

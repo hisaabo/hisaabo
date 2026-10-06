@@ -15,7 +15,8 @@ import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
-import { useCan } from "../../../../src/hooks/useCan";
+import { checkDocumentStatusTransition } from "@hisaabo/shared";
+import { useCan, useCanCreateDocument } from "../../../../src/hooks/useCan";
 
 export default function DeliveryChallanDetailScreen() {
   const styles = useStyles();
@@ -24,12 +25,15 @@ export default function DeliveryChallanDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const utils = trpc.useUtils();
   const canUpdate = useCan("update", "Invoice");
-  const canCreate = useCan("create", "Invoice");
 
   const { data: challan, isLoading, isError, refetch } = trpc.deliveryChallan.getById.useQuery(
     { id: id! },
     { enabled: !!id }
   );
+
+  // Converting creates an invoice on the challan's side; sellers cannot create
+  // purchase-side documents.
+  const canCreate = useCanCreateDocument("invoice", challan?.type === "purchase" ? "purchase" : "sale");
 
   const updateMutation = trpc.deliveryChallan.updateStatus.useMutation({
     onSuccess: () => {
@@ -62,13 +66,14 @@ export default function DeliveryChallanDetailScreen() {
     ]);
   }, [challan, updateMutation]);
 
-  const handleMarkDelivered = useCallback(() => {
+  const handleCancel = useCallback(() => {
     if (!challan) return;
-    Alert.alert("Mark as Delivered", "Confirm delivery of this challan?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert("Cancel Challan", "Cancel this challan? This cannot be undone.", [
+      { text: "Keep", style: "cancel" },
       {
-        text: "Confirm",
-        onPress: () => updateMutation.mutate({ id: challan.id, status: "delivered" }),
+        text: "Cancel Challan",
+        style: "destructive",
+        onPress: () => updateMutation.mutate({ id: challan.id, status: "cancelled" }),
       },
     ]);
   }, [challan, updateMutation]);
@@ -132,6 +137,10 @@ export default function DeliveryChallanDetailScreen() {
 
   const isMutating = updateMutation.isPending || convertMutation.isPending;
   const canConvert = challan.status !== "cancelled";
+  // Only offer transitions the API's per-document status table allows
+  // (draft -> sent | cancelled, sent -> cancelled; cancelled is terminal).
+  const canMarkSent = checkDocumentStatusTransition("delivery_challan", challan.status, "sent") === null && challan.status !== "sent";
+  const canCancel = challan.status !== "cancelled" && checkDocumentStatusTransition("delivery_challan", challan.status, "cancelled") === null;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -226,7 +235,7 @@ export default function DeliveryChallanDetailScreen() {
         {/* Actions */}
         <Text style={styles.sectionLabel}>Actions</Text>
         <View style={styles.actionsCard}>
-          {challan.status === "draft" && canUpdate && (
+          {canMarkSent && canUpdate && (
             <TouchableOpacity
               style={styles.actionBtn}
               onPress={handleMarkSent}
@@ -239,16 +248,16 @@ export default function DeliveryChallanDetailScreen() {
             </TouchableOpacity>
           )}
 
-          {(challan.status === "draft" || challan.status === "sent") && canUpdate && (
+          {canCancel && canUpdate && (
             <TouchableOpacity
               style={styles.actionBtn}
-              onPress={handleMarkDelivered}
+              onPress={handleCancel}
               activeOpacity={0.7}
               disabled={isMutating}
             >
-              <Ionicons name="checkmark-done-outline" size={18} color={colors.success} />
-              <Text style={[styles.actionBtnText, { color: colors.success }]}>Mark as Delivered</Text>
-              {updateMutation.isPending && <ActivityIndicator size="small" color={colors.success} style={styles.actionSpinner} />}
+              <Ionicons name="close-circle-outline" size={18} color={colors.danger} />
+              <Text style={[styles.actionBtnText, { color: colors.danger }]}>Cancel Challan</Text>
+              {updateMutation.isPending && <ActivityIndicator size="small" color={colors.danger} style={styles.actionSpinner} />}
             </TouchableOpacity>
           )}
 

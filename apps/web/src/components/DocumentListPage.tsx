@@ -10,7 +10,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
-import { useCan } from "@/hooks/useCan";
+import { checkDocumentStatusTransition } from "@hisaabo/shared";
+import { useCan, useCanCreateDocument } from "@/hooks/useCan";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -89,6 +90,12 @@ export interface DocumentListPageConfig {
   convert?: ConvertConfig;
 }
 
+// A status button is offered only when the API's per-document transition table
+// allows it (e.g. a delivery challan can never be marked paid).
+function isTransitionAllowed(documentType: string, from: string, to: string): boolean {
+  return from !== to && checkDocumentStatusTransition(documentType, from, to) === null;
+}
+
 // ── Component ─────────────────────────────────────────────────────
 
 const typeOptions = [
@@ -130,7 +137,9 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   // All these document types are Invoice-backed on the server, so the role
   // permission they require is "create:Invoice" / "update:Invoice" /
   // "delete:Invoice" (document.convert also needs create:Invoice).
-  const canCreate = useCan("create", "Invoice");
+  // Sellers cannot create purchase-side documents (API rule), so the create /
+  // convert controls follow the active sale/purchase side.
+  const canCreate = useCanCreateDocument(documentType, type);
   const canUpdate = useCan("update", "Invoice");
   const canDelete = useCan("delete", "Invoice");
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -315,7 +324,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                   </td>
                   <td className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {markSent && doc.status === "draft" && canUpdate && (
+                      {markSent && canUpdate && isTransitionAllowed(documentType, doc.status, "sent") && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "sent" })
@@ -325,7 +334,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                           Mark Sent
                         </button>
                       )}
-                      {markPaid && doc.status === "sent" && canUpdate && (
+                      {markPaid && canUpdate && isTransitionAllowed(documentType, doc.status, "paid") && (
                         <button
                           onClick={() =>
                             updateStatus.mutate({ id: doc.id, status: "paid" })
