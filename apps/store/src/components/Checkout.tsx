@@ -11,6 +11,8 @@ interface CheckoutProps {
   customerPhone: string;
   /** Pre-filled customer name from PhoneVerify step */
   customerName: string;
+  /** Token from the SMS OTP step, when the store requires phone verification */
+  otpToken?: string;
   /** Whether this is a new customer (name field editable) or returning (read-only) */
   isNewCustomer: boolean;
   onBack: () => void;
@@ -33,6 +35,7 @@ export function Checkout({
   slug,
   customerPhone,
   customerName: initialName,
+  otpToken,
   isNewCustomer,
   onBack,
   onSuccess,
@@ -178,6 +181,7 @@ export function Checkout({
           ...(c.selectedVariantId ? { variantId: c.selectedVariantId } : {}),
         })),
         turnstileToken: orderTokenRef.current,
+        ...(otpToken ? { otpToken } : {}),
       });
       onSuccess(result);
     } catch (err) {
