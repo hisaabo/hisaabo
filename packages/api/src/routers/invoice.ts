@@ -1,11 +1,12 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, money } from "@hisaabo/shared";
+import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
+import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
@@ -260,6 +261,9 @@ export const invoiceRouter = router({
 
   create: memberProcedure.input(createInvoiceSchema).mutation(async ({ input, ctx }) => {
     requireCan(ctx.ability, "create", "Invoice");
+    if (!canCreateDocumentType(ctx.role, input.documentType, input.type)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
+    }
     const invoice = await ctx.db.transaction(async (tx) => {
       // Security: validate that the partyId belongs to the current business before
       // creating the invoice. Without this check an attacker could associate an
@@ -717,6 +721,8 @@ export const invoiceRouter = router({
           amountPaid: invoices.amountPaid,
           createdAt: invoices.createdAt,
           deletedAt: invoices.deletedAt,
+          irn: invoices.irn,
+          eInvoiceStatus: invoices.eInvoiceStatus,
         })
           .from(invoices)
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
@@ -738,6 +744,7 @@ export const invoiceRouter = router({
           requireCan(ctx.ability, "delete", "Invoice");
           const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: before.status, createdAt: before.createdAt });
           if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
+          await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
           await reverseInvoiceEffects(tx, ctx.businessId, before);
         }
 
@@ -1015,7 +1022,7 @@ export const invoiceRouter = router({
       const result = await ctx.db.transaction(async (tx) => {
         // Row lock + re-check inside the transaction so concurrent deletes
         // cannot both reverse stock.
-        const [inv] = await tx.select({ id: invoices.id, status: invoices.status, type: invoices.type, documentType: invoices.documentType, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt })
+        const [inv] = await tx.select({ id: invoices.id, status: invoices.status, type: invoices.type, documentType: invoices.documentType, invoiceNumber: invoices.invoiceNumber, deletedAt: invoices.deletedAt, createdAt: invoices.createdAt, amountPaid: invoices.amountPaid, irn: invoices.irn, eInvoiceStatus: invoices.eInvoiceStatus })
           .from(invoices)
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
           .for("update")
@@ -1026,6 +1033,8 @@ export const invoiceRouter = router({
         // seller_manager: can only delete unpaid invoices created within the last 2 hours
         const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: inv.status, createdAt: inv.createdAt });
         if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
+
+        await assertNoPaymentsOrActiveIrn(tx, "delete", inv);
 
         // A cancelled invoice already had its stock/ITC reversed when it was cancelled.
         if (inv.status !== "cancelled") {

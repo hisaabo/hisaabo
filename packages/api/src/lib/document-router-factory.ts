@@ -16,10 +16,14 @@ import {
   calcLineItem,
   calcInvoiceTotals,
   checkInvoiceDeleteAllowed,
+  checkDocumentStatusTransition,
+  canCreateDocumentType,
+  SELLER_PURCHASE_DENIED_MESSAGE,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "./permissions.js";
 import { logAudit } from "./audit.js";
+import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
 import { buildBusinessDateFilter } from "./business-date.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
@@ -188,6 +192,9 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
       .mutation(async ({ input, ctx }) => {
         // Documents are Invoice-backed; same permission as the invoice router.
         requireCan(ctx.ability, "create", "Invoice");
+        if (!canCreateDocumentType(ctx.role, docType, input.type)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: SELLER_PURCHASE_DENIED_MESSAGE });
+        }
         const doc = await ctx.db.transaction(async (tx) => {
           // Security: validate that partyId belongs to the current business.
           const [partyCheck] = await tx.select({ id: parties.id })
@@ -463,24 +470,42 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
       .mutation(async ({ input, ctx }) => {
         // Documents are Invoice-backed; same permission as the invoice router.
         requireCan(ctx.ability, "update", "Invoice");
-        const [doc] = await ctx.db
-          .update(invoices)
-          .set({
-            status: input.status as InvoiceStatus,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(invoices.id, input.id),
-              eq(invoices.businessId, ctx.businessId),
-              eq(invoices.documentType, docType as DocumentType)
+        const doc = await ctx.db.transaction(async (tx) => {
+          const [before] = await tx
+            .select()
+            .from(invoices)
+            .where(
+              and(
+                eq(invoices.id, input.id),
+                eq(invoices.businessId, ctx.businessId),
+                eq(invoices.documentType, docType as DocumentType),
+                isNull(invoices.deletedAt)
+              )
             )
-          )
-          .returning();
+            .for("update")
+            .limit(1);
 
-        if (!doc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
-        }
+          if (!before) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Document not found" });
+          }
+
+          const transitionError = checkDocumentStatusTransition(docType, before.status, input.status);
+          if (transitionError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: transitionError });
+          }
+          if (before.status === input.status) return { ...before, fromStatus: before.status };
+
+          if (input.status === "cancelled") {
+            await assertNoPaymentsOrActiveIrn(tx, "cancel", before);
+          }
+
+          const [updated] = await tx
+            .update(invoices)
+            .set({ status: input.status as InvoiceStatus, updatedAt: new Date() })
+            .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
+            .returning();
+          return { ...updated, fromStatus: before.status };
+        });
 
         logAudit(ctx.db, {
           businessId: ctx.businessId,
@@ -488,11 +513,12 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
           action: `${config.documentType}.updateStatus`,
           entityType: config.documentType,
           entityId: input.id,
-          metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: input.status },
+          metadata: { invoiceNumber: doc.invoiceNumber, fromStatus: doc.fromStatus, toStatus: input.status },
           ipAddress: ctx.ipAddress,
         });
 
-        return doc;
+        const { fromStatus: _from, ...result } = doc;
+        return result;
       }),
 
     delete: adminProcedure
@@ -520,6 +546,8 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
           // Already soft-deleted — return early
           if (doc.deletedAt) return { success: true, invoiceNumber: doc.invoiceNumber, deleted: false };
+
+          await assertNoPaymentsOrActiveIrn(tx, "delete", doc);
 
           // Same record-level rule as invoice.delete (seller_manager: unpaid, within 2 hours)
           const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: doc.status, createdAt: doc.createdAt });

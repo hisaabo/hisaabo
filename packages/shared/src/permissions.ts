@@ -222,3 +222,19 @@ export function checkInvoiceDeleteAllowed(
   const reason = verdict.reason ?? "no-permission";
   return { allowed: false, reason, message: DELETE_DENIED_MESSAGES[reason] };
 }
+
+const PURCHASE_SIDE_DOCUMENT_TYPES: readonly string[] = ["purchase_return", "debit_note"];
+
+export const SELLER_PURCHASE_DENIED_MESSAGE =
+  "Sellers cannot create purchase-side documents";
+
+// Sellers sell; they may not record purchases, purchase returns or debit notes.
+// `side` is the document's sale/purchase flag when the type itself is neutral.
+export function canCreateDocumentType(
+  role: string | null | undefined,
+  documentType: string,
+  side?: "sale" | "purchase",
+): boolean {
+  if (mapDbRole(role) !== "seller") return true;
+  return side !== "purchase" && !PURCHASE_SIDE_DOCUMENT_TYPES.includes(documentType);
+}
