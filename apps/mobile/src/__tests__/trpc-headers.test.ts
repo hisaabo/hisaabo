@@ -107,4 +107,13 @@ describe("mobile tRPC client header posture — CSRF sentinel", () => {
     expect(headers["X-Requested-With"]).toBe("hisaabo");
     expect(headers["x-business-id"]).toBe("biz-abc-123");
   });
+
+  it("mobile tRPC clients send X-Hisaabo-Client: mobile (bearer client marker) on both the React and vanilla clients", () => {
+    const { commonOptions } = require("../lib/trpc");
+    expect(commonOptions().headers()["X-Hisaabo-Client"]).toBe("mobile");
+
+    const { httpLink } = require("@trpc/client");
+    const vanillaLinkOpts = (httpLink as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(vanillaLinkOpts.headers()["X-Hisaabo-Client"]).toBe("mobile");
+  });
 });

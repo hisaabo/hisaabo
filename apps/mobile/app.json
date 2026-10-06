@@ -16,7 +16,13 @@
       "bundleIdentifier": "in.hisaabo.app",
       "associatedDomains": [
         "applinks:app.hisaabo.in"
-      ]
+      ],
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -31,7 +37,18 @@
           "data": [
             {
               "scheme": "https",
-              "host": "app.hisaabo.in"
+              "host": "app.hisaabo.in",
+              "pathPrefix": "/auth/native/callback"
+            },
+            {
+              "scheme": "https",
+              "host": "app.hisaabo.in",
+              "pathPrefix": "/auth/verify"
+            },
+            {
+              "scheme": "https",
+              "host": "app.hisaabo.in",
+              "pathPrefix": "/invite"
             }
           ],
           "category": [
@@ -54,7 +71,16 @@
           "contactsPermission": "Hisaabo needs access to your contacts to help you create invoices faster."
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": false
+          }
+        }
+      ]
     ]
   }
 }

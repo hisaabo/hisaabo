@@ -733,9 +733,9 @@ describe("Store settings — Save and toggles need manage:Store", () => {
   const editTagline = () =>
     fireEvent.changeText(screen.getByPlaceholderText("Fresh organic produce delivered daily"), "Fresh");
 
-  it("admin sees both toggles and Save once the form is dirty", () => {
+  it("admin sees the store toggles (enabled, negative stock, phone OTP) and Save once dirty", () => {
     renderAs("admin", StoreSettingsScreen);
-    expect(screen.UNSAFE_queryAllByType(Switch)).toHaveLength(2);
+    expect(screen.UNSAFE_queryAllByType(Switch)).toHaveLength(3);
     editTagline();
     fireEvent.press(screen.getByText("Save"));
     expect(stub.mutations["store.updateSettings"]).toHaveLength(1);

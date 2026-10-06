@@ -67,6 +67,7 @@ function StoreSettingsScreenContent() {
   const [minOrder, setMinOrder] = useState<string | null>(null);
   const [deliveryNote, setDeliveryNote] = useState<string | null>(null);
   const [allowNegativeStock, setAllowNegativeStock] = useState<boolean | null>(null);
+  const [requirePhoneOtp, setRequirePhoneOtp] = useState<boolean | null>(null);
 
   const [showItemsModal, setShowItemsModal] = useState(false);
 
@@ -95,6 +96,8 @@ function StoreSettingsScreenContent() {
   const effectiveMinOrder = minOrder ?? settings?.storeMinOrderAmount ?? "";
   const effectiveDeliveryNote = deliveryNote ?? settings?.storeDeliveryNote ?? "";
   const effectiveAllowNegativeStock = allowNegativeStock ?? settings?.storeAllowNegativeStock ?? false;
+  const effectiveRequirePhoneOtp = requirePhoneOtp ?? settings?.storeRequirePhoneOtp ?? false;
+  const phoneOtpAvailable = settings?.phoneOtpAvailable ?? false;
 
   const isSlugLocked = !!settings?.storeSlug;
 
@@ -124,7 +127,8 @@ function StoreSettingsScreenContent() {
     whatsapp !== null ||
     minOrder !== null ||
     deliveryNote !== null ||
-    allowNegativeStock !== null;
+    allowNegativeStock !== null ||
+    requirePhoneOtp !== null;
 
   // ── Mutations ───────────────────────────────────────────────────
   const updateMutation = trpc.store.updateSettings.useMutation({
@@ -138,6 +142,7 @@ function StoreSettingsScreenContent() {
       setMinOrder(null);
       setDeliveryNote(null);
       setAllowNegativeStock(null);
+      setRequirePhoneOtp(null);
       Alert.alert("Saved", "Store settings updated successfully.");
     },
     onError: (err) => {
@@ -154,6 +159,7 @@ function StoreSettingsScreenContent() {
       storeMinOrderAmount: effectiveMinOrder || undefined,
       storeDeliveryNote: effectiveDeliveryNote || undefined,
       storeAllowNegativeStock: effectiveAllowNegativeStock,
+      ...(requirePhoneOtp !== null ? { storeRequirePhoneOtp: requirePhoneOtp } : {}),
     });
   };
 
@@ -354,6 +360,29 @@ function StoreSettingsScreenContent() {
                     <Switch
                       value={effectiveAllowNegativeStock}
                       onValueChange={setAllowNegativeStock}
+                      trackColor={{ false: colors.border, true: colors.brand }}
+                      thumbColor={colors.textPrimary}
+                    />
+                  )}
+                </View>
+              </View>
+
+              {/* ── Phone verification (SMS code) Toggle ───────── */}
+              <View style={[styles.card, { marginTop: 8 }]}>
+                <View style={styles.toggleRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.toggleLabel}>Verify customers by SMS code</Text>
+                    <Text style={styles.toggleHint}>
+                      {phoneOtpAvailable || effectiveRequirePhoneOtp
+                        ? "Customers confirm their phone with a one-time code before ordering"
+                        : "Needs an SMS provider. Ask your server administrator to set SMS_PROVIDER."}
+                    </Text>
+                  </View>
+                  {canManageStore && (
+                    <Switch
+                      value={effectiveRequirePhoneOtp}
+                      onValueChange={setRequirePhoneOtp}
+                      disabled={!phoneOtpAvailable && !effectiveRequirePhoneOtp}
                       trackColor={{ false: colors.border, true: colors.brand }}
                       thumbColor={colors.textPrimary}
                     />

@@ -1,3 +1,4 @@
+import { getRandomBytes } from "expo-crypto";
 // Minimal pure-JS SHA-256 (no native dependency available for hashing).
 // Input is treated as Latin-1/ASCII; callers pass hex digests and digits.
 
@@ -55,16 +56,9 @@ export function sha256Hex(input: string): string {
   return out;
 }
 
-/** Random hex string for per-install salts; uses the platform CSPRNG when present. */
+/** Random hex string for per-install salts, from the OS CSPRNG (expo-crypto). */
 export function randomHex(bytes: number): string {
-  const buf = new Uint8Array(bytes);
-  const c = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } }).crypto;
-  if (c?.getRandomValues) {
-    c.getRandomValues(buf);
-  } else {
-    for (let i = 0; i < bytes; i++) buf[i] = Math.floor(Math.random() * 256);
-  }
   let out = "";
-  for (const b of buf) out += b.toString(16).padStart(2, "0");
+  for (const b of getRandomBytes(bytes)) out += b.toString(16).padStart(2, "0");
   return out;
 }
