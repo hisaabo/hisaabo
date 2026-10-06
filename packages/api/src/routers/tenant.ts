@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { controlDb, tenants, tenantMembers, invitations, users, sessions, provisionTenantDatabase, cleanupTenantDatabase } from "@hisaabo/db";
+import { controlDb, tenants, tenantMembers, invitations, users, sessions, apiKeys, provisionTenantDatabase, cleanupTenantDatabase } from "@hisaabo/db";
 import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
 import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
+import { requireTenantRole, ADMIN_ROLES, invalidateMembershipCache } from "../lib/tenant-access.js";
+import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
 import { enforceTeamMemberLimit, enforceOrgCreationLimit, getLimits } from "../lib/plan-limits.js";
 
@@ -26,6 +28,58 @@ async function autoSelectTenantInSession(req: Request, tenantId: string): Promis
     .where(eq(tenants.id, tenantId))
     .limit(1);
   return tenant?.name ?? "Organization";
+}
+
+async function assertEmailVerified(userId: string): Promise<void> {
+  const [row] = await controlDb.select({ emailVerified: users.emailVerified })
+    .from(users).where(eq(users.id, userId)).limit(1);
+  if (!row?.emailVerified) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Verify your email address (sign in with an email link) before accepting an invitation",
+    });
+  }
+}
+
+type InvitationRow = typeof invitations.$inferSelect;
+
+// Claims the invitation (acceptedAt IS NULL guard) and creates the membership
+// in one transaction so a single invitation can only ever grant access once.
+async function claimInvitationAndAddMember(invitation: InvitationRow, userId: string): Promise<void> {
+  await controlDb.transaction(async (tx) => {
+    const claimed = await tx.update(invitations)
+      .set({ acceptedAt: new Date() })
+      .where(and(eq(invitations.id, invitation.id), isNull(invitations.acceptedAt)))
+      .returning({ id: invitations.id });
+    if (claimed.length === 0) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Invalid or expired invitation" });
+    }
+    await tx.insert(tenantMembers).values({
+      tenantId: invitation.tenantId,
+      userId,
+      role: invitation.role,
+      invitedBy: invitation.invitedBy ?? undefined,
+      acceptedAt: new Date(),
+    });
+  });
+}
+
+// Everything a removed member could still use against the tenant.
+async function revokeMemberAccess(tenantId: string, userId: string, email: string | null): Promise<void> {
+  await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, tenantId), eq(apiKeys.userId, userId)));
+  if (email) {
+    await controlDb.delete(invitations).where(and(eq(invitations.tenantId, tenantId), emailEq(invitations.email, email)));
+  }
+  const affectedSessions = await controlDb.select({ id: sessions.id })
+    .from(sessions)
+    .where(and(eq(sessions.userId, userId), eq(sessions.tenantId, tenantId)));
+  if (affectedSessions.length > 0) {
+    await controlDb.update(sessions)
+      .set({ tenantId: null })
+      .where(and(eq(sessions.userId, userId), eq(sessions.tenantId, tenantId)));
+  }
+  for (const s of affectedSessions) invalidateSessionCache(s.id);
+  invalidateMembershipCache(tenantId, userId);
 }
 
 function generateSlug(name: string): string {
@@ -162,7 +216,7 @@ export const tenantRouter = router({
       .from(invitations)
       .innerJoin(tenants, eq(tenants.id, invitations.tenantId))
       .where(and(
-        eq(invitations.email, ctx.user.email.toLowerCase()),
+        emailEq(invitations.email, ctx.user.email),
         isNull(invitations.acceptedAt),
         gt(invitations.expiresAt, new Date()),
       ));
@@ -179,7 +233,7 @@ export const tenantRouter = router({
         .from(invitations)
         .where(and(
           eq(invitations.id, input.invitationId),
-          eq(invitations.email, ctx.user.email.toLowerCase()),
+          emailEq(invitations.email, ctx.user.email),
           isNull(invitations.acceptedAt),
           gt(invitations.expiresAt, new Date()),
         ))
@@ -188,6 +242,7 @@ export const tenantRouter = router({
       if (!invitation) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found or expired" });
       }
+      await assertEmailVerified(ctx.user.id);
 
       // Check if already a member
       const [existingMember] = await controlDb.select({ id: tenantMembers.id })
@@ -204,18 +259,7 @@ export const tenantRouter = router({
         return { tenantId: invitation.tenantId, tenantName };
       }
 
-      await controlDb.transaction(async (tx) => {
-        await tx.insert(tenantMembers).values({
-          tenantId: invitation.tenantId,
-          userId: ctx.user.id,
-          role: invitation.role,
-          invitedBy: invitation.invitedBy ?? undefined,
-          acceptedAt: new Date(),
-        });
-        await tx.update(invitations)
-          .set({ acceptedAt: new Date() })
-          .where(eq(invitations.id, invitation.id));
-      });
+      await claimInvitationAndAddMember(invitation, ctx.user.id);
 
       const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
       return { tenantId: invitation.tenantId, tenantName };
@@ -255,7 +299,14 @@ export const tenantRouter = router({
 
   // Get current tenant info
   current: tenantProcedure.query(async ({ ctx }) => {
-    const [tenant] = await controlDb.select()
+    const [tenant] = await controlDb.select({
+      id: tenants.id,
+      name: tenants.name,
+      slug: tenants.slug,
+      plan: tenants.plan,
+      status: tenants.status,
+      createdAt: tenants.createdAt,
+    })
       .from(tenants)
       .where(eq(tenants.id, ctx.tenantId))
       .limit(1);
@@ -264,6 +315,8 @@ export const tenantRouter = router({
 
   // List members of current tenant
   members: tenantProcedure.query(async ({ ctx }) => {
+    // seller_manager needs the roster to assign sales targets, but not emails.
+    const role = await requireTenantRole(ctx, [...ADMIN_ROLES, "seller_manager"], "Only owners and admins can view members");
     const members = await controlDb.select({
       id: tenantMembers.id,
       userId: tenantMembers.userId,
@@ -276,6 +329,9 @@ export const tenantRouter = router({
       .from(tenantMembers)
       .innerJoin(users, eq(users.id, tenantMembers.userId))
       .where(eq(tenantMembers.tenantId, ctx.tenantId));
+    if (!(ADMIN_ROLES as readonly string[]).includes(role)) {
+      return members.map((m) => ({ ...m, userEmail: "" }));
+    }
     return members;
   }),
 
@@ -286,25 +342,16 @@ export const tenantRouter = router({
       role: z.enum(["admin", "seller_manager", "seller", "accountant"]).default("seller"),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Check caller has permission (owner/superadmin or admin)
-      const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
-        .from(tenantMembers)
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, ctx.user.id),
-        ))
-        .limit(1);
+      await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can invite members");
 
-      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can invite members" });
-      }
+      const inviteEmail = normalizeEmail(input.email);
 
       // Enforce team member limit before proceeding
       await enforceTeamMemberLimit(ctx.tenantId);
 
       // Check if already a member
       const [existingUser] = await controlDb.select({ id: users.id })
-        .from(users).where(eq(users.email, input.email)).limit(1);
+        .from(users).where(emailEq(users.email, inviteEmail)).limit(1);
 
       if (existingUser) {
         const [existingMember] = await controlDb.select({ id: tenantMembers.id })
@@ -325,7 +372,7 @@ export const tenantRouter = router({
         .from(invitations)
         .where(and(
           eq(invitations.tenantId, ctx.tenantId),
-          eq(invitations.email, input.email),
+          emailEq(invitations.email, inviteEmail),
           isNull(invitations.acceptedAt),
           gt(invitations.expiresAt, new Date()),
         ))
@@ -341,7 +388,7 @@ export const tenantRouter = router({
 
       await controlDb.insert(invitations).values({
         tenantId: ctx.tenantId,
-        email: input.email,
+        email: inviteEmail,
         role: input.role,
         token: tokenHash, // Store hash, never the raw token
         invitedBy: ctx.user.id,
@@ -363,7 +410,7 @@ export const tenantRouter = router({
       const inviteUrl = `${baseUrl}/invite/${rawToken}`;
 
       emailService.sendInvitation(
-        input.email,
+        inviteEmail,
         inviteUrl,
         tenant?.name ?? "Organization",
         inviter?.name ?? null,
@@ -371,7 +418,8 @@ export const tenantRouter = router({
         console.error("[invite] Failed to send invitation email:", err);
       });
 
-      // Return the raw token — this is what gets sent via email
+      // The raw token is returned because the web Team tab shows a copyable
+      // invite link and the CLI prints it; it is never logged.
       return { token: rawToken, expiresAt };
     }),
 
@@ -429,9 +477,10 @@ export const tenantRouter = router({
       // Verify the invitation email matches the authenticated user
       const [currentUser] = await controlDb.select({ email: users.email })
         .from(users).where(eq(users.id, ctx.user.id)).limit(1);
-      if (!currentUser || currentUser.email.toLowerCase() !== invitation.email.toLowerCase()) {
+      if (!currentUser || normalizeEmail(currentUser.email) !== normalizeEmail(invitation.email)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "This invitation was sent to a different email address" });
       }
+      await assertEmailVerified(ctx.user.id);
 
       // If already accepted, treat as idempotent — the user may be clicking
       // an old link or retrying after a partial failure. Check membership and
@@ -448,16 +497,9 @@ export const tenantRouter = router({
           const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
           return { tenantId: invitation.tenantId, tenantName };
         }
-        // Accepted but not a member (removed after accepting) — re-add them
-        await controlDb.insert(tenantMembers).values({
-          tenantId: invitation.tenantId,
-          userId: ctx.user.id,
-          role: invitation.role,
-          invitedBy: invitation.invitedBy ?? undefined,
-          acceptedAt: new Date(),
-        });
-        const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
-        return { tenantId: invitation.tenantId, tenantName };
+        // Accepted but not a member (removed after accepting): an accepted
+        // invitation must never grant membership again.
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invalid or expired invitation" });
       }
 
       // Check if already a member (e.g. double-click)
@@ -477,19 +519,7 @@ export const tenantRouter = router({
       // Create membership and mark invitation accepted atomically so a crash
       // between the two writes cannot leave the user as a member with a
       // re-usable invitation link.
-      await controlDb.transaction(async (tx) => {
-        await tx.insert(tenantMembers).values({
-          tenantId: invitation.tenantId,
-          userId: ctx.user.id,
-          role: invitation.role,
-          invitedBy: invitation.invitedBy ?? undefined,
-          acceptedAt: new Date(),
-        });
-
-        await tx.update(invitations)
-          .set({ acceptedAt: new Date() })
-          .where(eq(invitations.id, invitation.id));
-      });
+      await claimInvitationAndAddMember(invitation, ctx.user.id);
 
       const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
       return { tenantId: invitation.tenantId, tenantName };
@@ -497,6 +527,7 @@ export const tenantRouter = router({
 
   // List pending invitations for the current tenant
   pendingInvitations: tenantProcedure.query(async ({ ctx }) => {
+    await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can view invitations");
     const pending = await controlDb.select({
       id: invitations.id,
       email: invitations.email,
@@ -521,18 +552,7 @@ export const tenantRouter = router({
   revokeInvitation: tenantProcedure
     .input(z.object({ invitationId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      // Verify caller is admin/owner
-      const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
-        .from(tenantMembers)
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, ctx.user.id),
-        ))
-        .limit(1);
-
-      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can revoke invitations" });
-      }
+      await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can revoke invitations");
 
       await controlDb.delete(invitations)
         .where(and(
@@ -548,17 +568,7 @@ export const tenantRouter = router({
   removeMember: tenantProcedure
     .input(z.object({ userId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
-        .from(tenantMembers)
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, ctx.user.id),
-        ))
-        .limit(1);
-
-      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can remove members" });
-      }
+      await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can remove members");
 
       if (input.userId === ctx.user.id) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot remove yourself" });
@@ -583,26 +593,11 @@ export const tenantRouter = router({
           eq(tenantMembers.userId, input.userId),
         ));
 
-      // Revoke the removed user's access immediately: clear the tenantId from
-      // their sessions so the next request can't piggyback on the cached session.
-      const affectedSessions = await controlDb.select({ id: sessions.id })
-        .from(sessions)
-        .where(and(
-          eq(sessions.userId, input.userId),
-          eq(sessions.tenantId, ctx.tenantId),
-        ));
-
-      if (affectedSessions.length > 0) {
-        await controlDb.update(sessions)
-          .set({ tenantId: null })
-          .where(and(
-            eq(sessions.userId, input.userId),
-            eq(sessions.tenantId, ctx.tenantId),
-          ));
-        for (const s of affectedSessions) {
-          invalidateSessionCache(s.id);
-        }
-      }
+      // Revoke the removed user's access immediately: API keys, invitations,
+      // session tenant selection and cached membership.
+      const [removedUser] = await controlDb.select({ email: users.email })
+        .from(users).where(eq(users.id, input.userId)).limit(1);
+      await revokeMemberAccess(ctx.tenantId, input.userId, removedUser?.email ?? null);
 
       return { success: true };
     }),
@@ -614,17 +609,7 @@ export const tenantRouter = router({
       role: z.enum(["admin", "seller_manager", "seller", "accountant"]),
     }))
     .mutation(async ({ input, ctx }) => {
-      const [callerMembership] = await controlDb.select({ role: tenantMembers.role })
-        .from(tenantMembers)
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, ctx.user.id),
-        ))
-        .limit(1);
-
-      if (!callerMembership || !["owner", "superadmin", "admin"].includes(callerMembership.role)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can change roles" });
-      }
+      await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can change roles");
 
       // Prevent changing a superadmin/owner's role
       const [targetMembership] = await controlDb.select({ role: tenantMembers.role })
@@ -645,6 +630,10 @@ export const tenantRouter = router({
           eq(tenantMembers.tenantId, ctx.tenantId),
           eq(tenantMembers.userId, input.userId),
         ));
+
+      // Keys minted under the previous role must not outlive it.
+      await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, ctx.tenantId), eq(apiKeys.userId, input.userId)));
+      invalidateMembershipCache(ctx.tenantId, input.userId);
 
       return { success: true };
     }),

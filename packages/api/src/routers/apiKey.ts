@@ -5,6 +5,32 @@ import { router, protectedProcedure } from "../trpc.js";
 import { controlDb, apiKeys } from "@hisaabo/db";
 import { createApiKeySchema, revokeApiKeySchema } from "@hisaabo/shared";
 import { enforceApiKeyLimit } from "../lib/plan-limits.js";
+import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const API_KEY_DEFAULT_TTL_MS = 90 * DAY_MS;
+export const API_KEY_MAX_TTL_MS = 365 * DAY_MS;
+
+/** Resolves the key expiry: 90 days when omitted, never more than 365 days out. */
+export function resolveApiKeyExpiry(requested: string | Date | null | undefined, now = Date.now()): Date {
+  if (!requested) return new Date(now + API_KEY_DEFAULT_TTL_MS);
+  const at = new Date(requested).getTime();
+  if (Number.isNaN(at) || at <= now) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Expiry must be in the future" });
+  }
+  if (at > now + API_KEY_MAX_TTL_MS) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "API keys can be valid for at most 365 days" });
+  }
+  return new Date(at);
+}
+
+// A key (or any non-interactive credential) must never be able to mint or
+// revoke keys: only an interactive session can manage them.
+function rejectApiKeyAuth(ctx: { viaApiKey?: boolean }) {
+  if (ctx.viaApiKey) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "API keys cannot manage API keys" });
+  }
+}
 
 export const apiKeyRouter = router({
   /**
@@ -15,6 +41,7 @@ export const apiKeyRouter = router({
     if (!ctx.tenantId) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "No organization selected" });
     }
+    await requireTenantRole({ user: ctx.user, tenantId: ctx.tenantId }, ADMIN_ROLES, "Only owners and admins can manage API keys");
 
     const rows = await controlDb
       .select({
@@ -41,6 +68,9 @@ export const apiKeyRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "No organization selected" });
     }
 
+    rejectApiKeyAuth(ctx);
+    await requireTenantRole({ user: ctx.user, tenantId: ctx.tenantId }, ADMIN_ROLES, "Only owners and admins can manage API keys");
+
     // Plan check — enforces both plan access and key count limit
     await enforceApiKeyLimit(ctx.tenantId);
 
@@ -53,7 +83,7 @@ export const apiKeyRouter = router({
     // First 20 chars for display identification
     const keyPrefix = rawKey.slice(0, 20);
 
-    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    const expiresAt = resolveApiKeyExpiry(input.expiresAt);
 
     const [created] = await controlDb
       .insert(apiKeys)
@@ -90,6 +120,8 @@ export const apiKeyRouter = router({
     if (!ctx.tenantId) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "No organization selected" });
     }
+    rejectApiKeyAuth(ctx);
+    await requireTenantRole({ user: ctx.user, tenantId: ctx.tenantId }, ADMIN_ROLES, "Only owners and admins can manage API keys");
 
     const deleted = await controlDb
       .delete(apiKeys)

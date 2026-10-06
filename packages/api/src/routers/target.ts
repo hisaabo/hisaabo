@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { salesTargets, invoices, invoiceItems } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
-import { requireCan } from "../lib/permissions.js";
+import { requireCan, type AppAbility } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 
@@ -33,6 +33,18 @@ const updateTargetSchema = z.object({
   periodEnd: z.string().datetime().optional(),
   notes: z.string().max(500).nullish(),
 });
+
+/**
+ * Roles without manage:SalesTarget (seller, accountant) only see their own
+ * targets; managers/admins may filter by any user or see everyone's.
+ */
+export function targetUserScope(
+  ability: AppAbility,
+  selfUserId: string,
+  requestedUserId?: string,
+): string | undefined {
+  return ability.can("manage", "SalesTarget") ? requestedUserId : selfUserId;
+}
 
 // ── Progress computation ───────────────────────────────────────
 
@@ -205,8 +217,9 @@ export const targetRouter = router({
 
       const conditions = [eq(salesTargets.businessId, ctx.businessId)];
 
-      if (input.userId) {
-        conditions.push(eq(salesTargets.userId, input.userId));
+      const scopedUserId = targetUserScope(ctx.ability, ctx.user.id, input.userId);
+      if (scopedUserId) {
+        conditions.push(eq(salesTargets.userId, scopedUserId));
       }
       if (input.periodType) {
         conditions.push(eq(salesTargets.periodType, input.periodType));
@@ -244,15 +257,17 @@ export const targetRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "SalesTarget");
 
+      const conditions = [
+        eq(salesTargets.id, input.id),
+        eq(salesTargets.businessId, ctx.businessId),
+      ];
+      const scopedUserId = targetUserScope(ctx.ability, ctx.user.id);
+      if (scopedUserId) conditions.push(eq(salesTargets.userId, scopedUserId));
+
       const [target] = await ctx.db
         .select()
         .from(salesTargets)
-        .where(
-          and(
-            eq(salesTargets.id, input.id),
-            eq(salesTargets.businessId, ctx.businessId),
-          ),
-        )
+        .where(and(...conditions))
         .limit(1);
 
       if (!target) {

@@ -27,6 +27,10 @@ const checks: EnvCheck[] = [
   },
 ];
 
+export function isValidEncryptionKey(key: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(key);
+}
+
 /**
  * Validate required environment variables at startup.
  * Logs warnings for missing optional vars, throws for required vars.
@@ -45,6 +49,19 @@ export function validateEnv(): void {
         logger.warn({ key: check.key }, `${check.key} not set — ${check.hint}`);
       }
     }
+  }
+
+  const encKey = process.env.ENCRYPTION_KEY;
+  if (encKey && process.env.NODE_ENV === "production" && !isValidEncryptionKey(encKey)) {
+    errors.push("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes) in production.");
+  }
+  if (
+    process.env.NODE_ENV === "production" &&
+    !process.env.ENCRYPTION_KEY &&
+    !process.env.SESSION_SECRET &&
+    !process.env.EXPORT_SECRET
+  ) {
+    errors.push("A signing secret is required in production: set ENCRYPTION_KEY (or SESSION_SECRET / EXPORT_SECRET).");
   }
 
   if (errors.length > 0) {

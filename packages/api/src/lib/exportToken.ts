@@ -11,19 +11,13 @@
  * on instance A. For v1 this is acceptable; v2 can move to Redis.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
+import { deriveKey } from "./derive-key.js";
 
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-function getSecret(): string {
-  // Reuse ENCRYPTION_KEY as the signing secret; fall back to a derived constant
-  // for dev environments where the key is not set.
-  const key = process.env.ENCRYPTION_KEY || process.env.SESSION_SECRET;
-  if (!key) {
-    // In dev, derive a stable secret from a fixed string so tokens survive hot reloads.
-    return "hisaabo-export-dev-secret-NOT-FOR-PRODUCTION";
-  }
-  return key;
+function getSecret(): Buffer {
+  return deriveKey("export-token");
 }
 
 function sign(payload: string): string {
@@ -70,7 +64,7 @@ export function signExportToken(
   userId: string,
 ): { token: string; expiresAt: Date } {
   const exp = Date.now() + TOKEN_TTL_MS;
-  const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const nonce = randomBytes(16).toString("hex");
 
   const payload = b64encode({ tenantId, userId, exp, nonce });
   const sig = sign(payload);

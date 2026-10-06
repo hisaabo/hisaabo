@@ -311,14 +311,13 @@ describe("tenant.acceptInvitation", () => {
     expect(result.tenantName).toBe("Sharma Traders");
   });
 
-  it("REGRESSION: accepting an already-accepted invite re-adds a removed member", async () => {
-    // Scenario: user accepted invite, was removed, clicks old link again.
-    // Should re-add them to the org.
+  it("SECURITY: an already-accepted invite cannot re-add a removed member", async () => {
+    // Scenario: user accepted invite, was removed, clicks the old link again.
+    // The invitation is spent; membership must not be granted again.
     const rawToken = randomUUID();
     const email = `reinvite.readd.${randomUUID().slice(0, 8)}@example.in`;
     const readdUser = await createUser({ email, name: "Re-add User" });
 
-    // Insert an already-accepted invite (from first invite cycle)
     await insertInvitation({
       tenantId: tenant1.id,
       email,
@@ -331,11 +330,10 @@ describe("tenant.acceptInvitation", () => {
     // User is NOT a member (was removed after accepting)
     const readdSession = await createSession(readdUser.id);
     const caller = callerNoTenant(readdSession.id, readdUser);
-    const result = await caller.tenant.acceptInvitation({ token: rawToken });
+    await expect(
+      caller.tenant.acceptInvitation({ token: rawToken }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-    expect(result.tenantId).toBe(tenant1.id);
-
-    // Should now be a member again
     const db = getControlDb();
     const [membership] = await db.select({ role: tenantMembers.role })
       .from(tenantMembers)
@@ -344,8 +342,7 @@ describe("tenant.acceptInvitation", () => {
         eq(tenantMembers.userId, readdUser.id),
       ))
       .limit(1);
-    expect(membership).toBeDefined();
-    expect(membership!.role).toBe("accountant");
+    expect(membership).toBeUndefined();
   });
 });
 

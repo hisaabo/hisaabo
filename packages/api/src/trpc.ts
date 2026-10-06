@@ -5,6 +5,7 @@ import { getTenantDb, type TenantDatabase, controlDb, businesses, tenantMembers 
 import { eq, and } from "drizzle-orm";
 import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.js";
 import { getMaintenanceStatus } from "./lib/maintenance-cache.js";
+import { assertActiveMembership } from "./lib/tenant-access.js";
 
 // ── Middleware context shape interfaces ────────────────────────
 // These represent the enriched context after each middleware runs.
@@ -120,6 +121,10 @@ const hasTenantAccess = t.middleware(async ({ ctx, next }) => {
       message: maintenance.message || "System is under maintenance. Please try again later.",
     });
   }
+
+  // The session/API key remembers a tenantId from when it was issued; make sure
+  // the user is still a member of an active tenant.
+  await assertActiveMembership(ctx.tenantId, ctx.user.id);
 
   return next({
     ctx: {

@@ -6,12 +6,12 @@
  * A future consolidation pass can merge both into a single tokenUtils.ts.
  */
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
+import { deriveKey } from "./derive-key.js";
 
 const IMPORT_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-function getSecret(): string {
-  const secret = process.env.EXPORT_SECRET || process.env.SESSION_SECRET || "dev-import-secret-change-in-prod";
-  return secret;
+function getSecret(): Buffer {
+  return deriveKey("import-token");
 }
 
 // In-memory nonce set — tracks consumed tokens to enforce single-use.

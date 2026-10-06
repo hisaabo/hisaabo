@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash, randomBytes } from "node:crypto";
 import * as argon2 from "argon2";
-import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
+import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, apiKeys, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
@@ -12,6 +12,8 @@ import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions 
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
+import { getTrustedClientIp } from "../lib/client-ip.js";
+import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -38,26 +40,30 @@ function generateSlug(name: string): string {
   return `${base}-${suffix}`;
 }
 
+let dummyHashPromise: Promise<string> | null = null;
+function getDummyHash(): Promise<string> {
+  dummyHashPromise ??= argon2.hash(randomBytes(16).toString("hex"), {
+    type: argon2.argon2id,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 4,
+  });
+  return dummyHashPromise;
+}
+
+/** Non-reversible public identifier for a session (the raw id is a bearer credential). */
+export function sessionHandle(sessionId: string): string {
+  return createHash("sha256").update(sessionId).digest("hex");
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 const IS_SECURE = (process.env.APP_URL || "").startsWith("https");
 
-// Safe IP extraction from a raw Request — mirrors the logic in server.ts getClientIp().
-// Prefers cf-connecting-ip (Cloudflare, strips spoofed values at CDN edge).
-// Falls back to the LAST entry of x-forwarded-for (set by the closest trusted proxy).
 function getClientIpFromRequest(req: Request): string | null {
-  const cfIp = req.headers.get("cf-connecting-ip");
-  if (cfIp) return cfIp.trim();
-
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) {
-    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
-    if (parts.length > 0) return parts[parts.length - 1];
-  }
-
-  return null;
+  return getTrustedClientIp(req.headers);
 }
 
 /**
@@ -297,7 +303,8 @@ export const authRouter = router({
       }
     }
 
-    const existing = await controlDb.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
+    const emailLower = normalizeEmail(input.email);
+    const existing = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, emailLower)).limit(1);
     if (existing.length > 0) {
       throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
     }
@@ -315,11 +322,10 @@ export const authRouter = router({
     // invitation peek is a dirty read — confirmed inside the tx below. If the
     // peek is wrong (invitation accepted mid-flight), withProvisionedTenantCleanup
     // drops the unused DB on its way out.
-    const emailLower = input.email.toLowerCase();
     const [pendingInvitePeek] = await controlDb.select({ id: invitations.id })
       .from(invitations)
       .where(and(
-        eq(invitations.email, emailLower),
+        emailEq(invitations.email, emailLower),
         isNull(invitations.acceptedAt),
         gt(invitations.expiresAt, new Date()),
       ))
@@ -327,7 +333,7 @@ export const authRouter = router({
 
     const needsAutoTenant = process.env.MULTI_TENANT === "true" && !pendingInvitePeek;
     const provisioned: ProvisionedTenant | null = needsAutoTenant
-      ? await provisionNewTenantForUser(input.name || input.email.split("@")[0])
+      ? await provisionNewTenantForUser(input.name || emailLower.split("@")[0])
       : null;
 
     // Insert user, assign tenant, and create session in one outer transaction.
@@ -338,7 +344,7 @@ export const authRouter = router({
       async (markUsed) =>
         controlDb.transaction(async (tx) => {
           const [user] = await tx.insert(users).values({
-            email: input.email,
+            email: emailLower,
             name: input.name,
             passwordHash,
           }).returning({ id: users.id, email: users.email, name: users.name });
@@ -347,7 +353,7 @@ export const authRouter = router({
           const [pendingInvite] = await tx.select({ id: invitations.id })
             .from(invitations)
             .where(and(
-              eq(invitations.email, emailLower),
+              emailEq(invitations.email, emailLower),
               isNull(invitations.acceptedAt),
               gt(invitations.expiresAt, new Date()),
             ))
@@ -415,7 +421,7 @@ export const authRouter = router({
   // ── Password login ───────────────────────────────────────────
   login: publicProcedure.input(loginSchema).mutation(async ({ input, ctx }) => {
     // Per-email rate limiting: block after too many failed attempts
-    const emailKey = input.email.toLowerCase();
+    const emailKey = normalizeEmail(input.email);
     const loginIp = getClientIpFromRequest(ctx.req);
     const attempts = failedLoginAttempts.get(emailKey);
     if (attempts && attempts.count >= LOGIN_MAX_ATTEMPTS && Date.now() - attempts.firstAttempt < LOGIN_WINDOW_MS) {
@@ -426,8 +432,14 @@ export const authRouter = router({
     const [user] = await controlDb
       .select({ id: users.id, email: users.email, name: users.name, passwordHash: users.passwordHash })
       .from(users)
-      .where(eq(users.email, input.email))
+      .where(emailEq(users.email, emailKey))
       .limit(1);
+
+    // Burn the same argon2 work for unknown / passwordless accounts so response
+    // time doesn't reveal whether the email is registered.
+    if (!user?.passwordHash) {
+      await argon2.verify(await getDummyHash(), input.password).catch(() => false);
+    }
 
     if (!user) {
       const prev = failedLoginAttempts.get(emailKey);
@@ -482,7 +494,7 @@ export const authRouter = router({
       }
     }
 
-    const email = input.email.toLowerCase();
+    const email = normalizeEmail(input.email);
 
     // Rate limit: max 5 requests per email per 15 minutes
     const recentTokens = await controlDb
@@ -538,7 +550,7 @@ export const authRouter = router({
 
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)
-    const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+    const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, email)).limit(1);
     await emailService.sendMagicLink(email, primaryUrl, secondaryUrl, !existingUser);
 
     return { success: true }; // Always success — no email enumeration
@@ -578,11 +590,11 @@ export const authRouter = router({
     }
 
     const peekEmail = tokenPeek.email;
-    const peekEmailLower = peekEmail.toLowerCase();
+    const peekEmailLower = normalizeEmail(peekEmail);
 
     const [existingUserPeek] = await controlDb.select({ id: users.id })
       .from(users)
-      .where(eq(users.email, peekEmail))
+      .where(emailEq(users.email, peekEmailLower))
       .limit(1);
 
     const [pendingInvitePeek] = existingUserPeek ? [] : await controlDb.select({ id: invitations.id })
@@ -627,14 +639,14 @@ export const authRouter = router({
             });
           }
 
-          const emailLocal = tokenRow.email;
+          const emailLocal = normalizeEmail(tokenRow.email);
           let isNew = false;
 
           // Find or create user
           let [user] = await tx
             .select({ id: users.id, email: users.email, name: users.name })
             .from(users)
-            .where(eq(users.email, emailLocal))
+            .where(emailEq(users.email, emailLocal))
             .limit(1);
 
           if (!user) {
@@ -649,7 +661,7 @@ export const authRouter = router({
             const [pendingInvite] = await tx.select({ id: invitations.id })
               .from(invitations)
               .where(and(
-                eq(invitations.email, emailLocal.toLowerCase()),
+                emailEq(invitations.email, emailLocal),
                 isNull(invitations.acceptedAt),
                 gt(invitations.expiresAt, new Date()),
               ))
@@ -759,11 +771,11 @@ export const authRouter = router({
   requestEmailChange: protectedProcedure
     .input(z.object({ newEmail: z.string().email().max(255) }))
     .mutation(async ({ input, ctx }) => {
-      const email = input.newEmail.toLowerCase();
+      const email = normalizeEmail(input.newEmail);
 
       // Check if new email is already taken
       const [existing] = await controlDb.select({ id: users.id })
-        .from(users).where(eq(users.email, email)).limit(1);
+        .from(users).where(emailEq(users.email, email)).limit(1);
       if (existing) {
         throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
       }
@@ -847,6 +859,8 @@ export const authRouter = router({
       .where(eq(sessions.userId, ctx.user!.id));
 
     await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
+    // "Log out everywhere" also kills every API key the user minted, in all tenants.
+    await controlDb.delete(apiKeys).where(eq(apiKeys.userId, ctx.user!.id));
 
     revokeAllUserSessions(ctx.user!.id);
     for (const s of userSessions) {
@@ -879,9 +893,10 @@ export const authRouter = router({
         ))
         .orderBy(desc(sessions.createdAt));
 
-      return userSessions.map((s) => ({
-        ...s,
-        isCurrent: !input.expired && s.id === currentSessionId,
+      return userSessions.map(({ id, ...rest }) => ({
+        ...rest,
+        id: sessionHandle(id),
+        isCurrent: !input.expired && id === currentSessionId,
       }));
     }),
 
@@ -890,23 +905,26 @@ export const authRouter = router({
     .input(z.object({ sessionId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       const currentSessionId = getSessionIdFromContext(ctx);
-      if (input.sessionId === currentSessionId) {
+
+      // The client only ever sees a hash of the session id (the id itself is the
+      // bearer credential); resolve it against the caller's own sessions.
+      const own = await controlDb
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.userId, ctx.user!.id));
+      const target = own.find((s) => sessionHandle(s.id) === input.sessionId);
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      }
+      if (target.id === currentSessionId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot revoke your current session. Use logout instead." });
       }
 
-      const deleted = await controlDb
+      await controlDb
         .delete(sessions)
-        .where(and(
-          eq(sessions.id, input.sessionId),
-          eq(sessions.userId, ctx.user!.id),
-        ))
-        .returning({ id: sessions.id });
+        .where(and(eq(sessions.id, target.id), eq(sessions.userId, ctx.user!.id)));
 
-      if (deleted.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      }
-
-      invalidateSessionCache(input.sessionId);
+      invalidateSessionCache(target.id);
       return { success: true };
     }),
 

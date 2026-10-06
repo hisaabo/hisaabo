@@ -1,6 +1,7 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { createHash } from "crypto";
 import { logger } from "./lib/logger.js";
+import { getTrustedClientIp } from "./lib/client-ip.js";
 import { controlDb } from "@hisaabo/db";
 import { sessions, users, apiKeys, accessTokens } from "@hisaabo/db";
 import { eq, gt, and } from "drizzle-orm";
@@ -47,17 +48,6 @@ export function revokeAllUserSessions(userId: string) {
   }
 }
 
-function getClientIp(req: Request): string | null {
-  const cfIp = req.headers.get("cf-connecting-ip");
-  if (cfIp) return cfIp.trim();
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) {
-    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
-    if (parts.length > 0) return parts[parts.length - 1];
-  }
-  return null;
-}
-
 export async function createContext(opts: FetchCreateContextFnOptions) {
   // NOTE: we intentionally do NOT use getSessionIdFromRequest() here because
   // createContext needs the raw token to detect the API key prefix on line 27.
@@ -98,6 +88,7 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
   //   'cookie'  — HttpOnly session cookie (web)
   //   null      — API key or unauthenticated
   let authTokenKind: "access" | "refresh" | "cookie" | null = null;
+  let viaApiKey = false;
 
   if (rawBearerToken) {
     if (rawBearerToken.startsWith("hisaabo_key_")) {
@@ -123,6 +114,7 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
         user = { id: key.userId, email: key.email, name: key.name };
         tenantId = key.tenantId;
         // authTokenKind stays null for API keys
+        viaApiKey = true;
 
         controlDb
           .update(apiKeys)
@@ -394,7 +386,8 @@ export async function createContext(opts: FetchCreateContextFnOptions) {
     businessId: businessId && user ? businessId : null,
     req: opts.req,
     resHeaders: opts.resHeaders,
-    ipAddress: getClientIp(opts.req),
+    ipAddress: getTrustedClientIp(opts.req.headers),
+    viaApiKey,
     authTokenKind,
   };
 }
@@ -408,7 +401,10 @@ export function invalidateSessionCache(sessionId: string) {
 // may omit it — we make it optional here so the Context type is compatible
 // with both code paths.
 type RawContext = Awaited<ReturnType<typeof createContext>>;
-export type Context = Omit<RawContext, "authTokenKind"> & { authTokenKind?: "access" | "refresh" | "cookie" | null };
+export type Context = Omit<RawContext, "authTokenKind" | "viaApiKey"> & {
+  authTokenKind?: "access" | "refresh" | "cookie" | null;
+  viaApiKey?: boolean;
+};
 
 function getCookie(req: Request, name: string): string | null {
   const cookies = req.headers.get("cookie");

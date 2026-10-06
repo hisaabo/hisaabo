@@ -4,26 +4,30 @@ import { TRPCError } from "@trpc/server";
 import { businesses, bankAccounts, controlDb, tenants, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema, uploadBusinessLogoSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
-import { requireCan } from "../lib/permissions.js";
+import { requireCan, defineAbilityFor, mapDbRole } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
+import { requireTenantRole, getTenantRole, hasRole, ADMIN_ROLES } from "../lib/tenant-access.js";
+import { csvRow } from "@hisaabo/shared";
 import { getTenantMemberUserIds, businessTenantScope, assertBusinessInTenant } from "../lib/tenant-businesses.js";
 
 async function requireTenantAdmin(userId: string, tenantId: string) {
-  const [membership] = await controlDb
-    .select({ role: tenantMembers.role })
-    .from(tenantMembers)
-    .where(and(
-      eq(tenantMembers.tenantId, tenantId),
-      eq(tenantMembers.userId, userId),
-    ))
-    .limit(1);
-  if (!membership || !["owner", "admin"].includes(membership.role)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Only admins can manage businesses" });
-  }
+  await requireTenantRole({ user: { id: userId }, tenantId }, ADMIN_ROLES, "Only admins can manage businesses");
+}
+
+type Creds = ReturnType<typeof decryptCarrierCredentials>;
+
+// Carrier API secrets are only for owners/admins; everyone else sees which
+// carriers are enabled.
+function carrierCredsFor(creds: Parameters<typeof decryptCarrierCredentials>[0], isAdmin: boolean): Creds {
+  const decrypted = decryptCarrierCredentials(creds);
+  if (isAdmin || !decrypted) return decrypted;
+  return Object.fromEntries(
+    Object.entries(decrypted).map(([carrier, entry]) => [carrier, { enabled: entry.enabled }]),
+  );
 }
 
 export const businessRouter = router({
@@ -41,9 +45,10 @@ export const businessRouter = router({
     const memberIds = await getTenantMemberUserIds(ctx.tenantId);
     const { logoData: _logoData, ...cols } = getTableColumns(businesses);
     const rows = await ctx.db.select(cols).from(businesses).where(businessTenantScope(memberIds));
+    const isAdmin = hasRole(await getTenantRole(ctx.tenantId, ctx.user.id), ADMIN_ROLES);
     return rows.map((biz) => ({
       ...biz,
-      carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
+      carrierCredentials: carrierCredsFor(biz.carrierCredentials, isAdmin),
     }));
   }),
 
@@ -74,10 +79,10 @@ export const businessRouter = router({
         .where(and(eq(businesses.id, input.id), businessTenantScope(memberIds)))
         .limit(1);
       if (!biz) return null;
-      // Decrypt carrier credentials if present
+      const isAdmin = hasRole(await getTenantRole(ctx.tenantId, ctx.user.id), ADMIN_ROLES);
       return {
         ...biz,
-        carrierCredentials: decryptCarrierCredentials(biz.carrierCredentials),
+        carrierCredentials: carrierCredsFor(biz.carrierCredentials, isAdmin),
       };
     }),
 
@@ -291,6 +296,8 @@ export const businessRouter = router({
   ensureWalkInParty: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      const role = await getTenantRole(ctx.tenantId, ctx.user.id);
+      requireCan(defineAbilityFor({ userId: ctx.user.id, role: mapDbRole(role ?? "") }), "create", "Party");
       // The main query keys off parties.businessId, so the tenant-ownership rule
       // can't fold into its WHERE — assert the business belongs to the caller's
       // tenant first (shared-DB safe), else a tenant could seed a walk-in party
@@ -385,6 +392,10 @@ export const businessRouter = router({
     }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
+      const isAdmin = hasRole(await getTenantRole(ctx.tenantId, ctx.user.id), ADMIN_ROLES);
+      if (!isAdmin) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can view the audit trail" });
+      }
       const offset = (input.page - 1) * input.limit;
 
       const conditions = [eq(auditLog.businessId, ctx.businessId)];
@@ -457,16 +468,11 @@ export const businessRouter = router({
 });
 
 function toCsv<T extends Record<string, unknown>>(data: T[], fields: string[]): string {
-  const header = fields.join(",");
-  const rows = data.map(row =>
-    fields.map(f => {
+  const rows = data.map((row) =>
+    csvRow(fields.map((f) => {
       const val = row[f];
-      if (val === null || val === undefined) return "";
-      const str = val instanceof Date ? val.toISOString() : String(val);
-      return str.includes(",") || str.includes('"') || str.includes("\n")
-        ? `"${str.replace(/"/g, '""')}"`
-        : str;
-    }).join(",")
+      return val instanceof Date ? val.toISOString() : val;
+    })),
   );
-  return [header, ...rows].join("\n");
+  return [csvRow(fields), ...rows].join("\n");
 }
