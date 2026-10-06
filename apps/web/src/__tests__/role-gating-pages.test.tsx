@@ -599,3 +599,22 @@ describe("Root layout navigation", () => {
     expect(stub.navigate).not.toHaveBeenCalledWith({ to: "/invoices" });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Root error boundary — TanStack Router types thrown values as `unknown`
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Root error boundary", () => {
+  const RootError = RootRoute.options.errorComponent as ComponentType<{ error: unknown; reset: () => void }>;
+
+  it("shows the message of a thrown Error", () => {
+    render(<RootError error={new Error("Boom")} reset={vi.fn()} />);
+    expect(screen.getByText("Boom")).toBeInTheDocument();
+  });
+
+  it("falls back to a generic message when a non-Error is thrown", () => {
+    render(<RootError error={{ message: "not an Error instance" }} reset={vi.fn()} />);
+    expect(screen.getByText("An unexpected error occurred. Please try again.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload Page" })).toBeInTheDocument();
+  });
+});
