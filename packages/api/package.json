@@ -23,7 +23,7 @@
     "@resvg/resvg-wasm": "^2.6.2",
     "@trpc/server": "^11.0.0",
     "argon2": "^0.41.0",
-    "dotenv": "^17.3.1",
+    "dotenv": "^18.0.5",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.13",
     "nanoid": "^5.0.0",
