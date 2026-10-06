@@ -26,7 +26,8 @@ export const Route = createRootRoute({
   errorComponent: RootError,
 });
 
-function RootError({ error }: { error: Error }) {
+function RootError({ error }: { error: unknown }) {
+  const message = error instanceof Error ? error.message : undefined;
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface-1 p-8">
       <div className="max-w-md text-center">
@@ -37,7 +38,7 @@ function RootError({ error }: { error: Error }) {
         </div>
         <h1 className="text-lg font-semibold text-text-primary mb-2">Something went wrong</h1>
         <p className="text-sm text-text-tertiary mb-6">
-          {error?.message || "An unexpected error occurred. Please try again."}
+          {message || "An unexpected error occurred. Please try again."}
         </p>
         <button
           onClick={() => window.location.reload()}

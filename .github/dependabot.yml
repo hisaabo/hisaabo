@@ -1,61 +1,107 @@
-# Dependabot version updates. Weekly, grouped so each ecosystem produces at most
-# a couple of PRs instead of one per package. Security advisories open their own
-# (ungrouped) PRs regardless of this schedule.
+# Dependabot version updates: ONE combined pull request per week.
+#
+# Every ecosystem below belongs to the `weekly-dependencies` multi-ecosystem
+# group, so npm, GitHub Actions, Docker, docker-compose and Cargo updates all
+# land together in a single PR every Monday instead of one PR per package.
+#
+# Only minor and patch updates are proposed automatically. Major upgrades
+# (Expo SDK, Node, PostgreSQL, Tailwind 4, Vite 8, keyring 4, ...) need code or
+# data migrations, so each one is done deliberately in its own PR. Without the
+# `semver-major` ignores they would land in the shared weekly PR and a single
+# breaking major would block every other update.
+#
+# Security advisories are NOT affected by the `update-types` ignores below:
+# Dependabot still opens security-update PRs for vulnerable dependencies.
 version: 2
+
+multi-ecosystem-groups:
+  weekly-dependencies:
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
 
 updates:
   # JavaScript / TypeScript (pnpm workspace — lockfile at the repo root)
   - package-ecosystem: npm
     directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 10
-    groups:
-      npm-minor-patch:
-        update-types: [minor, patch]
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # React is pinned to 19.2.0 via pnpm.overrides in the root package.json
+      # and must match what the Expo SDK ships. Bump it with the SDK upgrade.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-minor"]
+      # apps/mobile: Expo SDK-managed packages. The SDK pins each of these to a
+      # specific version line (see expo/bundledNativeModules.json); moving one
+      # on its own breaks native builds. Upgrade them together with
+      # `npx expo install expo@^<sdk> --fix`. Patch updates are still allowed.
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@react-native-community/datetimepicker"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "react-native-worklets"
+        update-types: ["version-update:semver-patch"]
     labels: [dependencies]
 
   # GitHub Actions (workflows pin actions by commit SHA; Dependabot bumps the SHA + version comment)
   - package-ecosystem: github-actions
     directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    groups:
-      github-actions:
-        patterns: ["*"]
-    labels: [dependencies, ci]
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: [ci]
 
-  # Container base images (Dockerfile, Dockerfile.once, Dockerfile.backup)
+  # Container base images (Dockerfile, Dockerfile.once, Dockerfile.backup).
+  # Node and PostgreSQL majors are runtime/data migrations: node must move with
+  # CI's node-version (and node >= 25 no longer bundles corepack); postgres
+  # needs a pg_upgrade/dump-restore of existing volumes and a matching pg_dump
+  # client in Dockerfile.backup.
   - package-ecosystem: docker
     directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    groups:
-      docker-base-images:
-        patterns: ["*"]
-    labels: [dependencies, docker]
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: [docker]
 
   # Images referenced from docker-compose*.yml
   - package-ecosystem: docker-compose
     directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    groups:
-      docker-compose-images:
-        patterns: ["*"]
-    labels: [dependencies, docker]
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: [docker]
 
   # Rust (Tauri desktop shell)
   - package-ecosystem: cargo
     directory: "/apps/desktop/src-tauri"
-    schedule:
-      interval: weekly
-      day: monday
-    groups:
-      cargo-minor-patch:
-        update-types: [minor, patch]
-    labels: [dependencies, desktop]
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels: [desktop]

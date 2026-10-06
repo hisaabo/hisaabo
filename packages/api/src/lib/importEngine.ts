@@ -190,7 +190,7 @@ export async function importTenantBackup(
 
       extract.on("entry", (header, stream, next) => {
         const chunks: Buffer[] = [];
-        stream.on("data", (c: Buffer) => chunks.push(c));
+        stream.on("data", (c: unknown) => chunks.push(c as Buffer));
         stream.on("end", () => {
           entryBuffers.set(header.name, Buffer.concat(chunks));
           entryOrder.push(header.name);

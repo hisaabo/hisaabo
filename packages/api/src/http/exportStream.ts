@@ -432,7 +432,7 @@ export function registerExportRoute(app: Hono): void {
           );
 
           if (fm.bytes === 0) {
-            entry.end();
+            entry.end(undefined); // streamx typings require an arg; undefined === no final chunk
           } else {
             const readStream = createReadStream(fm.filePath);
             readStream.on("error", reject);

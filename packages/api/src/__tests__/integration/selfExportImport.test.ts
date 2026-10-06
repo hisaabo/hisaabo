@@ -288,7 +288,7 @@ async function unpackTarGz(buf: Buffer): Promise<Map<string, Buffer>> {
     const extract = tarStream.extract();
     extract.on("entry", (header, stream, next) => {
       const chunks: Buffer[] = [];
-      stream.on("data", (c: Buffer) => chunks.push(c));
+      stream.on("data", (c: unknown) => chunks.push(c as Buffer));
       stream.on("end", () => {
         result.set(header.name, Buffer.concat(chunks));
         next();
@@ -313,7 +313,7 @@ async function repackTar(entries: Map<string, Buffer>): Promise<Buffer> {
   const chunks: Buffer[] = [];
 
   return new Promise<Buffer>((resolve, reject) => {
-    pack.on("data", (c: Buffer) => chunks.push(c));
+    pack.on("data", (c: unknown) => chunks.push(c as Buffer));
     pack.on("end", () => resolve(Buffer.concat(chunks)));
     pack.on("error", reject);
 

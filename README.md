@@ -9,14 +9,17 @@
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-5626_passing-brightgreen)]()
+[![Node.js](https://img.shields.io/badge/Node.js-22_LTS-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Expo](https://img.shields.io/badge/Expo-55-000020?logo=expo&logoColor=white)](https://expo.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)](https://tauri.app/)
+[![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
 [![Hono](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
 [![tRPC](https://img.shields.io/badge/tRPC-11-2596BE?logo=trpc&logoColor=white)](https://trpc.io/)
 [![Drizzle](https://img.shields.io/badge/Drizzle-0.45-C5F74F?logo=drizzle&logoColor=black)](https://orm.drizzle.team/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Dependabot](https://img.shields.io/badge/Dependabot-weekly-025E8C?logo=dependabot&logoColor=white)](.github/dependabot.yml)
 [![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?logo=docker&logoColor=white)](https://ghcr.io/hisaabo/hisaabo)
 [![@hisaabo/cli](https://img.shields.io/npm/v/@hisaabo/cli?logo=npm&logoColor=white&label=@hisaabo/cli)](https://www.npmjs.com/package/@hisaabo/cli)
 [![@hisaabo/mcp](https://img.shields.io/npm/v/@hisaabo/mcp?logo=npm&logoColor=white&label=@hisaabo/mcp)](https://www.npmjs.com/package/@hisaabo/mcp)
@@ -413,7 +416,7 @@ Three paths depending on what you want to do.
 
 ### 1. Self-host and own your data
 
-**Prerequisites:** Node.js 20+, pnpm 9+, Docker
+**Prerequisites:** Node.js 20.19+ (22 LTS recommended), pnpm 9+, Docker
 
 ```bash
 git clone https://github.com/hisaabo/hisaabo.git
@@ -494,7 +497,7 @@ hisaabo/
 
 | Tool | Version | Install |
 |---|---|---|
-| Node.js | >= 20 | [nodejs.org](https://nodejs.org/) |
+| Node.js | >= 20.19 (22 LTS recommended) | [nodejs.org](https://nodejs.org/) |
 | pnpm | >= 9 | `npm install -g pnpm` |
 | Docker | any | [docker.com](https://www.docker.com/) |
 | Rust + Cargo | stable | Required only for desktop builds |
