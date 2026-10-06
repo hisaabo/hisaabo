@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validateInvoiceTotals } from "./calc.js";
 
 // ── Common ─────────────────────────────────────────────────────
 
@@ -19,12 +20,12 @@ export const searchSchema = z.object({
 // ── Auth ───────────────────────────────────────────────────────
 
 export const loginSchema = z.object({
-  email: z.string().email().max(255),
+  email: z.string().trim().toLowerCase().email().max(255),
   password: z.string().min(8).max(128),
 });
 
 export const registerSchema = z.object({
-  email: z.string().email().max(255),
+  email: z.string().trim().toLowerCase().email().max(255),
   name: z.string().min(2).max(100),
   password: z.string().min(8).max(128),
   confirmPassword: z.string(),
@@ -35,7 +36,7 @@ export const registerSchema = z.object({
 });
 
 export const magicLinkRequestSchema = z.object({
-  email: z.string().email().max(255),
+  email: z.string().trim().toLowerCase().email().max(255),
   turnstileToken: z.string().optional(),
   source: z.enum(["web", "desktop", "mobile"]).default("web"),
 });
@@ -60,13 +61,13 @@ export const createBusinessSchema = z.object({
   gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/),
   phone: z.string().min(1).max(15),
-  email: z.string().email().optional().or(z.literal("")),
+  email: z.string().trim().toLowerCase().email().optional().or(z.literal("")),
   address: z.string().min(1).max(500),
   city: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
   stateCode: z.string().max(2).optional(),
   pincode: z.string().max(10).optional(),
-  invoicePrefix: z.string().min(1).max(10).default("INV"),
+  invoicePrefix: z.string().min(1).max(10).regex(/^[A-Za-z0-9_-]+$/, "Prefix may only contain letters, numbers, hyphen and underscore").default("INV"),
   currency: z.string().length(3).default("INR"),
   paymentPrefix: z.string().min(1).max(10).default("PAY"),
   quotationPrefix: z.string().min(1).max(10).default("QTN"),
@@ -117,7 +118,7 @@ export const createPartySchema = z.object({
   type: z.enum(partyTypes),
   name: z.string().min(1).max(200),
   phone: z.string().max(15).optional(),
-  email: z.string().email().optional().or(z.literal("")),
+  email: z.string().trim().toLowerCase().email().optional().or(z.literal("")),
   gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().optional().or(z.literal("")),
   billingAddress: z.string().max(500).optional(),
@@ -272,7 +273,7 @@ export const invoiceLineItemSchema = z.object({
   variantId: z.string().uuid().nullish(),
 });
 
-export const createInvoiceSchema = z.object({
+export const createInvoiceBaseSchema = z.object({
   partyId: z.string().uuid(),
   type: z.enum(invoiceTypes),
   documentType: z.enum(documentTypes).default("invoice"),
@@ -303,6 +304,19 @@ export const createInvoiceSchema = z.object({
    * attribute a sale to its channel.
    */
   source: z.enum(["pos", "online_store", "webhook"]).optional(),
+});
+
+// Rejects manipulated totals (discount > 100% / > subtotal+tax, oversized
+// round-off, negative grand total) so no caller can persist them.
+export const createInvoiceSchema = createInvoiceBaseSchema.superRefine((d, ctx) => {
+  const message = validateInvoiceTotals({
+    lineItems: d.lineItems,
+    charges: d.charges,
+    invoiceDiscount: d.invoiceDiscount,
+    invoiceDiscountType: d.invoiceDiscountType,
+    roundOff: d.roundOff,
+  });
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
 });
 
 export const updateInvoiceStatusSchema = z.object({

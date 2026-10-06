@@ -203,3 +203,22 @@ export function canModify(
   }
   return { allowed: true };
 }
+
+const DELETE_DENIED_MESSAGES: Record<NonNullable<ModifyAffordance["reason"]>, string> = {
+  "no-permission": "You do not have permission to delete this document",
+  "invoice-paid": "Cannot delete paid invoices",
+  "window-expired": "Can only delete invoices within 2 hours of creation",
+};
+
+// Single source of truth for the invoice-like delete rule, used by the invoice
+// router and the document router factory. Pure: callers throw on !allowed.
+export function checkInvoiceDeleteAllowed(
+  role: string | null | undefined,
+  record: ModifiableRecord,
+  now: number = Date.now(),
+): { allowed: true } | { allowed: false; reason: NonNullable<ModifyAffordance["reason"]>; message: string } {
+  const verdict = canModify(defineAbilityFor(role), "delete", "Invoice", record, now);
+  if (verdict.allowed) return { allowed: true };
+  const reason = verdict.reason ?? "no-permission";
+  return { allowed: false, reason, message: DELETE_DENIED_MESSAGES[reason] };
+}

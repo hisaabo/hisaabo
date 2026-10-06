@@ -15,6 +15,7 @@ import {
   type DocumentType,
   calcLineItem,
   calcInvoiceTotals,
+  checkInvoiceDeleteAllowed,
 } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "./permissions.js";
@@ -94,6 +95,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
         })
       )
       .query(async ({ input, ctx }) => {
+        requireCan(ctx.ability, "read", "Invoice");
         const conditions = [
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.documentType, docType as DocumentType),
@@ -154,6 +156,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
     getById: viewerProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input, ctx }) => {
+        requireCan(ctx.ability, "read", "Invoice");
         const [invoice] = await ctx.db
           .select()
           .from(invoices)
@@ -236,6 +239,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .where(eq(businesses.id, ctx.businessId));
           } else {
             // Fallback: derive number from MAX of existing documents of this type
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${ctx.businessId} || ':' || ${docType} || '_number'))`);
             const [maxRow] = await tx
               .select({
                 maxNum: sql<number>`coalesce(max(cast(regexp_replace(${invoices.invoiceNumber}, '[^0-9]', '', 'g') as integer)), 0)`,
@@ -507,6 +511,7 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
                 eq(invoices.documentType, docType as DocumentType)
               )
             )
+            .for("update")
             .limit(1);
 
           if (!doc) {
@@ -515,6 +520,10 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
 
           // Already soft-deleted — return early
           if (doc.deletedAt) return { success: true, invoiceNumber: doc.invoiceNumber, deleted: false };
+
+          // Same record-level rule as invoice.delete (seller_manager: unpaid, within 2 hours)
+          const verdict = checkInvoiceDeleteAllowed(ctx.role, { status: doc.status, createdAt: doc.createdAt });
+          if (!verdict.allowed) throw new TRPCError({ code: "FORBIDDEN", message: verdict.message });
 
           // Reverse stock effects on delete (using stored conversionFactor)
           if (config.stockEffect !== "none") {

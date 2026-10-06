@@ -18,8 +18,7 @@
  *     The document-factory router DOES reverse stock on delete. This asymmetry
  *     is intentional and is documented as a test case so it is never silently
  *     "fixed" without understanding the trade-off.
- *   - invoice.updateStatus has no state-machine guard — any status → any status
- *     is allowed. Tests capture this current behaviour.
+ *   - invoice.updateStatus enforces a transition allow-list (see shared invoice-status.ts).
  *   - The overpayment guard lives in payment.create, not invoice.create.
  *
  * TEST ORGANISATION:
@@ -903,20 +902,22 @@ describe("invoice.updateStatus", () => {
     expect(updated!.status).toBe("sent");
   });
 
-  it("allows any status transition — no state-machine guard in invoice router (current design)", async () => {
-    // The invoice router does not enforce a state machine. Any status can
-    // transition to any other status. This is intentional for flexibility.
-    // (State machine enforcement lives in D3. tests.)
+  it("enforces a transition allow-list: cannot manually mark paid without covering payments", async () => {
     const caller = callerForRamesh();
 
     const invoice = await caller.invoice.create(
       baseSaleInput(world.party1.id, [{ description: "FSM test", quantity: "1", unitPrice: "100.00" }])
     );
 
-    // paid → draft — should be allowed (no guard)
-    await caller.invoice.updateStatus({ id: invoice.id, status: "paid" });
-    const updated = await caller.invoice.updateStatus({ id: invoice.id, status: "draft" });
-    expect(updated!.status).toBe("draft");
+    await expect(
+      caller.invoice.updateStatus({ id: invoice.id, status: "paid" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      caller.invoice.updateStatus({ id: invoice.id, status: "partial" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    const sent = await caller.invoice.updateStatus({ id: invoice.id, status: "sent" });
+    expect(sent!.status).toBe("sent");
   });
 
   it("updateStatus scopes to the active business — cannot update another business invoice", async () => {
