@@ -13,7 +13,8 @@ describe("fence", () => {
     const d = env.data as { name: string; evil: string; nested: Array<{ n: string }> };
     expect(d.name.startsWith("x".repeat(500))).toBe(true);
     expect(d.name).toContain("[truncated 100 chars]");
-    expect(d.evil).not.toMatch(/[\u001b‮]/);
+    expect(d.evil).not.toContain("\u001b");
+    expect(d.evil).not.toContain("\u202e");
     expect(d.nested[0].n).toContain("[truncated 1 chars]");
   });
 

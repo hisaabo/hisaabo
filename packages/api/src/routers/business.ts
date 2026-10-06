@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, gte, lte, inArray, count, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { businesses, bankAccounts, controlDb, tenants, tenantMembers, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
+import { businesses, bankAccounts, controlDb, tenants, auditLog, parties, items, invoices, invoiceItems, payments, expenses, users } from "@hisaabo/db";
 import { createBusinessSchema, updateBusinessSchema, updateSequenceNumberSchema, uploadBusinessLogoSchema } from "@hisaabo/shared";
 import { router, tenantProcedure, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan, defineAbilityFor, mapDbRole } from "../lib/permissions.js";

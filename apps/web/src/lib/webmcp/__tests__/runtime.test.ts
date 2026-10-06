@@ -17,7 +17,6 @@ import {
   isWebMcpAvailable,
   registerHisaaboTools,
   selectToolsForRole,
-  toErrorResult,
   toToolResult,
 } from "../runtime";
 import type { WebMcpToolContext, WebMcpToolDefinition, WebMcpTrpcClient } from "../types";
@@ -140,7 +139,8 @@ describe("toToolResult", () => {
 
   it("strips control and bidi characters from data", () => {
     const env = parse(toToolResult({ name: "a\u001b[31mb\u202ec" }));
-    expect(env.data.name).not.toMatch(/[\u001b\u202e]/);
+    expect(env.data.name).not.toContain("\u001b");
+    expect(env.data.name).not.toContain("\u202e");
   });
 
   it("caps the overall payload as a backstop", () => {

@@ -16,6 +16,8 @@ const { selects, queue, fakeDb } = vi.hoisted(() => {
     const result = queue.shift() ?? [];
     const b: Record<string, unknown> = {};
     for (const m of ["from", "innerJoin", "leftJoin", "where", "orderBy", "limit", "offset"]) b[m] = () => b;
+    // Drizzle query builders are awaitable; the mock must be thenable too.
+    // oxlint-disable-next-line unicorn/no-thenable
     b.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => Promise.resolve(result).then(res, rej);
     return b;
   };

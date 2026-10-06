@@ -2087,7 +2087,7 @@ app.post("/store/:slug/order", async (c) => {
       // was outside the transaction). Service items carry no inventory.
       if (!biz.storeAllowNegativeStock) {
         const demand = aggregateStockDemand(lineItemInputs);
-        for (const id of [...demand.items.keys()]) {
+        for (const id of demand.items.keys()) {
           if (itemMap.get(id)?.itemType === "service") demand.items.delete(id);
         }
         const short = [
