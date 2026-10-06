@@ -39,7 +39,7 @@
   "devDependencies": {
     "@clack/core": "^1.2.0",
     "@clack/prompts": "^1.2.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.4",
     "@types/pdfkit": "^0.13.0",
     "@types/pino": "^7.0.5",
     "@types/qrcode": "^1.5.6",
