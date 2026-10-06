@@ -75,6 +75,7 @@ function StoreSettingsCard() {
   const [minOrder, setMinOrder] = useState<string | null>(null);
   const [deliveryNote, setDeliveryNote] = useState<string | null>(null);
   const [allowNegativeStock, setAllowNegativeStock] = useState<boolean | null>(null);
+  const [requirePhoneOtp, setRequirePhoneOtp] = useState<boolean | null>(null);
 
   // Use server state as source of truth until the user edits
   const effectiveEnabled = enabled ?? settings?.storeEnabled ?? false;
@@ -84,6 +85,8 @@ function StoreSettingsCard() {
   const effectiveMinOrder = minOrder ?? settings?.storeMinOrderAmount ?? "";
   const effectiveDeliveryNote = deliveryNote ?? settings?.storeDeliveryNote ?? "";
   const effectiveAllowNegativeStock = allowNegativeStock ?? settings?.storeAllowNegativeStock ?? false;
+  const effectiveRequirePhoneOtp = requirePhoneOtp ?? settings?.storeRequirePhoneOtp ?? false;
+  const phoneOtpAvailable = settings?.phoneOtpAvailable ?? false;
 
   // Slug is locked once saved — cannot be changed
   const isSlugLocked = !!settings?.storeSlug;
@@ -116,7 +119,8 @@ function StoreSettingsCard() {
     whatsapp !== null ||
     minOrder !== null ||
     deliveryNote !== null ||
-    allowNegativeStock !== null;
+    allowNegativeStock !== null ||
+    requirePhoneOtp !== null;
 
   const updateMutation = trpc.store.updateSettings.useMutation({
     onSuccess: () => {
@@ -130,6 +134,7 @@ function StoreSettingsCard() {
       setMinOrder(null);
       setDeliveryNote(null);
       setAllowNegativeStock(null);
+      setRequirePhoneOtp(null);
     },
     onError: (err) => toast.error("Failed to save settings", err.message),
   });
@@ -143,6 +148,7 @@ function StoreSettingsCard() {
       storeMinOrderAmount: effectiveMinOrder || undefined,
       storeDeliveryNote: effectiveDeliveryNote || undefined,
       storeAllowNegativeStock: effectiveAllowNegativeStock,
+      ...(requirePhoneOtp !== null ? { storeRequirePhoneOtp: requirePhoneOtp } : {}),
     });
   }
 
@@ -298,6 +304,24 @@ function StoreSettingsCard() {
           checked={effectiveAllowNegativeStock}
           onChange={setAllowNegativeStock}
           label="Allow orders with negative stock"
+        />
+      </div>
+
+      {/* Phone verification by SMS code */}
+      <div className="flex items-center justify-between mb-5 pt-3 border-t border-border-light">
+        <div>
+          <p className="text-sm font-medium text-text-primary">Verify customers by SMS code</p>
+          <p className="text-xs text-text-tertiary">
+            {phoneOtpAvailable || effectiveRequirePhoneOtp
+              ? "Customers confirm their phone number with a one-time code before ordering."
+              : "Needs an SMS provider. Ask your server administrator to set SMS_PROVIDER (see the self-hosting docs)."}
+          </p>
+        </div>
+        <ToggleSwitch
+          checked={effectiveRequirePhoneOtp}
+          onChange={setRequirePhoneOtp}
+          disabled={!phoneOtpAvailable && !effectiveRequirePhoneOtp}
+          label="Verify customers by SMS code"
         />
       </div>
 

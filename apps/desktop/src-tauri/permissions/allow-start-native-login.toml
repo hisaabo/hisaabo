@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-start-native-login"
+description = """
+Allows the main window to call start_native_login, which binds a one-shot
+listener on 127.0.0.1 and relays the browser sign-in callback (code and state)
+back to the window as an event. The listener accepts a single request whose
+state matches and times out after five minutes.
+"""
+commands.allow = ["start_native_login"]

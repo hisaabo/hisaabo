@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { defineAbilityFor } from "@hisaabo/shared";
 
 interface SettingsTab {
   value: string;
@@ -8,6 +9,8 @@ interface SettingsTab {
   ownerOnly?: boolean;
   /** Hidden for everyone except owner/admin (matches server `requireTenantAdmin`). */
   adminOnly?: boolean;
+  /** Hidden unless the role holds `manage:Team` (same rule as the API and mobile). */
+  teamAdminOnly?: boolean;
 }
 
 function BuildingIcon() {
@@ -99,7 +102,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   { value: "business", label: "Business", icon: <BuildingIcon /> },
   { value: "documents", label: "Documents", icon: <DocumentIcon /> },
   { value: "shipping", label: "Shipping", icon: <TruckIcon /> },
-  { value: "team", label: "Team", icon: <UsersIcon /> },
+  { value: "team", label: "Team", icon: <UsersIcon />, teamAdminOnly: true },
   { value: "targets", label: "Sales Targets", icon: <TargetIcon /> },
   { value: "data", label: "Data", icon: <DatabaseIcon /> },
   { value: "account", label: "Account", icon: <UserIcon /> },
@@ -117,7 +120,9 @@ export function SettingsNav({ value, onChange, role }: SettingsNavProps) {
   const isOwner = role === "owner" || role === "superadmin";
   // `admin` and `owner` both pass adminOnly. superadmin inherits admin privileges.
   const isAdmin = isOwner || role === "admin";
+  const canManageTeam = defineAbilityFor(role).can("manage", "Team");
   const visibleTabs = SETTINGS_TABS.filter((tab) => {
+    if (tab.teamAdminOnly && !canManageTeam) return false;
     if (tab.ownerOnly && !isOwner) return false;
     if (tab.adminOnly && !isAdmin) return false;
     return true;

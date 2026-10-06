@@ -21,6 +21,17 @@ export const Route = createFileRoute("/settings")({
   component: SettingsPage,
 });
 
+function NoAccess({ what }: { what: string }) {
+  return (
+    <div className="card px-6 py-10 text-center" role="alert">
+      <p className="text-sm font-semibold text-text-primary">No access</p>
+      <p className="text-sm text-text-secondary mt-1">
+        Only owners and admins can open {what}.
+      </p>
+    </div>
+  );
+}
+
 function SettingsPage() {
   const [tab, setTab] = useState(() => sessionStorage.getItem("settings-tab") || "business");
   const handleTabChange = (t: string) => { setTab(t); sessionStorage.setItem("settings-tab", t); };
@@ -43,6 +54,7 @@ function SettingsPage() {
   const isOwner = session?.role === "owner" || session?.role === "superadmin";
   const canManageBusiness = useCan("manage", "Business");
   const canImport = useCan("manage", "Import");
+  const canManageTeam = useCan("manage", "Team");
 
   // Listen for "create-business" event from BusinessSwitcher (when already on settings)
   useEffect(() => {
@@ -244,7 +256,7 @@ function SettingsPage() {
           {tab === "business" && <BusinessTab biz={biz} />}
           {tab === "documents" && <DocumentsTab biz={biz} canManage={canManageBusiness} />}
           {tab === "shipping" && biz && <ShippingTab biz={biz} />}
-          {tab === "team" && <TeamTab />}
+          {tab === "team" && (canManageTeam ? <TeamTab /> : <NoAccess what="team management" />)}
           {tab === "targets" && <SalesTargetsTab />}
           {tab === "data" && <DataTab canImport={canImport} canExportCsv={canManageBusiness} />}
           {tab === "account" && <AccountTab />}

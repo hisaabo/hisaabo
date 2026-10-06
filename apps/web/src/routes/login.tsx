@@ -1,9 +1,10 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { TurnstileModal } from "@/components/ui/TurnstileModal";
 import { isDesktop } from "@/lib/isDesktop";
-import { saveDesktopToken } from "@/lib/desktop-session";
+import { DesktopSignIn } from "@/components/auth/DesktopSignIn";
+import { SignupHint } from "@/components/auth/SignupHint";
 
 /* ─── Turnstile type (declared in TurnstileModal) ──────────────────────── */
 declare global {
@@ -30,7 +31,7 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-type AuthMode = "magic-link" | "magic-link-sent" | "password-login" | "register";
+type AuthMode = "magic-link" | "magic-link-sent";
 
 /* ─── Pure-CSS animation keyframes injected once ─────────────────────────── */
 const KEYFRAMES = `
@@ -512,29 +513,16 @@ function Field({
   );
 }
 
-/* ─── Divider with text ───────────────────────────────────────────────────── */
-function OrDivider({ text }: { text: string }) {
-  return (
-    <div className="flex items-center gap-3 my-4">
-      <div className="flex-1 h-px bg-border-light" />
-      <span className="text-xs text-text-tertiary">{text}</span>
-      <div className="flex-1 h-px bg-border-light" />
-    </div>
-  );
-}
-
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 function LoginPage() {
   const [mode, setMode] = useState<AuthMode>("magic-link");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [cooldown, setCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval>>(undefined);
-  const navigate = useNavigate();
-  const utils = trpc.useUtils();
+  const { data: systemConfig } = trpc.system.config.useQuery();
+  const signupOpen = systemConfig?.signupOpen;
+  const desktop = isDesktop();
 
   // Show session-expired banner if redirected from a revoked session
   const [sessionExpired] = useState(() => {
@@ -557,46 +545,11 @@ function LoginPage() {
     }
   }, []);
 
-  /**
-   * Wraps a form submission: opens the Turnstile modal, then fires the action with the token.
-   * On desktop (Tauri), skips the modal and fires immediately with no token — the API has
-   * a matching carve-out that trusts the `x-hisaabo-client: desktop` header.
-   */
+  /** Wraps a form submission: opens the Turnstile modal, then fires the action with the token. */
   function withTurnstile(action: (token: string | undefined) => void) {
-    if (isDesktop()) {
-      action(undefined);
-      return;
-    }
     pendingActionRef.current = action;
     setShowTurnstile(true);
   }
-
-  const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: async (data) => {
-      // Desktop uses Bearer auth (cookies can't span tauri.localhost ↔ api.hisaabo.in).
-      // The server returns sessionToken in the response body in addition to
-      // setting the cookie; we persist it into the OS keychain for reuse.
-      // saveDesktopToken is a no-op on web, where the HttpOnly cookie is
-      // already in the browser's jar.
-      if (isDesktop() && data?.sessionToken) {
-        await saveDesktopToken(data.sessionToken);
-      }
-      utils.auth.me.invalidate();
-      navigate({ to: "/" });
-    },
-    onError: (e) => setError(e.message),
-  });
-
-  const registerMutation = trpc.auth.register.useMutation({
-    onSuccess: async (data) => {
-      if (isDesktop() && data?.sessionToken) {
-        await saveDesktopToken(data.sessionToken);
-      }
-      utils.auth.me.invalidate();
-      navigate({ to: "/" });
-    },
-    onError: (e) => setError(e.message),
-  });
 
   const magicLinkMutation = trpc.auth.sendMagicLink.useMutation({
     onSuccess: () => {
@@ -626,31 +579,13 @@ function LoginPage() {
   }, [cooldown > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isPending =
-    loginMutation.isPending || registerMutation.isPending || magicLinkMutation.isPending;
+    magicLinkMutation.isPending;
 
   function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     withTurnstile((token) => {
       magicLinkMutation.mutate({ email, turnstileToken: token });
-    });
-  }
-
-  function handlePasswordLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    loginMutation.mutate({ email, password });
-  }
-
-  function handleRegister(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    if (password !== confirmPassword) {
-      setError("Passwords don't match");
-      return;
-    }
-    withTurnstile((token) => {
-      registerMutation.mutate({ email, password, confirmPassword, name, turnstileToken: token });
     });
   }
 
@@ -688,8 +623,10 @@ function LoginPage() {
               </div>
             )}
 
+            {desktop && <DesktopSignIn signupOpen={signupOpen} />}
+
             {/* ── Mode: magic-link ────────────────────────────────── */}
-            {mode === "magic-link" && (
+            {!desktop && mode === "magic-link" && (
               <div style={{ animation: "form-enter 0.35s ease-out" }}>
                 {new URLSearchParams(window.location.search).get("invite") === "1" && (
                   <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
@@ -707,7 +644,6 @@ function LoginPage() {
                   </h1>
                   <p className="text-sm text-text-tertiary leading-relaxed">
                     Enter your email and we'll send you a one-click sign-in link.
-                    No password required.
                   </p>
                 </div>
 
@@ -744,23 +680,12 @@ function LoginPage() {
                   </PrimaryButton>
                 </form>
 
-                <p className="text-center text-xs text-text-tertiary mt-4 leading-relaxed">
-                  No account yet? Just enter your email — we'll create one automatically.
-                </p>
-
-                <OrDivider text="or" />
-
-                <GhostButton
-                  onClick={() => switchMode("password-login")}
-                  fullWidth
-                >
-                  Use password instead
-                </GhostButton>
+                <SignupHint signupOpen={signupOpen} />
               </div>
             )}
 
             {/* ── Mode: magic-link-sent ───────────────────────────── */}
-            {mode === "magic-link-sent" && (
+            {!desktop && mode === "magic-link-sent" && (
               <div
                 className="text-center"
                 style={{ animation: "form-enter 0.4s ease-out" }}
@@ -903,204 +828,6 @@ function LoginPage() {
               </div>
             )}
 
-            {/* ── Mode: password-login ────────────────────────────── */}
-            {mode === "password-login" && (
-              <div style={{ animation: "form-enter 0.35s ease-out" }}>
-                {new URLSearchParams(window.location.search).get("invite") === "1" && (
-                  <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
-                    {new URLSearchParams(window.location.search).get("error") === "email_mismatch"
-                      ? "This invitation was sent to a different email address. Please sign in with the email where you received the invitation."
-                      : "You've been invited to join an organization! Sign in with the email address where you received the invitation."}
-                  </div>
-                )}
-                <div className="mb-8">
-                  <h1
-                    className="text-2xl font-bold text-text-primary mb-2"
-                    style={{ letterSpacing: "-0.03em" }}
-                  >
-                    Welcome back
-                  </h1>
-                  <p className="text-sm text-text-tertiary">
-                    Sign in with your email and password.
-                  </p>
-                </div>
-
-                {error && <ErrorBanner message={error} />}
-
-                <form onSubmit={handlePasswordLogin} className="space-y-4">
-                  <Field label="Email address">
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      autoFocus
-                      className="input"
-                      placeholder="you@yourcompany.com"
-                    />
-                  </Field>
-
-                  <Field label="Password">
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      minLength={8}
-                      className="input"
-                      placeholder="Min 8 characters"
-                    />
-                  </Field>
-
-                  <PrimaryButton type="submit" disabled={isPending} fullWidth>
-                    {isPending ? (
-                      <>
-                        Signing in
-                        <LoadingDots />
-                      </>
-                    ) : (
-                      "Sign in"
-                    )}
-                  </PrimaryButton>
-                </form>
-
-                <p className="text-center text-sm mt-5 text-text-tertiary">
-                  Don't have an account?{" "}
-                  <button
-                    onClick={() => switchMode("register")}
-                    className="text-brand-600 hover:text-brand-700 font-semibold transition-colors"
-                  >
-                    Create one
-                  </button>
-                </p>
-
-                <OrDivider text="or" />
-
-                <GhostButton
-                  onClick={() => switchMode("magic-link")}
-                  fullWidth
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 2L11 13" />
-                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                  </svg>
-                  Use magic link instead
-                </GhostButton>
-              </div>
-            )}
-
-            {/* ── Mode: register ──────────────────────────────────── */}
-            {mode === "register" && (
-              <div style={{ animation: "form-enter 0.35s ease-out" }}>
-                {new URLSearchParams(window.location.search).get("invite") === "1" && (
-                  <div className="mb-5 px-4 py-3 rounded-xl text-sm bg-brand-600/[0.06] border border-brand-600/20 text-brand-700 dark:text-brand-400">
-                    {new URLSearchParams(window.location.search).get("error") === "email_mismatch"
-                      ? "This invitation was sent to a different email address. Please sign in with the email where you received the invitation."
-                      : "You've been invited to join an organization! Sign in with the email address where you received the invitation."}
-                  </div>
-                )}
-                <div className="mb-8">
-                  <h1
-                    className="text-2xl font-bold text-text-primary mb-2"
-                    style={{ letterSpacing: "-0.03em" }}
-                  >
-                    Create your account
-                  </h1>
-                  <p className="text-sm text-text-tertiary leading-relaxed">
-                    Get started with Hisaabo. You'll be the owner of your organization.
-                  </p>
-                </div>
-
-                {error && <ErrorBanner message={error} />}
-
-                <form onSubmit={handleRegister} className="space-y-4">
-                  <Field label="Full name">
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      required
-                      autoFocus
-                      className="input"
-                      placeholder="Your name"
-                    />
-                  </Field>
-
-                  <Field label="Email address">
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      className="input"
-                      placeholder="you@yourcompany.com"
-                    />
-                  </Field>
-
-                  <Field label="Password">
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      minLength={8}
-                      className="input"
-                      placeholder="Min 8 characters"
-                    />
-                  </Field>
-
-                  <Field label="Confirm password">
-                    <input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      required
-                      className="input"
-                      placeholder="Repeat password"
-                    />
-                  </Field>
-
-                  <PrimaryButton type="submit" disabled={isPending} fullWidth>
-                    {isPending ? (
-                      <>
-                        Creating account
-                        <LoadingDots />
-                      </>
-                    ) : (
-                      "Create account"
-                    )}
-                  </PrimaryButton>
-                </form>
-
-                <p className="text-xs text-text-tertiary mt-3 text-center">
-                  This will create your organization and you'll be its owner.
-                </p>
-
-                <p className="text-center text-sm mt-5 text-text-tertiary">
-                  Already have an account?{" "}
-                  <button
-                    onClick={() => switchMode("password-login")}
-                    className="text-brand-600 hover:text-brand-700 font-semibold transition-colors"
-                  >
-                    Sign in
-                  </button>
-                </p>
-
-                <OrDivider text="or" />
-
-                <GhostButton
-                  onClick={() => switchMode("magic-link")}
-                  fullWidth
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 2L11 13" />
-                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                  </svg>
-                  Sign in with magic link instead
-                </GhostButton>
-              </div>
-            )}
-
           </div>
         </div>
       </div>
@@ -1176,31 +903,6 @@ function PrimaryButton({
         fontSize: 14,
         fontWeight: 600,
         letterSpacing: "-0.01em",
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function GhostButton({
-  children,
-  onClick,
-  fullWidth,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  fullWidth?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="btn-ghost py-2.5"
-      style={{
-        width: fullWidth ? "100%" : undefined,
-        justifyContent: "center",
-        fontSize: 13,
       }}
     >
       {children}

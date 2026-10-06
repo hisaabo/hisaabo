@@ -17,6 +17,8 @@ import { useDesktopDeepLink } from "@/hooks/useDesktopDeepLink";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { clearDesktopToken } from "@/lib/desktop-session";
 import { useWebMcp } from "@/lib/webmcp/useWebMcp";
+import { resolveWebMcpBusinessId } from "@/lib/webmcp/business-gate";
+import { WebMcpConfirmHost } from "@/components/webmcp/WebMcpConfirmHost";
 import { defineAbilityFor, type Action, type Resource } from "@hisaabo/shared";
 
 export const Route = createRootRoute({
@@ -428,7 +430,7 @@ function RootLayout() {
   }, [businesses, currentBusinessId]);
 
   // Single consolidated redirect — priority order matters
-  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite"];
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite", "/auth/native"];
   useEffect(() => {
     if (sessionLoading || sessionFetching) return;
 
@@ -499,7 +501,7 @@ function RootLayout() {
   // session, role and active business at once. The business lookup is repeated
   // rather than hoisted: the render path below reads `activeBusiness` after
   // several early returns, and hooks must run before those.
-  const webMcpBusinessId = currentBusinessId ?? businesses?.[0]?.id ?? null;
+  const webMcpBusinessId = resolveWebMcpBusinessId(currentBusinessId, businesses);
   const webMcpBusiness = businesses?.find((b) => b.id === webMcpBusinessId) ?? null;
   useWebMcp({
     enabled:
@@ -541,7 +543,7 @@ function RootLayout() {
   if (!session.tenantId) {
     // Auth flow pages (complete-profile, invite) handle tenant resolution
     // themselves — let them render even with zero memberships.
-    const authFlowPaths = ["/auth/complete-profile", "/invite"];
+    const authFlowPaths = ["/auth/complete-profile", "/invite", "/auth/native"];
     const isAuthFlow = authFlowPaths.some((p) => pathname.startsWith(p));
     if (isAuthFlow) return <Outlet />;
 
@@ -840,6 +842,7 @@ function RootLayout() {
       <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} />
       <ShortcutsDialog open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ShortcutIndicator />
+      <WebMcpConfirmHost />
 
       {/* Tenant picker overlay — shown when user clicks the tenant name */}
       {showTenantPicker && (

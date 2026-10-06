@@ -2,6 +2,9 @@ use tauri::Emitter;
 use tauri::Listener;
 
 mod deep_link;
+mod external_url;
+mod native;
+mod native_login;
 mod session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -12,6 +15,8 @@ pub fn run() {
             session::save_session_token,
             session::get_session_token,
             session::clear_session_token,
+            native::start_native_login,
+            native::open_external_url,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

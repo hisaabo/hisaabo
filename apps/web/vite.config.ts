@@ -4,6 +4,7 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import path from "path";
 import { readFileSync } from "fs";
 import { execSync } from "child_process";
+import { generateWellKnown } from "./src/lib/well-known";
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
 
@@ -76,7 +77,35 @@ function cspPlugin(): Plugin {
           "  Referrer-Policy: strict-origin-when-cross-origin",
           "  Permissions-Policy: camera=(), microphone=(), geolocation=()",
           "",
+          "/.well-known/apple-app-site-association",
+          "  Content-Type: application/json",
+          "",
         ].join("\n"),
+      });
+    },
+  };
+}
+
+/**
+ * Emits the Android/iOS app-link association files from
+ * VITE_ANDROID_APP_CERT_SHA256 (comma-separated) and VITE_APPLE_TEAM_ID.
+ * Without them the build still succeeds, with placeholders and a warning.
+ */
+function wellKnownPlugin(): Plugin {
+  return {
+    name: "well-known-app-links",
+    generateBundle() {
+      const { assetlinks, aasa, warnings } = generateWellKnown(process.env);
+      for (const warning of warnings) this.warn(warning);
+      this.emitFile({
+        type: "asset",
+        fileName: ".well-known/assetlinks.json",
+        source: JSON.stringify(assetlinks, null, 2) + "\n",
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: ".well-known/apple-app-site-association",
+        source: JSON.stringify(aasa, null, 2) + "\n",
       });
     },
   };
@@ -129,6 +158,7 @@ export default defineConfig({
   plugins: [
     cspPlugin(),
     originTrialPlugin(),
+    wellKnownPlugin(),
     TanStackRouterVite(),
     react(),
   ],

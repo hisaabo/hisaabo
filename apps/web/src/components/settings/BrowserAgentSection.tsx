@@ -20,7 +20,7 @@ function detectWebMcpSupport(): boolean {
 }
 
 export function BrowserAgentSection() {
-  const [enabled, setEnabled] = useState(true);
+  const [enabled, setEnabled] = useState(false);
   const [supported, setSupported] = useState(true);
 
   // Read after mount: localStorage and document.modelContext are browser-only,
@@ -48,10 +48,10 @@ export function BrowserAgentSection() {
             Allow this browser&rsquo;s AI agent to use Hisaabo
           </label>
           <p className="text-sm text-text-secondary mt-1 leading-relaxed">
-            When on, AI features built into Chrome or Edge can read your data and create
-            invoices, parties, items, payments and expenses on your behalf, with the same
-            permissions as your account. Actions that change data ask for your confirmation.
-            Stored per browser.
+            Off by default. When on, AI features built into Chrome or Edge can read your data
+            and create invoices, parties, items, payments and expenses on your behalf, with the
+            same permissions as your account. Every action that changes data asks for your
+            confirmation first. Stored per browser.
           </p>
           {!supported && (
             <p className="text-xs text-text-tertiary mt-2">

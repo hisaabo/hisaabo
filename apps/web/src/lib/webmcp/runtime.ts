@@ -15,6 +15,7 @@
  */
 
 import { defineAbilityFor, stripControlChars } from "@hisaabo/shared";
+import { isConfirmHostMounted, requestConfirmation, summarizeInput } from "./confirm";
 import { fenceValue } from "./fence";
 import type {
   WebMcpToolContext,
@@ -164,24 +165,6 @@ function fireInvalidate(ctx: WebMcpToolContext): void {
   }
 }
 
-const CONFIRM_PREVIEW_CHARS = 600;
-
-/** Plain-language prompt shown to the user before an agent-initiated write. */
-function confirmationMessage(def: WebMcpToolDefinition, input: Record<string, unknown>): string {
-  let preview: string;
-  try {
-    preview = JSON.stringify(input, jsonReplacer, 2) ?? "{}";
-  } catch {
-    preview = "(unprintable input)";
-  }
-  preview = stripControlChars(preview);
-  if (preview.length > CONFIRM_PREVIEW_CHARS) preview = `${preview.slice(0, CONFIRM_PREVIEW_CHARS)}…`;
-  return (
-    `A browser AI agent wants to change your Hisaabo data.\n\n` +
-    `Action: ${def.title ?? def.name}\n${preview}\n\nAllow this?`
-  );
-}
-
 /**
  * Ask the user before a non-read-only tool runs. Uses the agent's
  * `requestUserInteraction` when the browser provides it (so the prompt is
@@ -193,10 +176,19 @@ export async function confirmWrite(
   input: Record<string, unknown>,
   options?: WebMCP.ToolExecuteCallbackOptions,
 ): Promise<boolean> {
-  const ask = async (): Promise<boolean> =>
-    typeof window !== "undefined" && typeof window.confirm === "function"
-      ? window.confirm(confirmationMessage(def, input)) === true
+  const title = `Allow AI agent: ${stripControlChars(def.title ?? def.name)}?`;
+  const summary = summarizeInput(input);
+  const ask = async (): Promise<boolean> => {
+    if (isConfirmHostMounted()) {
+      return requestConfirmation({
+        title,
+        description: `A browser AI agent wants to change your Hisaabo data. ${summary}`,
+      });
+    }
+    return typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(`${title}\n\n${summary}`) === true
       : false;
+  };
   try {
     if (typeof options?.requestUserInteraction === "function") {
       return (await options.requestUserInteraction(ask)) === true;
