@@ -20,6 +20,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { fonts } from "../../../../src/lib/theme";
 import { Card, Skeleton, QueryError } from "../../../../src/components/ui";
 import { formatDateTime } from "../../../../src/lib/utils";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,14 @@ const EXPIRY_OPTIONS: Array<{ label: string; days: number | null }> = [
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function ApiKeysScreen() {
+  return (
+    <PermissionGate action="manage" resource="Team">
+      <ApiKeysScreenContent />
+    </PermissionGate>
+  );
+}
+
+function ApiKeysScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

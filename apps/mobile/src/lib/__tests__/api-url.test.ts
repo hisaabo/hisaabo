@@ -172,3 +172,23 @@ describe("getApiUrl — API URL resolution for different build environments", ()
     expect(url).toBe("http://10.0.2.2:3000");
   });
 });
+
+describe("getApiUrl — release build transport security", () => {
+  const g = globalThis as unknown as { __DEV__: boolean };
+  const originalDev = g.__DEV__;
+  afterEach(() => {
+    g.__DEV__ = originalDev;
+  });
+
+  it("rejects a non-https API URL when not running in __DEV__", () => {
+    g.__DEV__ = false;
+    process.env.EXPO_PUBLIC_API_URL = "http://api.example.com";
+    expect(() => getApiUrl()).toThrow(/https/);
+  });
+
+  it("accepts an https API URL in release builds", () => {
+    g.__DEV__ = false;
+    process.env.EXPO_PUBLIC_API_URL = "https://api.example.com";
+    expect(getApiUrl()).toBe("https://api.example.com");
+  });
+});

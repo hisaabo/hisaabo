@@ -16,11 +16,11 @@ export function useAbility(): Ability {
   return useMemo(() => defineAbilityFor(role), [role]);
 }
 
-// useCan — boolean shortcut for the common "show this button?" case.
-// During the initial session load (role unknown) it returns `true` so the
-// UI doesn't flash hidden affordances; the API still enforces the real rule.
+// useCan — boolean shortcut for "should I show this control?". Fails closed
+// (false) while the session is loading or the role is unknown, per the
+// role-based-ui ADR; the root layouts gate on session load so this is brief.
 export function useCan(action: Action, resource: Resource): boolean {
-  const { data: session, isLoading } = trpc.auth.me.useQuery(undefined);
-  if (isLoading || !session?.role) return true;
+  const { data: session } = trpc.auth.me.useQuery(undefined);
+  if (!session?.role) return false;
   return defineAbilityFor(session.role).can(action, resource);
 }

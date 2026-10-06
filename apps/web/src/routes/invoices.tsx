@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
-import { formatCurrency, formatQuantity, formatDate, downloadCSV, cn } from "@/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, downloadCSV, cn, isHttpUrl } from "@/lib/utils";
 import { apiUrl } from "@/lib/api-url";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -407,7 +407,7 @@ function InvoiceShipmentCard({ invoiceId, partyId, invoiceStatus }: { invoiceId:
           {/* Tracking */}
           <div className="text-xs">
             <p className="text-text-tertiary mb-0.5">Tracking</p>
-            {shipment.trackingUrl ? (
+            {isHttpUrl(shipment.trackingUrl) ? (
               <a
                 href={shipment.trackingUrl}
                 target="_blank"

@@ -39,7 +39,8 @@
             "DEFAULT"
           ]
         }
-      ]
+      ],
+      "allowBackup": false
     },
     "plugins": [
       "expo-router",

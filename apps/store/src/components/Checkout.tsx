@@ -65,9 +65,15 @@ export function Checkout({
   useEffect(() => {
     if (!turnstileRef.current) return;
 
-    const siteKey =
+    // The always-pass test key is dev-only; production builds must configure a real key.
+    const configuredKey =
       (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA"; // Cloudflare test key for dev
+      (import.meta.env.PROD ? undefined : "1x00000000000000000000AA");
+    if (!configuredKey) {
+      setApiError("Verification is not configured. Please contact the store.");
+      return;
+    }
+    const siteKey: string = configuredKey;
 
     const win = window as unknown as {
       turnstile?: {

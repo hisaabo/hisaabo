@@ -90,9 +90,9 @@ describe("list screens — create FAB follows `create` permission", () => {
       expect(fabCount()).toBe(0);
     });
 
-    it("shows the FAB while the session is still loading (no flash of hidden UI)", () => {
+    it("hides the FAB while the session is still loading (fail closed)", () => {
       renderAs(null, Screen, { loading: true });
-      expect(fabCount()).toBe(1);
+      expect(fabCount()).toBe(0);
     });
   });
 });

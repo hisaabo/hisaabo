@@ -21,7 +21,7 @@ import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { getTokenSync } from "../../../src/lib/auth";
 import { getApiUrl } from "../../../src/lib/api-url";
-import { formatCurrency, formatQuantity, formatDate } from "../../../src/lib/utils";
+import { formatCurrency, formatQuantity, formatDate, isHttpUrl } from "../../../src/lib/utils";
 import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
@@ -275,7 +275,7 @@ function ShipmentSection({ invoiceId, invoiceStatus }: ShipmentSectionProps) {
   const statusCfg = SHIPMENT_STATUS_CONFIG[shipment.status as ShipmentStatus] ?? SHIPMENT_STATUS_CONFIG.pending;
   const cost = parseFloat(shipment.cost ?? "0");
   const hasTracking = !!shipment.trackingNumber;
-  const trackingUrl = shipment.trackingUrl ?? null;
+  const trackingUrl = isHttpUrl(shipment.trackingUrl) ? shipment.trackingUrl : null;
 
   const handleMarkShipped = () => {
     haptic.medium();

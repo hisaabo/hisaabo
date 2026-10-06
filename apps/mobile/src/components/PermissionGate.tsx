@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import type { Action, Resource } from "@hisaabo/shared";
 import { useCan } from "../hooks/useCan";
+import { trpc } from "../lib/trpc";
 import { makeStyles } from "../lib/makeStyles";
 import { EmptyState } from "./ui";
 
@@ -22,10 +23,13 @@ export function PermissionGate({
   children: ReactNode;
 }) {
   const allowed = useCan(action, resource);
+  const { isLoading } = trpc.auth.me.useQuery(undefined);
   const router = useRouter();
   const styles = useStyles();
 
   if (allowed) return <>{children}</>;
+  // Fail closed while the role is unknown, but don't flash "no access".
+  if (isLoading) return <SafeAreaView style={styles.container} />;
 
   return (
     <SafeAreaView style={styles.container} testID="permission-denied">

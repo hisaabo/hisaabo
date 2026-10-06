@@ -46,16 +46,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     setLoading(true);
 
-    const sessionToken = localStorage.getItem("api_docs_session_token");
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (sessionToken) {
-      headers["Authorization"] = `Bearer ${sessionToken}`;
-    }
-
     fetch(`${API_BASE}/api/trpc/auth.me`, {
-      headers,
+      headers: { "Content-Type": "application/json" },
       credentials: "include",
       signal: abortController.signal,
     })

@@ -253,9 +253,9 @@ describe("list screens — create FAB follows the router's create permission", (
       expect(fabCount()).toBe(0);
     });
 
-    it("shows the FAB while the session is still loading", () => {
+    it("hides the FAB while the session is still loading (fail closed)", () => {
       renderAs(null, Screen, { loading: true });
-      expect(fabCount()).toBe(1);
+      expect(fabCount()).toBe(0);
     });
   });
 });
@@ -698,14 +698,21 @@ describe("Settings index — rows that lead only to edit screens", () => {
     expect(has("Online Store")).toBe(true);
   });
 
-  it("seller sees none of them, but still sees Team, Profile and Sign Out", () => {
+  it("seller sees none of them, nor Team or API Keys, but still sees Profile and Sign Out", () => {
     renderAs("seller", SettingsIndexScreen);
+    expect(has("API Keys")).toBe(false);
     expect(has("Business Details")).toBe(false);
     expect(has("Documents")).toBe(false);
     expect(has("Online Store")).toBe(false);
-    expect(has("Team")).toBe(true);
+    expect(has("Team")).toBe(false);
     expect(has("Profile")).toBe(true);
     expect(has("Sign Out")).toBe(true);
+  });
+
+  it("admin sees Team and API Keys", () => {
+    renderAs("admin", SettingsIndexScreen);
+    expect(has("Team")).toBe(true);
+    expect(has("API Keys")).toBe(true);
   });
 });
 

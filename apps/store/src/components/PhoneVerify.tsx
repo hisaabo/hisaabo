@@ -21,9 +21,15 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
   useEffect(() => {
     if (!turnstileRef.current) return;
 
-    const siteKey =
+    // The always-pass test key is dev-only; production builds must configure a real key.
+    const configuredKey =
       (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
-      "1x00000000000000000000AA"; // Cloudflare test key for dev
+      (import.meta.env.PROD ? undefined : "1x00000000000000000000AA");
+    if (!configuredKey) {
+      setError("Verification is not configured. Please contact the store.");
+      return;
+    }
+    const siteKey: string = configuredKey;
 
     const win = window as unknown as {
       turnstile?: {
@@ -127,9 +133,11 @@ export function PhoneVerify({ slug, accentColor, onVerified, onBack }: PhoneVeri
 
       const data = await res.json() as { known: boolean; name?: string };
 
+      // The API may omit `name` (it no longer discloses customer names), so a
+      // missing name falls through to the name prompt.
       if (data.known && data.name && !/^(walk.?in|cash|misc|general)/i.test(data.name)) {
         // Known customer — proceed straight to checkout with their name + the verified token
-        onVerified(`+91${phone}`, data.name || "", false, tokenRef.current);
+        onVerified(`+91${phone}`, data.name, false, tokenRef.current);
       } else {
         // New customer — ask for their name
         setShowNameInput(true);

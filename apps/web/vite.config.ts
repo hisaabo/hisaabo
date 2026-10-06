@@ -14,37 +14,70 @@ const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "ut
 //   console.log('sha256-'+c.createHash('sha256').update(s).digest('base64'));"
 const THEME_SCRIPT_HASH = "sha256-7v6Dh3op5YztyC/jZCheSbtL3NqCrnIjQcllTk6J6Ug=";
 
+function apiOriginOf(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function cspDirectives(isDev: boolean, apiOrigin: string | undefined): string[] {
+  const connectSrc = isDev
+    ? "connect-src 'self' ws:"
+    : apiOrigin
+      ? `connect-src 'self' ${apiOrigin}`
+      : "connect-src 'self'";
+  // Logos and item images are fetched from the API origin via apiUrl().
+  const imgSrc = apiOrigin ? `img-src 'self' data: blob: ${apiOrigin}` : "img-src 'self' data: blob:";
+
+  return [
+    "default-src 'self'",
+    `script-src 'self' '${THEME_SCRIPT_HASH}' https://challenges.cloudflare.com`,
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    imgSrc,
+    connectSrc,
+    "frame-src https://challenges.cloudflare.com",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ];
+}
+
 function cspPlugin(): Plugin {
+  const apiOrigin = apiOriginOf(process.env.VITE_API_URL); // e.g. "https://api.hisaabo.in"
   return {
     name: "csp-meta-tag",
     transformIndexHtml: {
       order: "pre",
       handler(html, ctx) {
         const isDev = ctx.server !== undefined;
-        const apiOrigin = process.env.VITE_API_URL; // e.g. "https://api.hisaabo.in"
-        const connectSrc = isDev
-          ? "connect-src 'self' ws:"
-          : apiOrigin
-            ? `connect-src 'self' ${apiOrigin}`
-            : "connect-src 'self'";
-
-        const directives = [
-          "default-src 'self'",
-          `script-src 'self' '${THEME_SCRIPT_HASH}' https://challenges.cloudflare.com`,
-          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-          "font-src 'self' https://fonts.gstatic.com",
-          "img-src 'self' data: blob:",
-          connectSrc,
-          "frame-src https://challenges.cloudflare.com",
-          "object-src 'none'",
-          "base-uri 'self'",
-        ];
-
-        const cspContent = directives.join("; ");
+        const cspContent = cspDirectives(isDev, apiOrigin).join("; ");
         const metaTag = `<meta http-equiv="Content-Security-Policy" content="${cspContent}">`;
 
         return html.replace("<head>", `<head>\n    ${metaTag}`);
       },
+    },
+    // Cloudflare Pages reads dist/_headers. The same policy is sent as an HTTP
+    // header so frame-ancestors (ignored in <meta>) is enforced.
+    generateBundle() {
+      const csp = [...cspDirectives(false, apiOrigin), "frame-ancestors 'none'"].join("; ");
+      this.emitFile({
+        type: "asset",
+        fileName: "_headers",
+        source: [
+          "/*",
+          `  Content-Security-Policy: ${csp}`,
+          "  Strict-Transport-Security: max-age=63072000; includeSubDomains",
+          "  Cross-Origin-Opener-Policy: same-origin",
+          "  X-Content-Type-Options: nosniff",
+          "  X-Frame-Options: DENY",
+          "  Referrer-Policy: strict-origin-when-cross-origin",
+          "  Permissions-Policy: camera=(), microphone=(), geolocation=()",
+          "",
+        ].join("\n"),
+      });
     },
   };
 }

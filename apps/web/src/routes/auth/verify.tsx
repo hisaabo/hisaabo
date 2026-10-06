@@ -29,6 +29,10 @@ function VerifyPage() {
   // URL as the clickable CTA because email clients strip custom URL
   // schemes — see the rationale in packages/api/src/routers/auth.ts
   // (sendMagicLink). `handoffMode` drives the "Opening Hisaabo…" UI.
+  const { data: existingSession, isLoading: sessionLoading } = trpc.auth.me.useQuery();
+  // A magic-link token must never silently replace an existing session
+  // (login CSRF / session fixation) — ask for an explicit click first.
+  const [needsConfirm, setNeedsConfirm] = useState(false);
   const [handoffMode, setHandoffMode] = useState<"desktop" | "mobile" | null>(null);
   const calledRef = useRef(false);
 
@@ -39,7 +43,8 @@ function VerifyPage() {
       if (isDesktop() && data?.sessionToken) {
         await saveDesktopToken(data.sessionToken);
       }
-      utils.auth.me.invalidate();
+      if (existingSession?.user) utils.invalidate();
+      else utils.auth.me.invalidate();
       const pendingToken = sessionStorage.getItem("pendingInviteToken");
       if (data.needsProfile) {
         navigate({
@@ -56,12 +61,14 @@ function VerifyPage() {
   });
 
   useEffect(() => {
-    if (calledRef.current) return;
-    calledRef.current = true;
-
     // Strip token AND source from the URL immediately to prevent Referer
     // leakage and to stop a browser reload from re-triggering a spent token.
     window.history.replaceState({}, "", "/auth/verify");
+  }, []);
+
+  useEffect(() => {
+    if (sessionLoading || calledRef.current) return;
+    calledRef.current = true;
 
     if (!token) {
       setError("No token found in URL.");
@@ -78,8 +85,19 @@ function VerifyPage() {
       return;
     }
 
+    if (existingSession?.user) {
+      setNeedsConfirm(true);
+      return;
+    }
+
     verifyMutation.mutate({ token });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function confirmSwitch() {
+    if (!token) return;
+    setNeedsConfirm(false);
+    verifyMutation.mutate({ token });
+  }
 
   function retryHandoff() {
     if (!token) return;
@@ -118,6 +136,24 @@ function VerifyPage() {
               className="btn-primary w-full py-2.5"
             >
               Back to sign in
+            </button>
+          </>
+        ) : needsConfirm ? (
+          <>
+            <h1 className="text-lg font-semibold text-text-primary mb-2">
+              You are already signed in
+            </h1>
+            <p className="text-sm text-text-tertiary mb-6">
+              Signing in with this link will replace your current session. Switch account?
+            </p>
+            <button onClick={confirmSwitch} className="btn-primary w-full py-2.5 mb-3">
+              Switch account
+            </button>
+            <button
+              onClick={() => navigate({ to: "/" })}
+              className="text-sm text-text-tertiary hover:text-text-primary underline underline-offset-2"
+            >
+              Stay signed in
             </button>
           </>
         ) : handoffMode ? (

@@ -17,6 +17,7 @@ import { trpc } from "../../../../src/lib/trpc";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
+import { PermissionGate } from "../../../../src/components/PermissionGate";
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Owner",
@@ -74,6 +75,14 @@ const useBadgeStyles = makeStyles((_colors) => ({
 type ChangeRoleTarget = { userId: string; currentRole: string; displayName: string } | null;
 
 export default function TeamScreen() {
+  return (
+    <PermissionGate action="manage" resource="Team">
+      <TeamScreenContent />
+    </PermissionGate>
+  );
+}
+
+function TeamScreenContent() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();

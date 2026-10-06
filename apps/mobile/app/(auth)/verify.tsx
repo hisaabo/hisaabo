@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,20 @@ export default function VerifyScreen() {
   const { token } = useLocalSearchParams<{ token: string }>();
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState(true);
+  const [needsConfirm, setNeedsConfirm] = useState(false);
   const login = useAuthStore((s) => s.login);
+  const hydrated = useAuthStore((s) => s.isHydrated);
+  const startedRef = useRef(false);
+
+  // A magic-link token must never silently replace an existing session
+  // (login CSRF / session fixation): ask first when already signed in.
+  function startVerification() {
+    if (startedRef.current || !token) return;
+    startedRef.current = true;
+    setNeedsConfirm(false);
+    setVerifying(true);
+    verifyMutation.mutate({ token });
+  }
 
   const verifyMutation = trpc.auth.verifyMagicLink.useMutation({
     onSuccess: async (data) => {
@@ -38,18 +51,40 @@ export default function VerifyScreen() {
   });
 
   useEffect(() => {
-    if (token) {
-      verifyMutation.mutate({ token });
-    } else {
+    if (!hydrated) return;
+    if (!token) {
       setError("No verification token found. Please request a new sign-in link.");
       setVerifying(false);
+      return;
     }
-  }, [token]);
+    if (useAuthStore.getState().token) {
+      setNeedsConfirm(true);
+      setVerifying(false);
+      return;
+    }
+    startVerification();
+  }, [token, hydrated]);
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.inner}>
-        {verifying ? (
+        {needsConfirm ? (
+          <>
+            <Text style={styles.title}>You are already signed in</Text>
+            <Text style={styles.description}>
+              Signing in with this link will replace your current session. Switch account?
+            </Text>
+            <TouchableOpacity style={styles.button} onPress={startVerification}>
+              <Text style={styles.buttonText}>Switch account</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={() => router.replace("/(app)/(home)")}
+            >
+              <Text style={styles.secondaryButtonText}>Stay signed in</Text>
+            </TouchableOpacity>
+          </>
+        ) : verifying ? (
           <>
             <ActivityIndicator size="large" color="#6366f1" />
             <Text style={styles.text}>Signing you in...</Text>
@@ -97,5 +132,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     marginTop: 24,
   },
+  secondaryButton: { paddingVertical: 14, paddingHorizontal: 32, marginTop: 8 },
+  secondaryButtonText: { fontSize: 15, fontWeight: "600", color: "#9ca3af" },
   buttonText: { fontSize: 15, fontWeight: "700", color: "#ffffff" },
 });

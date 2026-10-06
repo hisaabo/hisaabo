@@ -12,6 +12,8 @@ import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
+import { findRoutePermission } from "@/lib/route-access";
+import { useDesktopDeepLink } from "@/hooks/useDesktopDeepLink";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { clearDesktopToken } from "@/lib/desktop-session";
 import { useWebMcp } from "@/lib/webmcp/useWebMcp";
@@ -52,7 +54,7 @@ function RootError({ error }: { error: Error }) {
 // legacy DB role names (owner/member/viewer) and unknown roles uniformly.
 
 function canAccess(role: string | null | undefined, resource: Resource, action: Action): boolean {
-  if (!role) return true; // graceful degradation while session loads
+  if (!role) return false; // fail closed until the session role is known
   return defineAbilityFor(role).can(action, resource);
 }
 
@@ -336,6 +338,7 @@ function TenantPicker({
 function RootLayout() {
   const utils = trpc.useUtils();
   const { data: session, isLoading: sessionLoading, isFetching: sessionFetching } = trpc.auth.me.useQuery();
+  useDesktopDeepLink();
   const { data: tenantList } = trpc.tenant.list.useQuery(undefined, {
     enabled: !!session?.user,
   });
@@ -472,6 +475,14 @@ function RootLayout() {
       navigate({ to: "/invoices" });
       return;
     }
+    // Priority 5: Route requires a permission the role lacks → dashboard
+    if (session?.role && pathname !== "/") {
+      const required = findRoutePermission(pathname, navSections.flatMap((s) => s.items));
+      if (required && !canAccess(session.role, required.resource, required.action)) {
+        navigate({ to: "/" });
+        return;
+      }
+    }
   }, [sessionLoading, sessionFetching, session, businesses, navigate, pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select single tenant
@@ -603,12 +614,15 @@ function RootLayout() {
   // topbar, no chrome of any kind. Every pixel goes to the cashier.
   // Matches the approach taken by Square / Lightspeed / Vyapaar POS where
   // the register is a station, not a page.
+  const requiredPermission = findRoutePermission(pathname, navSections.flatMap((s) => s.items));
+  const routeDenied =
+    !!requiredPermission && !canAccess(session.role, requiredPermission.resource, requiredPermission.action);
   const isPosMode = pathname === "/pos" || pathname.startsWith("/pos/");
   if (isPosMode) {
     return (
       <>
         <MaintenanceBanner />
-        <Outlet />
+        {routeDenied ? null : <Outlet />}
       </>
     );
   }
@@ -818,7 +832,7 @@ function RootLayout() {
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-[1400px] mx-auto px-6 py-6">
-            <Outlet />
+            {routeDenied ? null : <Outlet />}
           </div>
         </div>
       </main>
