@@ -64,6 +64,14 @@ COPY packages/shared/package.json packages/shared/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
+# ── Guard: no build tooling in the runtime image ──────────────
+# esbuild/drizzle-kit/tsx ship Go/native binaries that Trivy flags and that the
+# runtime never needs (migrations run from the pre-bundled dist/migrate.mjs).
+# They are devDependencies of @hisaabo/db; fail the build if they sneak back in.
+RUN if find /app -path '*/node_modules/*' \( -name esbuild -o -name '@esbuild' -o -name tsx -o -name drizzle-kit \) | grep -q .; then \
+      echo "FATAL: build tooling (esbuild/tsx/drizzle-kit) present in runtime image" >&2; exit 1; \
+    fi
+
 # ── Smoke test: catch module resolution errors at build time ──
 # This would have caught the control-schema.js error before deployment.
 RUN node --check packages/api/dist/server.js && \

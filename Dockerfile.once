@@ -63,6 +63,8 @@ RUN apk add --no-cache \
       curl \
       age \
       openssl \
+      libcap \
+    && setcap 'cap_net_bind_service=+ep' /usr/local/bin/node \
     && mkdir -p /storage/pgdata /storage/run /storage/backups /storage/wal_archive \
     && chown -R postgres:postgres /storage/pgdata /storage/run /storage/wal_archive
 
@@ -107,6 +109,14 @@ COPY scripts/postgresql-tuning.conf /etc/postgresql/tuning.conf
 # Password auth bootstrap (random scram-sha-256 password in /storage/secrets)
 COPY scripts/once-pg-auth.sh /usr/local/bin/once-pg-auth
 RUN chmod 755 /usr/local/bin/once-pg-auth
+
+# ── Guard: no build tooling in the runtime image ──────────────
+# esbuild/drizzle-kit/tsx ship Go/native binaries that Trivy flags and that the
+# runtime never needs (migrations run from the pre-bundled dist/migrate.mjs).
+# They are devDependencies of @hisaabo/db; fail the build if they sneak back in.
+RUN if find /app -path '*/node_modules/*' \( -name esbuild -o -name '@esbuild' -o -name tsx -o -name drizzle-kit \) | grep -q .; then \
+      echo "FATAL: build tooling (esbuild/tsx/drizzle-kit) present in runtime image" >&2; exit 1; \
+    fi
 
 # ── Smoke test: catch module resolution errors at build time ──
 RUN node --check packages/api/dist/server.js && \
@@ -194,14 +204,15 @@ echo "[pg-ready] Waiting for PostgreSQL (own or delegated)..."
 
 # Wait for PG on the Unix socket — works regardless of which container owns PG
 for i in $(seq 1 60); do
-  if pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
+  if su-exec postgres pg_isready -h "$SOCKETDIR" -U postgres -q 2>/dev/null; then
     echo "[pg-ready] PostgreSQL is ready on $SOCKETDIR"
-    # Ensure the hisaabo database exists
-    psql -h "$SOCKETDIR" -U postgres -tc \
+    # Ensure the hisaabo database exists. Client tools run as the unprivileged
+    # `postgres` user (the password is read as root above and passed via env).
+    su-exec postgres psql -h "$SOCKETDIR" -U postgres -tc \
       "SELECT 1 FROM pg_database WHERE datname = 'hisaabo'" \
       | grep -q 1 \
-      || createdb -h "$SOCKETDIR" -U postgres hisaabo
-    psql -h "$SOCKETDIR" -U postgres -d hisaabo -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+      || su-exec postgres createdb -h "$SOCKETDIR" -U postgres hisaabo
+    su-exec postgres psql -h "$SOCKETDIR" -U postgres -d hisaabo -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
     exit 0
   fi
   sleep 1
@@ -230,17 +241,30 @@ DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@/hisaabo?host=$SOCKETDIR"
 export DATABASE_URL
 unset DB_PASSWORD
 
+# Persistent object storage (item images). /storage is a volume, so fix the
+# ownership at runtime; the API itself never runs as root.
+STORAGE_LOCAL_DIR="${STORAGE_LOCAL_DIR:-/storage/objects}"
+export STORAGE_LOCAL_DIR
+mkdir -p "$STORAGE_LOCAL_DIR"
+chown node:node "$STORAGE_LOCAL_DIR"
+
+# s6 itself must run as root, but the API and its migrations run as the
+# unprivileged `node` user (secrets were read above while still root). The
+# environment (DATABASE_URL, ONCE-provided vars) is preserved by su-exec.
+# The node binary carries cap_net_bind_service (set at build time), so the
+# unprivileged API can bind :80 on any container runtime.
+
 # Run migrations (idempotent — safe even if old container is still serving)
 # Advisory lock inside migrate.mjs prevents conflicts during rolling deploys.
 echo "[api] Running database migrations..."
-if ! node /app/packages/db/dist/migrate.mjs; then
+if ! su-exec node node /app/packages/db/dist/migrate.mjs; then
   echo "[api] FATAL: Migration failed — refusing to start with inconsistent DB"
   exit 1
 fi
 
 # Start API — connects to PG via Unix socket
 echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
-exec node packages/api/dist/server.js
+exec su-exec node node packages/api/dist/server.js
 APIRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
 
@@ -416,6 +440,7 @@ LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
 
 ENV NODE_ENV=production
 ENV PORT=80
+ENV STORAGE_LOCAL_DIR=/storage/objects
 ENV HISAABO_VERSION=${VERSION}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
