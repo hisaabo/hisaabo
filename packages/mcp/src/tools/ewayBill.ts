@@ -10,11 +10,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerEwayBillTools(server: McpServer, client: HisaaboClient) {
+export function registerEwayBillTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "eway_bill_dashboard",

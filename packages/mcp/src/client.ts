@@ -12,6 +12,8 @@
  */
 
 import superjson from "superjson";
+import type { z } from "zod";
+import type { createInvoiceSchema, invoiceLineItemSchema, invoiceStatuses, documentTypes, paymentModes, recurringLineItemSchema } from "@hisaabo/shared";
 
 export interface ClientConfig {
   /** Base API URL, e.g. "http://localhost:3000" or "https://api.hisaabo.in" */
@@ -176,8 +178,8 @@ export class HisaaboClient {
       get(id: string) {
         return c.query<InvoiceDetail>("invoice.getById", { id });
       },
-      update(id: string, data: Partial<InvoiceCreateInput>) {
-        return c.mutate<InvoiceDetail>("invoice.update", { id, data });
+      update(input: InvoiceUpdateInput) {
+        return c.mutate<InvoiceDetail>("invoice.update", input);
       },
       updateStatus(id: string, status: InvoiceStatus) {
         return c.mutate<InvoiceSummary>("invoice.updateStatus", { id, status });
@@ -244,9 +246,6 @@ export class HisaaboClient {
       },
       delete(id: string) {
         return c.mutate<{ success: boolean }>("item.delete", { id });
-      },
-      categories() {
-        return c.query<string[]>("item.categories");
       },
       listVariants(itemId: string) {
         return c.query<unknown[]>("item.listVariants", { itemId });
@@ -354,7 +353,7 @@ export class HisaaboClient {
     const c = this;
     return {
       get() {
-        return c.query<BusinessDetail>("business.getById");
+        return c.query<BusinessDetail | null>("business.getById", { id: c.config.businessId });
       },
       list() {
         return c.query<BusinessSummary[]>("business.list");
@@ -1030,12 +1029,11 @@ export interface PaginatedResult<T> {
   limit: number;
 }
 
-export type InvoiceStatus =
-  | "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
+export type InvoiceStatus = (typeof invoiceStatuses)[number];
 
-export type DocumentType =
-  | "invoice" | "quotation" | "credit_note" | "debit_note"
-  | "delivery_challan" | "proforma" | "sales_return" | "purchase_return";
+export type DocumentType = (typeof documentTypes)[number];
+
+export type PaymentMode = (typeof paymentModes)[number];
 
 export interface MaintenanceStatus {
   enabled: boolean;
@@ -1096,33 +1094,12 @@ export interface InvoiceListInput {
   limit?: number;
 }
 
-export interface InvoiceLineItemInput {
-  itemId?: string;
-  description: string;
-  quantity: string;
-  unitPrice: string;
-  taxPercent?: string;
-  discountPercent?: string;
-  selectedUnit?: string | null;
-  variantId?: string | null;
-}
+export type InvoiceLineItemInput = z.input<typeof invoiceLineItemSchema>;
 
-export interface InvoiceCreateInput {
-  partyId: string;
-  type: "sale" | "purchase";
-  documentType?: DocumentType;
-  invoiceDate?: string;
-  dueDate?: string;
-  notes?: string;
-  termsAndConditions?: string;
-  additionalCharges?: string;
-  charges?: Array<{ label: string; amount: string }>;
-  invoiceDiscount?: string;
-  invoiceDiscountType?: "amount" | "percent";
-  roundOff?: string;
-  referenceDocumentId?: string;
-  lineItems: InvoiceLineItemInput[];
-}
+export type InvoiceCreateInput = z.input<typeof createInvoiceSchema>;
+
+/** Flat update payload: `id` plus the fields to change (matches invoice.update's input). */
+export type InvoiceUpdateInput = { id: string } & Partial<Omit<InvoiceCreateInput, "partyId" | "type" | "documentType">>;
 
 export interface PartySummary {
   id: string;
@@ -1264,8 +1241,9 @@ export interface ItemCreateInput {
 
 export interface StockAdjustInput {
   itemId: string;
-  /** Signed decimal string: "+50", "-3.500", "10" */
-  adjustment: string;
+  /** Signed decimal string without a leading "+": "-3.500", "10" */
+  quantity: string;
+  variantId?: string | null;
   reason?: string;
 }
 
@@ -1296,7 +1274,7 @@ export interface PaymentListInput {
 export interface PaymentCreateInput {
   partyId: string;
   amount: string;
-  mode: "cash" | "bank" | "upi" | "cheque" | "other";
+  mode: PaymentMode;
   invoiceId?: string;
   discount?: string;
   referenceNumber?: string;
@@ -1328,7 +1306,7 @@ export interface ExpenseListInput {
 export interface ExpenseCreateInput {
   category: string;
   amount: string;
-  mode: "cash" | "bank" | "upi" | "cheque" | "other";
+  mode: PaymentMode;
   description?: string;
   expenseDate?: string;
   referenceNumber?: string;
@@ -1409,7 +1387,7 @@ export interface PaymentDetail extends PaymentSummary {
 export interface PaymentUpdateInput {
   id: string;
   amount?: string;
-  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  mode?: PaymentMode;
   discount?: string;
   referenceNumber?: string | null;
   paymentDate?: string;
@@ -1909,7 +1887,7 @@ export interface ImportInvoicesInput {
 export interface ImportPaymentRecord {
   partyName: string;
   amount: string;
-  mode?: "cash" | "bank" | "upi" | "cheque" | "other";
+  mode?: PaymentMode;
   paymentDate?: string;
   paymentNumber?: string;
   referenceNumber?: string;
@@ -1957,13 +1935,7 @@ export type RecurringInvoiceStatus = "active" | "paused" | "completed" | "expire
 
 export type RecurringInvoiceRunStatus = "success" | "failed" | "skipped_limit";
 
-export interface RecurringInvoiceLineItem {
-  description: string;
-  quantity: string;
-  unitPrice: string;
-  taxPercent?: string;
-  discountPercent?: string;
-}
+export type RecurringInvoiceLineItem = z.input<typeof recurringLineItemSchema>;
 
 export interface RecurringInvoiceTemplateSummary {
   id: string;

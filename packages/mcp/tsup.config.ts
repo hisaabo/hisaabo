@@ -7,9 +7,6 @@ export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   target: "node20",
-  banner: {
-    js: "#!/usr/bin/env node",
-  },
   define: {
     __MCP_VERSION__: JSON.stringify(pkg.version),
   },

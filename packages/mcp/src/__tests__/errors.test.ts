@@ -1,7 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { wrapTool } from "../lib/errors.js";
 import { HisaaboApiError } from "../client.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+
+beforeEach(() => {
+  vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("wrapTool", () => {
   it("passes through a successful result unchanged", async () => {
@@ -93,5 +100,33 @@ describe("wrapTool", () => {
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("API error");
     expect(text).toContain("unexpected error");
+  });
+});
+
+describe("wrapTool unknown error sanitization", () => {
+  it("returns a generic message and logs detail to stderr only", async () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const handler = wrapTool(async () => {
+        throw new Error("SELECT * FROM secrets at https://internal.example.com/db password=hunter2");
+      });
+      const result = await handler({});
+      const text = (result.content[0] as { text: string }).text;
+      expect(result.isError).toBe(true);
+      expect(text).not.toContain("hunter2");
+      expect(text).not.toContain("internal.example.com");
+      expect(text).toContain("unexpected error");
+      expect(spy.mock.calls.map((c) => String(c[0])).join("")).toContain("hunter2");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("strips URLs from API-provided messages", async () => {
+    const handler = wrapTool(async () => {
+      throw new HisaaboApiError({ code: "api_error", message: "failed calling https://10.0.0.5:9000/internal" });
+    });
+    const text = ((await handler({})).content[0] as { text: string }).text;
+    expect(text).not.toContain("10.0.0.5");
   });
 });

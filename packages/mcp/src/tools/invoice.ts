@@ -12,15 +12,17 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
+import { lineItemSchema, toApiLineItems } from "../lib/lineItems.js";
+import { documentTypes, invoiceStatuses } from "@hisaabo/shared";
 
-const INVOICE_STATUS = ["draft", "unfulfilled", "sent", "paid", "partial", "overdue", "cancelled"] as const;
-const DOCUMENT_TYPE = ["invoice", "quotation", "credit_note", "debit_note", "delivery_challan", "proforma", "sales_return", "purchase_return"] as const;
+const INVOICE_STATUS = invoiceStatuses;
+const DOCUMENT_TYPE = documentTypes;
 
-export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
+export function registerInvoiceTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "invoice_list",
@@ -80,7 +82,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     [
       "Create a new invoice or bill for the active business. Returns the created invoice with its assigned invoice number.",
       "For sale invoices (customer billing), set type='sale'. For purchase bills (supplier invoices), set type='purchase'.",
-      "Each line item requires a description, quantity (decimal string), and unit_price (decimal string, no currency symbol).",
+      "Each line item requires a description (the billed name, max 200 chars), quantity (decimal string), and unit_price (decimal string, no currency symbol).",
       "Monetary values are always decimal strings, e.g. '1500.00' not 1500.",
       "If a line item corresponds to an inventory item, set item_id to link it and update stock automatically.",
       "Example: { party_id: 'uuid', type: 'sale', line_items: [{ description: 'Web Design', quantity: '1.00', unit_price: '15000.00', tax_percent: '18.00' }] }",
@@ -92,20 +94,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
         .describe("'sale' for customer invoices (money coming in), 'purchase' for supplier bills (money going out)."),
       document_type: z.enum(DOCUMENT_TYPE).optional()
         .describe("Document type (default: 'invoice'). Use 'quotation' to create a quote instead of an invoice."),
-      line_items: z.array(z.object({
-        description: z.string().min(1).max(500)
-          .describe("Product or service name/description."),
-        quantity: z.string().regex(/^\d+(\.\d{1,3})?$/)
-          .describe("Quantity as decimal string, e.g. '1.000', '7.500', '100'."),
-        unit_price: z.string().regex(/^\d+(\.\d{1,2})?$/)
-          .describe("Price per unit as decimal string, e.g. '250.00', '15000.00'."),
-        tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-          .describe("GST/tax rate percentage as decimal string: '0', '5.00', '12.00', '18.00', '28.00'."),
-        discount_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-          .describe("Line-level discount percentage, e.g. '10.00' for 10% off."),
-        item_id: z.string().uuid().optional()
-          .describe("Link to an inventory item UUID to auto-fill price and update stock (optional)."),
-      })).min(1)
+      line_items: z.array(lineItemSchema).min(1)
         .describe("At least one line item is required."),
       invoice_date: z.string().datetime().optional()
         .describe("Invoice date (ISO 8601). Defaults to today if omitted."),
@@ -137,14 +126,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
         invoiceDiscountType: input.invoice_discount_type,
         roundOff: input.round_off,
         referenceDocumentId: input.reference_document_id,
-        lineItems: input.line_items.map((li) => ({
-          description: li.description,
-          quantity: li.quantity,
-          unitPrice: li.unit_price,
-          taxPercent: li.tax_percent,
-          discountPercent: li.discount_percent,
-          itemId: li.item_id,
-        })),
+        lineItems: await toApiLineItems(client, input.line_items),
       });
       return {
         content: [{
@@ -188,20 +170,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     {
       invoice_id: z.string().uuid()
         .describe("Invoice UUID to update."),
-      line_items: z.array(z.object({
-        description: z.string().min(1).max(500)
-          .describe("Product or service name/description."),
-        quantity: z.string().regex(/^\d+(\.\d{1,3})?$/)
-          .describe("Quantity as decimal string."),
-        unit_price: z.string().regex(/^\d+(\.\d{1,2})?$/)
-          .describe("Price per unit as decimal string."),
-        tax_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-          .describe("GST/tax rate percentage."),
-        discount_percent: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0")
-          .describe("Line-level discount percentage."),
-        item_id: z.string().uuid().optional()
-          .describe("Inventory item UUID (optional)."),
-      })).optional()
+      line_items: z.array(lineItemSchema).min(1).optional()
         .describe("Replace all line items. Provide the full updated list."),
       invoice_date: z.string().datetime().optional()
         .describe("Updated invoice date (ISO 8601)."),
@@ -220,7 +189,8 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     },
     wrapTool(async (input) => {
       const { invoice_id, ...fields } = input;
-      const invoice = await client.invoice.update(invoice_id, {
+      const invoice = await client.invoice.update({
+        id: invoice_id,
         invoiceDate: fields.invoice_date,
         dueDate: fields.due_date,
         notes: fields.notes,
@@ -228,15 +198,8 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
         invoiceDiscount: fields.invoice_discount,
         invoiceDiscountType: fields.invoice_discount_type,
         roundOff: fields.round_off,
-        lineItems: fields.line_items?.map((li) => ({
-          description: li.description,
-          quantity: li.quantity,
-          unitPrice: li.unit_price,
-          taxPercent: li.tax_percent,
-          discountPercent: li.discount_percent,
-          itemId: li.item_id,
-        })),
-      } as any);
+        lineItems: fields.line_items ? await toApiLineItems(client, fields.line_items) : undefined,
+      });
       return {
         content: [{
           type: "text" as const,
@@ -298,9 +261,8 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
     "invoice_pdf_url",
     [
       "Get the URL to download or view an invoice as a PDF.",
-      "The URL requires the HISAABO_API_KEY for authentication (pass as a Bearer token).",
+      "The URL requires authentication, which this server never exposes: give the link to the user to open while signed in to Hisaabo. Do not ask for or handle any credentials.",
       "Use format='a4' for standard invoices and format='thermal' for 80mm receipt printing.",
-      "The URL is valid for as long as the session token is valid.",
     ].join(" "),
     {
       invoice_id: z.string().uuid()
@@ -316,7 +278,7 @@ export function registerInvoiceTools(server: McpServer, client: HisaaboClient) {
           type: "text" as const,
           text: JSON.stringify({
             url,
-            note: "Fetch this URL with the Authorization: Bearer <HISAABO_API_KEY> header to download the PDF.",
+            note: "This URL requires the user to be signed in to Hisaabo. Share it with the user; do not request or use credentials.",
             format: input.format,
           }, null, 2),
         }],

@@ -20,11 +20,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerReportTools(server: McpServer, client: HisaaboClient) {
+export function registerReportTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "report_daybook",

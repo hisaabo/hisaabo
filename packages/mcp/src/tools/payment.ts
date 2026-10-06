@@ -13,14 +13,15 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
+import { paymentModes } from "@hisaabo/shared";
 
-const PAYMENT_MODES = ["cash", "bank", "upi", "cheque", "other"] as const;
+const PAYMENT_MODES = paymentModes;
 
-export function registerPaymentTools(server: McpServer, client: HisaaboClient) {
+export function registerPaymentTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "payment_create",
@@ -37,7 +38,7 @@ export function registerPaymentTools(server: McpServer, client: HisaaboClient) {
       amount: z.string().regex(/^\d+(\.\d{1,2})?$/)
         .describe("Payment amount as decimal string, e.g. '5000.00'."),
       mode: z.enum(PAYMENT_MODES)
-        .describe("Payment method: 'cash', 'bank' (bank transfer/NEFT/RTGS), 'upi', 'cheque', or 'other'."),
+        .describe("Payment method: 'cash', 'bank' (bank transfer/NEFT/RTGS), 'upi', 'cheque', 'credit_card', 'debit_card', 'net_banking', 'wallet', or 'other'."),
       invoice_id: z.string().uuid().optional()
         .describe("Link this payment to a specific invoice UUID. The invoice status updates automatically. Omit for advance payments."),
       discount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
@@ -257,7 +258,7 @@ export function registerPaymentTools(server: McpServer, client: HisaaboClient) {
     {
       search: z.string().max(200).optional()
         .describe("Search by payment number or party name."),
-      mode: z.enum(["cash", "bank", "upi", "cheque", "other"]).optional()
+      mode: z.enum(PAYMENT_MODES).optional()
         .describe("Filter by payment mode."),
       from_date: z.string().datetime().optional()
         .describe("Start date (ISO 8601)."),

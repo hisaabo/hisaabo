@@ -14,7 +14,8 @@
  * could safely say out loud.
  */
 
-import { defineAbilityFor } from "@hisaabo/shared";
+import { defineAbilityFor, stripControlChars } from "@hisaabo/shared";
+import { fenceValue } from "./fence";
 import type {
   WebMcpToolContext,
   WebMcpToolDefinition,
@@ -46,9 +47,14 @@ export function isWebMcpAvailable(): boolean {
 
 // ── Result envelopes ───────────────────────────────────────────
 
-/** Wrap a tool's return value in the spec's `{ content: [{ type: "text", … }] }` envelope. */
+/**
+ * Wrap a tool's return value in the spec's `{ content: [{ type: "text", … }] }`
+ * envelope. The value is fenced as untrusted data first: strings are
+ * truncated and stripped of control characters, and the envelope tells the
+ * agent the fields are data, never instructions.
+ */
 export function toToolResult(value: unknown): WebMcpToolResult {
-  return { content: [{ type: "text", text: capText(stringifyValue(value)) }] };
+  return { content: [{ type: "text", text: capText(stringifyValue(fenceValue(value))) }] };
 }
 
 /** Wrap a thrown value as an agent-readable failure. Never leaks internals. */
@@ -61,8 +67,6 @@ export function toErrorResult(err: unknown): WebMcpToolResult {
 
 function stringifyValue(value: unknown): string {
   if (typeof value === "string") return value;
-  // A void mutation resolving to undefined has nothing to say; "undefined" would
-  // read as a bug to the agent.
   if (value === undefined) return "";
   try {
     return JSON.stringify(value, jsonReplacer, 2) ?? "";
@@ -102,7 +106,7 @@ function asTrpcError(err: unknown): TrpcLikeError | null {
 
 /** Strip anything that identifies our infrastructure before the agent sees it. */
 function sanitize(message: string): string {
-  return message.replace(/\b(?:https?|wss?):\/\/\S+/gi, "the Hisaabo API").trim();
+  return stripControlChars(message.replace(/\b(?:https?|wss?):\/\/\S+/gi, "the Hisaabo API")).trim();
 }
 
 function formatValidation(fields: Record<string, string[] | undefined>): string {
@@ -160,6 +164,49 @@ function fireInvalidate(ctx: WebMcpToolContext): void {
   }
 }
 
+const CONFIRM_PREVIEW_CHARS = 600;
+
+/** Plain-language prompt shown to the user before an agent-initiated write. */
+function confirmationMessage(def: WebMcpToolDefinition, input: Record<string, unknown>): string {
+  let preview: string;
+  try {
+    preview = JSON.stringify(input, jsonReplacer, 2) ?? "{}";
+  } catch {
+    preview = "(unprintable input)";
+  }
+  preview = stripControlChars(preview);
+  if (preview.length > CONFIRM_PREVIEW_CHARS) preview = `${preview.slice(0, CONFIRM_PREVIEW_CHARS)}…`;
+  return (
+    `A browser AI agent wants to change your Hisaabo data.\n\n` +
+    `Action: ${def.title ?? def.name}\n${preview}\n\nAllow this?`
+  );
+}
+
+/**
+ * Ask the user before a non-read-only tool runs. Uses the agent's
+ * `requestUserInteraction` when the browser provides it (so the prompt is
+ * attributed correctly), otherwise a native confirm. Anything other than an
+ * explicit yes — including no dialog being available — denies the write.
+ */
+export async function confirmWrite(
+  def: WebMcpToolDefinition,
+  input: Record<string, unknown>,
+  options?: WebMCP.ToolExecuteCallbackOptions,
+): Promise<boolean> {
+  const ask = async (): Promise<boolean> =>
+    typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(confirmationMessage(def, input)) === true
+      : false;
+  try {
+    if (typeof options?.requestUserInteraction === "function") {
+      return (await options.requestUserInteraction(ask)) === true;
+    }
+    return await ask();
+  } catch {
+    return false;
+  }
+}
+
 /** Adapt one Hisaabo definition into the shape `registerTool` expects. */
 export function buildBrowserTool(
   def: WebMcpToolDefinition,
@@ -171,10 +218,17 @@ export function buildBrowserTool(
     description: def.description,
     inputSchema: def.inputSchema,
     annotations: def.annotations,
-    execute: async (input) => {
+    execute: async (input, options) => {
       try {
+        const isWrite = !def.annotations?.readOnlyHint;
+        if (isWrite && !(await confirmWrite(def, input ?? {}, options))) {
+          return {
+            content: [{ type: "text", text: "The user declined this action. Nothing was changed. Do not retry unless the user asks." }],
+            isError: true,
+          };
+        }
         const value = await def.execute(input ?? {}, ctx);
-        if (!def.annotations?.readOnlyHint) fireInvalidate(ctx);
+        if (isWrite) fireInvalidate(ctx);
         return toToolResult(value);
       } catch (err) {
         return toErrorResult(err);

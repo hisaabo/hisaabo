@@ -10,14 +10,14 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
 const SHIPMENT_STATUSES = ["pending", "shipped", "in_transit", "delivered", "returned"] as const;
 
-export function registerShipmentTools(server: McpServer, client: HisaaboClient) {
+export function registerShipmentTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "shipment_list",

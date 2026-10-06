@@ -16,19 +16,18 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
+import { lineItemSchema, toApiLineItems } from "../lib/lineItems.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
+import { invoiceTypes, recurringFrequencies, recurringTemplateStatuses } from "@hisaabo/shared";
 
-const TEMPLATE_STATUSES = ["active", "paused", "completed", "expired"] as const;
-const INVOICE_TYPES = ["sale", "purchase"] as const;
-const FREQUENCIES = [
-  "weekly", "biweekly", "monthly", "quarterly",
-  "half_yearly", "yearly", "custom",
-] as const;
+const TEMPLATE_STATUSES = recurringTemplateStatuses;
+const INVOICE_TYPES = invoiceTypes;
+const FREQUENCIES = recurringFrequencies;
 
-export function registerAutomatedInvoiceTools(server: McpServer, client: HisaaboClient) {
+export function registerAutomatedInvoiceTools(server: ToolServer, client: HisaaboClient) {
 
   // ── List templates ──────────────────────────────────────────────────────
 
@@ -90,8 +89,8 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
     [
       "Create a new recurring invoice template.",
       "The system will automatically generate invoices based on the specified frequency.",
-      "Line items must be passed as a JSON string containing an array of objects with: description, quantity, unitPrice, and optional taxPercent and discountPercent.",
-      "All money values (unitPrice, taxPercent, discountPercent) should be decimal strings like '100.00'.",
+      "Each line item needs a description (billed name, max 200 chars), quantity and unit_price; tax_percent and discount_percent are optional.",
+      "All money values (unit_price, tax_percent, discount_percent) should be decimal strings like '100.00'.",
       "Frequency options: weekly, biweekly, monthly, quarterly, half_yearly, yearly, or custom (requires custom_interval_days).",
     ].join(" "),
     {
@@ -103,10 +102,10 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
         .describe("Invoice type: 'sale' or 'purchase'."),
       frequency: z.enum(FREQUENCIES)
         .describe("How often to generate invoices: weekly, biweekly, monthly, quarterly, half_yearly, yearly, or custom."),
-      custom_interval_days: z.number().int().min(1).optional()
+      custom_interval_days: z.number().int().min(1).max(365).optional()
         .describe("Required when frequency is 'custom'. Number of days between each invoice generation."),
-      line_items: z.string()
-        .describe("JSON string of line items array. Each item: { description: string, quantity: string, unitPrice: string, taxPercent?: string, discountPercent?: string }."),
+      line_items: z.array(lineItemSchema).min(1)
+        .describe("Line items billed on every generated invoice."),
       start_date: z.string().datetime()
         .describe("When to start generating invoices (ISO 8601 datetime). First invoice is generated on this date."),
       end_date: z.string().datetime().optional()
@@ -117,7 +116,7 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
         .describe("Optional notes to include on each generated invoice."),
     },
     wrapTool(async (input) => {
-      const lineItems = JSON.parse(input.line_items);
+      const lineItems = await toApiLineItems(client, input.line_items);
       const template = await client.automatedInvoice.create({
         partyId: input.party_id,
         name: input.name,
@@ -146,7 +145,7 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
     [
       "Update an existing recurring invoice template.",
       "Only provide fields you want to change — all other fields remain unchanged.",
-      "If updating line_items, pass the complete new array as a JSON string (replaces all existing items).",
+      "If updating line_items, pass the complete new array (replaces all existing items).",
     ].join(" "),
     {
       template_id: z.string().uuid()
@@ -159,10 +158,10 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
         .describe("Updated invoice type: 'sale' or 'purchase'."),
       frequency: z.enum(FREQUENCIES).optional()
         .describe("Updated frequency."),
-      custom_interval_days: z.number().int().min(1).optional()
+      custom_interval_days: z.number().int().min(1).max(365).optional()
         .describe("Updated custom interval (only when frequency is 'custom')."),
-      line_items: z.string().optional()
-        .describe("Updated line items as JSON string (replaces all existing). Same format as create."),
+      line_items: z.array(lineItemSchema).min(1).optional()
+        .describe("Updated line items (replaces all existing). Same format as create."),
       end_date: z.string().datetime().optional()
         .describe("Updated end date (ISO 8601)."),
       max_runs: z.number().int().min(1).optional()
@@ -171,7 +170,7 @@ export function registerAutomatedInvoiceTools(server: McpServer, client: Hisaabo
         .describe("Updated notes for generated invoices."),
     },
     wrapTool(async (input) => {
-      const lineItems = input.line_items ? JSON.parse(input.line_items) : undefined;
+      const lineItems = input.line_items ? await toApiLineItems(client, input.line_items) : undefined;
       const template = await client.automatedInvoice.update(input.template_id, {
         name: input.name,
         partyId: input.party_id,

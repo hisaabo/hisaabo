@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
@@ -48,7 +48,7 @@ function resolvePeriod(period: string | undefined): { fromDate?: string; toDate?
   return {};
 }
 
-export function registerDashboardTools(server: McpServer, client: HisaaboClient) {
+export function registerDashboardTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "dashboard_summary",

@@ -12,14 +12,14 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 import { MAX_PAGE_SIZE, withPaginationMeta } from "../lib/pagination.js";
 
 const ORDER_STATUSES = ["pending", "confirmed", "preparing", "ready", "delivered", "cancelled"] as const;
 
-export function registerStoreTools(server: McpServer, client: HisaaboClient) {
+export function registerStoreTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "store_settings",

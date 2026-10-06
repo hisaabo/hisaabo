@@ -29,6 +29,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HisaaboClient } from "../client.js";
+import { fenceJson } from "../lib/fence.js";
 
 export function registerResources(server: McpServer, client: HisaaboClient) {
 
@@ -44,7 +45,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "business://current",
-          text: JSON.stringify(biz, null, 2),
+          text: fenceJson(biz),
           mimeType: "application/json",
         }],
       };
@@ -69,7 +70,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "parties://customers",
-          text: JSON.stringify(result.data, null, 2),
+          text: fenceJson(result.data),
           mimeType: "application/json",
         }],
       };
@@ -93,7 +94,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "parties://suppliers",
-          text: JSON.stringify(result.data, null, 2),
+          text: fenceJson(result.data),
           mimeType: "application/json",
         }],
       };
@@ -113,7 +114,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "items://inventory",
-          text: JSON.stringify(result.data, null, 2),
+          text: fenceJson(result.data),
           mimeType: "application/json",
         }],
       };
@@ -135,7 +136,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "invoices://recent",
-          text: JSON.stringify(result.data, null, 2),
+          text: fenceJson(result.data),
           mimeType: "application/json",
         }],
       };
@@ -155,7 +156,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "dashboard://summary",
-          text: JSON.stringify(summary, null, 2),
+          text: fenceJson(summary),
           mimeType: "application/json",
         }],
       };
@@ -174,7 +175,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "bank://accounts",
-          text: JSON.stringify(accounts, null, 2),
+          text: fenceJson(accounts),
           mimeType: "application/json",
         }],
       };
@@ -192,7 +193,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "shipments://recent",
-          text: JSON.stringify(result.data, null, 2),
+          text: fenceJson(result.data),
           mimeType: "application/json",
         }],
       };
@@ -211,7 +212,7 @@ export function registerResources(server: McpServer, client: HisaaboClient) {
       return {
         contents: [{
           uri: "targets://active",
-          text: JSON.stringify(targets, null, 2),
+          text: fenceJson(targets),
           mimeType: "application/json",
         }],
       };

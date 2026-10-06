@@ -12,11 +12,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerBankReconTools(server: McpServer, client: HisaaboClient) {
+export function registerBankReconTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "bank_recon_imports",

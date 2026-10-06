@@ -11,11 +11,11 @@
  */
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolServer } from "../lib/registry.js";
 import type { HisaaboClient } from "../client.js";
 import { wrapTool } from "../lib/errors.js";
 
-export function registerItcTools(server: McpServer, client: HisaaboClient) {
+export function registerItcTools(server: ToolServer, client: HisaaboClient) {
 
   server.tool(
     "itc_dashboard",
