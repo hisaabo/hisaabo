@@ -32,9 +32,10 @@ export function registerJournalCommands(program: Command): void {
   journal
     .command("void <id>")
     .description("Void a journal entry")
+    .option("--yes", "Skip confirmation prompt")
     .option("--json", "JSON output")
     .action(async (id: string, opts) => {
-      await journalVoidCommand(id, { json: opts.json });
+      await journalVoidCommand(id, { json: opts.json, yes: opts.yes });
     });
 
   journal

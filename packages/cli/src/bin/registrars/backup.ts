@@ -8,6 +8,7 @@ export function registerBackupCommands(program: Command): void {
     .description("Download a full tenant backup as a .tar.gz archive")
     .requiredOption("--tenant <slug-or-id>", "Tenant slug or UUID to export")
     .requiredOption("-o, --output <file>", "Output file path (e.g. backup.tar.gz)")
+    .option("--force", "Overwrite the output file if it exists")
     .addHelpText(
       "after",
       `
@@ -23,7 +24,7 @@ Exit codes:
     )
     .action(async (opts) => {
       const { exportCommand } = await import("../../commands/backup/export.js");
-      await exportCommand({ tenant: opts.tenant, output: opts.output });
+      await exportCommand({ tenant: opts.tenant, output: opts.output, force: opts.force });
     });
 
   // ── restore ────────────────────────────────────────────────────────────────

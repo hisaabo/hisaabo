@@ -2,7 +2,7 @@ import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
 import { formatAmount, quarterRange, formatDate } from "../../format.js";
-import * as fs from "fs";
+import { safeFilename, writeFileSafe } from "../../safety.js";
 
 interface GstOpts {
   json?: boolean;
@@ -101,8 +101,8 @@ export async function gstR1CsvCommand(opts: GstOpts & { output?: string }): Prom
 
   try {
     const result = await client.gst.gstr1CSV({ month, year });
-    const outputPath = opts.output ?? result.filename;
-    fs.writeFileSync(outputPath, result.csv);
+    const outputPath = opts.output ?? safeFilename(result.filename, "gstr1.csv");
+    writeFileSafe(outputPath, result.csv);
     console.log(`  Saved: ${outputPath}`);
 
   } catch (e) {

@@ -45,9 +45,17 @@ export function handleApiError(e: unknown): never {
         EXIT.NETWORK,
       );
     } else {
-      fatalError(e.message, EXIT.GENERAL);
+      fatalError(debugDetail("The server returned an error.", e), EXIT.GENERAL);
     }
   }
 
-  fatalError(String(e instanceof Error ? e.message : e), EXIT.GENERAL);
+  fatalError(debugDetail("Unexpected error.", e), EXIT.GENERAL);
+}
+
+/** Raw server messages and stacks only appear when HISAABO_DEBUG=1. */
+function debugDetail(summary: string, e: unknown): string {
+  if (process.env["HISAABO_DEBUG"] !== "1") {
+    return `${summary} Re-run with HISAABO_DEBUG=1 for details.`;
+  }
+  return e instanceof Error ? `${summary}\n${e.stack ?? e.message}` : `${summary}\n${String(e)}`;
 }

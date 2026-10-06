@@ -45,7 +45,7 @@ export async function automatedInvoiceCreateCommand(opts: CreateOpts): Promise<v
   }
 
   const lineItems = items.map((desc, i) => ({
-    description: desc,
+    itemName: desc,
     quantity: qtys[i] ?? "1",
     unitPrice: rates[i] ?? "0",
     taxPercent: taxes[i],

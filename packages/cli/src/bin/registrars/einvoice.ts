@@ -32,8 +32,9 @@ export function registerEInvoiceCommands(program: Command): void {
     .description("Cancel an e-invoice")
     .option("--json", "JSON output")
     .option("--reason <code>", "Cancel reason code (1-4)")
+    .option("--yes", "Skip confirmation prompt")
     .action(async (invoiceId: string, opts) => {
-      await eInvoiceCancelCommand(invoiceId, { json: opts.json, reason: opts.reason });
+      await eInvoiceCancelCommand(invoiceId, { json: opts.json, reason: opts.reason, yes: opts.yes });
     });
 
   einvoice

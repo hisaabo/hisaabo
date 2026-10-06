@@ -38,7 +38,7 @@ export async function businessUpdateCommand(opts: BusinessUpdateOpts): Promise<v
   }
 
   try {
-    const result = await client.business.update(payload);
+    const result = await client.business.update(cfg.businessId, payload);
 
     if (opts.json) {
       outputJSON(result);

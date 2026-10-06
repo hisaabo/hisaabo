@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { fatalError } from "../output.js";
+import { fatalError, installTerminalSanitizer } from "../output.js";
 
 import { registerAuthCommands } from "./registrars/auth.js";
 import { registerDashboardCommands } from "./registrars/dashboard.js";
@@ -27,6 +27,8 @@ import { registerBankReconCommands } from "./registrars/bank-recon.js";
 import { registerEInvoiceCommands } from "./registrars/einvoice.js";
 import { registerEwbCommands } from "./registrars/ewb.js";
 import { registerBackupCommands } from "./registrars/backup.js";
+
+installTerminalSanitizer();
 
 // ── Program ───────────────────────────────────────────────────────────────
 

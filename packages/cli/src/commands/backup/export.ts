@@ -9,11 +9,12 @@
  */
 
 import { createWriteStream } from "node:fs";
-import { stat, unlink } from "node:fs/promises";
+import { lstat, stat, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import { HisaaboClient, HisaaboApiError, transferTimeoutMs } from "../../client.js";
 import { requireTenantAuth } from "../../config.js";
 import { fatalError, success, hasColor, isInteractive, EXIT } from "../../output.js";
+import { resolveSameOriginUrl } from "../../url.js";
 import chalk from "chalk";
 
 // ── Exit codes specific to backup/restore ─────────────────────────────────────
@@ -87,6 +88,7 @@ function clearProgress(): void {
 export interface ExportOpts {
   tenant: string;
   output: string;
+  force?: boolean;
   yes?: boolean;
 }
 
@@ -117,10 +119,8 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
   try {
     const result = await client.selfExport.request({ tenantId });
     // Server returns a relative URL: /api/export/:tenantId?token=...
-    // (older servers may have returned an absolute URL — handle both.)
-    exportUrl = result.url.startsWith("/")
-      ? `${cfg.apiUrl}${result.url}`
-      : result.url;
+    // Anything off-origin is refused so the bearer token is never sent elsewhere.
+    exportUrl = resolveSameOriginUrl(result.url, cfg.apiUrl);
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;
@@ -154,7 +154,41 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
     process.stdout.write(`  Downloading backup to ${outPath}...\n`);
   }
 
-  const writeStream = createWriteStream(outPath);
+  // Never write through a symlink; never clobber an existing file without --force.
+  try {
+    const existing = await lstat(outPath);
+    if (existing.isSymbolicLink()) {
+      fatalError(`Refusing to write to a symlink: ${outPath}`, EXIT.USAGE);
+    }
+    if (!opts.force) {
+      fatalError(`${outPath} already exists. Use --force to overwrite.`, EXIT.USAGE);
+    }
+    if (!existing.isFile()) {
+      fatalError(`${outPath} is not a regular file`, EXIT.USAGE);
+    }
+    await unlink(outPath);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+  }
+
+  // 'wx' fails if something appeared at the path since the check above.
+  const writeStream = createWriteStream(outPath, { flags: "wx", mode: 0o600 });
+  const opened = await new Promise<Error | null>((resolve) => {
+    writeStream.once("open", () => resolve(null));
+    writeStream.once("error", (err) => resolve(err));
+  });
+  if (opened) {
+    fatalError(`Cannot create ${outPath}: ${opened.message}`, EXIT.USAGE);
+  }
+
+  // Abort if no bytes arrive for the idle window (the whole transfer may be long).
+  const abort = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const bumpIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => abort.abort(), transferTimeoutMs());
+  };
+  bumpIdle();
 
   try {
     const response = await fetch(exportUrl, {
@@ -162,6 +196,8 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
         "Authorization": `Bearer ${cfg.token}`,
         "x-client-type": "cli",
       },
+      redirect: "error",
+      signal: abort.signal,
     });
 
     if (!response.ok) {
@@ -192,6 +228,7 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
             writeStream.end(() => resolve());
             return;
           }
+          bumpIdle();
           sha256.update(value);
           fileSize += value.length;
           if (!writeStream.write(value)) {
@@ -206,6 +243,7 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
     });
 
   } catch (e) {
+    if (idleTimer) clearTimeout(idleTimer);
     if (progressInterval !== undefined) {
       clearInterval(progressInterval);
     }
@@ -219,6 +257,7 @@ export async function exportCommand(opts: ExportOpts): Promise<void> {
     fatalError(`Download failed: ${String(e instanceof Error ? e.message : e)}`, EXIT_SERVER_ERROR);
   }
 
+  if (idleTimer) clearTimeout(idleTimer);
   if (progressInterval !== undefined) {
     clearInterval(progressInterval);
   }

@@ -136,21 +136,8 @@ export function registerDocumentCommands(program: Command): void {
       const cfg = requireAuth();
       const client = new HisaaboClient(cfg);
 
-      if (!opts.yes && process.stdin.isTTY) {
-        const readline = await import("readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const answer = await new Promise<string>((resolve) => {
-          rl.question(
-            `  Convert ${opts.fromType} ${opts.fromId} → ${opts.toType}? (y/N): `,
-            resolve,
-          );
-        });
-        rl.close();
-        if (answer.trim().toLowerCase() !== "y") {
-          console.log("  Cancelled.");
-          process.exit(EXIT.SUCCESS);
-        }
-      }
+      const { confirmOrExit } = await import("../../safety.js");
+      await confirmOrExit(`  Convert ${opts.fromType} ${opts.fromId} → ${opts.toType}?`, opts);
 
       try {
         const result = await client.document.convert({

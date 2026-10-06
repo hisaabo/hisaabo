@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
-import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import { HisaaboClient, HisaaboApiError, requestTimeoutMs } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, EXIT, success } from "../../output.js";
+import { requireUuid, safeFilename, writeFileSafe } from "../../safety.js";
 
 interface PdfOpts {
   output?: string;
@@ -10,6 +11,7 @@ interface PdfOpts {
 }
 
 export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void> {
+  requireUuid(id, "invoice id");
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
@@ -22,7 +24,10 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
     // Use id as-is if fetch fails
   }
 
-  // Build PDF URL
+  // Server-supplied number becomes a file name: reduce it to a safe basename
+  const fileName = `${safeFilename(invoiceNumber, "invoice")}.pdf`;
+
+  // Build PDF URL (id is a validated UUID)
   const pdfUrl = `${cfg.apiUrl}/api/invoice/${id}/pdf`;
 
   try {
@@ -33,6 +38,7 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
         "x-tenant-id": cfg.tenantId,
         "x-client-type": "cli",
       },
+      signal: AbortSignal.timeout(requestTimeoutMs()),
     });
 
     if (!res.ok) {
@@ -47,15 +53,15 @@ export async function invoicePdfCommand(id: string, opts: PdfOpts): Promise<void
     if (opts.output) {
       // If it's a directory, put the file inside it
       if (fs.existsSync(opts.output) && fs.statSync(opts.output).isDirectory()) {
-        outputPath = path.join(opts.output, `${invoiceNumber}.pdf`);
+        outputPath = path.join(opts.output, fileName);
       } else {
         outputPath = opts.output;
       }
     } else {
-      outputPath = `${invoiceNumber}.pdf`;
+      outputPath = fileName;
     }
 
-    fs.writeFileSync(outputPath, bytes);
+    writeFileSafe(outputPath, bytes);
     success(`Saved: ${outputPath} (${Math.round(bytes.length / 1024)} KB)`);
 
     if (opts.open) {

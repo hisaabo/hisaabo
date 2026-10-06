@@ -1,7 +1,7 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function invoiceDeleteCommand(id: string, opts: { yes?: boolean; json?: boolean }): Promise<void> {
   const cfg = requireAuth();
@@ -10,17 +10,7 @@ export async function invoiceDeleteCommand(id: string, opts: { yes?: boolean; js
   try {
     const inv = await client.invoice.get(id);
 
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Delete ${inv.invoiceNumber} (${inv.partyName}, ${inv.totalAmount})? (y/N): `, resolve);
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete ${inv.invoiceNumber} (${inv.partyName}, ${inv.totalAmount})?`, opts);
 
     const result = await client.invoice.delete(id);
 

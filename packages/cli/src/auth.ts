@@ -1,14 +1,7 @@
-import { HisaaboClient, HisaaboApiError } from "./client.js";
+import { HisaaboClient, HisaaboApiError, type AuthUser } from "./client.js";
 import { getConfig, setConfig, clearConfig, requireAuth, getConfigPath } from "./config.js";
-import { fatalError, EXIT, outputJSON, success } from "./output.js";
-
-function validateApiUrl(url: string): string {
-  const parsed = new URL(url);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    fatalError("API URL must use http:// or https://", EXIT.USAGE);
-  }
-  return parsed.origin + parsed.pathname.replace(/\/$/, "");
-}
+import { fatalError, EXIT, outputJSON, success, warn, sanitizeTerminal } from "./output.js";
+import { validateApiUrl } from "./url.js";
 
 /**
  * Authenticate using a long-lived API key (hisaabo_key_...).
@@ -38,39 +31,45 @@ export async function loginWithToken(apiUrl: string, token: string): Promise<voi
     return; // unreachable — fatalError throws, but satisfies TS control flow
   }
 
-  // Temporarily store the token so business.list() can authenticate
-  setConfig({ apiUrl: base, token });
+  const businesses = await listBusinessesOrExit(base, token);
+  const selected = await selectBusiness(businesses);
 
-  const authedClient = new HisaaboClient({
-    apiUrl: base,
-    token,
-    tenantId: "",
-    businessId: "",
-  });
+  persistSession(base, token, selected, user.tenantId);
 
+  success(`Authenticated as ${user.name ?? user.email} (${user.email}) via API key`);
+  console.log("  Active business: " + selected.name);
+  console.log("  Config saved to " + getConfigPath() + "\n");
+}
+
+async function listBusinessesOrExit(base: string, token: string): Promise<BusinessSummary[]> {
+  const authedClient = new HisaaboClient({ apiUrl: base, token, tenantId: "", businessId: "" });
   let businesses: BusinessSummary[];
   try {
     businesses = await authedClient.business.list();
   } catch {
     businesses = [];
   }
-
   if (businesses.length === 0) {
     fatalError("No businesses found for this account.", EXIT.GENERAL);
   }
+  return businesses;
+}
 
+async function selectBusiness(businesses: BusinessSummary[]): Promise<BusinessSummary> {
   console.log("\n  You have access to " + businesses.length + " business" + (businesses.length > 1 ? "es" : "") + ":\n");
   console.log("   #  Business" + " ".repeat(22) + "GSTIN" + " ".repeat(15) + "Role");
   console.log("  " + "─".repeat(58));
   businesses.forEach((b, i) => {
-    const name = b.name.padEnd(26);
-    const gstin = (b.gstin ?? "-").padEnd(19);
-    console.log(`   ${i + 1}  ${name} ${gstin} ${b.gstRegistrationType ?? "member"}`);
+    const name = sanitizeTerminal(b.name).padEnd(26);
+    const gstin = sanitizeTerminal(b.gstin ?? "-").padEnd(19);
+    console.log(`   ${i + 1}  ${name} ${gstin} ${sanitizeTerminal(b.gstRegistrationType ?? "member")}`);
   });
   console.log();
 
   let selected = businesses[0];
-  if (businesses.length > 1) {
+  if (businesses.length > 1 && !process.stdin.isTTY) {
+    warn(`Non-interactive login: using the first business (${sanitizeTerminal(businesses[0]!.name)}). Run "hisaabo switch" in a terminal to change.`);
+  } else if (businesses.length > 1) {
     const readline = await import("readline");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise<string>((resolve) => {
@@ -80,25 +79,27 @@ export async function loginWithToken(apiUrl: string, token: string): Promise<voi
     const idx = parseInt(answer.trim() || "1", 10) - 1;
     selected = businesses[Math.max(0, Math.min(idx, businesses.length - 1))];
   }
-
   if (!selected) {
     fatalError("No business selected.", EXIT.GENERAL);
   }
+  return selected;
+}
 
+/** Write credentials to disk only once login fully succeeded. */
+function persistSession(apiUrl: string, token: string, business: BusinessSummary, tenantId?: string | null): void {
+  clearConfig();
   setConfig({
-    businessId: selected.id,
-    businessName: selected.name,
-    tenantId: selected.id,
+    apiUrl,
+    token,
+    businessId: business.id,
+    businessName: business.name,
+    // Only the tenant reported by the server; never guess from a business id.
+    tenantId: tenantId ?? undefined,
     tokenCreatedAt: Date.now(),
   });
-
-  success(`Authenticated as ${user.name ?? user.email} (${user.email}) via API key`);
-  console.log("  Active business: " + selected.name);
-  console.log("  Config saved to " + getConfigPath() + "\n");
 }
 
 // Type aliases used locally (mirrors what the client returns)
-type AuthUser = { id: string; email: string; name: string | null; role: string };
 type BusinessSummary = { id: string; name: string; gstin?: string | null; gstRegistrationType?: string | null };
 
 export async function login(apiUrl: string, email: string, password: string): Promise<void> {
@@ -114,58 +115,14 @@ export async function login(apiUrl: string, email: string, password: string): Pr
 
   try {
     const result = await client.auth.login({ email, password });
-    // After login, fetch businesses
-    const authedClient = new HisaaboClient({
-      apiUrl: base,
-      token: result.sessionId,
-      tenantId: "",
-      businessId: "",
-    });
-    const businesses = await authedClient.business.list();
+    const token = result.sessionId;
+    const authedClient = new HisaaboClient({ apiUrl: base, token, tenantId: "", businessId: "" });
+    const me = await authedClient.auth.me().catch(() => undefined);
 
-    if (businesses.length === 0) {
-      fatalError("No businesses found for this account.", EXIT.GENERAL);
-    }
+    const businesses = await listBusinessesOrExit(base, token);
+    const selected = await selectBusiness(businesses);
 
-    setConfig({
-      apiUrl: base,
-      token: result.sessionId,
-    });
-
-    // Return businesses for caller to handle selection
-    console.log("\n  You have access to " + businesses.length + " business" + (businesses.length > 1 ? "es" : "") + ":\n");
-    console.log("   #  Business" + " ".repeat(22) + "GSTIN" + " ".repeat(15) + "Role");
-    console.log("  " + "─".repeat(58));
-    businesses.forEach((b, i) => {
-      const name = b.name.padEnd(26);
-      const gstin = (b.gstin ?? "-").padEnd(19);
-      console.log(`   ${i + 1}  ${name} ${gstin} ${b.gstRegistrationType ?? "member"}`);
-    });
-    console.log();
-
-    // Default to first if only one
-    let selected = businesses[0];
-    if (businesses.length > 1) {
-      const readline = await import("readline");
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question("  Select business [1]: ", resolve);
-      });
-      rl.close();
-      const idx = parseInt(answer.trim() || "1", 10) - 1;
-      selected = businesses[Math.max(0, Math.min(idx, businesses.length - 1))];
-    }
-
-    if (!selected) {
-      fatalError("No business selected.", EXIT.GENERAL);
-    }
-
-    setConfig({
-      businessId: selected.id,
-      businessName: selected.name,
-      tenantId: selected.id, // fallback; real tenantId may differ
-      tokenCreatedAt: Date.now(),
-    });
+    persistSession(base, token, selected, me?.tenantId);
 
     success(`Active business: ${selected.name}`);
     console.log("  Config saved to " + getConfigPath());
@@ -206,7 +163,7 @@ export async function whoami(jsonMode: boolean): Promise<void> {
       outputJSON({ user, business: { id: cfg.businessId, name: cfg.businessName }, apiUrl: cfg.apiUrl });
       return;
     }
-    console.log(`  User:     ${user.name} <${user.email}>`);
+    console.log(`  User:     ${user.name ?? "-"} <${user.email}>`);
     console.log(`  Role:     ${user.role}`);
     console.log(`  Business: ${cfg.businessName} (${cfg.businessId})`);
     console.log(`  API:      ${cfg.apiUrl}`);

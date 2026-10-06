@@ -12,11 +12,12 @@
 
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import * as readline from "node:readline";
 
-import { HisaaboClient, HisaaboApiError } from "../../client.js";
+import { HisaaboClient, HisaaboApiError, transferTimeoutMs } from "../../client.js";
 import { requireTenantAuth } from "../../config.js";
 import { fatalError, success, warn, hasColor, isInteractive, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
+import { resolveSameOriginUrl } from "../../url.js";
 import chalk from "chalk";
 
 // ── Exit codes specific to backup/restore ─────────────────────────────────────
@@ -80,18 +81,6 @@ function printUploadProgress(uploaded: number, total: number, elapsed: number): 
 function clearProgress(): void {
   if (!isInteractive()) return;
   process.stdout.write("\r" + " ".repeat(80) + "\r");
-}
-
-// ── Confirmation prompt ───────────────────────────────────────────────────────
-
-async function confirm(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === "y");
-    });
-  });
 }
 
 // ── Import response types ─────────────────────────────────────────────────────
@@ -185,30 +174,19 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
   }
 
   // 3. Confirmation prompt
-  if (!opts.yes) {
-    if (process.stdin.isTTY) {
-      const proceed = await confirm(
-        `  This will import all data from \`${opts.input}\` into tenant \`${tenantSlug}\`.\n` +
-        `  Target tenant must be empty. Proceed? [y/N]: `,
-      );
-      if (!proceed) {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    } else {
-      warn("Non-interactive mode: pass --yes to skip confirmation.");
-      process.exit(0);
-    }
-  }
+  await confirmOrExit(
+    `This will import all data from \`${opts.input}\` into tenant \`${tenantSlug}\`.\n` +
+    `  Target tenant must be empty. Proceed?`,
+    opts,
+  );
 
   // 4. Request import token
   let uploadUrl: string;
   try {
     const result = await client.selfImport.request({ tenantId });
     // Server returns a relative URL: /api/selfImport/:tenantId?token=...
-    uploadUrl = result.url.startsWith("/")
-      ? `${cfg.apiUrl}${result.url}`
-      : result.url;
+    // Anything off-origin is refused so the bearer token is never sent elsewhere.
+    uploadUrl = resolveSameOriginUrl(result.url, cfg.apiUrl);
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;
@@ -250,6 +228,15 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
 
   let responseBody: ImportSuccessResponse | ImportFailedResponse;
 
+  // Abort if no bytes move for the idle window (the whole transfer may be long).
+  const abort = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const bumpIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => abort.abort(), transferTimeoutMs());
+  };
+  bumpIdle();
+
   try {
     // Build a ReadableStream from the file — do not buffer into memory
     const nodeReadStream = createReadStream(opts.input);
@@ -257,6 +244,7 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
       start(controller) {
         nodeReadStream.on("data", (chunk: Buffer | string) => {
           const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          bumpIdle();
           uploaded += buf.length;
           controller.enqueue(new Uint8Array(buf));
         });
@@ -277,10 +265,13 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
         "Content-Length": String(fileStats.size),
       },
       body: webReadable,
+      redirect: "error",
+      signal: abort.signal,
       // @ts-expect-error -- Node 18+ fetch needs duplex for request body streaming
       duplex: "half",
     });
 
+    if (idleTimer) clearTimeout(idleTimer);
     clearInterval(progressInterval);
     progressInterval = undefined;
     clearProgress();
@@ -306,6 +297,7 @@ export async function restoreCommand(opts: RestoreOpts): Promise<void> {
     responseBody = raw as ImportSuccessResponse | ImportFailedResponse;
 
   } catch (e) {
+    if (idleTimer) clearTimeout(idleTimer);
     if (progressInterval !== undefined) {
       clearInterval(progressInterval);
     }

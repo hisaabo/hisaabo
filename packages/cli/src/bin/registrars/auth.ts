@@ -3,7 +3,7 @@ import * as readline from "readline";
 import { login, loginWithToken, logout, whoami } from "../../auth.js";
 import { setConfig, requireAuth } from "../../config.js";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
-import { fatalError, success, EXIT, outputJSON } from "../../output.js";
+import { fatalError, success, warn, EXIT, outputJSON } from "../../output.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +75,20 @@ function askSecret(prompt: string): Promise<string> {
   });
 }
 
+/** Read a secret from stdin (all of it, trailing newline trimmed). */
+async function readSecretFromStdin(flag: string): Promise<string> {
+  if (process.stdin.isTTY) {
+    fatalError(`${flag} expects the value piped on stdin`, EXIT.USAGE);
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+  if (!value) fatalError(`No value received on stdin for ${flag}`, EXIT.USAGE);
+  return value;
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 export function registerAuthCommands(program: Command): void {
@@ -85,10 +99,26 @@ export function registerAuthCommands(program: Command): void {
     .description("Authenticate and configure your Hisaabo server")
     .option("--api-url <url>", "Server URL")
     .option("--email <email>", "Email address")
-    .option("--password <password>", "Password (visible in shell history — prefer interactive prompt)")
-    .option("--token <token>", "API key (visible in shell history — prefer HISAABO_TOKEN env var)")
+    .option("--password <password>", "Password (deprecated: visible in process list and shell history; use --password-stdin)")
+    .option("--password-stdin", "Read the password from stdin")
+    .option("--token <token>", "API key (deprecated: visible in process list and shell history; use --token-stdin)")
+    .option("--token-stdin", "Read the API key from stdin")
     .action(async (opts) => {
       let apiUrl = opts.apiUrl;
+
+      if (opts.tokenStdin && opts.passwordStdin) {
+        fatalError("Use only one of --token-stdin and --password-stdin", EXIT.USAGE);
+      }
+      if (opts.token) warn("--token is deprecated (visible to other users via the process list). Use --token-stdin.");
+      if (opts.password) warn("--password is deprecated (visible to other users via the process list). Use --password-stdin.");
+      if (opts.tokenStdin || opts.passwordStdin) {
+        // stdin carries the secret, so nothing else can be prompted for
+        apiUrl = apiUrl ?? process.env["HISAABO_API_URL"];
+        if (!apiUrl) fatalError("--api-url is required with --token-stdin/--password-stdin", EXIT.USAGE);
+        if (opts.passwordStdin && !opts.email) fatalError("--email is required with --password-stdin", EXIT.USAGE);
+        if (opts.tokenStdin) opts.token = await readSecretFromStdin("--token-stdin");
+        else opts.password = await readSecretFromStdin("--password-stdin");
+      }
 
       // ── API key path — skip email/password flow ──
       if (opts.token) {

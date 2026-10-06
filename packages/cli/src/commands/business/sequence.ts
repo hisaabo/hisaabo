@@ -4,49 +4,35 @@ import { fatalError, success, outputJSON, EXIT } from "../../output.js";
 
 interface BusinessSequenceOpts {
   type?: string;
-  prefix?: string;
   nextNumber?: string;
   json?: boolean;
 }
+
+const DOCUMENT_TYPES = ["invoice", "payment", "quotation", "credit_note", "delivery_challan", "proforma"] as const;
 
 export async function businessSequenceCommand(opts: BusinessSequenceOpts): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  if (!opts.type) {
-    fatalError("--type is required (sale or purchase).", EXIT.USAGE);
+  // "sale" was the previous spelling of the invoice counter
+  const documentType = opts.type === "sale" ? "invoice" : opts.type;
+  if (!documentType || !(DOCUMENT_TYPES as readonly string[]).includes(documentType)) {
+    fatalError(`--type must be one of: ${DOCUMENT_TYPES.join(", ")}.`, EXIT.USAGE);
   }
-  if (opts.type !== "sale" && opts.type !== "purchase") {
-    fatalError("--type must be 'sale' or 'purchase'.", EXIT.USAGE);
+  if (opts.nextNumber === undefined || !/^\d+$/.test(opts.nextNumber) || parseInt(opts.nextNumber, 10) < 1) {
+    fatalError("--next-number must be a positive integer.", EXIT.USAGE);
   }
-
-  const payload: Record<string, unknown> = { type: opts.type };
-  if (opts.prefix !== undefined) payload["prefix"] = opts.prefix;
-  if (opts.nextNumber !== undefined) {
-    const n = parseInt(opts.nextNumber, 10);
-    if (isNaN(n) || n < 1) {
-      fatalError("--next-number must be a positive integer.", EXIT.USAGE);
-    }
-    payload["nextNumber"] = n;
-  }
-
-  if (Object.keys(payload).length === 1) {
-    fatalError("Pass at least one of --prefix or --next-number.", EXIT.USAGE);
-  }
+  const newNumber = parseInt(opts.nextNumber, 10);
 
   try {
-    const result = await client.business.updateSequenceNumber(payload);
+    const result = await client.business.updateSequenceNumber({ documentType, newNumber });
 
     if (opts.json) {
       outputJSON(result);
       return;
     }
 
-    const typeLabel = opts.type === "sale" ? "Sales" : "Purchase";
-    const parts: string[] = [];
-    if (opts.prefix !== undefined) parts.push(`prefix → "${opts.prefix}"`);
-    if (opts.nextNumber !== undefined) parts.push(`next number → ${opts.nextNumber}`);
-    success(`${typeLabel} invoice sequence updated: ${parts.join(", ")}.`);
+    success(`${documentType} sequence updated: next number → ${newNumber}.`);
   } catch (e) {
     if (e instanceof HisaaboApiError) {
       const err = e.hisaaboError;

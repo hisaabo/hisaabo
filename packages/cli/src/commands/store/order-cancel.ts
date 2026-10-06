@@ -1,7 +1,7 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function storeOrderCancelCommand(
   id: string,
@@ -10,17 +10,7 @@ export async function storeOrderCancelCommand(
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
 
-  if (!opts.yes && process.stdin.isTTY) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(`  Cancel order ${id}? This cannot be undone. (y/n): `, resolve);
-    });
-    rl.close();
-    if (answer.trim().toLowerCase() !== "y") {
-      console.log("  Cancelled.");
-      process.exit(0);
-    }
-  }
+  await confirmOrExit(`  Cancel order ${id}? This cannot be undone.`, opts);
 
   try {
     const input: Record<string, unknown> = { orderId: id };

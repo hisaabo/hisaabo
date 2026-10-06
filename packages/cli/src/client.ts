@@ -78,6 +78,20 @@ function normalizeTrpcError(raw: unknown): HisaaboError {
   return { code: "api_error", message };
 }
 
+// ── Timeouts ───────────────────────────────────────────────────────────────
+
+/** Per-request timeout for API calls. Override with HISAABO_TIMEOUT_MS. */
+export function requestTimeoutMs(): number {
+  const n = Number(process.env["HISAABO_TIMEOUT_MS"]);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+}
+
+/** Idle timeout for large streaming transfers (backup download/upload). */
+export function transferTimeoutMs(): number {
+  const n = Number(process.env["HISAABO_TRANSFER_TIMEOUT_MS"]);
+  return Number.isFinite(n) && n > 0 ? n : 30 * 60_000;
+}
+
 // ── HTTP client ────────────────────────────────────────────────────────────
 
 export class HisaaboClient {
@@ -119,7 +133,15 @@ export class HisaaboClient {
       });
     }
 
-    const body = await res.json() as unknown;
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      throw new HisaaboApiError({
+        code: "api_error",
+        message: `Unexpected non-JSON response from API (HTTP ${res.status})`,
+      });
+    }
 
     if (typeof body !== "object" || body === null) {
       throw new HisaaboApiError({ code: "api_error", message: "Unexpected response format from API" });
@@ -148,7 +170,10 @@ export class HisaaboClient {
         if (input !== undefined) {
           url.searchParams.set("input", JSON.stringify(superjson.serialize(input)));
         }
-        const res = await fetch(url.toString(), { headers: this.buildHeaders() });
+        const res = await fetch(url.toString(), {
+          headers: this.buildHeaders(),
+          signal: AbortSignal.timeout(requestTimeoutMs()),
+        });
         return await this.unwrap<T>(res);
       } catch (e) {
         // Auto-retry on rate limit for idempotent reads
@@ -170,8 +195,9 @@ export class HisaaboClient {
         method: "POST",
         headers: { ...this.buildHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify(superjson.serialize(input)),
+        signal: AbortSignal.timeout(requestTimeoutMs()),
       });
-      return this.unwrap<T>(res);
+      return await this.unwrap<T>(res);
     } catch (e) {
       if (e instanceof HisaaboApiError) throw e;
       throw new HisaaboApiError({ code: "network_error", message: String(e instanceof Error ? e.message : e) });
@@ -184,13 +210,28 @@ export class HisaaboClient {
     const c = this;
     return {
       login(input: { email: string; password: string }) {
-        return c.mutate<{ sessionId: string; user: AuthUser }>("auth.login", input);
+        // The API returns `sessionToken`; older servers used `sessionId`.
+        return c.mutate<{ sessionToken?: string; sessionId?: string; user: { id: string; email: string; name: string | null } }>("auth.login", input)
+          .then((r) => {
+            const sessionId = r.sessionToken ?? r.sessionId;
+            if (!sessionId) throw new HisaaboApiError({ code: "api_error", message: "Login response did not include a session" });
+            return { sessionId, user: r.user };
+          });
       },
       logout() {
         return c.mutate<{ success: boolean }>("auth.logout", {});
       },
       me() {
-        return c.query<AuthUser>("auth.me");
+        // The API returns { user, tenantId, tenantName, role }; flatten it.
+        return c.query<{
+          user: { id: string; email: string; name: string | null } | null;
+          tenantId: string | null;
+          tenantName: string | null;
+          role: string | null;
+        }>("auth.me").then((r): AuthUser => {
+          if (!r.user) throw new HisaaboApiError({ code: "unauthorized", message: "Not authenticated" });
+          return { ...r.user, role: r.role ?? "", tenantId: r.tenantId, tenantName: r.tenantName };
+        });
       },
       completeProfile(input: { name: string }) {
         return c.mutate<any>("auth.completeProfile", input);
@@ -221,16 +262,16 @@ export class HisaaboClient {
       list() {
         return c.query<BusinessSummary[]>("business.list");
       },
-      get() {
-        return c.query<BusinessDetail>("business.getById");
+      get(id: string) {
+        return c.query<BusinessDetail>("business.getById", { id });
       },
       create(input: any) {
         return c.mutate<any>("business.create", input);
       },
-      update(input: any) {
-        return c.mutate<any>("business.update", input);
+      update(id: string, data: Record<string, unknown>) {
+        return c.mutate<any>("business.update", { id, data });
       },
-      updateSequenceNumber(input: any) {
+      updateSequenceNumber(input: { documentType: string; newNumber: number }) {
         return c.mutate<any>("business.updateSequenceNumber", input);
       },
       auditTrail(input?: { page?: number; limit?: number }) {
@@ -328,9 +369,6 @@ export class HisaaboClient {
       },
       adjustStock(input: StockAdjustInput) {
         return c.mutate<ItemSummary>("item.adjustStock", input);
-      },
-      categories() {
-        return c.query<string[]>("item.categories");
       },
       createVariant(input: any) {
         return c.mutate<any>("item.createVariant", input);
@@ -1235,8 +1273,10 @@ export interface PaginatedResult<T> {
 export interface AuthUser {
   id: string;
   email: string;
-  name: string;
+  name: string | null;
   role: string;
+  tenantId?: string | null;
+  tenantName?: string | null;
 }
 
 export interface MaintenanceStatus {
@@ -1273,7 +1313,8 @@ export interface InvoiceSummary {
 export interface LineItem {
   id?: string;
   itemId?: string | null;
-  description: string;
+  itemName: string;
+  description?: string | null;
   quantity: string;
   unitPrice: string;
   taxPercent: string;
@@ -1312,7 +1353,8 @@ export interface InvoiceListInput {
 
 export interface InvoiceLineItemInput {
   itemId?: string;
-  description: string;
+  itemName: string;
+  description?: string;
   quantity: string;
   unitPrice: string;
   taxPercent?: string;
@@ -1479,7 +1521,7 @@ export interface ItemCreateInput {
 
 export interface StockAdjustInput {
   itemId: string;
-  adjustment: string;
+  quantity: string;
   reason?: string;
 }
 
@@ -1990,18 +2032,22 @@ export interface TargetUpdateInput {
 }
 
 export interface ImportPartiesInput {
+  source?: string;
   parties: Array<Record<string, unknown>>;
 }
 
 export interface ImportItemsInput {
+  source?: string;
   items: Array<Record<string, unknown>>;
 }
 
 export interface ImportInvoicesInput {
+  source?: string;
   invoices: Array<Record<string, unknown>>;
 }
 
 export interface ImportPaymentsInput {
+  source?: string;
   payments: Array<Record<string, unknown>>;
 }
 
@@ -2037,7 +2083,8 @@ export interface RecurringInvoiceSummary {
 }
 
 export interface RecurringInvoiceLineItem {
-  description: string;
+  itemName: string;
+  description?: string | null;
   quantity: string;
   unitPrice: string;
   taxPercent?: string;
@@ -2064,7 +2111,7 @@ export interface RecurringInvoiceCreateInput {
   frequency: RecurringInvoiceFrequency;
   customIntervalDays?: number;
   lineItems: Array<{
-    description: string;
+    itemName: string;
     quantity: string;
     unitPrice: string;
     taxPercent?: string;

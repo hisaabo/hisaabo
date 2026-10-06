@@ -20,7 +20,7 @@ export async function itemStockCommand(id: string, adjustment: string, opts: Sto
   try {
     const updated = await client.item.adjustStock({
       itemId: id,
-      adjustment,
+      quantity: adjustment,
       reason: opts.reason,
     });
 

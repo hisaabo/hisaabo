@@ -1,7 +1,10 @@
 import Conf from "conf";
 import { hostname, userInfo } from "os";
+import { chmodSync, existsSync, writeFileSync } from "fs";
+import { dirname } from "path";
 import { createHash } from "crypto";
 import { fatalError, warn } from "./output.js";
+import { validateApiUrl } from "./url.js";
 import type { HisaaboClient } from "./client.js";
 
 interface ConfigSchema {
@@ -14,44 +17,79 @@ interface ConfigSchema {
 }
 
 /**
- * Derive a machine+user-specific encryption key. Prevents casual read of
- * the config file and stops accidental credential leaks in screenshots,
- * backups, or `cat` output. Not unbreakable — but the token at rest is
- * no longer plaintext.
+ * The token is stored in plaintext. The previous "encryption" key was derived
+ * from public values (uid, hostname), so it protected nothing against anyone
+ * able to read the file. Real protection is filesystem permissions: the file
+ * is mode 0600 inside a 0700 directory. Anything running as this user can
+ * still read it; use HISAABO_TOKEN for ephemeral/CI credentials instead.
  */
-function deriveEncryptionKey(): string {
+const CONF_OPTIONS = {
+  projectName: "hisaabo",
+  projectSuffix: "",
+  configName: "config",
+  configFileMode: 0o600,
+};
+
+/** Key used by older CLI versions; only needed to read their config files. */
+function legacyEncryptionKey(): string {
   let uid: string;
   try {
     uid = String(userInfo().uid);
   } catch {
     uid = String(process.getuid?.() ?? process.pid);
   }
-  const raw = `${uid}:${hostname()}:hisaabo-cli`;
-  return createHash("sha256").update(raw).digest("hex");
+  return createHash("sha256").update(`${uid}:${hostname()}:hisaabo-cli`).digest("hex");
 }
 
-const conf = new Conf<Partial<ConfigSchema>>({
-  projectName: "hisaabo",
-  projectSuffix: "",
-  configName: "config",
-  encryptionKey: deriveEncryptionKey(),
-  configFileMode: 0o600, // owner read/write only — prevents credential theft on shared systems
-});
+function hardenPermissions(file: string): void {
+  try {
+    chmodSync(dirname(file), 0o700);
+    if (existsSync(file)) chmodSync(file, 0o600);
+  } catch {
+    // Not supported on every platform/filesystem
+  }
+}
+
+function openConf(): Conf<Partial<ConfigSchema>> {
+  let c: Conf<Partial<ConfigSchema>>;
+  try {
+    c = new Conf<Partial<ConfigSchema>>(CONF_OPTIONS);
+  } catch {
+    // Config written by an older version (encrypted) — migrate to plaintext.
+    try {
+      const legacy = new Conf<Partial<ConfigSchema>>({ ...CONF_OPTIONS, encryptionKey: legacyEncryptionKey() });
+      writeFileSync(legacy.path, JSON.stringify(legacy.store), { mode: 0o600 });
+    } catch {
+      new Conf<Partial<ConfigSchema>>({ ...CONF_OPTIONS, clearInvalidConfig: true });
+      warn("Saved credentials could not be read and were discarded. Run: hisaabo login");
+    }
+    c = new Conf<Partial<ConfigSchema>>(CONF_OPTIONS);
+  }
+  hardenPermissions(c.path);
+  return c;
+}
+
+let confInstance: Conf<Partial<ConfigSchema>> | undefined;
+function conf(): Conf<Partial<ConfigSchema>> {
+  return (confInstance ??= openConf());
+}
 
 export function getConfig(): Partial<ConfigSchema> {
-  return conf.store;
+  return conf().store;
 }
 
 export function setConfig(values: Partial<ConfigSchema>): void {
   for (const [k, v] of Object.entries(values)) {
     if (v !== undefined) {
-      conf.set(k as keyof ConfigSchema, v as string);
+      conf().set(k as keyof ConfigSchema, v as string);
     }
   }
+  hardenPermissions(conf().path);
 }
 
 export function clearConfig(): void {
-  conf.clear();
+  conf().clear();
+  hardenPermissions(conf().path);
 }
 
 export function isAuthenticated(): boolean {
@@ -65,7 +103,7 @@ export function requireAuth(): ConfigSchema {
   const envUrl = process.env["HISAABO_API_URL"];
   if (envToken && envUrl) {
     return {
-      apiUrl: envUrl,
+      apiUrl: validateApiUrl(envUrl),
       token: envToken,
       tenantId: process.env["HISAABO_TENANT_ID"] ?? "",
       businessId: process.env["HISAABO_BUSINESS_ID"] ?? "",
@@ -75,7 +113,7 @@ export function requireAuth(): ConfigSchema {
   }
 
   const cfg = getConfig();
-  if (!cfg.token || !cfg.apiUrl || !cfg.businessId || !cfg.tenantId) {
+  if (!cfg.token || !cfg.apiUrl || !cfg.businessId) {
     fatalError("Not authenticated. Run: hisaabo login", 3);
   }
 
@@ -89,7 +127,7 @@ export function requireAuth(): ConfigSchema {
     }
   }
 
-  return cfg as ConfigSchema;
+  return { ...cfg, apiUrl: validateApiUrl(cfg.apiUrl), tenantId: cfg.tenantId ?? "" } as ConfigSchema;
 }
 
 /**
@@ -111,7 +149,7 @@ export function requireTenantAuth(): TenantAuthConfig {
   const envUrl = process.env["HISAABO_API_URL"];
   if (envToken && envUrl) {
     return {
-      apiUrl: envUrl,
+      apiUrl: validateApiUrl(envUrl),
       token: envToken,
       tenantId: process.env["HISAABO_TENANT_ID"] ?? "",
       businessId: process.env["HISAABO_BUSINESS_ID"] ?? "",
@@ -134,11 +172,11 @@ export function requireTenantAuth(): TenantAuthConfig {
     }
   }
 
-  return cfg as TenantAuthConfig;
+  return { ...cfg, apiUrl: validateApiUrl(cfg.apiUrl) } as TenantAuthConfig;
 }
 
 export function getConfigPath(): string {
-  return conf.path;
+  return conf().path;
 }
 
 /**

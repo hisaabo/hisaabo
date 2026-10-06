@@ -1,6 +1,7 @@
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 function handleError(e: unknown): never {
   if (e instanceof HisaaboApiError) {
@@ -68,9 +69,11 @@ export async function eInvoiceGenerateCommand(invoiceId: string, opts: { json?: 
   }
 }
 
-export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: boolean; reason?: string }): Promise<void> {
+export async function eInvoiceCancelCommand(invoiceId: string, opts: { json?: boolean; reason?: string; yes?: boolean }): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
+
+  await confirmOrExit(`Cancel the e-invoice for ${invoiceId}? This cannot be undone.`, opts);
 
   try {
     const result = await client.eInvoice.cancel({ invoiceId, cancelReason: opts.reason ?? "1" });

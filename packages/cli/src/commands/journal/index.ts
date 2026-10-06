@@ -2,6 +2,7 @@ import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT } from "../../output.js";
 import { formatDate } from "../../format.js";
+import { confirmOrExit } from "../../safety.js";
 
 interface JournalOpts {
   json?: boolean;
@@ -100,9 +101,11 @@ export async function journalGetCommand(id: string, opts: { json?: boolean }): P
   }
 }
 
-export async function journalVoidCommand(id: string, opts: { json?: boolean }): Promise<void> {
+export async function journalVoidCommand(id: string, opts: { json?: boolean; yes?: boolean }): Promise<void> {
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
+
+  await confirmOrExit(`Void journal entry ${id}?`, opts);
 
   try {
     const result = await client.journal.void(id);

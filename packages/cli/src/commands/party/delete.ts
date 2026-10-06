@@ -1,7 +1,7 @@
-import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
+import { confirmOrExit } from "../../safety.js";
 
 export async function partyDeleteCommand(id: string, opts: { yes?: boolean; json?: boolean }): Promise<void> {
   const cfg = requireAuth();
@@ -10,17 +10,7 @@ export async function partyDeleteCommand(id: string, opts: { yes?: boolean; json
   try {
     const party = await client.party.get(id);
 
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Delete ${party.name}? (y/N): `, resolve);
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete ${party.name}?`, opts);
 
     const result = await client.party.delete(id);
 

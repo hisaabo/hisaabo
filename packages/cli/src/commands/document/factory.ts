@@ -11,6 +11,7 @@ import {
   fyStart, todayISO, monthStart, monthEnd, currentFY,
 } from "../../format.js";
 import chalk from "chalk";
+import { confirmOrExit } from "../../safety.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -230,7 +231,7 @@ export async function docGetCommand(dt: DocTypeConfig, id: string, opts: GetOpts
 
       items.forEach((item: any, i: number) => {
         const idx = String(i + 1).padStart(2);
-        const desc = (item.description ?? item.name ?? "").slice(0, 18).padEnd(18);
+        const desc = (item.itemName ?? item.description ?? item.name ?? "").slice(0, 18).padEnd(18);
         const qty = String(item.quantity ?? "1").padStart(5);
         const rate = formatAmount(String(item.unitPrice ?? item.rate ?? "0")).padStart(10);
         const amt = formatAmount(String(item.amount ?? "0")).padStart(12);
@@ -319,7 +320,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
     }
 
     // ── Build line items ───────────────────────────────────────────
-    const lineItems: Array<{ itemId?: string; description: string; quantity: string; unitPrice: string; taxPercent?: string; discountPercent?: string }> = [];
+    const lineItems: Array<{ itemId?: string; itemName: string; quantity: string; unitPrice: string; taxPercent?: string; discountPercent?: string }> = [];
 
     if (opts.item && opts.item.length > 0) {
       for (let i = 0; i < opts.item.length; i++) {
@@ -333,7 +334,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
             unitPrice = items.data[0].salePrice;
             lineItems.push({
               itemId: items.data[0].id,
-              description: items.data[0].name,
+              itemName: items.data[0].name,
               quantity: qty,
               unitPrice,
               taxPercent: items.data[0].taxPercent,
@@ -349,13 +350,13 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
           if (matched) {
             lineItems.push({
               itemId: matched.id,
-              description: matched.name,
+              itemName: matched.name,
               quantity: qty,
               unitPrice,
               taxPercent: matched.taxPercent,
             });
           } else {
-            lineItems.push({ description: itemName, quantity: qty, unitPrice });
+            lineItems.push({ itemName, quantity: qty, unitPrice });
           }
         }
       }
@@ -415,7 +416,7 @@ export async function docCreateCommand(dt: DocTypeConfig, opts: CreateOpts): Pro
           `    > ${description}  x${qty}  @${formatAmount(unitPrice)}  ${taxPercent}% tax  = ${formatAmount(String(amount))}\n`,
         );
 
-        lineItems.push({ itemId, description, quantity: qty, unitPrice, taxPercent, discountPercent });
+        lineItems.push({ itemId, itemName: description, quantity: qty, unitPrice, taxPercent, discountPercent });
         itemNum++;
       }
       rl.close();
@@ -553,20 +554,7 @@ export async function docDeleteCommand(
     const doc = await ns.getById({ id });
     const docNum = doc.documentNumber ?? doc.number ?? id;
 
-    if (!opts.yes && process.stdin.isTTY) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(
-          `  Delete ${docNum} (${doc.partyName ?? ""}, ${doc.totalAmount ?? ""})? (y/N): `,
-          resolve,
-        );
-      });
-      rl.close();
-      if (answer.trim().toLowerCase() !== "y") {
-        console.log("  Cancelled.");
-        process.exit(0);
-      }
-    }
+    await confirmOrExit(`  Delete ${docNum} (${doc.partyName ?? ""}, ${doc.totalAmount ?? ""})?`, opts);
 
     const result = await ns.delete({ id });
 

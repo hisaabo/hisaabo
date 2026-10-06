@@ -56,10 +56,9 @@ export function registerBusinessCommands(program: Command): void {
 
   business
     .command("sequence")
-    .description("Update invoice sequence number / prefix")
-    .requiredOption("--type <type>", "Document type: sale or purchase")
-    .option("--prefix <prefix>", "Invoice prefix (e.g. INV-)")
-    .option("--next-number <n>", "Next sequence number")
+    .description("Set the next document number (cannot go backwards)")
+    .requiredOption("--type <type>", "Document type: invoice, payment, quotation, credit_note, delivery_challan, proforma")
+    .requiredOption("--next-number <n>", "Next sequence number")
     .option("--json", "JSON output")
     .action(async (opts) => {
       const { businessSequenceCommand } = await import("../../commands/business/sequence.js");

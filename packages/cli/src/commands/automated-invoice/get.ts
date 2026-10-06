@@ -85,7 +85,7 @@ export async function automatedInvoiceGetCommand(id: string, opts: { json?: bool
 
     tmpl.lineItems.forEach((item, i) => {
       const idx = String(i + 1).padStart(2);
-      const desc = item.description.slice(0, 18).padEnd(18);
+      const desc = item.itemName.slice(0, 18).padEnd(18);
       const qty = item.quantity.padStart(5);
       const rate = formatAmount(item.unitPrice).padStart(10);
       const tax = item.taxPercent ? `${item.taxPercent}%`.padStart(5) : "    -";
