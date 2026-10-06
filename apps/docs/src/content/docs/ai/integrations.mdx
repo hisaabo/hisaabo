@@ -90,7 +90,7 @@ Bot replies: "Invoice BB-15042 ready!
 
 - Use the [WhatsApp Business Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) for message webhooks
 - Audio transcription via OpenAI Whisper handles Hindi, English, and regional languages well
-- Use a dedicated Hisaabo user account with the `seller` role for the write MCP instance to limit blast radius; use an `accountant`-role account for any read-only agent
+- Use a dedicated API key (`hisaabo_key_...`) from a `seller`-role member for the write MCP instance (`HISAABO_MCP_MODE=write`) to limit blast radius; use an `accountant`-role key in the default `readonly` mode for any read-only agent. Keys expire (default 90 days) and are revoked if the member's role changes
 - Keep an audit log of every voice note + transcript + invoice created for dispute resolution
 
 ---
@@ -404,10 +404,10 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_API_KEY: "sess_..."
+      HISAABO_API_KEY: "hisaabo_key_..."
       HISAABO_TENANT_ID: "tenant-uuid"
       HISAABO_BUSINESS_ID: "business-uuid"
-    # Use an accountant-role user account so the agent cannot create or modify records
+    # Use an API key from an accountant-role member and leave HISAABO_MCP_MODE unset (readonly) so the agent cannot create or modify records
 
 system_prompt: |
   You are a friendly customer service agent for [Your Store Name].
@@ -447,7 +447,7 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_API_KEY: "sess_..."
+      HISAABO_API_KEY: "hisaabo_key_..."
       HISAABO_TENANT_ID: "tenant-uuid"
       HISAABO_BUSINESS_ID: "business-uuid"
 
@@ -485,7 +485,7 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_API_KEY: "sess_client1_token..."
+      HISAABO_API_KEY: "hisaabo_key_client1..."
       HISAABO_TENANT_ID: "tenant-uuid"
       HISAABO_BUSINESS_ID: "sharma-traders-business-uuid"
   - name: client-gupta-enterprises
@@ -493,7 +493,7 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_API_KEY: "sess_client2_token..."
+      HISAABO_API_KEY: "hisaabo_key_client2..."
       HISAABO_TENANT_ID: "tenant-uuid"
       HISAABO_BUSINESS_ID: "gupta-enterprises-business-uuid"
   - name: client-vinod-sons
@@ -501,7 +501,7 @@ mcp_servers:
     args: ["@hisaabo/mcp"]
     env:
       HISAABO_API_URL: "https://your-hisaabo-instance.com"
-      HISAABO_API_KEY: "sess_client3_token..."
+      HISAABO_API_KEY: "hisaabo_key_client3..."
       HISAABO_TENANT_ID: "tenant-uuid"
       HISAABO_BUSINESS_ID: "vinod-sons-business-uuid"
 

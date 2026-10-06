@@ -121,11 +121,16 @@ AI Agent: "Q3 FY 2025-26 GST summary:
 See the [MCP Server setup guide](/ai/mcp-server/) for full installation and configuration instructions. The short version:
 
 ```bash
-# 1. Install CLI and authenticate
+# 1. Install CLI and sign in (opens your browser)
 npm install -g @hisaabo/cli
 hisaabo login
-hisaabo whoami --json   # copy token, tenantId, businessId from output
+hisaabo whoami --json   # copy tenantId and businessId from the output
+
+# 2. Create a dedicated API key for the MCP server (admin only)
+hisaabo api-key create --name "Claude Desktop" --expires-in-days 90
 ```
+
+The MCP server authenticates with an API key (`hisaabo_key_...`), not a login session token. You can also create one in the web app under **Settings → API Keys** (admins only). Keys expire (default 90 days, maximum 365) and stop working when the member is removed or their role changes. The server starts in `readonly` mode; set `HISAABO_MCP_MODE=write` to let the agent create and change records.
 
 Then add this to your Claude Desktop `claude_desktop_config.json`:
 
@@ -137,7 +142,7 @@ Then add this to your Claude Desktop `claude_desktop_config.json`:
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_API_KEY": "sess_...",
+        "HISAABO_API_KEY": "hisaabo_key_...",
         "HISAABO_TENANT_ID": "tenant-uuid",
         "HISAABO_BUSINESS_ID": "business-uuid"
       }
@@ -146,15 +151,15 @@ Then add this to your Claude Desktop `claude_desktop_config.json`:
 }
 ```
 
-### Available tools (~50 total)
+### Available tools
 
-The MCP server exposes tools across all Hisaabo business domains:
+The MCP server exposes tools across all Hisaabo business domains. Which tools are registered depends on the safety mode (`readonly` by default, `write`, or `admin` with `HISAABO_MCP_ENABLE_ADMIN=1`); destructive tools additionally require `confirm: true`. A selection:
 
 | Domain | Tools |
 |---|---|
 | **Invoicing** | `invoice_list`, `invoice_create`, `invoice_get`, `invoice_update_status`, `invoice_pdf_url`, `invoice_delete` |
 | **Parties** | `party_list`, `party_create`, `party_get`, `party_update`, `party_delete`, `party_ledger` |
-| **Items** | `item_list`, `item_create`, `item_get`, `item_update`, `item_delete`, `item_adjust_stock`, `item_categories` |
+| **Items** | `item_list`, `item_create`, `item_get`, `item_update`, `item_delete`, `item_adjust_stock`, `item_merge` |
 | **Payments** | `payment_list`, `payment_create`, `payment_get`, `payment_update`, `payment_delete` |
 | **Expenses** | `expense_list`, `expense_create`, `expense_update`, `expense_delete`, `expense_categories` |
 | **GST** | `gst_report`, `gst_report_csv` |
@@ -179,7 +184,7 @@ The Hisaabo CLI (`hisaabo`) is built with [Ink 5](https://github.com/vadimdemede
 ```bash
 npm install -g @hisaabo/cli
 
-# Authenticate (interactive prompt for URL, email, password)
+# Sign in (opens your browser; no password is typed in the terminal)
 hisaabo login
 
 # Check current context
@@ -231,22 +236,23 @@ If you are building a custom AI agent or integration, the underlying tRPC API is
 
 ### Authentication
 
-All API calls require a session token in the `Authorization` header and the target business ID:
+All API calls from automations should use an API key in the `Authorization` header, plus the target business ID:
 
 ```http
-Authorization: Bearer sess_VbK2mQ9xP4nR7wA1...
+Authorization: Bearer hisaabo_key_VbK2mQ9xP4nR7wA1...
 x-business-id: <your-business-uuid>
 x-tenant-id: <your-tenant-uuid>
 ```
 
-Get your session token by logging in via the CLI:
+Create a key in the web app under **Settings → API Keys** (admins only), or from the CLI:
 
 ```bash
 hisaabo login
-hisaabo whoami --json   # prints token, tenantId, businessId
+hisaabo api-key create --name "Reporting bot" --expires-in-days 90
+hisaabo whoami --json   # prints tenantId and businessId
 ```
 
-Session tokens last 30 days. For unattended server automations, store the token in an environment variable and refresh it monthly.
+The full key is shown once. Keys expire (default 90 days, maximum 365) and are revoked automatically when the member is removed or their role changes, so plan to rotate them. Do not use login session tokens for unattended automations; they are issued to interactive clients and are not meant to be copied into scripts.
 
 ### Key patterns
 
@@ -290,7 +296,7 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import type { AppRouter } from "@hisaabo/api";
 
-// Get these values from: hisaabo whoami --json
+// tenantId and businessId: hisaabo whoami --json. HISAABO_API_KEY: an API key (hisaabo_key_...)
 const client = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({

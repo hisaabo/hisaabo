@@ -49,7 +49,7 @@ You do not need a token if you are testing with the Chrome flag, and you will no
 
 ### 3. Switch it on in Hisaabo
 
-Open **Settings → Account → Browser AI agents** and turn on *Allow this browser's AI agent to use Hisaabo*. It is on by default and stored per browser, so turning it off on your office machine does not affect your laptop.
+Open **Settings → Account → Browser AI agents** and turn on *Allow this browser's AI agent to use Hisaabo*. It is off by default (opt-in) and stored per browser, so enabling or disabling it on your office machine does not affect your laptop.
 
 ---
 
@@ -92,9 +92,10 @@ The design goal is that an agent can do nothing through WebMCP that you could no
 - **Same validation.** Inputs go through the same schemas as the dashboard. A GSTIN that the form would reject is rejected here too.
 - **Everything is in the audit trail.** Every write is logged exactly as a manual one is, visible under **Settings → Account → Activity**. You can always see what the agent did.
 - **No delete tools.** Nothing destructive is exposed. The agent cannot delete an invoice, a party, an item, a payment or an expense — deletions stay a deliberate human action in the UI.
-- **Writes ask first.** Every tool that changes data is marked consequential, so the browser shows you what is about to happen and waits for your approval.
+- **Off until you turn it on.** Browser AI agent access is opt-in: no tools are registered until you enable **Settings → Account → Browser AI agents** in that browser.
+- **Writes ask first, inside Hisaabo.** Every tool that changes data is marked consequential, and Hisaabo itself shows a confirmation dialog describing what is about to happen. Nothing is written until you approve it there.
 - **Prompt injection.** Anything an agent reads can try to instruct it — a party name, an invoice note, a product description typed by someone else. Read results carry `untrustedContentHint` so the agent treats them as data, but the confirmation prompt on every write is the real backstop. Read what you are approving, especially for amounts and party names.
-- **Turn it off.** Settings → Account → Browser AI agents. The tools are unregistered immediately, per browser.
+- **Turn it off.** Settings → Account → Browser AI agents. The tools are unregistered immediately, per browser. The setting is stored per browser.
 
 ---
 
@@ -107,7 +108,7 @@ The design goal is that an agent can do nothing through WebMCP that you could no
 | **ChatGPT Desktop** | Consumes WebMCP tools from the browser |
 | **Claude in Chrome** | Does not consume WebMCP today ([claude-code#30645](https://github.com/anthropics/claude-code/issues/30645), closed as not planned) |
 
-If you use Claude, nothing changes: keep using the [MCP server](/ai/mcp-server/) with `@hisaabo/mcp`. It covers considerably more ground than the browser tools — about 50 tools including GST reports, banking, shipments and bulk import — and it works from Claude Desktop without a browser tab open at all.
+If you use Claude, nothing changes: keep using the [MCP server](/ai/mcp-server/) with `@hisaabo/mcp`. It covers considerably more ground than the browser tools — well over a hundred tools including GST reports, banking, shipments and bulk import — and it works from Claude Desktop without a browser tab open at all.
 
 ---
 
