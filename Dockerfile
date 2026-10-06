@@ -1,5 +1,5 @@
 # ── Stage 1: Build ──────────────────────────────────────────────
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
 # pnpm via corepack (pinned to match packageManager field)
@@ -36,7 +36,7 @@ RUN pnpm --filter @hisaabo/db exec esbuild src/migrate-cli.ts \
       --external:postgres --external:drizzle-orm --external:dotenv
 
 # ── Stage 2: Production runtime ────────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate

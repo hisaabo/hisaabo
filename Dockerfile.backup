@@ -1,4 +1,4 @@
-FROM postgres:16-alpine
+FROM postgres:18-alpine
 
 RUN apk add --no-cache bash rclone age openssl \
     && adduser -D -u 10001 -h /home/backup backup

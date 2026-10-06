@@ -18,7 +18,7 @@
 # ONCE backup hooks: /hooks/pre-backup, /hooks/post-restore
 
 # ── Stage 1: Build API ────────────────────────────────────────
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
@@ -48,7 +48,7 @@ RUN pnpm --filter @hisaabo/db exec esbuild src/migrate-cli.ts \
       --external:postgres --external:drizzle-orm --external:dotenv
 
 # ── Stage 2: Production runtime ──────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 
 # ── System deps ──────────────────────────────────────────────
