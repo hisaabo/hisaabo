@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-router-dom": "^7.0.0",
     "prismjs": "^1.29.0"
   },
@@ -19,7 +19,7 @@
     "@types/react": "~19.2.0",
     "@types/react-dom": "~19.2.0",
     "@types/prismjs": "^1.26.0",
-    "typescript": "~5.7.0",
+    "typescript": "~5.9.3",
     "vite": "^7.0.0",
     "@vitejs/plugin-react": "^5.2.0",
     "tailwindcss": "^4.0.0",
