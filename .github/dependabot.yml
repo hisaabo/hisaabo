@@ -5,7 +5,7 @@
 # land together in a single PR every Monday instead of one PR per package.
 #
 # Only minor and patch updates are proposed automatically. Major upgrades
-# (Expo SDK, Node, PostgreSQL, Tailwind 4, Vite 8, keyring 4, ...) need code or
+# (Expo SDK, Node, PostgreSQL, Tailwind 4, pdfjs-dist 6, keyring 4, ...) need code or
 # data migrations, so each one is done deliberately in its own PR. Without the
 # `semver-major` ignores they would land in the shared weekly PR and a single
 # breaking major would block every other update.
@@ -30,12 +30,14 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # React is pinned to 19.2.0 via pnpm.overrides in the root package.json
-      # and must match what the Expo SDK ships. Bump it with the SDK upgrade.
+      # React is pinned to exactly 19.2.0 via pnpm.overrides in the root
+      # package.json and must match what the Expo SDK ships, so patch bumps of
+      # the manifest ranges would only misstate what is installed. Bump it with
+      # the SDK upgrade.
       - dependency-name: "react"
-        update-types: ["version-update:semver-minor"]
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "react-dom"
-        update-types: ["version-update:semver-minor"]
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "@types/react"
         update-types: ["version-update:semver-minor"]
       - dependency-name: "@types/react-dom"
@@ -60,6 +62,14 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "react-native-worklets"
         update-types: ["version-update:semver-patch"]
+      # The SDK pins reanimated to an exact version paired with worklets.
+      - dependency-name: "react-native-reanimated"
+        update-types: ["version-update:semver-patch"]
+      # pdfjs-dist 5.6.83 up to 6.2.108 is affected by GHSA-hq66-cqwq-w95j
+      # (arbitrary JS execution from a malicious PDF); 5.5.x is not. The fix
+      # is the 6.x major, which is done deliberately in its own PR.
+      - dependency-name: "pdfjs-dist"
+        versions: ["5.6.x", "5.7.x"]
     labels: [dependencies]
 
   # GitHub Actions (workflows pin actions by commit SHA; Dependabot bumps the SHA + version comment)

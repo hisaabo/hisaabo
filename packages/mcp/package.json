@@ -49,11 +49,11 @@
   "devDependencies": {
     "@hisaabo/api": "workspace:*",
     "@hisaabo/shared": "workspace:*",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "tsup": "^8.3.0",
     "tsx": "^4.23.15",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"

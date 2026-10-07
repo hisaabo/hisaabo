@@ -4,9 +4,9 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import path from "path";
 import { readFileSync } from "fs";
 import { execSync } from "child_process";
-import { generateWellKnown } from "./src/lib/well-known";
+import { generateWellKnown } from "./src/lib/well-known.ts";
 
-const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
+const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8"));
 
 // SHA-256 hash of the inline theme-detection script in index.html (lines 36-40).
 // Recompute with: node -e "const c=require('crypto'),f=require('fs');
@@ -164,7 +164,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   server: {
@@ -180,13 +180,15 @@ export default defineConfig({
     target: "es2022",
     outDir: "dist",
     sourcemap: "hidden",
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-router': ['@tanstack/react-router'],
-          'vendor-query': ['@tanstack/react-query'],
-          'vendor-trpc': ['@trpc/client', '@trpc/react-query', 'superjson'],
+        codeSplitting: {
+          groups: [
+            { name: "vendor-react", test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: "vendor-router", test: /[\\/]node_modules[\\/]@tanstack[\\/](react-router|router-core|history)[\\/]/ },
+            { name: "vendor-query", test: /[\\/]node_modules[\\/]@tanstack[\\/](react-query|query-core)[\\/]/ },
+            { name: "vendor-trpc", test: /[\\/]node_modules[\\/](@trpc[\\/](client|react-query|server)|superjson|copy-anything|is-what)[\\/]/ },
+          ],
         },
       },
     },

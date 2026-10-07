@@ -9,7 +9,7 @@
  * Run with: pnpm --filter @hisaabo/web test -- --run src/lib/webmcp
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { WEBMCP_PREF_KEY } from "../preferences";
 import type { WebMcpTrpcClient } from "../types";
@@ -37,7 +37,9 @@ vi.mock("../tools", () => ({
 const { useWebMcp } = await import("../useWebMcp");
 type UseWebMcpInput = Parameters<typeof useWebMcp>[0];
 
-let registerTool: ReturnType<typeof vi.fn>;
+let registerTool: Mock<
+  (tool: WebMCP.ModelContextTool, options?: WebMCP.ModelContextRegisterToolOptions) => Promise<void>
+>;
 
 function makeInput(overrides: Partial<UseWebMcpInput> = {}): UseWebMcpInput {
   return {
@@ -99,7 +101,7 @@ describe("useWebMcp", () => {
     const { unmount } = renderHook(() => useWebMcp(makeInput()));
     await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
 
-    const signal = registerTool.mock.calls[0][1].signal as AbortSignal;
+    const signal = registerTool.mock.calls[0][1]?.signal as AbortSignal;
     expect(signal.aborted).toBe(false);
     unmount();
     expect(signal.aborted).toBe(true);
@@ -110,7 +112,7 @@ describe("useWebMcp", () => {
       initialProps: makeInput({ businessId: "biz-1" }),
     });
     await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(2));
-    const firstSignal = registerTool.mock.calls[0][1].signal as AbortSignal;
+    const firstSignal = registerTool.mock.calls[0][1]?.signal as AbortSignal;
 
     rerender(makeInput({ businessId: "biz-2" }));
     await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(4));
