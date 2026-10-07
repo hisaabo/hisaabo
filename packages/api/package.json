@@ -16,7 +16,7 @@
     "admin": "tsx src/bin/admin.ts"
   },
   "dependencies": {
-    "@casl/ability": "^6.8.0",
+    "@casl/ability": "^6.8.1",
     "@hisaabo/db": "workspace:*",
     "@hisaabo/shared": "workspace:*",
     "@hono/node-server": "^1.19.17",
@@ -39,7 +39,7 @@
   "devDependencies": {
     "@clack/core": "^1.5.1",
     "@clack/prompts": "^1.8.1",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "@types/pdfkit": "^0.17.6",
     "@types/pino": "^7.0.5",
     "@types/qrcode": "^1.5.6",
