@@ -438,7 +438,7 @@ describe("downloadCSV() — generates and triggers download of a BOM-prefixed CS
     let lastContent = "";
     let lastType = "";
     vi.spyOn(globalThis, "Blob").mockImplementation(
-      (parts?: BlobPart[], options?: BlobPropertyBag) => {
+      function (parts?: BlobPart[], options?: BlobPropertyBag) {
         // parts[0] is the full CSV string ("\uFEFF" + csv)
         lastContent = (parts?.[0] as string) ?? "";
         lastType = options?.type ?? "";

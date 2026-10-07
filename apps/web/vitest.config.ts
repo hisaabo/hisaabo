@@ -11,12 +11,10 @@ export default defineConfig({
     // Exclude route files — they depend on TanStack Router's file-based
     // route generation which requires the full Vite plugin pipeline.
     exclude: ["**/node_modules/**", "**/routes/**"],
-    // Prevent memory explosion: single fork reuses one worker for all test files
+    // Prevent memory explosion: run test files one at a time in a single fork
     // instead of spawning parallel jsdom environments.
     pool: "forks",
-    poolOptions: {
-      forks: { singleFork: true },
-    },
+    maxWorkers: 1,
     testTimeout: 10000,
     teardownTimeout: 5000,
   },
@@ -35,7 +33,7 @@ export default defineConfig({
     // symlinks.
     dedupe: ["react", "react-dom", "react/jsx-runtime"],
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
 });
