@@ -1,0 +1,5 @@
+# Generated files are rewritten wholesale by tooling (e.g. a TanStack Router
+# plugin upgrade reorders every line of routeTree.gen.ts), which would
+# otherwise count as uncovered patch lines.
+ignore:
+  - "**/routeTree.gen.ts"

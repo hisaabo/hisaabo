@@ -9,155 +9,40 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as StoreOrdersRouteImport } from './routes/store-orders'
-import { Route as ShipmentsRouteImport } from './routes/shipments'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as SalesReturnsRouteImport } from './routes/sales-returns'
-import { Route as ReportsRouteImport } from './routes/reports'
-import { Route as QuotationsRouteImport } from './routes/quotations'
-import { Route as ProformaInvoicesRouteImport } from './routes/proforma-invoices'
-import { Route as PosRouteImport } from './routes/pos'
-import { Route as PaymentsRouteImport } from './routes/payments'
-import { Route as PartiesRouteImport } from './routes/parties'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as JournalEntriesRouteImport } from './routes/journal-entries'
-import { Route as ItemsRouteImport } from './routes/items'
-import { Route as ItcRouteImport } from './routes/itc'
-import { Route as InvoicesRouteImport } from './routes/invoices'
-import { Route as Gstr2bRouteImport } from './routes/gstr2b'
-import { Route as GstRouteImport } from './routes/gst'
-import { Route as ExpensesRouteImport } from './routes/expenses'
-import { Route as EwayBillsRouteImport } from './routes/eway-bills'
-import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
-import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
-import { Route as CreditNotesRouteImport } from './routes/credit-notes'
-import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
-import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
-import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoices'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as InviteTokenRouteImport } from './routes/invite/$token'
-import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
-import { Route as AuthNativeRouteImport } from './routes/auth/native'
+import { Route as AutomatedInvoicesRouteImport } from './routes/automated-invoices'
+import { Route as BankReconciliationRouteImport } from './routes/bank-reconciliation'
+import { Route as CashAndBankRouteImport } from './routes/cash-and-bank'
+import { Route as CreditNotesRouteImport } from './routes/credit-notes'
+import { Route as DeliveryChallansRouteImport } from './routes/delivery-challans'
+import { Route as EInvoicingRouteImport } from './routes/e-invoicing'
+import { Route as EwayBillsRouteImport } from './routes/eway-bills'
+import { Route as ExpensesRouteImport } from './routes/expenses'
+import { Route as GstRouteImport } from './routes/gst'
+import { Route as Gstr2bRouteImport } from './routes/gstr2b'
+import { Route as InvoicesRouteImport } from './routes/invoices'
+import { Route as ItcRouteImport } from './routes/itc'
+import { Route as ItemsRouteImport } from './routes/items'
+import { Route as JournalEntriesRouteImport } from './routes/journal-entries'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as PartiesRouteImport } from './routes/parties'
+import { Route as PaymentsRouteImport } from './routes/payments'
+import { Route as PosRouteImport } from './routes/pos'
+import { Route as ProformaInvoicesRouteImport } from './routes/proforma-invoices'
+import { Route as QuotationsRouteImport } from './routes/quotations'
+import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as SalesReturnsRouteImport } from './routes/sales-returns'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ShipmentsRouteImport } from './routes/shipments'
+import { Route as StoreOrdersRouteImport } from './routes/store-orders'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
+import { Route as AuthNativeRouteImport } from './routes/auth/native'
+import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
+import { Route as InviteTokenRouteImport } from './routes/invite/$token'
 
-const StoreOrdersRoute = StoreOrdersRouteImport.update({
-  id: '/store-orders',
-  path: '/store-orders',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ShipmentsRoute = ShipmentsRouteImport.update({
-  id: '/shipments',
-  path: '/shipments',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SalesReturnsRoute = SalesReturnsRouteImport.update({
-  id: '/sales-returns',
-  path: '/sales-returns',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ReportsRoute = ReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const QuotationsRoute = QuotationsRouteImport.update({
-  id: '/quotations',
-  path: '/quotations',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProformaInvoicesRoute = ProformaInvoicesRouteImport.update({
-  id: '/proforma-invoices',
-  path: '/proforma-invoices',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PosRoute = PosRouteImport.update({
-  id: '/pos',
-  path: '/pos',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PaymentsRoute = PaymentsRouteImport.update({
-  id: '/payments',
-  path: '/payments',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PartiesRoute = PartiesRouteImport.update({
-  id: '/parties',
-  path: '/parties',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const JournalEntriesRoute = JournalEntriesRouteImport.update({
-  id: '/journal-entries',
-  path: '/journal-entries',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ItemsRoute = ItemsRouteImport.update({
-  id: '/items',
-  path: '/items',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ItcRoute = ItcRouteImport.update({
-  id: '/itc',
-  path: '/itc',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const InvoicesRoute = InvoicesRouteImport.update({
-  id: '/invoices',
-  path: '/invoices',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const Gstr2bRoute = Gstr2bRouteImport.update({
-  id: '/gstr2b',
-  path: '/gstr2b',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GstRoute = GstRouteImport.update({
-  id: '/gst',
-  path: '/gst',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ExpensesRoute = ExpensesRouteImport.update({
-  id: '/expenses',
-  path: '/expenses',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EwayBillsRoute = EwayBillsRouteImport.update({
-  id: '/eway-bills',
-  path: '/eway-bills',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EInvoicingRoute = EInvoicingRouteImport.update({
-  id: '/e-invoicing',
-  path: '/e-invoicing',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DeliveryChallansRoute = DeliveryChallansRouteImport.update({
-  id: '/delivery-challans',
-  path: '/delivery-challans',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CreditNotesRoute = CreditNotesRouteImport.update({
-  id: '/credit-notes',
-  path: '/credit-notes',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CashAndBankRoute = CashAndBankRouteImport.update({
-  id: '/cash-and-bank',
-  path: '/cash-and-bank',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BankReconciliationRoute = BankReconciliationRouteImport.update({
-  id: '/bank-reconciliation',
-  path: '/bank-reconciliation',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AutomatedInvoicesRoute = AutomatedInvoicesRouteImport.update({
@@ -165,19 +50,129 @@ const AutomatedInvoicesRoute = AutomatedInvoicesRouteImport.update({
   path: '/automated-invoices',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const BankReconciliationRoute = BankReconciliationRouteImport.update({
+  id: '/bank-reconciliation',
+  path: '/bank-reconciliation',
   getParentRoute: () => rootRouteImport,
 } as any)
-const InviteTokenRoute = InviteTokenRouteImport.update({
-  id: '/invite/$token',
-  path: '/invite/$token',
+const CashAndBankRoute = CashAndBankRouteImport.update({
+  id: '/cash-and-bank',
+  path: '/cash-and-bank',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthVerifyRoute = AuthVerifyRouteImport.update({
-  id: '/auth/verify',
-  path: '/auth/verify',
+const CreditNotesRoute = CreditNotesRouteImport.update({
+  id: '/credit-notes',
+  path: '/credit-notes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeliveryChallansRoute = DeliveryChallansRouteImport.update({
+  id: '/delivery-challans',
+  path: '/delivery-challans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EInvoicingRoute = EInvoicingRouteImport.update({
+  id: '/e-invoicing',
+  path: '/e-invoicing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EwayBillsRoute = EwayBillsRouteImport.update({
+  id: '/eway-bills',
+  path: '/eway-bills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExpensesRoute = ExpensesRouteImport.update({
+  id: '/expenses',
+  path: '/expenses',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GstRoute = GstRouteImport.update({
+  id: '/gst',
+  path: '/gst',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Gstr2bRoute = Gstr2bRouteImport.update({
+  id: '/gstr2b',
+  path: '/gstr2b',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvoicesRoute = InvoicesRouteImport.update({
+  id: '/invoices',
+  path: '/invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ItcRoute = ItcRouteImport.update({
+  id: '/itc',
+  path: '/itc',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ItemsRoute = ItemsRouteImport.update({
+  id: '/items',
+  path: '/items',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const JournalEntriesRoute = JournalEntriesRouteImport.update({
+  id: '/journal-entries',
+  path: '/journal-entries',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PartiesRoute = PartiesRouteImport.update({
+  id: '/parties',
+  path: '/parties',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaymentsRoute = PaymentsRouteImport.update({
+  id: '/payments',
+  path: '/payments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PosRoute = PosRouteImport.update({
+  id: '/pos',
+  path: '/pos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProformaInvoicesRoute = ProformaInvoicesRouteImport.update({
+  id: '/proforma-invoices',
+  path: '/proforma-invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QuotationsRoute = QuotationsRouteImport.update({
+  id: '/quotations',
+  path: '/quotations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SalesReturnsRoute = SalesReturnsRouteImport.update({
+  id: '/sales-returns',
+  path: '/sales-returns',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ShipmentsRoute = ShipmentsRouteImport.update({
+  id: '/shipments',
+  path: '/shipments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StoreOrdersRoute = StoreOrdersRouteImport.update({
+  id: '/store-orders',
+  path: '/store-orders',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
+  id: '/auth/complete-profile',
+  path: '/auth/complete-profile',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthNativeRoute = AuthNativeRouteImport.update({
@@ -185,9 +180,14 @@ const AuthNativeRoute = AuthNativeRouteImport.update({
   path: '/auth/native',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
-  id: '/auth/complete-profile',
-  path: '/auth/complete-profile',
+const AuthVerifyRoute = AuthVerifyRouteImport.update({
+  id: '/auth/verify',
+  path: '/auth/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -422,172 +422,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/store-orders': {
-      id: '/store-orders'
-      path: '/store-orders'
-      fullPath: '/store-orders'
-      preLoaderRoute: typeof StoreOrdersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/shipments': {
-      id: '/shipments'
-      path: '/shipments'
-      fullPath: '/shipments'
-      preLoaderRoute: typeof ShipmentsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sales-returns': {
-      id: '/sales-returns'
-      path: '/sales-returns'
-      fullPath: '/sales-returns'
-      preLoaderRoute: typeof SalesReturnsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reports': {
-      id: '/reports'
-      path: '/reports'
-      fullPath: '/reports'
-      preLoaderRoute: typeof ReportsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/quotations': {
-      id: '/quotations'
-      path: '/quotations'
-      fullPath: '/quotations'
-      preLoaderRoute: typeof QuotationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/proforma-invoices': {
-      id: '/proforma-invoices'
-      path: '/proforma-invoices'
-      fullPath: '/proforma-invoices'
-      preLoaderRoute: typeof ProformaInvoicesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/pos': {
-      id: '/pos'
-      path: '/pos'
-      fullPath: '/pos'
-      preLoaderRoute: typeof PosRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/payments': {
-      id: '/payments'
-      path: '/payments'
-      fullPath: '/payments'
-      preLoaderRoute: typeof PaymentsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/parties': {
-      id: '/parties'
-      path: '/parties'
-      fullPath: '/parties'
-      preLoaderRoute: typeof PartiesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/journal-entries': {
-      id: '/journal-entries'
-      path: '/journal-entries'
-      fullPath: '/journal-entries'
-      preLoaderRoute: typeof JournalEntriesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/items': {
-      id: '/items'
-      path: '/items'
-      fullPath: '/items'
-      preLoaderRoute: typeof ItemsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/itc': {
-      id: '/itc'
-      path: '/itc'
-      fullPath: '/itc'
-      preLoaderRoute: typeof ItcRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/invoices': {
-      id: '/invoices'
-      path: '/invoices'
-      fullPath: '/invoices'
-      preLoaderRoute: typeof InvoicesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/gstr2b': {
-      id: '/gstr2b'
-      path: '/gstr2b'
-      fullPath: '/gstr2b'
-      preLoaderRoute: typeof Gstr2bRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/gst': {
-      id: '/gst'
-      path: '/gst'
-      fullPath: '/gst'
-      preLoaderRoute: typeof GstRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/expenses': {
-      id: '/expenses'
-      path: '/expenses'
-      fullPath: '/expenses'
-      preLoaderRoute: typeof ExpensesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/eway-bills': {
-      id: '/eway-bills'
-      path: '/eway-bills'
-      fullPath: '/eway-bills'
-      preLoaderRoute: typeof EwayBillsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/e-invoicing': {
-      id: '/e-invoicing'
-      path: '/e-invoicing'
-      fullPath: '/e-invoicing'
-      preLoaderRoute: typeof EInvoicingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/delivery-challans': {
-      id: '/delivery-challans'
-      path: '/delivery-challans'
-      fullPath: '/delivery-challans'
-      preLoaderRoute: typeof DeliveryChallansRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/credit-notes': {
-      id: '/credit-notes'
-      path: '/credit-notes'
-      fullPath: '/credit-notes'
-      preLoaderRoute: typeof CreditNotesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cash-and-bank': {
-      id: '/cash-and-bank'
-      path: '/cash-and-bank'
-      fullPath: '/cash-and-bank'
-      preLoaderRoute: typeof CashAndBankRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/bank-reconciliation': {
-      id: '/bank-reconciliation'
-      path: '/bank-reconciliation'
-      fullPath: '/bank-reconciliation'
-      preLoaderRoute: typeof BankReconciliationRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/automated-invoices': {
@@ -597,25 +436,179 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AutomatedInvoicesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/bank-reconciliation': {
+      id: '/bank-reconciliation'
+      path: '/bank-reconciliation'
+      fullPath: '/bank-reconciliation'
+      preLoaderRoute: typeof BankReconciliationRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/invite/$token': {
-      id: '/invite/$token'
-      path: '/invite/$token'
-      fullPath: '/invite/$token'
-      preLoaderRoute: typeof InviteTokenRouteImport
+    '/cash-and-bank': {
+      id: '/cash-and-bank'
+      path: '/cash-and-bank'
+      fullPath: '/cash-and-bank'
+      preLoaderRoute: typeof CashAndBankRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/verify': {
-      id: '/auth/verify'
-      path: '/auth/verify'
-      fullPath: '/auth/verify'
-      preLoaderRoute: typeof AuthVerifyRouteImport
+    '/credit-notes': {
+      id: '/credit-notes'
+      path: '/credit-notes'
+      fullPath: '/credit-notes'
+      preLoaderRoute: typeof CreditNotesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/delivery-challans': {
+      id: '/delivery-challans'
+      path: '/delivery-challans'
+      fullPath: '/delivery-challans'
+      preLoaderRoute: typeof DeliveryChallansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/e-invoicing': {
+      id: '/e-invoicing'
+      path: '/e-invoicing'
+      fullPath: '/e-invoicing'
+      preLoaderRoute: typeof EInvoicingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/eway-bills': {
+      id: '/eway-bills'
+      path: '/eway-bills'
+      fullPath: '/eway-bills'
+      preLoaderRoute: typeof EwayBillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/expenses': {
+      id: '/expenses'
+      path: '/expenses'
+      fullPath: '/expenses'
+      preLoaderRoute: typeof ExpensesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gst': {
+      id: '/gst'
+      path: '/gst'
+      fullPath: '/gst'
+      preLoaderRoute: typeof GstRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gstr2b': {
+      id: '/gstr2b'
+      path: '/gstr2b'
+      fullPath: '/gstr2b'
+      preLoaderRoute: typeof Gstr2bRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invoices': {
+      id: '/invoices'
+      path: '/invoices'
+      fullPath: '/invoices'
+      preLoaderRoute: typeof InvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/itc': {
+      id: '/itc'
+      path: '/itc'
+      fullPath: '/itc'
+      preLoaderRoute: typeof ItcRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/items': {
+      id: '/items'
+      path: '/items'
+      fullPath: '/items'
+      preLoaderRoute: typeof ItemsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/journal-entries': {
+      id: '/journal-entries'
+      path: '/journal-entries'
+      fullPath: '/journal-entries'
+      preLoaderRoute: typeof JournalEntriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/parties': {
+      id: '/parties'
+      path: '/parties'
+      fullPath: '/parties'
+      preLoaderRoute: typeof PartiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payments': {
+      id: '/payments'
+      path: '/payments'
+      fullPath: '/payments'
+      preLoaderRoute: typeof PaymentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pos': {
+      id: '/pos'
+      path: '/pos'
+      fullPath: '/pos'
+      preLoaderRoute: typeof PosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/proforma-invoices': {
+      id: '/proforma-invoices'
+      path: '/proforma-invoices'
+      fullPath: '/proforma-invoices'
+      preLoaderRoute: typeof ProformaInvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/quotations': {
+      id: '/quotations'
+      path: '/quotations'
+      fullPath: '/quotations'
+      preLoaderRoute: typeof QuotationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sales-returns': {
+      id: '/sales-returns'
+      path: '/sales-returns'
+      fullPath: '/sales-returns'
+      preLoaderRoute: typeof SalesReturnsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/shipments': {
+      id: '/shipments'
+      path: '/shipments'
+      fullPath: '/shipments'
+      preLoaderRoute: typeof ShipmentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/store-orders': {
+      id: '/store-orders'
+      path: '/store-orders'
+      fullPath: '/store-orders'
+      preLoaderRoute: typeof StoreOrdersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/complete-profile': {
+      id: '/auth/complete-profile'
+      path: '/auth/complete-profile'
+      fullPath: '/auth/complete-profile'
+      preLoaderRoute: typeof AuthCompleteProfileRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/native': {
@@ -625,11 +618,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthNativeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/complete-profile': {
-      id: '/auth/complete-profile'
-      path: '/auth/complete-profile'
-      fullPath: '/auth/complete-profile'
-      preLoaderRoute: typeof AuthCompleteProfileRouteImport
+    '/auth/verify': {
+      id: '/auth/verify'
+      path: '/auth/verify'
+      fullPath: '/auth/verify'
+      preLoaderRoute: typeof AuthVerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
