@@ -1,8 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, cn, downloadCSV, todayISODate, toISOString } from "@/lib/utils";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -25,6 +24,9 @@ import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { Pagination } from "@/components/ui/Pagination";
 import { UnitVariantEditor } from "@/components/UnitVariantEditor";
 import { ItemImageManager } from "@/components/items/ItemImageManager";
+import { ItemTypeSwitch } from "@/components/items/ItemTypeSwitch";
+import { PriceHistoryPanel } from "@/components/items/PriceHistoryPanel";
+import { StockMovementsPanel } from "@/components/items/StockMovementsPanel";
 import {
   type UiUnitVariant,
   recomputeOnBasePriceChange,
@@ -32,6 +34,10 @@ import {
 } from "@/lib/unit-variant-derivation";
 
 export const Route = createFileRoute("/items")({
+  // ?id= opens the item detail panel (deep link from document line items).
+  validateSearch: (search: Record<string, unknown>): { id?: string } => ({
+    id: typeof search.id === "string" && search.id ? search.id : undefined,
+  }),
   component: ItemsPage,
 });
 
@@ -120,7 +126,14 @@ function ItemsPage() {
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const deleteConfirm = useDeleteConfirmation();
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  // The open item lives in the URL (?id=) so browser back returns to whatever
+  // linked here (e.g. an invoice). Opening pushes history; closing replaces.
+  const navigate = useNavigate();
+  const { id: idFromSearch } = useSearch({ from: "/items" });
+  const selectedItemId = idFromSearch ?? null;
+  const setSelectedItemId = (id: string | null) => {
+    navigate({ to: "/items", search: id ? { id } : {}, replace: !id });
+  };
   const [editItemId, setEditItemId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const canCreate = useCan("create", "Item");
@@ -1247,13 +1260,10 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
     >
       <div className="space-y-4">
         {/* Item Type toggle */}
-        <SegmentedControl
-          tabs={[
-            { value: "product", label: "Product" },
-            { value: "service", label: "Service" },
-          ]}
+        <ItemTypeSwitch
           value={itemType}
-          onChange={(v) => setItemType(v as ItemType)}
+          onChange={setItemType}
+          locked={item?.hasTransactions === true}
         />
 
         {/* Item Mode display (read-only for existing items) */}
@@ -1600,417 +1610,19 @@ function EditItemModal({ itemId, onClose }: { itemId: string; onClose: () => voi
 
 // ── Item Detail Panel ────────────────────────────────────────────
 
-// Sub-components for Price History and Stock Movements tabs
-
-type PriceHistoryRow = {
-  invoiceId: string;
-  invoiceDate: Date | string;
-  invoiceNumber: string;
-  invoiceType: string;
-  unitPrice: string;
-  quantity: string;
-  taxPercent: string;
-  totalAmount: string;
-  partyName: string;
-  selectedUnit: string | null;
-  conversionFactor: string | null;
-};
-
-type StockMovementRow = {
-  invoiceId: string;
-  invoiceDate: Date | string;
-  invoiceNumber: string;
-  invoiceType: string;
-  documentType: string;
-  quantity: string;
-  partyName: string;
-  direction: "in" | "out";
-  selectedUnit: string | null;
-  conversionFactor: string | null;
-};
-
-const DOC_TYPE_ROUTE: Record<string, string> = {
-  invoice: "/invoices",
-  credit_note: "/credit-notes",
-  sales_return: "/sales-returns",
-  delivery_challan: "/delivery-challans",
-  quotation: "/quotations",
-  proforma: "/proforma-invoices",
-  purchase_return: "/invoices",
-  debit_note: "/invoices",
-};
-
-function PriceHistoryTab({
-  priceHistory,
-  period,
-  onPeriodChange,
-}: {
-  priceHistory: PriceHistoryRow[];
-  period: PeriodFilter;
-  onPeriodChange: (v: PeriodFilter) => void;
-}) {
-  const filtered = useMemo(() => filterByPeriod(priceHistory, period), [priceHistory, period]);
-
-  // Build chart data: chronological, sales only, max 10 points if "all"
-  const chartData = useMemo(() => {
-    const chronological = [...filtered].reverse();
-    const limited = period === "all" && chronological.length > 10
-      ? chronological.slice(-10)
-      : chronological;
-    return limited.map((h) => ({
-      date: formatDate(h.invoiceDate),
-      price: parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1"),
-      invoiceNumber: h.invoiceNumber,
-    }));
-  }, [filtered, period]);
-
-  // Price-changed rows: only invoices where unit price differs from the previous entry
-  const priceChangedRows = useMemo(() => {
-    const chronological = [...filtered].reverse();
-    return chronological.filter((h, i) => {
-      if (i === 0) return true;
-      const basePrice = parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1");
-      const prevBasePrice = parseFloat(chronological[i - 1].unitPrice) / parseFloat(chronological[i - 1].conversionFactor || "1");
-      return Math.abs(basePrice - prevBasePrice) > 0.01;
-    }).reverse(); // show newest first
-  }, [filtered]);
-
-  if (!priceHistory.length) {
-    return (
-      <EmptyState
-        title="No price history"
-        description="Prices will appear here as this item is used in invoices."
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-text-secondary">Price Over Time</p>
-        <PeriodToggle value={period} onChange={onPeriodChange} />
-      </div>
-
-      {chartData.length > 1 ? (
-        <div className="rounded-xl border border-border-light bg-surface-0 p-4">
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(v) => `₹${v}`}
-                width={55}
-              />
-              <Tooltip
-                {...CHART_TOOLTIP_STYLE}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                formatter={(value: any) => [`₹${Number(value ?? 0).toFixed(2)}`, "Unit Price"]}
-              />
-              <Line
-                type="monotone"
-                dataKey="price"
-                stroke="#5b5bd6"
-                strokeWidth={2}
-                dot={{ r: 3, fill: "#5b5bd6", strokeWidth: 0 }}
-                activeDot={{ r: 5 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-border-light bg-surface-1 px-4 py-3 text-xs text-text-tertiary">
-          Not enough data points to draw a chart.
-        </div>
-      )}
-
-      {priceChangedRows.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-text-secondary mb-2">Price Changes</p>
-          <div className="rounded-xl border border-border-light overflow-hidden">
-            <div className="max-h-[300px] overflow-y-auto">
-              <table className="data-table w-full">
-                <thead className="sticky top-0 z-10">
-                  <tr>
-                    <th style={{ width: "50%" }}>Invoice #</th>
-                    <th style={{ width: "50%" }} className="text-right">Unit Price (base)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {priceChangedRows.map((h, i) => (
-                    <tr key={i}>
-                      <td className="font-mono text-[13px]">
-                        <Link to="/invoices" search={{ id: h.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
-                          {h.invoiceNumber}
-                        </Link>
-                      </td>
-                      <td className="text-right tabular-nums font-medium">
-                        {formatCurrency(String(parseFloat(h.unitPrice) / parseFloat(h.conversionFactor || "1")))}
-                        {h.selectedUnit && h.conversionFactor && parseFloat(h.conversionFactor) !== 1 && (
-                          <span className="text-[10px] text-text-tertiary ml-1">
-                            ({formatCurrency(h.unitPrice)}/{h.selectedUnit})
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StockMovementsTab({
-  stockMovements,
-  period,
-  onPeriodChange,
-  currentStock,
-}: {
-  stockMovements: StockMovementRow[];
-  period: PeriodFilter;
-  onPeriodChange: (v: PeriodFilter) => void;
-  currentStock: number;
-}) {
-  const filtered = useMemo(() => filterByPeriod(stockMovements, period), [stockMovements, period]);
-
-  // Build running stock data (oldest first for chart)
-  const { chartData, tableRows } = useMemo(() => {
-    const chronological = [...filtered].reverse();
-
-    // Compute running balance backwards from current stock
-    // Sum all qty changes (+ for in, - for out) in the filtered window
-    const totalChange = chronological.reduce((acc, m) => {
-      const factor = parseFloat(m.conversionFactor || "1");
-      const qty = parseFloat(m.quantity) * factor;
-      return acc + (m.direction === "in" ? qty : -qty);
-    }, 0);
-
-    // Starting stock = currentStock - totalChange in this window
-    let running = currentStock - totalChange;
-    const rows: { date: string; invoiceId: string; invoiceNumber: string; documentType: string; qtyChange: number; running: number }[] = [];
-
-    for (const m of chronological) {
-      const factor = parseFloat(m.conversionFactor || "1");
-      const qty = parseFloat(m.quantity) * factor;
-      const delta = m.direction === "in" ? qty : -qty;
-      running += delta;
-      rows.push({
-        date: formatDate(m.invoiceDate),
-        invoiceId: m.invoiceId,
-        invoiceNumber: m.invoiceNumber,
-        documentType: m.documentType,
-        qtyChange: delta,
-        running,
-      });
-    }
-
-    // Table shows newest first (reverse of rows)
-    const tableRows = [...rows].reverse();
-
-    const chartData = rows.map((r) => ({
-      date: r.date,
-      stock: r.running,
-    }));
-
-    return { chartData, tableRows };
-  }, [filtered, currentStock]);
-
-  const { totalIn, totalOut } = useMemo(() => {
-    let totalIn = 0, totalOut = 0;
-    for (const m of filtered) {
-      const factor = parseFloat(m.conversionFactor || "1");
-      const qty = parseFloat(m.quantity) * factor;
-      if (m.direction === "in") totalIn += qty;
-      else totalOut += qty;
-    }
-    return { totalIn, totalOut };
-  }, [filtered]);
-
-  if (!stockMovements.length) {
-    return (
-      <EmptyState
-        title="No stock movements"
-        description="Stock changes will appear here as invoices are created."
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-text-secondary">Stock Over Time</p>
-        <PeriodToggle value={period} onChange={onPeriodChange} />
-      </div>
-
-      <div className="flex items-center gap-3">
-        <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600/10 text-emerald-700 dark:text-emerald-400 font-medium">
-          In: +{totalIn.toLocaleString()}
-        </span>
-        <span className="text-xs px-2.5 py-1 rounded-lg bg-red-600/10 text-red-700 dark:text-red-400 font-medium">
-          Out: -{totalOut.toLocaleString()}
-        </span>
-        <span className="text-xs px-2.5 py-1 rounded-lg bg-surface-2 text-text-secondary font-medium">
-          Net: {(totalIn - totalOut) > 0 ? "+" : ""}{(totalIn - totalOut).toLocaleString()}
-        </span>
-        <span className="text-xs text-text-tertiary ml-auto">
-          {filtered.length} movements
-        </span>
-      </div>
-
-      {chartData.length > 1 ? (
-        <div className="rounded-xl border border-border-light bg-surface-0 p-4">
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: "var(--text-tertiary)" }}
-                tickLine={false}
-                axisLine={false}
-                width={40}
-              />
-              <Tooltip
-                {...CHART_TOOLTIP_STYLE}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                formatter={(value: any) => [Number(value ?? 0).toLocaleString(), "Stock"]}
-              />
-              <Line
-                type="monotone"
-                dataKey="stock"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={{ r: 3, fill: "#10b981", strokeWidth: 0 }}
-                activeDot={{ r: 5 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-border-light bg-surface-1 px-4 py-3 text-xs text-text-tertiary">
-          Not enough data points to draw a chart.
-        </div>
-      )}
-
-      <div className="rounded-xl border border-border-light overflow-hidden">
-        <div className="max-h-[300px] overflow-y-auto">
-          <table className="data-table w-full">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th style={{ width: "30%" }}>Date</th>
-                <th style={{ width: "25%" }}>Invoice #</th>
-                <th style={{ width: "25%" }} className="text-right">Qty Change</th>
-                <th style={{ width: "20%" }} className="text-right">Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.map((r, i) => (
-                <tr key={i}>
-                  <td className="text-text-secondary text-xs">{r.date}</td>
-                  <td className="font-mono text-[13px]">
-                    <Link to={DOC_TYPE_ROUTE[r.documentType] ?? "/invoices"} search={{ id: r.invoiceId }} className="text-brand-600 hover:text-brand-700 hover:underline">
-                      {r.invoiceNumber}
-                    </Link>
-                  </td>
-                  <td className={cn(
-                    "text-right tabular-nums font-medium",
-                    r.qtyChange > 0 ? "text-emerald-600" : "text-red-600"
-                  )}>
-                    {r.qtyChange > 0 ? "+" : ""}{r.qtyChange.toLocaleString()}
-                  </td>
-                  <td className="text-right tabular-nums text-text-secondary">{r.running.toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const DETAIL_TABS = [
   { value: "overview", label: "Overview" },
   { value: "prices", label: "Price History" },
   { value: "stock", label: "Stock Movements" },
 ];
 
-const CHART_TOOLTIP_STYLE = {
-  contentStyle: {
-    background: "var(--surface-0)",
-    border: "1px solid var(--border-light)",
-    borderRadius: "8px",
-    fontSize: "12px",
-  },
-};
-
-type PeriodFilter = "6m" | "1y" | "all";
-
-function filterByPeriod<T extends { invoiceDate: Date | string }>(data: T[], period: PeriodFilter): T[] {
-  if (period === "all") return data;
-  const now = new Date();
-  const cutoff = new Date(now);
-  if (period === "6m") cutoff.setMonth(cutoff.getMonth() - 6);
-  else cutoff.setFullYear(cutoff.getFullYear() - 1);
-  return data.filter((d) => new Date(d.invoiceDate) >= cutoff);
-}
-
-function PeriodToggle({ value, onChange }: { value: PeriodFilter; onChange: (v: PeriodFilter) => void }) {
-  const opts: { value: PeriodFilter; label: string }[] = [
-    { value: "6m", label: "Last 6M" },
-    { value: "1y", label: "Last 1Y" },
-    { value: "all", label: "All" },
-  ];
-  return (
-    <div className="flex gap-1">
-      {opts.map((o) => (
-        <button
-          key={o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
-            value === o.value
-              ? "bg-brand-600 text-white"
-              : "bg-surface-1 text-text-secondary hover:bg-surface-2 border border-border-light"
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose: () => void; onEdit: (id: string) => void }) {
   const [tab, setTab] = useState("overview");
   const [showMerge, setShowMerge] = useState(false);
   const [showSwitchUnit, setShowSwitchUnit] = useState(false);
   const [showAdjustStock, setShowAdjustStock] = useState(false);
-  const [pricePeriod, setPricePeriod] = useState<PeriodFilter>("all");
-  const [stockPeriod, setStockPeriod] = useState<PeriodFilter>("all");
 
   const { data: item } = trpc.item.getById.useQuery({ id: itemId });
-  const { data: priceHistory } = trpc.item.priceHistory.useQuery(
-    { id: itemId },
-    { enabled: tab === "prices" || tab === "overview" }
-  );
-  const { data: stockMovements } = trpc.item.stockMovements.useQuery(
-    { id: itemId },
-    { enabled: tab === "stock" || tab === "overview" }
-  );
   // Sales stats are aggregated server-side (no row-limit truncation)
   const { data: salesStats } = trpc.item.salesStats.useQuery({ id: itemId });
   const canUpdate = useCan("update", "Item");
@@ -2216,20 +1828,19 @@ function ItemDetailPanel({ itemId, onClose, onEdit }: { itemId: string; onClose:
 
         {/* ── Price History ─────────────────────────────────── */}
         {tab === "prices" && (
-          <PriceHistoryTab
-            priceHistory={priceHistory ?? []}
-            period={pricePeriod}
-            onPeriodChange={setPricePeriod}
+          <PriceHistoryPanel
+            itemId={itemId}
+            baseUnit={item.unit}
+            unitVariants={item.unitVariants as { unit: string; conversionFactor: number | string }[] | null}
           />
         )}
 
         {/* ── Stock Movements ───────────────────────────────── */}
         {tab === "stock" && (
-          <StockMovementsTab
-            stockMovements={stockMovements ?? []}
-            period={stockPeriod}
-            onPeriodChange={setStockPeriod}
-            currentStock={parseFloat(item.stockQuantity)}
+          <StockMovementsPanel
+            itemId={itemId}
+            baseUnit={item.unit}
+            unitVariants={item.unitVariants as { unit: string; conversionFactor: number | string }[] | null}
           />
         )}
       </div>
