@@ -398,6 +398,7 @@ export const partyRouter = router({
       const paymentConditions = [
         eq(payments.partyId, input.partyId),
         eq(payments.businessId, ctx.businessId),
+        isNull(payments.deletedAt),
       ];
 
       invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));
@@ -519,6 +520,7 @@ export const partyRouter = router({
       const paymentConditions = [
         eq(payments.partyId, input.partyId),
         eq(payments.businessId, ctx.businessId),
+        isNull(payments.deletedAt),
       ];
 
       invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: input.fromDate, to: input.toDate }));

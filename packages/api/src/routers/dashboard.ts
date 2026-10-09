@@ -85,16 +85,22 @@ export const dashboardRouter = router({
           dateCondition(expenses),
         )),
 
-      // Receivable = current outstanding balance (balance sheet metric, NOT period-scoped)
-      // Credit notes and sales returns reduce the receivable balance; invoices and debit notes add to it.
+      // Receivable = current outstanding balance (balance sheet metric, NOT period-scoped).
+      // MUST stay identical to receivablesAging's definition (see RECEIVABLE_DOC_TYPES):
+      //   + outstanding of invoices / debit notes (draft, cancelled, deleted excluded)
+      //   - outstanding of credit notes / sales returns
+      //   + opening balances of customers (amounts owed before Hisaabo records began)
+      // Quotations, challans and proformas are not receivables and are excluded.
       ctx.db.select({
-        total: sql<string>`coalesce(sum(CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return') THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)::text`,
+        total: sql<string>`(coalesce(sum(CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return') THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric) END), 0)
+          + coalesce((SELECT sum(${parties.openingBalance}::numeric) FROM ${parties} WHERE ${parties.businessId} = ${ctx.businessId} AND ${parties.type} = 'customer'), 0))::text`,
       }).from(invoices)
         .where(and(
           eq(invoices.businessId, ctx.businessId),
           eq(invoices.type, "sale"),
+          sql`${invoices.documentType} IN ('invoice', 'debit_note', 'credit_note', 'sales_return')`,
           isNull(invoices.deletedAt),
-          sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+          sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`,
         )),
 
       // Payable = current outstanding balance (balance sheet metric, NOT period-scoped)
@@ -594,93 +600,92 @@ export const dashboardRouter = router({
     .query(async ({ ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const unpaidInvoices = await ctx.db.select({
-        partyId: invoices.partyId,
-        partyName: parties.name,
-        invoiceNumber: invoices.invoiceNumber,
-        invoiceDate: invoices.invoiceDate,
-        dueDate: invoices.dueDate,
-        totalAmount: invoices.totalAmount,
-        amountPaid: invoices.amountPaid,
-      }).from(invoices)
-        .innerJoin(parties, eq(parties.id, invoices.partyId))
-        .where(and(
-          eq(invoices.businessId, ctx.businessId),
-          eq(invoices.type, "sale"),
-          eq(invoices.documentType, "invoice"),
-          sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`,
-        ))
-        .orderBy(invoices.invoiceDate);
+      // Same population as dashboard.summary().receivable so the two totals agree:
+      // invoices + debit notes (positive), credit notes + sales returns (negative),
+      // not draft/cancelled/deleted, plus customers' opening balances.
+      const [openDocs, openingRows] = await Promise.all([
+        ctx.db.select({
+          partyId: invoices.partyId,
+          partyName: parties.name,
+          documentType: invoices.documentType,
+          invoiceDate: invoices.invoiceDate,
+          dueDate: invoices.dueDate,
+          totalAmount: invoices.totalAmount,
+          amountPaid: invoices.amountPaid,
+        }).from(invoices)
+          .innerJoin(parties, eq(parties.id, invoices.partyId))
+          .where(and(
+            eq(invoices.businessId, ctx.businessId),
+            eq(invoices.type, "sale"),
+            sql`${invoices.documentType} IN ('invoice', 'debit_note', 'credit_note', 'sales_return')`,
+            isNull(invoices.deletedAt),
+            sql`${invoices.status} NOT IN ('paid', 'cancelled', 'draft')`,
+          ))
+          .orderBy(invoices.invoiceDate),
+        ctx.db.select({
+          partyId: parties.id,
+          partyName: parties.name,
+          openingBalance: parties.openingBalance,
+        }).from(parties)
+          .where(and(
+            eq(parties.businessId, ctx.businessId),
+            eq(parties.type, "customer"),
+            sql`${parties.openingBalance}::numeric <> 0`,
+          )),
+      ]);
 
       const now = new Date();
 
-      const partyBuckets = new Map<string, {
-        partyName: string;
-        current: number;
-        days31_60: number;
-        days61_90: number;
-        days90Plus: number;
-        total: number;
-      }>();
+      type Buckets = { partyName: string; current: string; days31_60: string; days61_90: string; days90Plus: string; total: string };
+      const partyBuckets = new Map<string, Buckets>();
+      const bucketsFor = (partyId: string, partyName: string): Buckets => {
+        let b = partyBuckets.get(partyId);
+        if (!b) {
+          b = { partyName, current: "0.00", days31_60: "0.00", days61_90: "0.00", days90Plus: "0.00", total: "0.00" };
+          partyBuckets.set(partyId, b);
+        }
+        return b;
+      };
 
-      for (const inv of unpaidInvoices) {
-        const outstanding = parseFloat(inv.totalAmount) - parseFloat(inv.amountPaid);
-        if (outstanding <= 0) continue;
+      for (const inv of openDocs) {
+        const raw = money.sub(inv.totalAmount, inv.amountPaid);
+        if (money.isZero(raw)) continue;
+        const reduces = inv.documentType === "credit_note" || inv.documentType === "sales_return";
+        const outstanding = reduces ? money.sub("0", raw) : raw;
 
-        const refDate = inv.dueDate || inv.invoiceDate;
+        // Credit documents age from their own date; invoices from due date.
+        const refDate = (!reduces && inv.dueDate) || inv.invoiceDate;
         const daysOld = Math.floor((now.getTime() - new Date(refDate).getTime()) / (1000 * 60 * 60 * 24));
 
-        const existing = partyBuckets.get(inv.partyId) ?? {
-          partyName: inv.partyName,
-          current: 0,
-          days31_60: 0,
-          days61_90: 0,
-          days90Plus: 0,
-          total: 0,
-        };
+        const b = bucketsFor(inv.partyId, inv.partyName);
+        if (daysOld <= 30) b.current = money.add(b.current, outstanding);
+        else if (daysOld <= 60) b.days31_60 = money.add(b.days31_60, outstanding);
+        else if (daysOld <= 90) b.days61_90 = money.add(b.days61_90, outstanding);
+        else b.days90Plus = money.add(b.days90Plus, outstanding);
+        b.total = money.add(b.total, outstanding);
+      }
 
-        if (daysOld <= 30) existing.current += outstanding;
-        else if (daysOld <= 60) existing.days31_60 += outstanding;
-        else if (daysOld <= 90) existing.days61_90 += outstanding;
-        else existing.days90Plus += outstanding;
-        existing.total += outstanding;
-
-        partyBuckets.set(inv.partyId, existing);
+      // Opening balances carry no date: they pre-date the records, so they sit in the oldest bucket.
+      for (const p of openingRows) {
+        const b = bucketsFor(p.partyId, p.partyName);
+        b.days90Plus = money.add(b.days90Plus, p.openingBalance);
+        b.total = money.add(b.total, p.openingBalance);
       }
 
       const rows = [...partyBuckets.entries()]
-        .map(([partyId, data]) => ({ partyId, ...data }))
-        .sort((a, b) => b.total - a.total);
+        .filter(([, d]) => !money.isZero(d.total) || !money.isZero(d.current) || !money.isZero(d.days31_60) || !money.isZero(d.days61_90) || !money.isZero(d.days90Plus))
+        .map(([partyId, d]) => ({ partyId, ...d }))
+        .sort((a, b) => money.compare(b.total, a.total));
 
-      const summary = rows.reduce(
-        (acc, r) => ({
-          current: acc.current + r.current,
-          days31_60: acc.days31_60 + r.days31_60,
-          days61_90: acc.days61_90 + r.days61_90,
-          days90Plus: acc.days90Plus + r.days90Plus,
-          total: acc.total + r.total,
-        }),
-        { current: 0, days31_60: 0, days61_90: 0, days90Plus: 0, total: 0 }
-      );
-
-      return {
-        rows: rows.map((r) => ({
-          partyId: r.partyId,
-          partyName: r.partyName,
-          current: r.current.toFixed(2),
-          days31_60: r.days31_60.toFixed(2),
-          days61_90: r.days61_90.toFixed(2),
-          days90Plus: r.days90Plus.toFixed(2),
-          total: r.total.toFixed(2),
-        })),
-        summary: {
-          current: summary.current.toFixed(2),
-          days31_60: summary.days31_60.toFixed(2),
-          days61_90: summary.days61_90.toFixed(2),
-          days90Plus: summary.days90Plus.toFixed(2),
-          total: summary.total.toFixed(2),
-        },
+      const summary = {
+        current: money.sum(rows.map((r) => r.current)),
+        days31_60: money.sum(rows.map((r) => r.days31_60)),
+        days61_90: money.sum(rows.map((r) => r.days61_90)),
+        days90Plus: money.sum(rows.map((r) => r.days90Plus)),
+        total: money.sum(rows.map((r) => r.total)),
       };
+
+      return { rows, summary };
     }),
 
   // ── Payment Mode Breakdown ────────────────────────────────────────────────

@@ -454,9 +454,15 @@ export const convertDocumentSchema = z.object({
 
 // ── Reports ────────────────────────────────────────────────────
 
+// Report range bounds are optional: an absent bound means "unbounded" (the
+// "All time" preset). Clients must omit the key rather than send "".
+const reportDateTimeBound = z.string().datetime().optional();
+const reportDateBound = z.union([z.string().date(), z.string().datetime()]).optional();
+
 export const daybookInputSchema = z.object({
-  fromDate: z.string().date(),
-  toDate: z.string().date(),
+  // Accepts YYYY-MM-DD or a full ISO datetime. Omitted bounds mean "all time".
+  fromDate: reportDateBound,
+  toDate: reportDateBound,
   typeFilter: z.enum(["all", "invoices", "payments", "expenses"]).default("all"),
 });
 
@@ -466,14 +472,14 @@ export const outstandingInputSchema = z.object({
 });
 
 export const registerInputSchema = z.object({
-  fromDate: z.string().datetime(),
-  toDate: z.string().datetime(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
   partyId: z.string().uuid().optional(),
 });
 
 export const taxSummaryInputSchema = z.object({
-  fromDate: z.string().datetime(),
-  toDate: z.string().datetime(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
   type: z.enum(["sales", "purchases", "both"]).default("both"),
 });
 
@@ -482,17 +488,22 @@ export const cashFlowForecastInputSchema = z.object({
 });
 
 export const collectionEfficiencyInputSchema = z.object({
-  fromDate: z.string().datetime(),
-  toDate: z.string().datetime(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
 });
 
 export const itemSalesInputSchema = z.object({
-  fromDate: z.string().datetime(),
-  toDate: z.string().datetime(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
   category: z.string().optional(),
   itemType: z.enum(["product", "service"]).optional(),
   sortBy: z.enum(["revenue", "quantity", "invoices", "margin"]).default("revenue"),
   compareToPrevious: z.boolean().default(false),
+});
+
+export const cashFlowStatementInputSchema = z.object({
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
 });
 
 export const stockSummaryInputSchema = z.object({
@@ -502,13 +513,13 @@ export const stockSummaryInputSchema = z.object({
 
 export const partyStatementInputSchema = z.object({
   partyId: z.string().uuid(),
-  fromDate: z.string().datetime().optional(),
-  toDate: z.string().datetime().optional(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
 });
 
 export const paymentSummaryInputSchema = z.object({
-  fromDate: z.string().datetime(),
-  toDate: z.string().datetime(),
+  fromDate: reportDateTimeBound,
+  toDate: reportDateTimeBound,
   type: z.enum(["received", "made", "both"]).default("both"),
   bankAccountId: z.string().uuid().optional(),
 });

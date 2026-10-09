@@ -36,6 +36,8 @@ import {
   type TestBusiness,
   type TestItem,
 } from "../helpers/fixtures.js";
+import { eq } from "drizzle-orm";
+import { invoiceItems } from "@hisaabo/db";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import { createQueryCounter, assertMaxQueries } from "../helpers/query-counter.js";
 
@@ -723,6 +725,218 @@ describe("item.stockMovements — direction correctness", () => {
     expect(movements.every(m => m.invoiceType !== undefined)).toBe(true);
     // No movement should show qty 99
     expect(movements.find(m => m.quantity === "99")).toBeUndefined();
+  });
+});
+
+// ── Period-wide price history / stock movements (multi-unit) ─────────────────
+
+describe("item.priceSummary / priceHistoryPage / stockSummary / stockMovementsPage", () => {
+  let multi: TestItem;
+  let party: Awaited<ReturnType<typeof createParty>>;
+  const DAY = 86_400_000;
+
+  /** Creates one invoice line, optionally billed in an alt unit. */
+  async function line(opts: {
+    daysAgo: number; qty: string; price: string; unit?: string; cf?: string;
+    type?: "sale" | "purchase"; status?: "sent" | "draft";
+    documentType?: "invoice" | "sales_return";
+  }) {
+    const tenantDb = getTenantTestDb();
+    const { lineItems } = await createInvoiceWithItems(
+      tenantDb, business1.id, party.id,
+      [{ itemId: multi.id, itemName: multi.name, quantity: opts.qty, unitPrice: opts.price }],
+      {
+        type: opts.type ?? "sale",
+        documentType: opts.documentType ?? "invoice",
+        status: opts.status ?? "sent",
+        invoiceDate: new Date(Date.now() - opts.daysAgo * DAY),
+      },
+    );
+    if (opts.unit) {
+      await tenantDb.update(invoiceItems)
+        .set({ selectedUnit: opts.unit, conversionFactor: opts.cf ?? "1" })
+        .where(eq(invoiceItems.id, lineItems[0]!.id));
+    }
+  }
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+    party = await createParty(tenantDb, business1.id, { name: "Multi Unit Party" });
+    // Base unit kg; "box" = 12 kg. Current stock 100 kg.
+    multi = await createItem(tenantDb, business1.id, {
+      name: "Multi Unit Rice", unit: "kg", itemMode: "alt_units", stockQuantity: "100",
+      unitVariants: [{ unit: "box", conversionFactor: 12, salePrice: "1200" }],
+    });
+    // Oldest -> newest. Prices per kg: 100, 100, 110, 90 ; plus 80 old (> 1y)
+    await line({ daysAgo: 500, qty: "10", price: "80" });                       // kg @80   (outside 1y)
+    await line({ daysAgo: 300, qty: "1", price: "1200", unit: "box", cf: "12" });// box @1200 => 100/kg (in 1y, not 6m)
+    await line({ daysAgo: 100, qty: "5", price: "100" });                       // kg @100
+    await line({ daysAgo: 50, qty: "2", price: "1320", unit: "box", cf: "12" }); // box @1320 => 110/kg
+    await line({ daysAgo: 10, qty: "4", price: "90" });                         // kg @90
+    await line({ daysAgo: 5, qty: "3", price: "70", type: "purchase" });        // purchase: separate series
+    await line({ daysAgo: 4, qty: "9", price: "5", status: "draft" });          // draft ignored
+    await line({ daysAgo: 3, qty: "1", price: "100", documentType: "sales_return" }); // not an "invoice" doc
+  });
+
+  it("'All' covers every sale line (not just the latest 50 / 10 points) and normalises units", async () => {
+    const r = await callerRamesh.item.priceSummary({ id: multi.id, period: "all" });
+    expect(r.unit).toBe("kg");
+    expect(r.stats.count).toBe(5);
+    expect(r.stats.min).toBe("80.0000");
+    expect(r.stats.max).toBe("110.0000");
+    // (80 + 100 + 100 + 110 + 90) / 5
+    expect(r.stats.avg).toBe("96.0000");
+    expect(r.stats.latest).toBe("90.0000");
+    expect(r.series.map((p) => p.price)).toEqual(["80.0000", "100.0000", "100.0000", "110.0000", "90.0000"]);
+    expect(r.downsampled).toBe(false);
+  });
+
+  it("windows are applied server-side and stats follow the period", async () => {
+    const y = await callerRamesh.item.priceSummary({ id: multi.id, period: "1y" });
+    expect(y.stats.count).toBe(4);
+    expect(y.stats.min).toBe("90.0000");
+    const m = await callerRamesh.item.priceSummary({ id: multi.id, period: "6m" });
+    expect(m.stats.count).toBe(3);
+    expect(m.stats.avg).toBe("100.0000");
+    expect(m.stats.max).toBe("110.0000");
+  });
+
+  it("re-expresses prices in the selected unit consistently across periods", async () => {
+    for (const period of ["6m", "1y", "all"] as const) {
+      const kg = await callerRamesh.item.priceSummary({ id: multi.id, period });
+      const box = await callerRamesh.item.priceSummary({ id: multi.id, period, unit: "box" });
+      expect(box.unit).toBe("box");
+      expect(Number(box.stats.max)).toBeCloseTo(Number(kg.stats.max) * 12, 3);
+      expect(Number(box.stats.min)).toBeCloseTo(Number(kg.stats.min) * 12, 3);
+      expect(Number(box.stats.avg)).toBeCloseTo(Number(kg.stats.avg) * 12, 3);
+    }
+  });
+
+  it("purchase prices are a separate series", async () => {
+    const r = await callerRamesh.item.priceSummary({ id: multi.id, period: "all", invoiceType: "purchase" });
+    expect(r.stats.count).toBe(1);
+    expect(r.stats.min).toBe("70.0000");
+  });
+
+  it("downsamples the chart series but computes stats from every line", async () => {
+    const r = await callerRamesh.item.priceSummary({ id: multi.id, period: "all", maxPoints: 10 });
+    expect(r.series.length).toBe(5); // fewer lines than maxPoints -> no loss
+    const big = await createItem(getTenantTestDb(), business1.id, { name: "Many Prices", unit: "pcs" });
+    const tenantDb = getTenantTestDb();
+    for (let i = 0; i < 25; i++) {
+      await createInvoiceWithItems(
+        tenantDb, business1.id, party.id,
+        [{ itemId: big.id, itemName: big.name, quantity: "1", unitPrice: String(100 + i) }],
+        { type: "sale", documentType: "invoice", status: "sent", invoiceDate: new Date(Date.now() - (30 - i) * DAY) },
+      );
+    }
+    const d = await callerRamesh.item.priceSummary({ id: big.id, period: "all", maxPoints: 10 });
+    expect(d.downsampled).toBe(true);
+    expect(d.series).toHaveLength(10);
+    expect(d.stats.count).toBe(25);
+    expect(d.stats.min).toBe("100.0000");
+    expect(d.stats.max).toBe("124.0000");
+    expect(d.stats.avg).toBe("112.0000");
+    expect(d.series.reduce((a, p) => a + p.count, 0)).toBe(25);
+    expect(d.series[9]!.max).toBe("124.0000");
+  });
+
+  it("priceHistoryPage pages with a cursor, newest first, showing only price changes", async () => {
+    const p1 = await callerRamesh.item.priceHistoryPage({ id: multi.id, period: "all", limit: 2 });
+    // Lines in order: 80, 100, 100(dup, hidden), 110, 90 -> changes: 90, 110, 100, 80
+    expect(p1.rows.map((r) => r.price)).toEqual(["90.0000", "110.0000"]);
+    expect(p1.nextCursor).toBe(2);
+    expect(p1.total).toBe(4);
+    const p2 = await callerRamesh.item.priceHistoryPage({ id: multi.id, period: "all", limit: 2, cursor: p1.nextCursor! });
+    expect(p2.rows.map((r) => r.price)).toEqual(["100.0000", "80.0000"]);
+    expect(p2.nextCursor).toBeNull();
+    const all = await callerRamesh.item.priceHistoryPage({ id: multi.id, period: "all", changesOnly: false, limit: 50 });
+    expect(all.rows).toHaveLength(5);
+  });
+
+  it("rejects an unknown display unit", async () => {
+    await expect(callerRamesh.item.priceSummary({ id: multi.id, unit: "carton" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("stockSummary converts to the selected unit via conversion factors", async () => {
+    // Base-kg deltas (newest first): +1 (sales_return), +3 (purchase), -4, -24, -5, -12, -10
+    const kg = await callerRamesh.item.stockSummary({ id: multi.id, period: "all" });
+    expect(kg.stats.count).toBe(7);
+    expect(kg.stats.totalIn).toBe("4.0000");
+    expect(kg.stats.totalOut).toBe("55.0000");
+    expect(kg.stats.net).toBe("-51.0000");
+    const box = await callerRamesh.item.stockSummary({ id: multi.id, period: "all", unit: "box" });
+    expect(box.unit).toBe("box");
+    expect(Number(box.stats.totalOut)).toBeCloseTo(55 / 12, 3);
+    expect(Number(box.stats.net)).toBeCloseTo(-51 / 12, 3);
+    // Latest balance equals current stock in either unit
+    expect(kg.series.at(-1)!.balance).toBe("100.0000");
+    expect(Number(box.series.at(-1)!.balance)).toBeCloseTo(100 / 12, 3);
+  });
+
+  it("stockMovementsPage: balances come from the full history regardless of period, and it pages", async () => {
+    const p1 = await callerRamesh.item.stockMovementsPage({ id: multi.id, period: "all", limit: 3 });
+    expect(p1.rows).toHaveLength(3);
+    expect(p1.nextCursor).toBe(3);
+    expect(p1.total).toBe(7);
+    expect(p1.rows[0]).toMatchObject({ direction: "in", qtyChange: "1.0000", balance: "100.0000" });
+    expect(p1.rows[1]).toMatchObject({ direction: "in", qtyChange: "3.0000", balance: "99.0000" });
+    expect(p1.rows[2]).toMatchObject({ direction: "out", qtyChange: "-4.0000", balance: "96.0000" });
+    const rest = await callerRamesh.item.stockMovementsPage({ id: multi.id, period: "all", limit: 3, cursor: 3 });
+    const rest2 = await callerRamesh.item.stockMovementsPage({ id: multi.id, period: "all", limit: 3, cursor: 6 });
+    expect(rest.rows).toHaveLength(3);
+    expect(rest2.rows).toHaveLength(1);
+    expect(rest2.nextCursor).toBeNull();
+
+    // 6M window: same balances for the same rows (not re-based on the window)
+    const m = await callerRamesh.item.stockMovementsPage({ id: multi.id, period: "6m", limit: 50 });
+    expect(m.rows).toHaveLength(5);
+    expect(m.rows[2]!.balance).toBe("96.0000");
+
+    const box = await callerRamesh.item.stockMovementsPage({ id: multi.id, period: "6m", unit: "box", limit: 50 });
+    expect(Number(box.rows[2]!.qtyChange)).toBeCloseTo(-4 / 12, 3);
+    expect(Number(box.rows[2]!.balance)).toBeCloseTo(96 / 12, 3);
+  });
+
+  it("cannot read another business's item (empty)", async () => {
+    const r = await callerKiran.item.priceSummary({ id: multi.id });
+    expect(r.stats.count).toBe(0);
+    const s = await callerKiran.item.stockMovementsPage({ id: multi.id });
+    expect(s.rows).toHaveLength(0);
+  });
+});
+
+// ── Item type lock ────────────────────────────────────────────────────────────
+
+describe("item.update — itemType lock", () => {
+  it("allows changing the type of an item with no transactions", async () => {
+    const it1 = await createItem(getTenantTestDb(), business1.id, { name: "Fresh Item", itemType: "product" });
+    const r = await callerRamesh.item.update({ id: it1.id, data: { itemType: "service" } });
+    expect(r!.itemType).toBe("service");
+    expect((await callerRamesh.item.getById({ id: it1.id }))!.hasTransactions).toBe(false);
+  });
+
+  it("rejects a type change once the item is on an invoice line", async () => {
+    const tenantDb = getTenantTestDb();
+    const p = await createParty(tenantDb, business1.id, { name: "Lock Party" });
+    const it2 = await createItem(tenantDb, business1.id, { name: "Used Item", itemType: "product" });
+    await createInvoiceWithItems(tenantDb, business1.id, p.id,
+      [{ itemId: it2.id, itemName: it2.name, quantity: "1", unitPrice: "10" }], { status: "draft" });
+    expect((await callerRamesh.item.getById({ id: it2.id }))!.hasTransactions).toBe(true);
+    await expect(callerRamesh.item.update({ id: it2.id, data: { itemType: "service" } }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("Item type cannot be changed") });
+    // Unchanged type and other edits still work
+    const ok = await callerRamesh.item.update({ id: it2.id, data: { itemType: "product", name: "Used Item 2" } });
+    expect(ok!.name).toBe("Used Item 2");
+    expect(ok!.itemType).toBe("product");
+  });
+
+  it("rejects a type change once the item has a stock adjustment", async () => {
+    const it3 = await createItem(getTenantTestDb(), business1.id, { name: "Adjusted Item", itemType: "product" });
+    await callerRamesh.item.adjustStock({ itemId: it3.id, quantity: "5", reason: "Opening" });
+    await expect(callerRamesh.item.update({ id: it3.id, data: { itemType: "service" } }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 
