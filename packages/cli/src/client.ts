@@ -404,8 +404,14 @@ export class HisaaboClient {
       salesStats(input: InputOf<"item.salesStats">) {
         return c.query("item.salesStats", input);
       },
+      priceSummary(input: InputOf<"item.priceSummary">) {
+        return c.query("item.priceSummary", input);
+      },
       stockMovements(input: InputOf<"item.stockMovements">) {
         return c.query("item.stockMovements", input);
+      },
+      stockSummary(input: InputOf<"item.stockSummary">) {
+        return c.query("item.stockSummary", input);
       },
     };
   }

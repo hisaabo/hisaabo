@@ -129,3 +129,38 @@ describe("contract: payloads parse against the shared server schemas", () => {
     expect(input.json).toEqual({ id: BIZ });
   });
 });
+
+describe("contract: item history/summary tools match the item router inputs", () => {
+  // packages/api/src/routers/item.ts
+  const period = z.enum(["6m", "1y", "all"]);
+  const serverInputs = {
+    "item.priceHistory": z.object({ id: z.string().uuid(), period: period.default("all"), limit: z.number().int().min(1).max(500).default(50) }).strict(),
+    "item.stockMovements": z.object({ id: z.string().uuid(), period: period.default("all"), limit: z.number().int().min(1).max(500).default(50) }).strict(),
+    "item.priceSummary": z.object({
+      id: z.string().uuid(), period: period.default("all"), unit: z.string().min(1).max(50).optional(),
+      invoiceType: z.enum(["sale", "purchase"]).default("sale"), maxPoints: z.number().int().min(10).max(200).default(60),
+    }).strict(),
+    "item.stockSummary": z.object({
+      id: z.string().uuid(), period: period.default("all"), unit: z.string().min(1).max(50).optional(),
+      maxPoints: z.number().int().min(10).max(200).default(60),
+    }).strict(),
+  } as const;
+
+  const cases: Array<[string, keyof typeof serverInputs, Record<string, unknown>, Record<string, unknown>]> = [
+    ["item_price_history", "item.priceHistory", { item_id: UUID, period: "6m", limit: 100 }, { id: UUID, period: "6m", limit: 100 }],
+    ["item_stock_movements", "item.stockMovements", { item_id: UUID }, { id: UUID, period: "all", limit: 50 }],
+    ["item_price_summary", "item.priceSummary", { item_id: UUID, period: "1y", unit: "box", invoice_type: "purchase" }, { id: UUID, period: "1y", unit: "box", invoiceType: "purchase" }],
+    ["item_stock_summary", "item.stockSummary", { item_id: UUID, unit: "box" }, { id: UUID, period: "all", unit: "box" }],
+  ];
+
+  for (const [tool, path, args, expected] of cases) {
+    it(`${tool} calls ${path} with a valid input`, async () => {
+      const { tools, calls } = setup();
+      await callTool(tools.get(tool)!, args);
+      expect(calls[0].url.pathname).toContain(path);
+      const payload = JSON.parse(calls[0].url.searchParams.get("input")!).json as Record<string, unknown>;
+      expect(serverInputs[path].safeParse(payload).success).toBe(true);
+      expect(payload).toEqual(expected);
+    });
+  }
+});

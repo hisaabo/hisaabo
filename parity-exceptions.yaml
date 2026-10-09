@@ -297,6 +297,13 @@ exceptions:
 
   cli:
     not-applicable:
+      # --- Item history paging ---
+      # UI infinite-scroll paging variants (cursor pages feeding the detail
+      # screens' tables). The CLI reads item.priceHistory / item.stockMovements
+      # with period + limit, and item.priceSummary / item.stockSummary for totals.
+      - item.priceHistoryPage
+      - item.stockMovementsPage
+
       # --- GST JSON / Party ledger CSV ---
       # Browser download flows. The CLI exposes the same data as structured
       # output (gst gstr9, party ledger) which can be piped or exported to CSV.
@@ -389,6 +396,13 @@ exceptions:
 
   mcp:
     not-applicable:
+      # --- Item history paging ---
+      # UI infinite-scroll paging variants (cursor pages feeding the detail
+      # screens' tables). MCP reads item.priceHistory / item.stockMovements
+      # with period + limit, and item.priceSummary / item.stockSummary for totals.
+      - item.priceHistoryPage
+      - item.stockMovementsPage
+
       # --- GST JSON / Party ledger CSV ---
       # File-download formats for the GST portal / spreadsheets. MCP agents read
       # the structured equivalents (gst.gstr9, party.ledger).
