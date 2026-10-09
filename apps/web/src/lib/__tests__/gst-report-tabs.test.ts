@@ -35,6 +35,11 @@ describe("gst report tabs", () => {
     expect(readStoredReportTab(null)).toBeNull();
   });
 
+  it("never stores a value that isn't a known tab", () => {
+    storeReportTab("biz-1", "4111111111111111" as never);
+    expect(localStorage.length).toBe(0);
+  });
+
   it("prefers the URL tab, then the stored tab, then the default", () => {
     expect(resolveReportTab("ledger", "pnl", true)).toBe("ledger");
     expect(resolveReportTab(undefined, "pnl", true)).toBe("pnl");

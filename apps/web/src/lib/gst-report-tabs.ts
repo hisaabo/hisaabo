@@ -32,9 +32,13 @@ export function readStoredReportTab(businessId: string | null): string | null {
 }
 
 export function storeReportTab(businessId: string | null, tab: ReportTab): void {
-  if (!businessId) return;
+  const index = REPORT_TABS.indexOf(tab);
+  if (!businessId || index < 0) return;
   try {
-    localStorage.setItem(STORAGE_PREFIX + businessId, tab);
+    // Write the constant from REPORT_TABS (looked up by index) rather than the
+    // caller's value: only a known tab name can ever reach storage, and static
+    // analysis (CodeQL clear-text-storage) can see that too.
+    localStorage.setItem(STORAGE_PREFIX + businessId, REPORT_TABS[index]);
   } catch {
     // storage unavailable — the URL still carries the tab
   }
