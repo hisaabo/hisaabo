@@ -20,6 +20,8 @@ import { toast } from "@/hooks/useToast";
 import { getDatePreset } from "@/hooks/useDateRange";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
 import { useCan } from "@/hooks/useCan";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 
 export const Route = createFileRoute("/cash-and-bank")({
   component: CashAndBankPage,
@@ -36,6 +38,11 @@ function CashAndBankPage() {
   const canCreateAccount = useCan("create", "BankAccount");
   const canCreateTxn = useCan("create", "BankTransaction");
   const canUpdateAccount = useCan("update", "BankAccount");
+
+  // Keyboard shortcut: N to add a new bank account
+  useHotkeys(canCreateAccount ? [
+    { key: "n", handler: () => setShowAddAccount(true), description: "New bank account", scope: "general" },
+  ] : []);
   const canAssignPayments = useCan("update", "Payment");
   const [selectedUntracked, setSelectedUntracked] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false); // true = all across ALL pages
@@ -258,8 +265,9 @@ function CashAndBankPage() {
               </button>
             )}
             {canCreateAccount && (
-              <button className="btn-primary" onClick={() => setShowAddAccount(true)}>
+              <button className="btn-primary inline-flex items-center gap-2" onClick={() => setShowAddAccount(true)}>
                 + Add Account
+                <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
               </button>
             )}
           </div>

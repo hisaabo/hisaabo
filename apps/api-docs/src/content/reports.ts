@@ -13,8 +13,8 @@ export const reportsEndpoints: EndpointGroup = {
       description: "A combined chronological log of all invoices, payments, and expenses for a date range. Each entry is normalised into a debit/credit format. Use `typeFilter` to focus on a single entry type. Returns a daily summary alongside the entries.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (YYYY-MM-DD)", required: true, description: "Start date of the daybook range" },
-        { name: "toDate", type: "string (YYYY-MM-DD)", required: true, description: "End date of the daybook range (inclusive)" },
+        { name: "fromDate", type: "string (YYYY-MM-DD or ISO datetime)", required: false, description: "Start date of the daybook range. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (YYYY-MM-DD or ISO datetime)", required: false, description: "End date of the daybook range (inclusive). Omit for no upper bound (all time)" },
         { name: "typeFilter", type: "'all' | 'invoices' | 'payments' | 'expenses'", required: false, description: "Filter to a single entry type. Defaults to 'all'." },
       ],
       output: {
@@ -65,7 +65,7 @@ resp = httpx.get(
 )`,
       },
       gotchas: [
-        "`fromDate` and `toDate` accept date-only strings (YYYY-MM-DD), not full ISO datetimes. The range is inclusive of the full end day (toDate T23:59:59.999).",
+        "`fromDate` and `toDate` accept date-only strings (YYYY-MM-DD) or full ISO datetimes. A date-only `toDate` is inclusive of the full end day (T23:59:59.999); a datetime is used exactly as given. Omit a bound to leave that side of the range open (all time).",
         "For invoices, sale invoices produce a `credit` entry; purchase invoices produce a `debit` entry. For payments, customer payments produce `credit`; supplier payments produce `debit`.",
         "`netCashMovement` = paymentsReceived - paymentsMade - expenses. It does NOT include invoices (which are not cash until collected).",
       ],
@@ -126,8 +126,8 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.outstanding?input={pa
       description: "Full sales register listing all sale invoices, credit notes, and debit notes in a date range. Each row includes customer GSTIN, subtotal, discount, tax, and total. A per-invoice tax breakdown (grouped by tax rate) is attached to each row for GST filing.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the date range" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the date range" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the date range. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the date range. Omit for no upper bound (all time)" },
         { name: "partyId", type: "string (UUID)", required: false, description: "Filter to a specific customer" },
       ],
       output: {
@@ -181,8 +181,8 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.salesRegister?input={
       description: "Full purchase register listing all purchase invoices in a date range. Mirrors the sales register structure but for supplier invoices. Includes supplier GSTIN for input tax credit reconciliation.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the date range" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the date range" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the date range. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the date range. Omit for no upper bound (all time)" },
         { name: "partyId", type: "string (UUID)", required: false, description: "Filter to a specific supplier" },
       ],
       output: {
@@ -234,8 +234,8 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.purchaseRegister?inpu
       description: "Summarises GST collected on sales and paid on purchases, grouped by tax rate slab. Returns `netTaxLiability = taxCollected - taxPaid`. Use this for GSTR-3B preparation or quarterly GST working.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the tax period" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the tax period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the tax period. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the tax period. Omit for no upper bound (all time)" },
         { name: "type", type: "'sales' | 'purchases' | 'both'", required: false, description: "Which side to include. Defaults to 'both'." },
       ],
       output: {
@@ -336,8 +336,8 @@ console.log("Expected balance in 30 days:", next30?.expected);`,
       description: "Measures payment collection quality for a period. Returns on-time payment rate (% of invoices paid before the due date) and Days Sales Outstanding (DSO). DSO <= 30 days is considered healthy; > 45 days triggers a warning.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the analysis period" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the analysis period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the analysis period. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the analysis period. Omit for no upper bound (all time)" },
       ],
       output: {
         description: "On-time collection stats and DSO calculation.",
@@ -385,8 +385,8 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.collectionEfficiency?
       description: "Per-item sales performance report for a date range. Returns quantity sold, revenue, average unit price, unique customer count, estimated gross margin %, and invoice count per item. Can compare against the equivalent prior period by setting `compareToPrevious: true`.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the analysis period" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the analysis period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the analysis period. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the analysis period. Omit for no upper bound (all time)" },
         { name: "category", type: "string", required: false, description: "Filter to a specific item category" },
         { name: "itemType", type: "'product' | 'service'", required: false, description: "Filter to a specific item type" },
         { name: "sortBy", type: "'revenue' | 'quantity' | 'invoices' | 'margin'", required: false, description: "Sort order. Defaults to 'revenue'." },
@@ -445,6 +445,7 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.itemSales?input={para
         "`grossMarginPct` uses the item's `purchasePrice` as a cost proxy. If `purchasePrice` is null, cost is treated as zero — making the margin 100%.",
         "`estimatedCost` similarly uses `purchasePrice * soldQty`, not actual purchase invoice data.",
         "When `compareToPrevious` is true, the prior period window is auto-calculated as the same duration immediately before `fromDate`.",
+        "`compareToPrevious` is ignored when either `fromDate` or `toDate` is omitted (all time has no previous period).",
       ],
     },
     {
@@ -595,8 +596,8 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.partyStatement?input=
       description: "Summarises all payments in a date range, grouped by payment mode and bank account. Returns both customer payments received and supplier payments made, broken down by mode (cash, bank, UPI, cheque). Also includes expense cash outflow by mode. Returns up to 200 recent payment records.",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the period. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the period. Omit for no upper bound (all time)" },
         { name: "type", type: "'received' | 'made' | 'both'", required: false, description: "Filter to payments received (from customers), made (to suppliers), or both. Default: 'both'." },
         { name: "bankAccountId", type: "string (UUID)", required: false, description: "Filter to a specific bank account" },
       ],
@@ -1025,11 +1026,11 @@ with open(data["filename"], "w") as f:
       method: "query",
       path: "reports.cashFlowStatement",
       title: "Cash Flow Statement",
-      description: "Cash flow statement using the indirect method. Starts with net income, adjusts for non-cash items (depreciation), and working capital changes (receivables, payables, inventory). Classifies cash flows into operating, investing, and financing activities.",
+      description: "Cash flow statement using the indirect method. Starts with net income, adjusts for non-cash items (depreciation), and working capital changes (receivables, payables, inventory). Classifies cash flows into operating, investing, and financing activities. The statement always reconciles to the actual movement in cash and bank accounts (1000, 1010); any difference from the classified sections is shown as an \"Other operating items\" working-capital line. Omit `fromDate`/`toDate` for all time (opening cash is then zero).",
       auth: "business",
       input: [
-        { name: "fromDate", type: "string (ISO datetime)", required: true, description: "Start of the period" },
-        { name: "toDate", type: "string (ISO datetime)", required: true, description: "End of the period" },
+        { name: "fromDate", type: "string (ISO datetime)", required: false, description: "Start of the period. Omit for no lower bound (all time)" },
+        { name: "toDate", type: "string (ISO datetime)", required: false, description: "End of the period. Omit for no upper bound (all time)" },
       ],
       output: {
         description: "Operating, investing, and financing cash flows with net change.",
@@ -1072,10 +1073,12 @@ resp = httpx.get(f"https://api.hisaabo.in/api/trpc/reports.cashFlowStatement?inp
       },
       gotchas: [
         "Uses the indirect method: starts with net income and adjusts for non-cash items.",
-        "Working capital changes are derived from account movements: receivables (1100), payables (2000), inventory (1300).",
-        "Increase in receivables = negative cash flow (money tied up). Increase in payables = positive cash flow (deferred payments).",
-        "Depreciation (account 5900) is added back as a non-cash expense adjustment.",
-        "Investing activities include fixed asset movements (1500). Financing includes loan movements (2100) and equity changes (3000).",
+        "Working capital changes cover current assets (receivables 1100, inventory 1200, advances 1300, prepaid 1400, input GST 1510-1512) and current liabilities (payables 2000, output GST 2100-2102, TDS 2200, other current 2300).",
+        "Increase in a current asset = negative cash flow (money tied up). Increase in a current liability = positive cash flow (deferred payments).",
+        "Depreciation (account 5900) is added back as a non-cash expense adjustment and is not double-counted in investing.",
+        "Investing activities are the other asset accounts (e.g. fixed assets 1500). Financing is equity (capital, drawings, other equity; retained earnings excluded) and non-current liabilities such as loans.",
+        "The net cash change always equals the real movement in cash and bank accounts (1000, 1010). Anything the classification does not explain (e.g. manual journals) appears as an \"Other operating items\" line.",
+        "If `fromDate` is omitted the opening cash balance is zero; if `toDate` is omitted the range is open-ended.",
       ],
       relatedEndpoints: ["reports-profit-and-loss", "reports-balance-sheet"],
     },
