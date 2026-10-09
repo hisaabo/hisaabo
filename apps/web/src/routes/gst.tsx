@@ -52,7 +52,9 @@ function GSTReportsPage() {
   const activeTab: ReportTab = tabFromSearch ?? readStoredTab();
   const setActiveTab = (tab: ReportTab) => {
     try {
-      localStorage.setItem("hisaabo_gst_tab", tab);
+      // Persist the canonical constant (not the caller's value) — it's only a UI tab name.
+      const canonical = REPORT_TABS.find((t) => t === tab);
+      if (canonical) localStorage.setItem("hisaabo_gst_tab", canonical);
     } catch {
       // storage unavailable — URL still carries the tab
     }
