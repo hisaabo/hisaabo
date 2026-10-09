@@ -1,4 +1,4 @@
-import { useEffect, useState, useTransition } from "react";
+import { Fragment, useEffect, useState, useTransition } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
@@ -1091,15 +1091,30 @@ function SummaryCards({
     <div className="mb-6">
       <p className="text-[11px] font-medium text-text-tertiary mb-2">{periodLabel} — Receivable & Payable are current totals</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {cards.map((c) => (
-          <StatCard
-            key={c.label}
-            label={c.label}
-            value={formatCurrency(c.value)}
-            valueColor={c.color}
-            className="truncate"
-          />
-        ))}
+        {cards.map((c) => {
+          const card = (
+            <StatCard
+              label={c.label}
+              value={formatCurrency(c.value)}
+              valueColor={c.color}
+              className="truncate"
+            />
+          );
+          // Receivable drills into the Aging Report (same total, per customer).
+          return c.label === "Receivable" ? (
+            <Link
+              key={c.label}
+              to="/gst"
+              search={{ tab: "aging" }}
+              aria-label={`Receivable ${formatCurrency(c.value)} — view aging report`}
+              className="block rounded-xl transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            >
+              {card}
+            </Link>
+          ) : (
+            <Fragment key={c.label}>{card}</Fragment>
+          );
+        })}
       </div>
     </div>
   );
