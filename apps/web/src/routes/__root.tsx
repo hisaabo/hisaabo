@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
+import { isGstRegisteredBusiness } from "@/hooks/useActiveBusiness";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
@@ -616,8 +617,7 @@ function RootLayout() {
   }
 
   const activeBusiness = businesses?.find((b) => b.id === (currentBusinessId ?? businesses?.[0]?.id)) ?? businesses?.[0];
-  const isGstRegistered =
-    activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
+  const isGstRegistered = isGstRegisteredBusiness(activeBusiness);
 
   // No businesses yet — user is in the onboarding flow. Hide the sidebar
   // since nav items are meaningless without a business context.

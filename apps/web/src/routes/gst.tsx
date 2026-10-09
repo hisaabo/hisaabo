@@ -16,9 +16,16 @@ import { getCurrentFYBounds, getPreviousFYBounds, fyLabel } from "@/lib/fy-bound
 import { documentRouteFor } from "@/lib/document-routes";
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
+import { useActiveBusiness } from "@/hooks/useActiveBusiness";
+import {
+  REPORT_TABS,
+  type ReportTab,
+  availableReportTabs,
+  readStoredReportTab,
+  resolveReportTab,
+  storeReportTab,
+} from "@/lib/gst-report-tabs";
 
-const REPORT_TABS = ["gstr1", "gstr3b", "gstr9", "pnl", "trial-balance", "balance-sheet", "aging", "ledger", "tally"] as const;
-type ReportTab = (typeof REPORT_TABS)[number];
 
 // The active tab and the Party Ledger's selected party live in the URL so that
 // deep links (dashboard → Aging, Aging → ledger) work and the browser back
@@ -33,38 +40,21 @@ export const Route = createFileRoute("/gst")({
   component: GSTReportsPage,
 });
 
-function readStoredTab(): ReportTab {
-  try {
-    const stored = localStorage.getItem("hisaabo_gst_tab");
-    if ((REPORT_TABS as readonly string[]).includes(stored ?? "")) return stored as ReportTab;
-  } catch {
-    // storage unavailable
-  }
-  return "gstr1";
-}
-
 function GSTReportsPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const navigate = useNavigate();
   const { tab: tabFromSearch, partyId: partyIdFromSearch } = useSearch({ from: "/gst" });
-  const activeTab: ReportTab = tabFromSearch ?? readStoredTab();
+
+  // Labels, available tabs and the remembered tab all follow the business the
+  // user is working in — not businesses[0] — since GST status differs per business.
+  const { businessId, isGstRegistered } = useActiveBusiness();
+  const activeTab = resolveReportTab(tabFromSearch, readStoredReportTab(businessId), isGstRegistered);
   const setActiveTab = (tab: ReportTab) => {
-    try {
-      // Persist the canonical constant (not the caller's value) — it's only a UI tab name.
-      const canonical = REPORT_TABS.find((t) => t === tab);
-      if (canonical) localStorage.setItem("hisaabo_gst_tab", canonical);
-    } catch {
-      // storage unavailable — URL still carries the tab
-    }
+    storeReportTab(businessId, tab);
     navigate({ to: "/gst", search: { tab } });
   };
-
-  const { data: businesses } = trpc.business.list.useQuery();
-  const biz = businesses?.[0];
-
-  const isGstRegistered = biz?.gstRegistrationType !== "unregistered" || !!biz?.gstin;
 
   // Report labels adapt based on GST status
   const reportTitle = isGstRegistered ? "GST Returns" : "Tax Reports";
@@ -74,7 +64,7 @@ function GSTReportsPage() {
   const tab1Label = isGstRegistered ? "GSTR-1" : "Sales Report";
   const tab2Label = isGstRegistered ? "GSTR-3B" : "Tax Summary";
 
-  const tabs: Array<{ value: ReportTab; label: string }> = [
+  const allTabs: Array<{ value: ReportTab; label: string }> = [
     { value: "gstr1", label: tab1Label },
     { value: "gstr3b", label: tab2Label },
     { value: "gstr9", label: "GSTR-9" },
@@ -85,6 +75,8 @@ function GSTReportsPage() {
     { value: "ledger", label: "Party Ledger" },
     { value: "tally", label: "Tally Export" },
   ];
+  const available = availableReportTabs(isGstRegistered);
+  const tabs = allTabs.filter((t) => available.includes(t.value));
 
   return (
     <div>
