@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { getBusinessId } from "@/lib/trpc";
@@ -15,6 +15,8 @@ import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { DetailField } from "@/components/ui/DetailField";
 import { LinkButton } from "@/components/ui/LinkButton";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { PopoverMenu } from "@/components/ui/PopoverMenu";
+import { DocumentLineItemName } from "@/components/DocumentLineItemName";
 import { DocumentCreator } from "@/components/DocumentCreator";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
@@ -96,6 +98,7 @@ function DownloadPDFButton({
 }) {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const { data: businesses } = trpc.business.list.useQuery();
   const activeId = getBusinessId();
@@ -145,9 +148,12 @@ function DownloadPDFButton({
   return (
     <div className="relative inline-flex" onClick={(e) => e.stopPropagation()}>
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         disabled={loading}
         title="Download PDF"
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="p-1.5 rounded-lg text-text-tertiary hover:text-brand-600 hover:bg-brand-600/[0.08] transition-colors disabled:opacity-50"
       >
         {loading ? (
@@ -158,22 +164,18 @@ function DownloadPDFButton({
           </svg>
         )}
       </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-20 min-w-[172px] rounded-lg border border-border-light bg-surface-1 shadow-lg py-1">
-            {options.map((opt) => (
-              <button
-                key={opt.format}
-                onClick={() => download(opt.format)}
-                className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+      <PopoverMenu open={open} onClose={() => setOpen(false)} anchorRef={triggerRef}>
+        {options.map((opt) => (
+          <button
+            key={opt.format}
+            role="menuitem"
+            onClick={() => download(opt.format)}
+            className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
+          >
+            {opt.label}
+          </button>
+        ))}
+      </PopoverMenu>
     </div>
   );
 }
@@ -695,7 +697,7 @@ function InvoiceDetailPanel({
                         {/* Primary: frozen item name snapshot. Secondary:
                             optional italic notes — collapses with no
                             placeholder gap when description is null/empty. */}
-                        <p className="font-medium text-text-primary">{li.itemName}</p>
+                        <DocumentLineItemName itemId={li.itemId} name={li.itemName} />
                         {li.description && (
                           <p className="text-[11px] italic text-text-secondary mt-0.5 whitespace-pre-wrap">
                             {li.description}
@@ -884,6 +886,7 @@ interface PaymentPanelState {
 const PAGE_SIZE = 25;
 
 function InvoicesPage() {
+  const navigate = useNavigate();
   const [type, setType] = useState<"sale" | "purchase">("sale");
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
@@ -900,7 +903,6 @@ function InvoicesPage() {
   const [lastCreatedPartyId, setLastCreatedPartyId] = useState<string | undefined>(undefined);
   const deleteConfirm = useDeleteConfirmation();
   const [paymentPanel, setPaymentPanel] = useState<PaymentPanelState | null>(null);
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [editInvoice, setEditInvoice] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [cnSource, setCnSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
   const [srSource, setSrSource] = useState<{ id: string; type: "sale" | "purchase" } | null>(null);
@@ -919,12 +921,18 @@ function InvoicesPage() {
   // or open the create slider when navigated here with ?create=1 (used by
   // the Dashboard "+ New Invoice" CTA so users land directly in the form
   // rather than just on the list).
+  //
+  // The open invoice lives in the URL (?id=) so a line-item link to /items can
+  // return here with the browser back button. Opening pushes a history entry;
+  // closing replaces it so back never re-opens a panel the user dismissed.
   const { id: idFromSearch, create: createFromSearch } = useSearch({ from: "/invoices" });
-  useEffect(() => {
-    if (idFromSearch) {
-      setSelectedInvoiceId(idFromSearch);
-    }
-  }, [idFromSearch]);
+  const selectedInvoiceId = idFromSearch ?? null;
+  const setSelectedInvoiceId = useCallback(
+    (id: string | null) => {
+      navigate({ to: "/invoices", search: id ? { id } : {}, replace: !id });
+    },
+    [navigate],
+  );
   useEffect(() => {
     if (createFromSearch && canCreate) {
       setShowCreate(true);
