@@ -9,6 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
+import { emitNotificationEvent } from "../lib/notifications/index.js";
 
 const ASSIGN_CHUNK_SIZE = 500;
 
@@ -265,7 +266,7 @@ export const paymentRouter = router({
     requireCan(ctx.ability, "create", "Payment");
     const payment = await ctx.db.transaction(async (tx) => {
       // Security: validate that partyId belongs to the current business.
-      const [partyCheck] = await tx.select({ id: parties.id })
+      const [partyCheck] = await tx.select({ id: parties.id, name: parties.name, type: parties.type })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
@@ -402,6 +403,17 @@ export const paymentRouter = router({
             .where(eq(bankAccounts.id, input.bankAccountId));
         }
       }
+
+      await emitPaymentNotification(tx, {
+        tenantId: ctx.tenantId,
+        businessId: ctx.businessId,
+        actorUserId: ctx.user!.id,
+        viaApiKey: !!ctx.viaApiKey,
+        payment,
+        partyName: partyCheck.name,
+        partyType: partyCheck.type,
+        invoiceIds: effectiveAllocations.map((a) => a.invoiceId),
+      });
 
       // ── Gateway charge + settlement ─────────────────────────────────
       if (input.bankAccountId) {
@@ -1062,3 +1074,75 @@ export const paymentRouter = router({
       return { assigned: result.assigned };
     }),
 });
+
+// ── Notifications ─────────────────────────────────────────────────────────
+
+/**
+ * Raise `payment.received` (money in) or `payment.made` (money out) inside the
+ * payment's transaction. "Mine" for a received payment is the seller who
+ * created the invoice it settles, so sellers hear about their own sales.
+ */
+async function emitPaymentNotification(
+  tx: Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0],
+  args: {
+    tenantId: string | null;
+    businessId: string;
+    actorUserId: string;
+    viaApiKey: boolean;
+    payment: { id: string; paymentNumber: string | null; amount: string };
+    partyName: string;
+    partyType: "customer" | "supplier";
+    invoiceIds: string[];
+  },
+): Promise<void> {
+  const [primary] = args.invoiceIds.length
+    ? await tx.select({
+      id: invoices.id,
+      type: invoices.type,
+      status: invoices.status,
+      invoiceNumber: invoices.invoiceNumber,
+      createdByUserId: invoices.createdByUserId,
+    })
+      .from(invoices)
+      .where(and(eq(invoices.id, args.invoiceIds[0]), eq(invoices.businessId, args.businessId)))
+      .limit(1)
+    : [];
+  const outgoing = primary ? primary.type === "purchase" : args.partyType === "supplier";
+  const common = {
+    tenantId: args.tenantId,
+    businessId: args.businessId,
+    actorUserId: args.actorUserId,
+    actorKind: args.viaApiKey ? ("api_key" as const) : ("user" as const),
+  };
+
+  if (outgoing) {
+    await emitNotificationEvent(tx, {
+      ...common,
+      type: "payment.made",
+      payload: {
+        paymentId: args.payment.id,
+        paymentNumber: args.payment.paymentNumber,
+        amount: args.payment.amount,
+        partyName: args.partyName,
+      },
+      ownerUserId: args.actorUserId,
+      dedupeKey: `payment.made:${args.payment.id}`,
+    });
+    return;
+  }
+  await emitNotificationEvent(tx, {
+    ...common,
+    type: "payment.received",
+    payload: {
+      paymentId: args.payment.id,
+      paymentNumber: args.payment.paymentNumber,
+      amount: args.payment.amount,
+      partyName: args.partyName,
+      invoiceId: primary?.id ?? null,
+      invoiceNumber: primary?.invoiceNumber ?? null,
+      invoiceFullyPaid: primary?.status === "paid",
+    },
+    ownerUserId: primary?.createdByUserId ?? args.actorUserId,
+    dedupeKey: `payment.received:${args.payment.id}`,
+  });
+}

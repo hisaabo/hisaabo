@@ -226,6 +226,14 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   store_confirm_order: D,
   store_cancel_order: D,
 
+  // notifications (inbox + the caller's own preferences)
+  notification_list: R,
+  notification_unread_counts: R,
+  notification_mark_read: W,
+  notification_mark_all_read: W,
+  notification_preferences_get: R,
+  notification_preference_update: W,
+
   // targets
   target_list: R,
   target_create: W,

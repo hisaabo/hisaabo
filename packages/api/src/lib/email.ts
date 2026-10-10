@@ -14,6 +14,16 @@ function escapeHtml(str: string): string {
 interface EmailService {
   sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void>;
   sendInvitation(to: string, inviteUrl: string, businessName: string, inviterName: string | null): Promise<void>;
+  sendNotification(to: string, message: NotificationEmail): Promise<void>;
+}
+
+/** Email copy of an in-app notification (locked events, opted-in channels). */
+export interface NotificationEmail {
+  title: string;
+  body: string;
+  /** Absolute link that opens the notification target in the web app. */
+  url: string;
+  locale: "en" | "hi";
 }
 
 class ConsoleEmailService implements EmailService {
@@ -45,6 +55,20 @@ class ConsoleEmailService implements EmailService {
     console.log(`║  ${inviteUrl}`);
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log("");
+  }
+
+  async sendNotification(to: string, message: NotificationEmail): Promise<void> {
+    await ConsoleNotificationEmail.send(to, message);
+  }
+}
+
+class ConsoleNotificationEmail {
+  static async send(to: string, message: NotificationEmail): Promise<void> {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
+      throw new Error("Email service not configured");
+    }
+    console.log(`[email:console] notification to ${to}: ${message.title} — ${message.body} (${message.url})`);
   }
 }
 
@@ -382,6 +406,56 @@ ${reassuranceHtml}
       throw new Error("Failed to send email");
     }
   }
+
+  async sendNotification(to: string, message: NotificationEmail): Promise<void> {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: this.fromAddress,
+        to,
+        subject: message.title,
+        html: renderNotificationEmailHtml(message),
+        text: `${message.title}\n\n${message.body}\n\n${message.url}`,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`[email] Resend API error: ${res.status} ${text}`);
+      throw new Error("Failed to send email");
+    }
+  }
+}
+
+// Plain, single-card layout: notification emails are short and frequent, so
+// they skip the marketing chrome of the sign-in and invitation emails.
+export function renderNotificationEmailHtml(message: NotificationEmail): string {
+  const title = escapeHtml(message.title);
+  const body = escapeHtml(message.body);
+  const url = escapeHtml(message.url);
+  const cta = message.locale === "hi" ? "Hisaabo में खोलें" : "Open in Hisaabo";
+  const footer = message.locale === "hi"
+    ? "आप यह ईमेल इसलिए पा रहे हैं क्योंकि यह सूचना आपके खाते के लिए आवश्यक है या आपने ईमेल प्रतियाँ चालू की हैं। सेटिंग्स → सूचनाएँ में बदलें।"
+    : "You are receiving this because this alert is required for your role or you turned on email copies. Change this in Settings → Notifications.";
+  const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+  return `<!DOCTYPE html>
+<html lang="${message.locale}">
+<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>${title}</title></head>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f3f4f6;"><tr><td style="padding: 32px 16px;">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 480px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
+<tr><td style="height: 4px; background-color: #4f46e5; font-size: 0; line-height: 0; border-radius: 12px 12px 0 0;">&nbsp;</td></tr>
+<tr><td style="padding: 28px 32px 0 32px;"><h1 style="margin: 0 0 12px 0; font-family: ${font}; font-size: 19px; font-weight: 700; color: #111827; line-height: 26px;">${title}</h1>
+<p style="margin: 0; font-family: ${font}; font-size: 15px; line-height: 24px; color: #4b5563;">${body}</p></td></tr>
+<tr><td style="padding: 24px 32px 28px 32px;"><a href="${url}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #4f46e5; color: #ffffff; font-family: ${font}; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 8px;">${cta}</a></td></tr>
+</table>
+<p style="max-width: 480px; margin: 16px auto 0 auto; font-family: ${font}; font-size: 12px; line-height: 18px; color: #9ca3af; text-align: center;">${footer}</p>
+</td></tr></table>
+</body>
+</html>`;
 }
 
 function createEmailService(): EmailService {

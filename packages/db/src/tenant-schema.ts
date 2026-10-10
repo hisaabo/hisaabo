@@ -1125,6 +1125,65 @@ export const gstr2bRecords = pgTable("gstr2b_records", {
   index("g2br_match_idx").on(t.uploadId, t.matchStatus),
 ]);
 
+// ── Notifications ─────────────────────────────────────────────
+// See docs/architecture/notifications.md §6–7. Both tables carry tenant_id
+// because tenant-level events (team, security) have no business, and in
+// self-hosted mode every tenant shares this database: every query filters on
+// tenant_id, and on business_id where the row has one.
+
+// Transactional outbox: domain writes insert here in the same transaction, the
+// dispatcher fans each row out to recipients' inboxes and push devices.
+export const notificationOutbox = pgTable("notification_outbox", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // No FK — tenants live in the control schema
+  tenantId: uuid("tenant_id").notNull(),
+  // Null for tenant-level events (team changes, API keys)
+  businessId: uuid("business_id").references(() => businesses.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(),
+  // No FKs to users — users live in the control schema
+  actorUserId: uuid("actor_user_id"),
+  actorKind: text("actor_kind").default("user").notNull(), // "user" | "api_key" | "agent" | "system"
+  ownerUserId: uuid("owner_user_id"),     // who "mine" refers to (record creator)
+  subjectUserId: uuid("subject_user_id"), // who an own-account / team event is about
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: text("status").default("pending").notNull(), // "pending" | "dispatched" | "failed" | "expired"
+  attempts: integer("attempts").default(0).notNull(),
+  availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+}, (t) => [
+  uniqueIndex("notif_outbox_dedupe_idx").on(t.tenantId, t.dedupeKey),
+  index("notif_outbox_pending_idx").on(t.status, t.availableAt),
+  index("notif_outbox_business_idx").on(t.businessId),
+]);
+
+// Inbox: the system of record for every notification a user receives.
+export const notificationInbox = pgTable("notification_inbox", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  businessId: uuid("business_id").references(() => businesses.id, { onDelete: "cascade" }),
+  recipientUserId: uuid("recipient_user_id").notNull(),
+  outboxId: uuid("outbox_id").references(() => notificationOutbox.id, { onDelete: "set null" }),
+  channel: text("channel").notNull(),
+  eventType: text("event_type").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  locale: text("locale").default("en").notNull(),
+  target: jsonb("target").$type<{ kind: string; id?: string }>().notNull(),
+  locked: boolean("locked").default(false).notNull(),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  // One inbox row per (event, recipient) so dispatcher retries are idempotent
+  uniqueIndex("notif_inbox_outbox_recipient_idx").on(t.outboxId, t.recipientUserId),
+  index("notif_inbox_recipient_idx").on(t.tenantId, t.recipientUserId, t.createdAt),
+  index("notif_inbox_unread_idx").on(t.tenantId, t.recipientUserId, t.businessId).where(sql`read_at IS NULL AND archived_at IS NULL`),
+  index("notif_inbox_created_idx").on(t.createdAt),
+]);
+
 // ── Relations ──────────────────────────────────────────────────
 
 export const businessesRelations = relations(businesses, ({ many }) => ({

@@ -547,6 +547,30 @@ export class HisaaboClient {
     };
   }
 
+  get notification() {
+    const c = this;
+    return {
+      list(input: { limit?: number; cursor?: string; unreadOnly?: boolean; channel?: NotificationChannel }) {
+        return c.query("notification.list", input);
+      },
+      unreadCounts() {
+        return c.query("notification.unreadCounts");
+      },
+      markRead(ids: string[]) {
+        return c.mutate("notification.markRead", { ids });
+      },
+      markAllRead() {
+        return c.mutate("notification.markAllRead");
+      },
+      getPreferences(businessId?: string | null) {
+        return c.query("notification.getPreferences", { businessId });
+      },
+      updatePreference(input: NotificationPreferenceUpdate) {
+        return c.mutate("notification.updatePreference", input);
+      },
+    };
+  }
+
   get target() {
     const c = this;
     return {
@@ -1535,6 +1559,16 @@ export interface RecurringInvoiceUpdateInput {
   notes?: string;
 }
 
+export type NotificationChannel =
+  | "money_in" | "collections" | "sales" | "store" | "payables" | "banking" | "compliance"
+  | "inventory" | "targets" | "security" | "digest" | "general" | "promotions";
 
-
-
+export interface NotificationPreferenceUpdate {
+  businessId: string | null;
+  channel: NotificationChannel;
+  delivery?: "push" | "inbox" | "digest" | "off" | null;
+  scope?: "mine" | "everyone" | null;
+  thresholdPaise?: number | null;
+  email?: boolean | null;
+  reset?: boolean;
+}

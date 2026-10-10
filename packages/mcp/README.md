@@ -89,7 +89,7 @@ An AI agent reads free text from your books (party names, notes, store orders) t
 
 ## Available Tools
 
-Up to 180 tools across all business domains, depending on the [safety mode](#safety-modes). In the default `readonly` mode only query tools are registered; the tables below list everything.
+Up to 186 tools across all business domains, depending on the [safety mode](#safety-modes). In the default `readonly` mode only query tools are registered; the tables below list everything.
 
 ### Invoicing
 
@@ -255,6 +255,17 @@ Up to 180 tools across all business domains, depending on the [safety mode](#saf
 | `target_create` | Create a new sales target |
 | `target_progress` | Get progress data for a target |
 | `target_my` | Get targets assigned to the current user |
+
+### Notifications
+
+| Tool | What it does |
+|---|---|
+| `notification_list` | List the caller's notifications for the active business (filter by channel / unread) |
+| `notification_unread_counts` | Unread counts per business |
+| `notification_mark_read` | Mark notifications read by id |
+| `notification_mark_all_read` | Mark the active business's notifications read |
+| `notification_preferences_get` | Effective preference per channel (delivery, scope, threshold, email, locked) |
+| `notification_preference_update` | Change one channel's preference for the organization or a business |
 
 ### Import
 

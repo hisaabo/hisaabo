@@ -50,6 +50,13 @@
       "when": 1791656780103,
       "tag": "0006_cache_invalidation_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791662615664,
+      "tag": "0007_notifications",
+      "breakpoints": true
     }
   ]
 }

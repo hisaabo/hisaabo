@@ -58,6 +58,12 @@ const EXEMPT: Record<string, string> = {
   "business.deleteLogo": "tenant-ownership scope on businesses.createdByUserId",
   "business.setPosEnabled": "tenant-ownership scope on businesses.createdByUserId",
   "business.ensureWalkInParty": "assertBusinessInTenant() guard before seeding",
+
+  // ── Notification preferences: per-user rows in the control DB, scoped by
+  //    ctx.tenantId + ctx.user.id; an optional businessId is checked with
+  //    assertBusinessInTenant(). Covered by integration/notifications.test.ts. ──
+  "notification.getPreferences": "assertBusinessInTenant() guard; rows scoped by ctx.tenantId + ctx.user.id",
+  "notification.updatePreference": "assertBusinessInTenant() guard; rows scoped by ctx.tenantId + ctx.user.id",
 };
 
 // ── Introspection helpers ───────────────────────────────────────────────────

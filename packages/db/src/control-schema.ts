@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb, check, integer, bigint, primaryKey } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
@@ -193,6 +193,85 @@ export const systemConfig = pgTable("system_config", {
   value: jsonb("value").notNull().default({}),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ── Notifications (user-level) ─────────────────────────────────
+// See docs/architecture/notifications.md §4, §7. Tenant-scoped notification
+// data (outbox, inbox) lives in the tenant schema; what follows belongs to the
+// user across all their tenants.
+
+// A push registration. Bound to the session that registered it: signing out,
+// revoking or rotating the session deletes the registration (FK cascade), so a
+// revoked session stops receiving push immediately. Clients re-register on
+// every launch (idempotent upsert keyed by token hash).
+export const pushDevices = pgTable("push_devices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+  platform: text("platform").notNull(),     // "ios" | "android" | "web" | "unifiedpush"
+  appFlavor: text("app_flavor").notNull(),  // "play" | "appstore" | "fdroid" | "web" | "desktop"
+  // sha256(platform:token) — lookup/uniqueness without storing the token in clear
+  tokenHash: text("token_hash").notNull(),
+  // Device token or push endpoint URL, encrypted at rest (crypto.ts encryptField)
+  token: text("token").notNull(),
+  // RFC 8291 keys for end-to-end encrypted payloads (base64url). authSecret is encrypted at rest.
+  publicKey: text("public_key"),
+  authSecret: text("auth_secret"),
+  locale: text("locale").default("en").notNull(),
+  appVersion: text("app_version"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("push_devices_token_idx").on(t.tokenHash),
+  index("push_devices_user_idx").on(t.userId),
+  index("push_devices_session_idx").on(t.sessionId),
+]);
+
+// User-global notification settings (apply across every tenant).
+export const userNotificationSettings = pgTable("user_notification_settings", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  locale: text("locale").default("en").notNull(),
+  // "HH:MM" in the business time zone; both null = quiet hours off
+  quietStart: text("quiet_start").default("22:00"),
+  quietEnd: text("quiet_end").default("08:00"),
+  pausedUntil: timestamp("paused_until", { withTimezone: true }),
+  lockScreenPrivacy: boolean("lock_screen_privacy").default(false).notNull(),
+  // Explicit, withdrawable consent for the promotions channel (App Store 4.5.4, DPDP Act)
+  promotionsOptInAt: timestamp("promotions_opt_in_at", { withTimezone: true }),
+  promotionsOptInSource: text("promotions_opt_in_source"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Per-channel preference overrides. business_id NULL = the user's default for
+// the whole tenant; a row with business_id overrides it for that business.
+// Any null column falls through to the next level (business → tenant → role default).
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  // No FK — businesses live in the tenant schema
+  businessId: uuid("business_id"),
+  channel: text("channel").notNull(),
+  delivery: text("delivery"),     // "push" | "inbox" | "digest" | "off"
+  scope: text("scope"),           // "mine" | "everyone"
+  thresholdPaise: bigint("threshold_paise", { mode: "number" }),
+  email: boolean("email"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("notif_prefs_tenant_idx").on(t.userId, t.tenantId, t.channel).where(sql`business_id IS NULL`),
+  uniqueIndex("notif_prefs_business_idx").on(t.userId, t.tenantId, t.businessId, t.channel).where(sql`business_id IS NOT NULL`),
+  index("notif_prefs_lookup_idx").on(t.tenantId, t.userId),
+]);
+
+// Fixed-window push counters for the per-instance / per-tenant / per-user quotas (§9).
+export const pushQuotaUsage = pgTable("push_quota_usage", {
+  scope: text("scope").notNull(),       // "instance" | "instance_minute" | "tenant" | "user_hour" | "user_day"
+  scopeId: text("scope_id").notNull(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  count: integer("count").default(0).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.scope, t.scopeId, t.windowStart] }),
+  index("push_quota_window_idx").on(t.windowStart),
+]);
 
 // ── Store slug registry ───────────────────────────────────────
 //
