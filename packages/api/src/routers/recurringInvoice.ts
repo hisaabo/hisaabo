@@ -46,7 +46,7 @@ export const recurringInvoiceRouter = router({
           .from(recurringInvoiceTemplates)
           .leftJoin(parties, eq(recurringInvoiceTemplates.partyId, parties.id))
           .where(and(...conditions))
-          .orderBy(desc(recurringInvoiceTemplates.createdAt))
+          .orderBy(desc(recurringInvoiceTemplates.createdAt), desc(recurringInvoiceTemplates.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` })
@@ -318,7 +318,7 @@ export const recurringInvoiceRouter = router({
             eq(recurringInvoiceRuns.templateId, input.templateId),
             eq(recurringInvoiceRuns.businessId, ctx.businessId),
           ))
-          .orderBy(desc(recurringInvoiceRuns.executedAt))
+          .orderBy(desc(recurringInvoiceRuns.executedAt), desc(recurringInvoiceRuns.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` })

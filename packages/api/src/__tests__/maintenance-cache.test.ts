@@ -39,7 +39,7 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(() => "eq-expression"),
 }));
 
-describe("maintenance-cache — getMaintenanceStatus() + invalidateMaintenanceCache()", () => {
+describe("maintenance-cache — getMaintenanceStatus() + the maintenance bus event", () => {
   beforeEach(async () => {
     // Fresh module instance per test so the in-module `cached` / `cachedAt`
     // state starts at null/0 — this is how production bootstraps on a fresh
@@ -152,17 +152,18 @@ describe("maintenance-cache — getMaintenanceStatus() + invalidateMaintenanceCa
     }
   });
 
-  it("invalidateMaintenanceCache() forces the NEXT call to refetch — used by the CLI after it writes a new maintenance config so admins see the change immediately", async () => {
+  it("a `maintenance` bus event forces the NEXT call to refetch — used by the CLI after it writes a new maintenance config so admins see the change immediately", async () => {
     mockLimit
       .mockResolvedValueOnce([{ value: { enabled: false, message: "" } }])
       .mockResolvedValueOnce([{ value: { enabled: true, message: "now" } }]);
 
     const mod = await import("../lib/maintenance-cache.js");
+    const { cacheBus } = await import("../lib/cache/bus.js");
 
     const before = await mod.getMaintenanceStatus();
     expect(before.enabled).toBe(false);
 
-    mod.invalidateMaintenanceCache();
+    cacheBus.invalidate({ kind: "maintenance" });
 
     const after = await mod.getMaintenanceStatus();
     expect(after.enabled).toBe(true);
@@ -170,15 +171,16 @@ describe("maintenance-cache — getMaintenanceStatus() + invalidateMaintenanceCa
     expect(mockSelect).toHaveBeenCalledTimes(2);
   });
 
-  it("invalidateMaintenanceCache() is idempotent on a cold cache — calling it before any fetch should not throw or corrupt state", async () => {
+  it("a `maintenance` bus event is idempotent on a cold cache — calling it before any fetch should not throw or corrupt state", async () => {
     mockLimit.mockResolvedValueOnce([
       { value: { enabled: false, message: "", startsAt: null, endsAt: null } },
     ]);
 
     const mod = await import("../lib/maintenance-cache.js");
+    const { cacheBus } = await import("../lib/cache/bus.js");
 
-    expect(() => mod.invalidateMaintenanceCache()).not.toThrow();
-    expect(() => mod.invalidateMaintenanceCache()).not.toThrow();
+    expect(() => cacheBus.invalidate({ kind: "maintenance" })).not.toThrow();
+    expect(() => cacheBus.invalidate({ kind: "maintenance" })).not.toThrow();
 
     const status = await mod.getMaintenanceStatus();
     expect(status.enabled).toBe(false);

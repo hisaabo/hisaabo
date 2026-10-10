@@ -1280,9 +1280,9 @@ The store catalog is the hottest path. It must be fast.
 - CDN caches the response for 60 seconds, serves stale for up to 5 minutes while revalidating.
 - Cache key: `slug + category + search + page`.
 
-**Layer 2: Application-level cache (both modes)**
-- The catalog handler maintains an in-memory cache per business (TTL: 60 seconds).
-- Cache is invalidated when `bulkToggleItems` or `updateItemStoreSettings` is called (via a simple version counter).
+**Layer 2: No application-level catalog cache**
+- The catalog handler does not cache in process: every request that reaches the API runs the (indexed) catalog queries. Freshness for shoppers is governed by the `Cache-Control` header above, and edits become visible when it expires; there is no version counter to bump from `bulkToggleItems` / `updateItemStoreSettings`.
+- What *is* cached in process is the slug lookup (`lib/store-slug-cache.ts`: 5 min positive, 30 s negative, invalidated on store settings changes). The business `storeEnabled` flag is still re-checked in the tenant DB on every request. See [caching.md](caching.md).
 
 **Layer 3: Database query optimization**
 - The `items_store_idx` index on `(business_id, store_enabled)` makes the catalog query fast.

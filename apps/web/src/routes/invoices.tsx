@@ -951,7 +951,7 @@ function InvoicesPage() {
 
   const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
-  const { data, isFetching, isLoading } = trpc.invoice.list.useQuery({
+  const { data, isFetching, isLoading, isPlaceholderData } = trpc.invoice.list.useQuery({
     type,
     status: (status || undefined) as any,
     search: debouncedSearch || undefined,
@@ -973,6 +973,7 @@ function InvoicesPage() {
     total: data?.total ?? 0,
     page,
     isFetching,
+    isPlaceholderData,
     onLoadMore: loadMore,
     resetDeps: [type, status, debouncedSearch, dateRange.fromDate, dateRange.toDate, sortBy, sortDir],
   });

@@ -15,12 +15,12 @@ import path from "node:path";
 import os from "node:os";
 import QRCode from "qrcode";
 import { appRouter } from "./router.js";
-import { TRPCError } from "@trpc/server";
 import { createContext } from "./context.js";
-import { assertActiveMembership } from "./lib/tenant-access.js";
+import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/authz.js";
+import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, tenantMembers, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
@@ -38,7 +38,9 @@ import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
 import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
-import { NegativeCache } from "./lib/ttl-negative-cache.js";
+import { resolveStoreSlug } from "./lib/store-slug-cache.js";
+import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
+import { serveBusinessLogo, LOGO_SAFE_HEADERS } from "./lib/logo-response.js";
 import { validateOrderItemsShape, normalizeIndianMobile, aggregateStockDemand, findInsufficientStock } from "./lib/store-order-validation.js";
 import { verifyShippingWebhook, parseWebhookTime, WEBHOOK_TOLERANCE_MS } from "./lib/shipping-webhook.js";
 import { getOrRenderStoreOg, storeMetaSummary, injectStoreMeta, jsonLdScriptSafe } from "./lib/og/index.js";
@@ -462,19 +464,11 @@ async function verifyBusinessAccess(
   businessId: string,
   tenantId: string,
 ): Promise<{ ok: true; business: { id: string; createdByUserId: string } } | { ok: false; error: string }> {
-  const [biz] = await db.select({ id: businesses.id, createdByUserId: businesses.createdByUserId })
-    .from(businesses).where(eq(businesses.id, businessId)).limit(1);
-  if (!biz) return { ok: false, error: "Business not found" };
-
-  // Self-hosted cross-tenant guard: verify the creator is a member of this tenant
-  const [creatorMembership] = await controlDb
-    .select({ userId: tenantMembers.userId })
-    .from(tenantMembers)
-    .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, biz.createdByUserId)))
-    .limit(1);
-  if (!creatorMembership) return { ok: false, error: "Business not found" };
-
-  return { ok: true, business: biz };
+  // Same cached, positive-only facts as the tRPC hasBusinessAccess middleware
+  // (lib/authz.ts); denial messages come from the shared table.
+  const r = await getBusinessAccess(db, tenantId, businessId);
+  if (!r.ok) return { ok: false, error: authzDenialError(r.reason).message };
+  return { ok: true, business: { id: businessId, createdByUserId: r.createdByUserId } };
 }
 
 // ── Session validation for non-tRPC authenticated endpoints ─────
@@ -494,12 +488,8 @@ async function authenticateRest(c: Context): Promise<RestAuth> {
   if (!ctx.user) return { ok: false, status: 401, error: "Unauthorized" };
   if (!ctx.tenantId) return { ok: false, status: 400, error: "No organization selected" };
 
-  try {
-    await assertActiveMembership(ctx.tenantId, ctx.user.id);
-  } catch (err) {
-    if (err instanceof TRPCError) return { ok: false, status: 403, error: err.message };
-    throw err;
-  }
+  const authz = await getActiveMembership(ctx.tenantId, ctx.user.id);
+  if (!authz.ok) return { ok: false, status: 403, error: authzDenialError(authz.reason).message };
 
   return { ok: true, userId: ctx.user.id, tenantId: ctx.tenantId };
 }
@@ -700,16 +690,6 @@ app.get("/api/invoices/:id/pdf", async (c) => {
 // PDF endpoint. `nosniff` + strict CSP prevents any future browser from
 // sniffing the bytes as HTML/JS even if an attacker smuggled something past
 // the magic-byte check at upload time.
-const EMPTY_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-  "base64",
-);
-const LOGO_SAFE_HEADERS = {
-  "X-Content-Type-Options": "nosniff",
-  "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'none'",
-  "Cross-Origin-Resource-Policy": "same-site",
-};
-
 app.get("/api/businesses/:id/logo", async (c) => {
   const businessId = c.req.param("id");
 
@@ -721,37 +701,7 @@ app.get("/api/businesses/:id/logo", async (c) => {
   const bizAccess = await verifyBusinessAccess(db, businessId, sessionRow.tenantId);
   if (!bizAccess.ok) return c.json({ error: bizAccess.error }, 403);
 
-  const [row] = await db.select({
-    logoData: businesses.logoData,
-    logoMimeType: businesses.logoMimeType,
-    logoUpdatedAt: businesses.logoUpdatedAt,
-  }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
-
-  if (!row || !row.logoData || !row.logoMimeType) {
-    return new Response(new Uint8Array(EMPTY_PNG), {
-      status: 200,
-      headers: {
-        ...LOGO_SAFE_HEADERS,
-        "Content-Type": "image/png",
-        "Cache-Control": "private, max-age=60",
-      },
-    });
-  }
-
-  const etag = `"${row.logoUpdatedAt?.getTime() ?? 0}"`;
-  if (c.req.header("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
-  }
-
-  return new Response(new Uint8Array(row.logoData), {
-    status: 200,
-    headers: {
-      ...LOGO_SAFE_HEADERS,
-      "Content-Type": row.logoMimeType,
-      "Cache-Control": "private, max-age=300",
-      ETag: etag,
-    },
-  });
+  return serveBusinessLogo(db, eq(businesses.id, businessId), c.req.header("if-none-match"), "private");
 });
 
 // GET /api/items/:itemId/images/:imageId — authenticated item-image bytes for
@@ -946,9 +896,6 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
 });
 
 // ── Public Store API ─────────────────────────────────────────
-// Slug resolution cache: slug → { tenantId, businessId, expires }
-const slugCache = new Map<string, { tenantId: string; businessId: string; expires: number }>();
-
 // Rate limit for order placement: phone → { count, reset }
 const orderRateMap = new Map<string, { count: number; reset: number }>();
 
@@ -986,85 +933,6 @@ setInterval(() => {
   }
 }, 5 * 60_000).unref();
 
-// Unknown slugs would otherwise fan out to every tenant DB on each request.
-const unknownSlugCache = new NegativeCache(5000, 30_000);
-const slugLookups = new Map<string, Promise<{ tenantId: string; businessId: string } | null>>();
-
-async function resolveStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
-  // Validate slug format
-  if (!slug || !/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(slug)) return null;
-
-  const now = Date.now();
-  const cached = slugCache.get(slug);
-  if (cached && now < cached.expires) {
-    return { tenantId: cached.tenantId, businessId: cached.businessId };
-  }
-  if (unknownSlugCache.has(slug, now)) return null;
-
-  // Coalesce concurrent lookups for the same slug into one scan.
-  let lookup = slugLookups.get(slug);
-  if (!lookup) {
-    lookup = lookupStoreSlug(slug).finally(() => slugLookups.delete(slug));
-    slugLookups.set(slug, lookup);
-  }
-  return lookup;
-}
-
-async function lookupStoreSlug(slug: string): Promise<{ tenantId: string; businessId: string } | null> {
-  const now = Date.now();
-  const isMultiTenant = process.env.MULTI_TENANT === "true";
-
-  if (!isMultiTenant) {
-    // Self-hosted: single tenant DB — query directly
-    const db = await getTenantDb("single");
-    const [biz] = await db.select({ id: businesses.id })
-      .from(businesses)
-      .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
-      .limit(1);
-
-    if (!biz) {
-      unknownSlugCache.add(slug, now);
-      return null;
-    }
-
-    const resolved = { tenantId: "single", businessId: biz.id };
-    slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
-    return resolved;
-  }
-
-  // Multi-tenant: scan all active tenants to find the business with this slug.
-  // Follow-up: replace with a global slug registry in the control DB so this
-  // is a single indexed lookup.
-  const activeTenants = await controlDb
-    .select({ id: tenants.id })
-    .from(tenants)
-    .where(eq(tenants.status, "active"));
-
-  let scanComplete = true;
-  for (const tenant of activeTenants) {
-    try {
-      const db = await getTenantDb(tenant.id);
-      const [biz] = await db.select({ id: businesses.id })
-        .from(businesses)
-        .where(and(eq(businesses.storeSlug, slug), eq(businesses.storeEnabled, true)))
-        .limit(1);
-
-      if (biz) {
-        const resolved = { tenantId: tenant.id, businessId: biz.id };
-        slugCache.set(slug, { ...resolved, expires: now + 5 * 60_000 });
-        return resolved;
-      }
-    } catch {
-      // Skip tenants with DB connectivity issues
-      scanComplete = false;
-    }
-  }
-
-  // Don't remember a miss if some tenants couldn't be searched.
-  if (scanComplete) unknownSlugCache.add(slug, now);
-  return null;
-}
-
 // Helper: get tenant DB for a resolved slug context
 async function getStoreDb(tenantId: string) {
   // In self-hosted, tenantId is always "single"
@@ -1088,39 +956,12 @@ app.get("/store/:slug/logo", async (c) => {
   if (!resolved) return c.json({ error: "Store not found" }, 404);
 
   const db = await getStoreDb(resolved.tenantId);
-  const [row] = await db.select({
-    logoData: businesses.logoData,
-    logoMimeType: businesses.logoMimeType,
-    logoUpdatedAt: businesses.logoUpdatedAt,
-  }).from(businesses)
-    .where(and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)))
-    .limit(1);
-
-  if (!row || !row.logoData || !row.logoMimeType) {
-    return new Response(new Uint8Array(EMPTY_PNG), {
-      status: 200,
-      headers: {
-        ...LOGO_SAFE_HEADERS,
-        "Content-Type": "image/png",
-        "Cache-Control": "public, max-age=60",
-      },
-    });
-  }
-
-  const etag = `"${row.logoUpdatedAt?.getTime() ?? 0}"`;
-  if (c.req.header("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
-  }
-
-  return new Response(new Uint8Array(row.logoData), {
-    status: 200,
-    headers: {
-      ...LOGO_SAFE_HEADERS,
-      "Content-Type": row.logoMimeType,
-      "Cache-Control": "public, max-age=3600",
-      ETag: etag,
-    },
-  });
+  return serveBusinessLogo(
+    db,
+    and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)),
+    c.req.header("if-none-match"),
+    "public",
+  );
 });
 
 // GET /store/:slug/items/:itemId/images/:imageId — public item-image bytes for
@@ -1140,41 +981,11 @@ app.get("/store/:slug/items/:itemId/images/:imageId", async (c) => {
   if (!resolved) return c.json({ error: "Store not found" }, 404);
 
   const db = await getStoreDb(resolved.tenantId);
-  const [row] = await db.select({
-    storageKey: itemImages.storageKey,
-    mimeType: itemImages.mimeType,
-    updatedAt: itemImages.updatedAt,
-  }).from(itemImages)
-    .innerJoin(items, eq(items.id, itemImages.itemId))
-    .where(and(
-      eq(itemImages.id, imageId),
-      eq(itemImages.itemId, itemId),
-      eq(items.businessId, resolved.businessId),
-      eq(items.storeEnabled, true),
-      isNull(items.deletedAt),
-      isNull(itemImages.deletedAt),
-    ))
-    .limit(1);
-
-  if (!row) return c.json({ error: "Image not found" }, 404);
-
-  const etag = `"${row.updatedAt?.getTime() ?? 0}"`;
-  if (c.req.header("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
-  }
-
-  const bytes = await getStorage().get(row.storageKey);
-  if (!bytes) return c.json({ error: "Image not found" }, 404);
-
-  return new Response(new Uint8Array(bytes), {
-    status: 200,
-    headers: {
-      ...LOGO_SAFE_HEADERS,
-      "Content-Type": row.mimeType,
-      "Cache-Control": "public, max-age=3600",
-      ETag: etag,
-    },
-  });
+  return serveStoreItemImage(
+    db,
+    { businessId: resolved.businessId, itemId, imageId },
+    c.req.header("if-none-match"),
+  );
 });
 
 // ── Store OG image + SEO shell ─────────────────────────────────
@@ -1222,7 +1033,6 @@ app.get("/store/:slug/og.png", async (c) => {
     storeTagline: businesses.storeTagline,
     storeAccentColor: businesses.storeAccentColor,
     currency: businesses.currency,
-    logoData: businesses.logoData,
     logoMimeType: businesses.logoMimeType,
     logoUpdatedAt: businesses.logoUpdatedAt,
   }).from(businesses)
@@ -1237,6 +1047,12 @@ app.get("/store/:slug/og.png", async (c) => {
       businessId: resolved.businessId,
       slug,
       business: biz,
+      // Logo bytes are read only when the PNG has to be rendered (cache miss).
+      loadLogo: async () => {
+        const [row] = await db.select({ logoData: businesses.logoData })
+          .from(businesses).where(eq(businesses.id, resolved.businessId)).limit(1);
+        return row?.logoData ?? null;
+      },
       storeBaseUrl: getStorePublicBase(c),
     });
 
@@ -1461,8 +1277,8 @@ app.get("/store/:slug/catalog.json", async (c) => {
 
   if (!biz) return c.json({ error: "Store not found" }, 404);
 
-  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10)));
+  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10) || 24));
   const category = c.req.query("category");
   const search = c.req.query("search");
   const offset = (page - 1) * limit;
@@ -1474,11 +1290,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
     // public store, even if `store_enabled` was not cleared before deletion.
     isNull(items.deletedAt),
   ];
+  // Category chips cover the whole store, not just the filtered page.
+  const baseConditions = [...conditions];
   if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
   if (search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(search) + "%"}`);
 
   // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
-  const [catalog, [{ total }]] = await Promise.all([
+  const [catalog, [{ total }], categoryRows] = await Promise.all([
     db.select({
       id: items.id,
       name: items.name,
@@ -1496,11 +1314,18 @@ app.get("/store/:slug/catalog.json", async (c) => {
       variantAttributes: items.variantAttributes,
     }).from(items)
       .where(and(...conditions))
-      .orderBy(items.storeSortOrder, items.name)
+      // id tiebreaker keeps offset pages stable when names repeat
+      .orderBy(items.storeSortOrder, items.name, items.id)
       .limit(limit)
       .offset(offset),
     db.select({ total: sql<number>`count(*)::int` }).from(items)
       .where(and(...conditions)),
+    // Ordered by each category's first item in store order (as the chips were before)
+    db.select({ category: sql<string | null>`COALESCE(${items.storeCategory}, ${items.category})` })
+      .from(items)
+      .where(and(...baseConditions))
+      .groupBy(sql`1`)
+      .orderBy(sql`MIN(${items.storeSortOrder})`, sql`MIN(${items.name})`),
   ]);
 
   // Fetch store-enabled variants for any variant-mode items in this page
@@ -1580,9 +1405,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
     imagesByItem.set(img.itemId, arr);
   }
 
-  const categories = [...new Set(
-    catalog.map((i) => i.category).filter(Boolean) as string[]
-  )];
+  const categories = categoryRows.map((r) => r.category).filter(Boolean) as string[];
 
   // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
   const allowNeg = biz.storeAllowNegativeStock;
@@ -1727,6 +1550,9 @@ app.post("/store/:slug/identify", async (c) => {
   // Resolve slug → business
   const resolved = await resolveStoreSlug(slug);
   if (!resolved) return c.json({ error: "Store not found" }, 404);
+  if (!(await isStoreEnabled(await getStoreDb(resolved.tenantId), resolved.businessId))) {
+    return c.json({ error: "Store not found" }, 404);
+  }
 
   // Deliberately uniform: this endpoint is public and unauthenticated, so it
   // must not reveal whether a phone number belongs to an existing customer
@@ -2319,6 +2145,7 @@ app.use("/api/trpc/*", async (c) => {
 // Clean up expired sessions every hour — unref so it doesn't keep process alive
 const cleanupTimer = setInterval(async () => {
   try {
+    // cache-guard: expiry sweep; expired sessions are rejected on every cache hit (isSessionUsable)
     await controlDb.delete(sessions).where(lt(sessions.expiresAt, new Date()));
     await controlDb.delete(magicLinkTokens).where(lt(magicLinkTokens.expiresAt, new Date()));
   } catch (e) {
@@ -2524,6 +2351,29 @@ app.notFound((c) => {
   }
 }
 
+// ── Cross-process cache invalidation ─────────────────────────
+// LISTEN/NOTIFY needs a direct (non-pooled) connection: prefer
+// CONTROL_DATABASE_URL (the control DB the cached tables live in). Behind
+// PgBouncer in transaction mode LISTEN silently never delivers; the watchdog
+// then flips the process to degraded mode (cache TTLs clamped) instead of
+// crashing boot. See docs/architecture/caching.md.
+let cacheListener: CacheListener | null = null;
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  const cacheListenUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  if (cacheListenUrl) {
+    startCacheListener({ connectionString: cacheListenUrl })
+      .then((l) => {
+        cacheListener = l;
+        if (l.healthy() && !isDegraded()) logger.info("Cache listener started (cross-process invalidation active)");
+        else logger.warn("Cache listener started DEGRADED: cache TTLs clamped until it recovers (run migrations / installCacheTriggers if triggers are missing; use a direct, non-PgBouncer-transaction-mode URL for LISTEN). See docs/architecture/caching.md");
+      })
+      .catch((err) => {
+        setDegraded(true);
+        logger.warn({ err }, "Cache listener failed to start: running in degraded mode (cache TTLs clamped)");
+      });
+  }
+}
+
 // ── Start ──────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "3000", 10);
 
@@ -2539,6 +2389,7 @@ function shutdown(signal: string) {
   logger.info({ signal }, `Shutting down (${signal})...`);
   stopRecurringScheduler();
   stopNotificationWorkers();
+  void cacheListener?.stop().catch(() => {});
   server.close(() => {
     logger.info("HTTP server closed");
     process.exit(0);

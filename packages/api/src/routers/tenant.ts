@@ -5,8 +5,9 @@ import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { router, publicProcedure, protectedProcedure, tenantProcedure } from "../trpc.js";
-import { invalidateSessionCache, getSessionIdFromRequest } from "../context.js";
-import { requireTenantRole, ADMIN_ROLES, invalidateMembershipCache } from "../lib/tenant-access.js";
+import { getSessionIdFromRequest } from "../context.js";
+import { cacheBus } from "../lib/cache/bus.js";
+import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
 import { lockSignup, isOpenSignupEnabled, hasPendingInvitation, SIGNUP_CLOSED_MESSAGE } from "../lib/signup-policy.js";
@@ -20,10 +21,11 @@ function hashInvitationToken(token: string): string {
 async function autoSelectTenantInSession(req: Request, tenantId: string): Promise<string> {
   const sessionId = getSessionIdFromRequest(req);
   if (sessionId) {
-    await controlDb.update(sessions)
-      .set({ tenantId })
-      .where(eq(sessions.id, sessionId));
-    invalidateSessionCache(sessionId);
+    await cacheBus.afterWrite([{ kind: "session", sessionId }], () =>
+      controlDb.update(sessions)
+        .set({ tenantId })
+        .where(eq(sessions.id, sessionId)),
+    );
   }
   const [tenant] = await controlDb.select({ name: tenants.name })
     .from(tenants)
@@ -48,7 +50,10 @@ type InvitationRow = typeof invitations.$inferSelect;
 // Claims the invitation (acceptedAt IS NULL guard) and creates the membership
 // in one transaction so a single invitation can only ever grant access once.
 async function claimInvitationAndAddMember(invitation: InvitationRow, userId: string): Promise<void> {
-  await controlDb.transaction(async (tx) => {
+  // `membership` is emitted after the transaction settled (a new member can
+  // change the authz result of anything cached for the tenant).
+  await cacheBus.afterWrite([{ kind: "membership", tenantId: invitation.tenantId, userId }], () =>
+    controlDb.transaction(async (tx) => {
     const claimed = await tx.update(invitations)
       .set({ acceptedAt: new Date() })
       .where(and(eq(invitations.id, invitation.id), isNull(invitations.acceptedAt)))
@@ -63,7 +68,7 @@ async function claimInvitationAndAddMember(invitation: InvitationRow, userId: st
       invitedBy: invitation.invitedBy ?? undefined,
       acceptedAt: new Date(),
     });
-  });
+  }));
   await emitTenantEvent(invitation.tenantId, {
     type: "team.member_joined",
     payload: { memberUserId: userId, memberName: await userDisplayName(userId), role: invitation.role },
@@ -75,20 +80,31 @@ async function claimInvitationAndAddMember(invitation: InvitationRow, userId: st
 
 // Everything a removed member could still use against the tenant.
 async function revokeMemberAccess(tenantId: string, userId: string, email: string | null): Promise<void> {
-  await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, tenantId), eq(apiKeys.userId, userId)));
-  if (email) {
-    await controlDb.delete(invitations).where(and(eq(invitations.tenantId, tenantId), emailEq(invitations.email, email)));
-  }
-  const affectedSessions = await controlDb.select({ id: sessions.id })
-    .from(sessions)
-    .where(and(eq(sessions.userId, userId), eq(sessions.tenantId, tenantId)));
-  if (affectedSessions.length > 0) {
-    await controlDb.update(sessions)
-      .set({ tenantId: null })
+  // Events are emitted in `finally`, after the writes settled (even if one of
+  // them throws half-way): API keys, every session that pointed at this
+  // tenant, and the membership/authz entries of the tenant.
+  try {
+    await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, tenantId), eq(apiKeys.userId, userId)));
+    if (email) {
+      await controlDb.delete(invitations).where(and(eq(invitations.tenantId, tenantId), emailEq(invitations.email, email)));
+    }
+    const affectedSessions = await controlDb.select({ id: sessions.id })
+      .from(sessions)
       .where(and(eq(sessions.userId, userId), eq(sessions.tenantId, tenantId)));
+    if (affectedSessions.length > 0) {
+      await controlDb.update(sessions)
+        .set({ tenantId: null })
+        .where(and(eq(sessions.userId, userId), eq(sessions.tenantId, tenantId)));
+    }
+  } finally {
+    cacheBus.invalidate([
+      { kind: "apiKey", userId, tenantId },
+      // By user: covers every session that pointed at this tenant (even ones
+      // created between the SELECT and the UPDATE above).
+      { kind: "session", userId },
+      { kind: "membership", tenantId, userId },
+    ]);
   }
-  for (const s of affectedSessions) invalidateSessionCache(s.id);
-  invalidateMembershipCache(tenantId, userId);
 }
 
 function generateSlug(name: string): string {
@@ -117,6 +133,7 @@ export const tenantRouter = router({
       // failure), we compensate by dropping the physical DB + role — without
       // this, CREATE DATABASE would orphan resources forever.
       let tenantId: string;
+      let createdTenantId: string | undefined;
       try {
         tenantId = await controlDb.transaction(async (tx) => {
           const [tenant] = await tx.insert(tenants).values({
@@ -136,6 +153,7 @@ export const tenantRouter = router({
             acceptedAt: new Date(),
           });
 
+          createdTenantId = tenant.id;
           return tenant.id;
         });
       } catch (err) {
@@ -143,6 +161,11 @@ export const tenantRouter = router({
         // rolled back. Best-effort — never throws.
         await cleanupTenantDatabase(dbConfig.dbName, dbConfig.dbUser);
         throw err;
+      } finally {
+        // After the transaction settled (commit or rollback).
+        if (createdTenantId) {
+          cacheBus.invalidate({ kind: "membership", tenantId: createdTenantId, userId: ctx.user.id });
+        }
       }
 
       // Auto-select the new tenant in session (outside tx, not part of the
@@ -153,6 +176,7 @@ export const tenantRouter = router({
     } else {
       // Self-hosted: join/create default tenant. Once the default tenant has
       // an owner this needs a pending invitation unless open signup is on.
+      let touchedTenantId: string | undefined;
       const defaultTenantId = await controlDb.transaction(async (tx) => {
         await lockSignup(tx);
 
@@ -171,11 +195,17 @@ export const tenantRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: SIGNUP_CLOSED_MESSAGE });
         }
 
+        touchedTenantId = defaultTenant.id;
         await tx.insert(tenantMembers).values({
           tenantId: defaultTenant.id, userId: ctx.user.id,
           role: memberCount.length === 0 ? "owner" : "member", acceptedAt: new Date(),
         });
         return defaultTenant.id;
+      }).finally(() => {
+        // After the transaction settled (commit or rollback).
+        if (touchedTenantId) {
+          cacheBus.invalidate({ kind: "membership", tenantId: touchedTenantId, userId: ctx.user.id });
+        }
       });
 
       const tenantNameResult = await autoSelectTenantInSession(ctx.req, defaultTenantId);
@@ -304,13 +334,13 @@ export const tenantRouter = router({
       const sessionId = getSessionIdFromRequest(ctx.req);
       if (!sessionId) throw new TRPCError({ code: "UNAUTHORIZED" });
 
-      // Update session's tenantId
-      await controlDb.update(sessions)
-        .set({ tenantId: input.tenantId })
-        .where(eq(sessions.id, sessionId));
-
-      // Invalidate cached session so the next request picks up the new tenant
-      invalidateSessionCache(sessionId);
+      // Update session's tenantId; the cached session is dropped once the
+      // write settled so the next request picks up the new tenant.
+      await cacheBus.afterWrite([{ kind: "session", sessionId }], () =>
+        controlDb.update(sessions)
+          .set({ tenantId: input.tenantId })
+          .where(eq(sessions.id, sessionId)),
+      );
 
       return { success: true };
     }),
@@ -606,14 +636,19 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot remove a superadmin" });
       }
 
-      await controlDb.delete(tenantMembers)
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, input.userId),
-        ));
+      // Membership is invalidated FIRST (right after the delete settled): the
+      // removed user's very next call is denied even if the cleanup below is
+      // slow or fails half-way.
+      await cacheBus.afterWrite([{ kind: "membership", tenantId: ctx.tenantId, userId: input.userId }], () =>
+        controlDb.delete(tenantMembers)
+          .where(and(
+            eq(tenantMembers.tenantId, ctx.tenantId),
+            eq(tenantMembers.userId, input.userId),
+          )),
+      );
 
-      // Revoke the removed user's access immediately: API keys, invitations,
-      // session tenant selection and cached membership.
+      // Revoke the removed user's remaining access: API keys, invitations,
+      // session tenant selection (each invalidated after its writes settle).
       const [removedUser] = await controlDb.select({ email: users.email })
         .from(users).where(eq(users.id, input.userId)).limit(1);
       await revokeMemberAccess(ctx.tenantId, input.userId, removedUser?.email ?? null);
@@ -643,16 +678,26 @@ export const tenantRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot change the role of a superadmin" });
       }
 
-      await controlDb.update(tenantMembers)
-        .set({ role: input.role })
-        .where(and(
-          eq(tenantMembers.tenantId, ctx.tenantId),
-          eq(tenantMembers.userId, input.userId),
-        ));
+      // Role change + key revocation, then (in `finally`, after BOTH writes
+      // settled) membership/authz AND API key caches are invalidated, so the
+      // member's very next call sees the new role and the old keys are dead.
+      await cacheBus.afterWrite(
+        [
+          { kind: "membership", tenantId: ctx.tenantId, userId: input.userId },
+          { kind: "apiKey", tenantId: ctx.tenantId, userId: input.userId },
+        ],
+        async () => {
+          await controlDb.update(tenantMembers)
+            .set({ role: input.role })
+            .where(and(
+              eq(tenantMembers.tenantId, ctx.tenantId),
+              eq(tenantMembers.userId, input.userId),
+            ));
 
-      // Keys minted under the previous role must not outlive it.
-      await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, ctx.tenantId), eq(apiKeys.userId, input.userId)));
-      invalidateMembershipCache(ctx.tenantId, input.userId);
+          // Keys minted under the previous role must not outlive it.
+          await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, ctx.tenantId), eq(apiKeys.userId, input.userId)));
+        },
+      );
 
       if (targetMembership && targetMembership.role !== input.role) {
         await emitTenantEvent(ctx.tenantId, {

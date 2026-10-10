@@ -400,9 +400,11 @@ export async function generateGSTR3B(
   businessId: string,
   year: number,
   month: number,
-  db: TenantDatabase
+  db: TenantDatabase,
+  // Optional precomputed GSTR-1 for the same business/period (avoids recomputing it)
+  precomputedGstr1?: GSTR1Report,
 ): Promise<GSTR3BReport> {
-  const gstr1 = await generateGSTR1(businessId, year, month, db);
+  const gstr1 = precomputedGstr1 ?? await generateGSTR1(businessId, year, month, db);
 
   // Get purchase invoices for ITC
   const startDate = new Date(year, month - 1, 1);

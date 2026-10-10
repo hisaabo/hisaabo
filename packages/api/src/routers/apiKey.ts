@@ -7,6 +7,7 @@ import { createApiKeySchema, revokeApiKeySchema } from "@hisaabo/shared";
 import { enforceApiKeyLimit } from "../lib/plan-limits.js";
 import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
 import { emitTenantEvent } from "../lib/notifications/index.js";
+import { cacheBus } from "../lib/cache/bus.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const API_KEY_DEFAULT_TTL_MS = 90 * DAY_MS;
@@ -133,16 +134,23 @@ export const apiKeyRouter = router({
     rejectApiKeyAuth(ctx);
     await requireTenantRole({ user: ctx.user, tenantId: ctx.tenantId }, ADMIN_ROLES, "Only owners and admins can manage API keys");
 
-    const deleted = await controlDb
-      .delete(apiKeys)
-      .where(
-        and(
-          eq(apiKeys.id, input.id),
-          eq(apiKeys.userId, ctx.user.id),
-          eq(apiKeys.tenantId, ctx.tenantId),
-        ),
-      )
-      .returning({ id: apiKeys.id });
+    // Revocation is immediate: the cached key (if any) is dropped as soon as
+    // the DELETE settled, so the key's very next request is unauthenticated.
+    const tenantId = ctx.tenantId;
+    const deleted = await cacheBus.afterWrite(
+      [{ kind: "apiKey", keyId: input.id, userId: ctx.user.id, tenantId }],
+      () =>
+        controlDb
+          .delete(apiKeys)
+          .where(
+            and(
+              eq(apiKeys.id, input.id),
+              eq(apiKeys.userId, ctx.user.id),
+              eq(apiKeys.tenantId, tenantId),
+            ),
+          )
+          .returning({ id: apiKeys.id }),
+    );
 
     if (deleted.length === 0) {
       throw new TRPCError({ code: "NOT_FOUND", message: "API key not found" });

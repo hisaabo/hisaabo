@@ -184,7 +184,7 @@ function AutomatedInvoicesPage() {
   const { data: planUsage } = trpc.recurringInvoice.planUsage.useQuery();
   const { data: suggestions } = trpc.recurringInvoice.suggestions.useQuery();
   // Party search handled by PartyCombobox component
-  const { data: items } = trpc.item.list.useQuery({ page: 1, limit: 500 });
+  const { data: items } = trpc.item.list.useQuery({ page: 1, limit: 100 });
 
   const utils = trpc.useUtils();
 

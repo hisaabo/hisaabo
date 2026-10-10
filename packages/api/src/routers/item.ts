@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc, isNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
@@ -168,7 +168,7 @@ export const itemRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(items)
           .where(and(...conditions))
-          .orderBy(desc(items.updatedAt))
+          .orderBy(desc(items.updatedAt), desc(items.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(items)
@@ -983,7 +983,8 @@ export const itemRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        ctx.db.selectDistinctOn([invoices.id], {
+        // EXISTS (not DISTINCT ON id) so pages can be ordered newest-first
+        ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
           invoiceDate: invoices.invoiceDate,
@@ -993,16 +994,15 @@ export const itemRouter = router({
           totalAmount: invoices.totalAmount,
           partyName: parties.name,
         })
-          .from(invoiceItems)
-          .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+          .from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(
             and(
-              eq(invoiceItems.itemId, input.id),
               eq(invoices.businessId, ctx.businessId),
+              sql`EXISTS (SELECT 1 FROM ${invoiceItems} WHERE ${invoiceItems.invoiceId} = ${invoices.id} AND ${invoiceItems.itemId} = ${input.id})`,
             )
           )
-          .orderBy(invoices.id, desc(invoices.invoiceDate))
+          .orderBy(desc(invoices.invoiceDate), desc(invoices.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(DISTINCT ${invoices.id})::int` })
@@ -1069,6 +1069,32 @@ export const itemRouter = router({
       return ctx.db.select().from(itemVariants)
         .where(and(eq(itemVariants.itemId, input.itemId), isNull(itemVariants.deletedAt)))
         .orderBy(itemVariants.createdAt);
+    }),
+
+  /**
+   * Batched `listVariants` for many items in one round trip (CSV export).
+   * Same scoping/ordering as `listVariants`; items that are missing, in another
+   * business, or soft-deleted are silently omitted instead of raising NOT_FOUND.
+   * Returns variants grouped by item id.
+   */
+  listVariantsForItems: viewerProcedure
+    .input(z.object({ itemIds: z.array(z.string().uuid()).max(500) }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const result: Record<string, (typeof itemVariants.$inferSelect)[]> = {};
+      if (input.itemIds.length === 0) return result;
+
+      const rows = await ctx.db.select({ variant: itemVariants }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(
+          inArray(itemVariants.itemId, input.itemIds),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+          isNull(itemVariants.deletedAt),
+        ))
+        .orderBy(itemVariants.createdAt);
+      for (const { variant } of rows) (result[variant.itemId] ??= []).push(variant);
+      return result;
     }),
 
   createVariant: memberProcedure
@@ -1519,7 +1545,7 @@ export const itemRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(stockAdjustments)
           .where(and(...conditions))
-          .orderBy(desc(stockAdjustments.adjustmentDate))
+          .orderBy(desc(stockAdjustments.adjustmentDate), desc(stockAdjustments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(stockAdjustments)

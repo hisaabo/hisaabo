@@ -1,4 +1,4 @@
-import { eq, and, sql, desc, isNull } from "drizzle-orm";
+import { eq, and, sql, desc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -2005,37 +2005,54 @@ export const reportsRouter = router({
         )
         .orderBy(journalEntries.entryDate);
 
-      const journalDerived = await Promise.all(
-        manualEntries.map(async (je) => {
-          const lines = await ctx.db
-            .select({
-              id: journalEntryLines.id,
-              accountId: journalEntryLines.accountId,
-              accountCode: chartOfAccounts.code,
-              accountName: chartOfAccounts.name,
-              debit: journalEntryLines.debit,
-              credit: journalEntryLines.credit,
-            })
-            .from(journalEntryLines)
-            .innerJoin(chartOfAccounts, eq(journalEntryLines.accountId, chartOfAccounts.id))
-            .where(eq(journalEntryLines.journalEntryId, je.id));
+      // Fetch all lines in batched queries (instead of one query per entry)
+      type JournalLineRow = {
+        id: string;
+        journalEntryId: string;
+        accountId: string;
+        accountCode: string;
+        accountName: string;
+        debit: string;
+        credit: string;
+      };
+      const linesByEntry = new Map<string, JournalLineRow[]>();
+      const LINE_CHUNK = 5000;
+      for (let i = 0; i < manualEntries.length; i += LINE_CHUNK) {
+        const ids = manualEntries.slice(i, i + LINE_CHUNK).map((je) => je.id);
+        const rows = await ctx.db
+          .select({
+            id: journalEntryLines.id,
+            journalEntryId: journalEntryLines.journalEntryId,
+            accountId: journalEntryLines.accountId,
+            accountCode: chartOfAccounts.code,
+            accountName: chartOfAccounts.name,
+            debit: journalEntryLines.debit,
+            credit: journalEntryLines.credit,
+          })
+          .from(journalEntryLines)
+          .innerJoin(chartOfAccounts, eq(journalEntryLines.accountId, chartOfAccounts.id))
+          .where(inArray(journalEntryLines.journalEntryId, ids));
+        for (const row of rows) {
+          const list = linesByEntry.get(row.journalEntryId);
+          if (list) list.push(row);
+          else linesByEntry.set(row.journalEntryId, [row]);
+        }
+      }
 
-          return {
-            date: je.entryDate,
-            narration: je.narration ?? `Journal Entry ${je.entryNumber}`,
-            sourceType: "journal" as const,
-            sourceId: je.id,
-            sourceNumber: je.entryNumber,
-            lines: lines.map((l) => ({
-              accountId: l.accountId,
-              accountCode: l.accountCode,
-              accountName: l.accountName,
-              debit: l.debit,
-              credit: l.credit,
-            })),
-          };
-        }),
-      );
+      const journalDerived = manualEntries.map((je) => ({
+        date: je.entryDate,
+        narration: je.narration ?? `Journal Entry ${je.entryNumber}`,
+        sourceType: "journal" as const,
+        sourceId: je.id,
+        sourceNumber: je.entryNumber,
+        lines: (linesByEntry.get(je.id) ?? []).map((l) => ({
+          accountId: l.accountId,
+          accountCode: l.accountCode,
+          accountName: l.accountName,
+          debit: l.debit,
+          credit: l.credit,
+        })),
+      }));
 
       // ── 3. Chart of Accounts ──────────────────────────────────────
       const coaRows = await ctx.db

@@ -92,6 +92,7 @@ async function rotateControlDb(): Promise<RotationStats> {
       else stats.rotated++;
 
       if (EXECUTE) {
+        // cache-guard: offline CLI; dbPassword is not part of any cached value
         await controlDb
           .update(tenants)
           .set({ dbPassword: reEncrypted, updatedAt: new Date() })
