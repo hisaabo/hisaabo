@@ -34,6 +34,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Version manifests in lockstep
+        run: pnpm versions:check
+
       - name: Lint
         run: pnpm exec oxlint --deny-warnings --ignore-path .gitignore --ignore-pattern '**/target/**' ./packages ./apps
 

@@ -90,9 +90,22 @@ jobs:
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
 
       - name: Install Tauri CLI
-        # Pinned (no --force / floating ^2): a compromised or breaking tauri-cli
+        # Pinned (never a floating ^2): a compromised or breaking tauri-cli
         # release must not flow silently into signed-release builds.
-        run: cargo install tauri-cli --version "=2.12.1" --locked
+        # The Rust cache restores ~/.cargo/bin without cargo's install
+        # metadata, so a plain `cargo install` refuses to overwrite the cached
+        # binary. Reuse it only when it is exactly the pinned version;
+        # otherwise reinstall the pinned version over it.
+        shell: bash
+        env:
+          TAURI_CLI_VERSION: "2.12.1"
+        run: |
+          if [ "$(cargo tauri --version 2>/dev/null)" = "tauri-cli ${TAURI_CLI_VERSION}" ]; then
+            echo "Using cached tauri-cli ${TAURI_CLI_VERSION}"
+          else
+            cargo install tauri-cli --version "=${TAURI_CLI_VERSION}" --locked --force
+          fi
+          cargo tauri --version
 
       - name: Note optional Tauri updater signing key
         env:

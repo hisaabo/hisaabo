@@ -3,7 +3,6 @@ import react from "@vitejs/plugin-react";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import path from "path";
 import { readFileSync } from "fs";
-import { execSync } from "child_process";
 import { generateWellKnown } from "./src/lib/well-known.ts";
 
 const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8"));
@@ -141,14 +140,14 @@ function originTrialPlugin(): Plugin {
 }
 
 function getVersion(): string {
-  // CI sets this from the git tag; fallback to git describe, then package.json
+  // package.json is the source of truth: `pnpm release` bumps it in lockstep
+  // with every other manifest and the release workflow refuses a tag that
+  // does not match. (No `git describe`: it depends on which tags the checkout
+  // fetched, so web, desktop and API builds could disagree.)
+  // VITE_APP_VERSION remains as an explicit override.
   // Always strip leading "v" — the display template adds its own "v" prefix
   if (process.env.VITE_APP_VERSION) return process.env.VITE_APP_VERSION.replace(/^v/, "");
-  try {
-    return execSync("git describe --tags --abbrev=0", { encoding: "utf-8" }).trim().replace(/^v/, "");
-  } catch {
-    return pkg.version;
-  }
+  return pkg.version;
 }
 
 export default defineConfig({
