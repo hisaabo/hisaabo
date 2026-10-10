@@ -18,6 +18,7 @@ beforeAll(async () => {
   world = await createTestWorld();
 });
 afterAll(async () => {
+  await truncateAllTables();
   await closeTestDb();
 });
 

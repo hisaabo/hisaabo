@@ -49,7 +49,7 @@ export const expenseRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(expenses)
           .where(and(...conditions))
-          .orderBy(desc(expenses.expenseDate))
+          .orderBy(desc(expenses.expenseDate), desc(expenses.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(expenses)

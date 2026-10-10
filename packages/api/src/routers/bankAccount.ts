@@ -263,6 +263,29 @@ export const bankAccountRouter = router({
         .where(eq(bankAccounts.id, input.bankAccountId))
         .limit(1);
 
+      // Running balance is computed over ALL of the account's transactions (before
+      // the type/date filters) so a filtered view shows the true balance per row.
+      const running = ctx.db
+        .select({
+          id: bankTransactions.id,
+          // Running balance: opening_balance + cumulative deposits - cumulative withdrawals
+          balanceAfter: sql<string>`(
+            ${acct.openingBalance}::numeric + SUM(
+              CASE WHEN ${bankTransactions.type} = 'deposit' THEN ${bankTransactions.amount}::numeric
+                   ELSE -${bankTransactions.amount}::numeric END
+            ) OVER (
+              ORDER BY ${bankTransactions.transactionDate} ASC, ${bankTransactions.createdAt} ASC, ${bankTransactions.id} ASC
+              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            )
+          )::text`.as("balance_after"),
+        })
+        .from(bankTransactions)
+        .where(and(
+          eq(bankTransactions.businessId, ctx.businessId),
+          eq(bankTransactions.bankAccountId, input.bankAccountId),
+        ))
+        .as("running_balances");
+
       const [data, [{ count }]] = await Promise.all([
         ctx.db
           .select({
@@ -276,20 +299,12 @@ export const bankAccountRouter = router({
             referenceId: bankTransactions.referenceId,
             transactionDate: bankTransactions.transactionDate,
             createdAt: bankTransactions.createdAt,
-            // Running balance: opening_balance + cumulative deposits - cumulative withdrawals
-            balanceAfter: sql<string>`(
-              ${acct.openingBalance}::numeric + SUM(
-                CASE WHEN ${bankTransactions.type} = 'deposit' THEN ${bankTransactions.amount}::numeric
-                     ELSE -${bankTransactions.amount}::numeric END
-              ) OVER (
-                ORDER BY ${bankTransactions.transactionDate} ASC, ${bankTransactions.createdAt} ASC
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-              )
-            )::text`.as("balance_after"),
+            balanceAfter: running.balanceAfter,
           })
           .from(bankTransactions)
+          .innerJoin(running, eq(running.id, bankTransactions.id))
           .where(and(...conditions))
-          .orderBy(desc(bankTransactions.transactionDate))
+          .orderBy(desc(bankTransactions.transactionDate), desc(bankTransactions.createdAt), desc(bankTransactions.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db

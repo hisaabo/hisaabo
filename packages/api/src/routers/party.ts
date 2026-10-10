@@ -65,35 +65,48 @@ export const partyRouter = router({
 
       const offset = (input.page - 1) * input.limit;
 
-      // Pre-aggregate invoice balances per party in a single scan.
       // Credit notes, sales returns, and purchase returns REDUCE the balance.
+      const invoiceDue = sql`CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
+          THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+          ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
+        END`;
+      const invoiceFilter = and(
+        eq(invoices.businessId, ctx.businessId),
+        sql`${invoices.status} NOT IN ('cancelled')`,
+        isNull(invoices.deletedAt),
+      );
+
+      const sortByBalance = input.sortBy === "balance";
+
+      // Sorting by balance needs every party's balance, so pre-aggregate invoices
+      // per party in a single scan. Otherwise only the returned page needs it:
+      // a correlated subquery (indexed on invoices.party_id) is evaluated just
+      // for the page's rows instead of aggregating every invoice in the business.
+      // (`parties.id` is written literally: Drizzle drops table qualifiers in a
+      // join-less select, which would make the column resolve to invoices.id.)
       const invoiceBalanceSq = ctx.db
         .select({
           partyId: invoices.partyId,
-          balance: sql<string>`COALESCE(SUM(
-            CASE WHEN ${invoices.documentType} IN ('credit_note', 'sales_return', 'purchase_return')
-              THEN -(${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-              ELSE (${invoices.totalAmount}::numeric - ${invoices.amountPaid}::numeric)
-            END
-          ), 0)`.as("inv_balance"),
+          balance: sql<string>`COALESCE(SUM(${invoiceDue}), 0)`.as("inv_balance"),
         })
         .from(invoices)
-        .where(and(
-          eq(invoices.businessId, ctx.businessId),
-          sql`${invoices.status} NOT IN ('cancelled')`,
-          isNull(invoices.deletedAt),
-        ))
+        .where(invoiceFilter)
         .groupBy(invoices.partyId)
         .as("invoice_balances");
 
-      const balanceExpr = sql<string>`(${parties.openingBalance}::numeric + COALESCE(${invoiceBalanceSq.balance}::numeric, 0))::text`;
+      const balanceExpr = sortByBalance
+        ? sql<string>`(${parties.openingBalance}::numeric + COALESCE(${invoiceBalanceSq.balance}::numeric, 0))::text`
+        : sql<string>`(${parties.openingBalance}::numeric + COALESCE((
+            SELECT SUM(${invoiceDue}) FROM ${invoices}
+            WHERE ${invoices.partyId} = parties.id AND ${invoiceFilter}
+          ), 0))::text`;
 
-      const sortCol = input.sortBy === "balance"
+      const sortCol = sortByBalance
         ? (input.sortDir === "asc" ? sql`${balanceExpr}::numeric ASC` : sql`${balanceExpr}::numeric DESC`)
         : (input.sortDir === "desc" ? desc(parties.name) : asc(parties.name));
+      const idTiebreak = input.sortDir === "desc" ? desc(parties.id) : asc(parties.id);
 
-      const [data, [{ count }]] = await Promise.all([
-        ctx.db.select({
+      const listQuery = ctx.db.select({
           id: parties.id,
           businessId: parties.businessId,
           name: parties.name,
@@ -121,10 +134,12 @@ export const partyRouter = router({
           createdAt: parties.createdAt,
           updatedAt: parties.updatedAt,
           balance: balanceExpr,
-        }).from(parties)
-          .leftJoin(invoiceBalanceSq, eq(invoiceBalanceSq.partyId, parties.id))
+        }).from(parties).$dynamic();
+
+      const [data, [{ count }]] = await Promise.all([
+        (sortByBalance ? listQuery.leftJoin(invoiceBalanceSq, eq(invoiceBalanceSq.partyId, parties.id)) : listQuery)
           .where(and(...conditions))
-          .orderBy(sortCol)
+          .orderBy(sortCol, idTiebreak)
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(parties)

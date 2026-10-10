@@ -168,7 +168,7 @@ export const itemRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(items)
           .where(and(...conditions))
-          .orderBy(desc(items.updatedAt))
+          .orderBy(desc(items.updatedAt), desc(items.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(items)
@@ -983,7 +983,8 @@ export const itemRouter = router({
       const offset = (input.page - 1) * input.limit;
 
       const [data, [{ count }]] = await Promise.all([
-        ctx.db.selectDistinctOn([invoices.id], {
+        // EXISTS (not DISTINCT ON id) so pages can be ordered newest-first
+        ctx.db.select({
           id: invoices.id,
           invoiceNumber: invoices.invoiceNumber,
           invoiceDate: invoices.invoiceDate,
@@ -993,16 +994,15 @@ export const itemRouter = router({
           totalAmount: invoices.totalAmount,
           partyName: parties.name,
         })
-          .from(invoiceItems)
-          .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+          .from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(
             and(
-              eq(invoiceItems.itemId, input.id),
               eq(invoices.businessId, ctx.businessId),
+              sql`EXISTS (SELECT 1 FROM ${invoiceItems} WHERE ${invoiceItems.invoiceId} = ${invoices.id} AND ${invoiceItems.itemId} = ${input.id})`,
             )
           )
-          .orderBy(invoices.id, desc(invoices.invoiceDate))
+          .orderBy(desc(invoices.invoiceDate), desc(invoices.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(DISTINCT ${invoices.id})::int` })
@@ -1545,7 +1545,7 @@ export const itemRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(stockAdjustments)
           .where(and(...conditions))
-          .orderBy(desc(stockAdjustments.adjustmentDate))
+          .orderBy(desc(stockAdjustments.adjustmentDate), desc(stockAdjustments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(stockAdjustments)

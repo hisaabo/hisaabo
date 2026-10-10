@@ -194,6 +194,8 @@ export const items = pgTable("items", {
   // includes `business_id` AND `deleted_at IS NULL`, keeping active-item
   // queries off the full table once soft deletes accumulate.
   index("items_active_idx").on(t.businessId, t.name).where(sql`deleted_at IS NULL`),
+  // Default `items.list` / `pos.catalog` order (most recently updated first, id as tiebreaker).
+  index("items_active_updated_idx").on(t.businessId, sql`${t.updatedAt} DESC`, sql`${t.id} DESC`).where(sql`deleted_at IS NULL`),
 ]);
 
 // ── Item Variants (for items with itemMode = "variants") ─────
@@ -456,7 +458,8 @@ export const bankTransactions = pgTable("bank_transactions", {
 }, (t) => [
   index("bank_txn_business_idx").on(t.businessId),
   index("bank_txn_account_idx").on(t.bankAccountId),
-  index("bank_txn_date_idx").on(t.bankAccountId, t.transactionDate),
+  // Serves bankAccount.listTransactions (running-balance window + display order).
+  index("bank_txn_date_idx").on(t.bankAccountId, t.transactionDate, t.createdAt, t.id),
   index("bank_txn_ref_idx").on(t.referenceType, t.referenceId),
   index("bank_txn_payment_idx").on(t.paymentId),
 ]);
@@ -979,7 +982,7 @@ export const bankStatementLines = pgTable("bank_statement_lines", {
   autoCategory: text("auto_category"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
-  index("bsl_import_idx").on(t.importId),
+  index("bsl_import_idx").on(t.importId, t.lineNumber),
   index("bsl_business_idx").on(t.businessId),
   index("bsl_date_idx").on(t.businessId, t.transactionDate),
   index("bsl_status_idx").on(t.importId, t.matchStatus),

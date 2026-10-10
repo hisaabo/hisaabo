@@ -175,7 +175,7 @@ export const storeRouter = router({
           storeDescription: items.storeDescription,
         }).from(items)
           .where(and(...conditions))
-          .orderBy(items.storeSortOrder, items.name)
+          .orderBy(items.storeSortOrder, items.name, items.id)
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(items)
@@ -329,7 +329,7 @@ export const storeRouter = router({
           confirmedAt: storeOrders.confirmedAt,
         }).from(storeOrders)
           .where(and(...conditions))
-          .orderBy(desc(storeOrders.createdAt))
+          .orderBy(desc(storeOrders.createdAt), desc(storeOrders.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(storeOrders)

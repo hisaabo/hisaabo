@@ -21,6 +21,7 @@ import {
   createBankAccount,
   type TestWorld,
 } from "../helpers/fixtures.js";
+import { bankTransactions } from "@hisaabo/db";
 import { createTestCaller } from "../helpers/create-test-caller.js";
 import { truncateAllTables, closeTestDb } from "../helpers/test-db.js";
 
@@ -473,5 +474,62 @@ describe("bankAccount.delete", () => {
     await expect(
       callerKiran.bankAccount.delete({ id: b1Account.id }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+// ── listTransactions running balance ───────────────────────────────────────────
+
+describe("bankAccount.listTransactions", () => {
+  it("balanceAfter is computed over all transactions, not just the filtered rows", async () => {
+    const caller = createTestCaller({
+      userId: world.ramesh.id,
+      email: world.ramesh.email,
+      name: world.ramesh.name,
+      tenantId: world.tenant1.id,
+      businessId: world.business1.id,
+    });
+    const account = await createBankAccount(world.tenantDb, world.business1.id, {
+      accountName: "Running Balance Account",
+      openingBalance: "1000.00",
+      currentBalance: "1000.00",
+      isDefault: false,
+    });
+    const day = (d: number) => new Date(Date.UTC(2025, 0, d, 12));
+    const seed = [
+      { type: "deposit" as const, amount: "100.00", transactionDate: day(1) },
+      { type: "withdrawal" as const, amount: "30.00", transactionDate: day(2) },
+      { type: "deposit" as const, amount: "50.00", transactionDate: day(3) },
+      { type: "deposit" as const, amount: "20.00", transactionDate: day(3) }, // same-day tie
+      { type: "withdrawal" as const, amount: "10.00", transactionDate: day(5) },
+    ];
+    for (const [i, t] of seed.entries()) {
+      await world.tenantDb.insert(bankTransactions).values({
+        businessId: world.business1.id,
+        bankAccountId: account.id,
+        createdAt: new Date(Date.UTC(2025, 0, 1, 0, 0, i)),
+        ...t,
+      });
+    }
+
+    const all = await caller.bankAccount.listTransactions({ bankAccountId: account.id });
+    expect(all.total).toBe(5);
+    // Display order is newest first; running balance follows it deterministically.
+    expect(all.data.map((r) => r.balanceAfter)).toEqual(["1130.00", "1140.00", "1120.00", "1070.00", "1100.00"]);
+
+    // Date filter: balances must equal the unfiltered values for the same rows.
+    const byId = new Map(all.data.map((r) => [r.id, r.balanceAfter]));
+    const ranged = await caller.bankAccount.listTransactions({
+      bankAccountId: account.id,
+      fromDate: day(2).toISOString(),
+      toDate: day(3).toISOString(),
+    });
+    expect(ranged.total).toBe(3);
+    expect(ranged.data.map((r) => r.balanceAfter)).toEqual(["1140.00", "1120.00", "1070.00"]);
+    for (const r of ranged.data) expect(r.balanceAfter).toBe(byId.get(r.id));
+
+    // Type filter and pagination keep the same per-row balances.
+    const deposits = await caller.bankAccount.listTransactions({ bankAccountId: account.id, type: "deposit", page: 2, limit: 2 });
+    expect(deposits.total).toBe(3);
+    expect(deposits.data.map((r) => r.balanceAfter)).toEqual(["1100.00"]);
   });
 });

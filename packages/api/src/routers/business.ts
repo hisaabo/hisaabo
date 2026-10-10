@@ -406,7 +406,7 @@ export const businessRouter = router({
         ctx.db.select()
           .from(auditLog)
           .where(and(...conditions))
-          .orderBy(desc(auditLog.createdAt))
+          .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: count() })

@@ -1007,3 +1007,32 @@ describe("item.listVariantsForItems", () => {
     await expect(callerRamesh.item.listVariantsForItems({ itemIds: ids })).rejects.toThrow();
   });
 });
+
+describe("item.relatedInvoices — ordering and de-duplication", () => {
+  let relItem: TestItem;
+  // Six invoices so a random-UUID order can't match date order by chance
+  const dates = ["2025-01-10", "2025-02-10", "2025-03-10", "2025-04-10", "2025-05-10", "2025-06-10"];
+  const ids: string[] = [];
+
+  beforeAll(async () => {
+    const tenantDb = getTenantTestDb();
+    const party = await createParty(tenantDb, business1.id, { name: "Related Inv Party" });
+    relItem = await createItem(tenantDb, business1.id, { name: "Related Inv Widget", itemType: "product" });
+    const line = { itemId: relItem.id, itemName: "Related Inv Widget", quantity: "1", unitPrice: "10" };
+    for (const [i, date] of dates.entries()) {
+      // One invoice carries the item on two lines — it must still appear once
+      const lines = i === 2 ? [line, line] : [line];
+      const { invoice } = await createInvoiceWithItems(tenantDb, business1.id, party.id, lines, {
+        type: "sale", documentType: "invoice", status: "sent", invoiceDate: new Date(`${date}T00:00:00.000Z`),
+      });
+      ids.push(invoice.id);
+    }
+  });
+
+  it("returns each invoice once, newest first, across pages", async () => {
+    const pages = await Promise.all([1, 2, 3].map((page) =>
+      callerRamesh.item.relatedInvoices({ id: relItem.id, page, limit: 2 })));
+    expect(pages[0].total).toBe(6);
+    expect(pages.flatMap((p) => p.data.map((r) => r.id))).toEqual([...ids].reverse());
+  });
+});

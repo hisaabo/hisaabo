@@ -102,6 +102,33 @@ describe("payment.assignAccount", () => {
     expect(a!.b).toBe("30.00");
   });
 
+  it("never lists or assigns soft-deleted payments", async () => {
+    const db = getTenantTestDb();
+    const caller = callerForRamesh();
+    const account = await createBankAccount(db, world.business1.id, { accountName: "SoftDel", isDefault: false });
+    const live = await createPayment(db, world.business1.id, world.party1.id, { amount: "11.00", mode: "other" });
+    const deleted = await createPayment(db, world.business1.id, world.party1.id, {
+      amount: "22.00", mode: "other", deletedAt: new Date(),
+    });
+
+    const listed = await caller.payment.untrackedPayments({ mode: "other" });
+    expect(listed.data.map((p) => p.id)).toEqual([live.id]);
+    expect(listed.total).toBe(1);
+
+    // Explicit id path
+    await caller.payment.assignAccount({ paymentIds: [deleted.id], bankAccountId: account.id });
+    // allMatching path
+    const res = await caller.payment.assignAccount({ allMatching: true, mode: "other", bankAccountId: account.id });
+    expect(res.assigned).toBe(1); // only the live payment matched
+
+    const [row] = await db.select({ b: payments.bankAccountId }).from(payments).where(eq(payments.id, deleted.id));
+    expect(row!.b).toBeNull();
+    const txns = await db.select().from(bankTransactions).where(eq(bankTransactions.bankAccountId, account.id));
+    expect(txns.map((t) => t.referenceId)).toEqual([live.id]);
+    const [acct] = await db.select({ b: bankAccounts.currentBalance }).from(bankAccounts).where(eq(bankAccounts.id, account.id));
+    expect(acct!.b).toBe("11.00");
+  });
+
   it("returns assigned 0 for an empty list and rejects unknown accounts", async () => {
     const caller = callerForRamesh();
     const db = getTenantTestDb();

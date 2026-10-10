@@ -125,7 +125,7 @@ export const paymentRouter = router({
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...conditions))
-          .orderBy(desc(payments.paymentDate))
+          .orderBy(desc(payments.paymentDate), desc(payments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
@@ -883,6 +883,7 @@ export const paymentRouter = router({
 
       const conditions = [
         eq(payments.businessId, ctx.businessId),
+        isNull(payments.deletedAt),
         sql`${payments.bankAccountId} IS NULL`,
       ];
       if (input.search) {
@@ -908,7 +909,7 @@ export const paymentRouter = router({
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...conditions))
-          .orderBy(desc(payments.paymentDate))
+          .orderBy(desc(payments.paymentDate), desc(payments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
@@ -952,6 +953,7 @@ export const paymentRouter = router({
         if (input.allMatching) {
           const matchConditions = [
             eq(payments.businessId, ctx.businessId),
+            isNull(payments.deletedAt),
             sql`${payments.bankAccountId} IS NULL`,
           ];
           if (input.search) {
@@ -988,6 +990,7 @@ export const paymentRouter = router({
             .where(and(
               inArray(payments.id, ids),
               eq(payments.businessId, ctx.businessId),
+              isNull(payments.deletedAt),
               sql`${payments.bankAccountId} IS NULL`,
             )));
         }

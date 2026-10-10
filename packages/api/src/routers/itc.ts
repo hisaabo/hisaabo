@@ -173,7 +173,7 @@ export const itcRouter = router({
         .leftJoin(invoices, eq(itcLedgerEntries.invoiceId, invoices.id))
         .leftJoin(parties, eq(invoices.partyId, parties.id))
         .where(and(...conditions))
-        .orderBy(desc(itcLedgerEntries.createdAt))
+        .orderBy(desc(itcLedgerEntries.createdAt), desc(itcLedgerEntries.id))
         .limit(input.limit)
         .offset(offset);
 

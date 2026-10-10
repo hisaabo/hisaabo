@@ -444,7 +444,7 @@ export const bankReconRouter = router({
           .select()
           .from(bankStatementImports)
           .where(and(...conditions))
-          .orderBy(desc(bankStatementImports.createdAt))
+          .orderBy(desc(bankStatementImports.createdAt), desc(bankStatementImports.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db
@@ -522,7 +522,7 @@ export const bankReconRouter = router({
           .select()
           .from(bankStatementLines)
           .where(and(...conditions))
-          .orderBy(bankStatementLines.lineNumber)
+          .orderBy(bankStatementLines.lineNumber, bankStatementLines.id)
           .limit(input.limit)
           .offset(offset),
         ctx.db

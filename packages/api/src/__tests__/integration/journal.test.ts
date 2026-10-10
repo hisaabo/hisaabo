@@ -87,6 +87,35 @@ describe("journal.list", () => {
   });
 });
 
+describe("journal.list line aggregates", () => {
+  it("reports lineCount and totalAmount per entry, and 0 / '0' for entries without lines", async () => {
+    const caller = callerForRamesh();
+    const db = getTenantTestDb();
+    const withLines = await caller.journal.create({
+      entryDate: new Date().toISOString(),
+      narration: "Aggregate check",
+      lines: [
+        { accountId: cashAccountId, debit: "250.50", credit: "0" },
+        { accountId: capitalAccountId, debit: "0", credit: "250.50" },
+      ],
+    });
+    const [empty] = await db.insert(journalEntries).values({
+      businessId: world.business1.id,
+      entryNumber: "JE-EMPTY-1",
+      entryDate: new Date(),
+      source: "manual",
+    }).returning();
+
+    const rows = await caller.journal.list({});
+    const a = rows.find((r) => r.id === withLines.id)!;
+    const b = rows.find((r) => r.id === empty!.id)!;
+    expect(Number(a.lineCount)).toBe(2);
+    expect(a.totalAmount).toBe("250.50");
+    expect(Number(b.lineCount)).toBe(0);
+    expect(b.totalAmount).toBe("0");
+  });
+});
+
 describe("journal.getById", () => {
   it("returns entry with lines", async () => {
     const caller = callerForRamesh();

@@ -151,7 +151,9 @@ export const invoiceRouter = router({
               ? (input.sortDir === "asc" ? sql`${invoices.totalAmount}::numeric ASC` : sql`${invoices.totalAmount}::numeric DESC`)
               : input.sortBy === "number"
                 ? (input.sortDir === "asc" ? invoices.invoiceNumber : desc(invoices.invoiceNumber))
-                : (input.sortDir === "asc" ? invoices.invoiceDate : desc(invoices.invoiceDate))
+                : (input.sortDir === "asc" ? invoices.invoiceDate : desc(invoices.invoiceDate)),
+            // Unique tiebreaker keeps offset pages stable (no duplicated/skipped rows)
+            input.sortDir === "asc" ? invoices.id : desc(invoices.id),
           )
           .limit(input.limit)
           .offset(offset),

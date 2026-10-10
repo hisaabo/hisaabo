@@ -566,7 +566,7 @@ export const eInvoiceRouter = router({
           .from(invoices)
           .innerJoin(parties, eq(parties.id, invoices.partyId))
           .where(and(...conditions))
-          .orderBy(desc(invoices.invoiceDate))
+          .orderBy(desc(invoices.invoiceDate), desc(invoices.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db
