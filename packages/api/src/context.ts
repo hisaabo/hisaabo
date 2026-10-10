@@ -75,12 +75,14 @@ async function loadSession(sessionId: string): Promise<SessionEntry | undefined>
     const slidTo = new Date(now.getTime() + BEARER_SESSION_DURATION_MS);
     const newExpiresAt = row.maxExpiresAt && slidTo > row.maxExpiresAt ? row.maxExpiresAt : slidTo;
     entry.expiresAt = newExpiresAt;
+    // cache-guard: sliding-window bump; the cached entry above already carries the new expiry
     controlDb
       .update(sessions)
       .set({ lastUsedAt: now, expiresAt: newExpiresAt })
       .where(eq(sessions.id, sessionId))
       .catch((err) => { logger.warn({ err }, "Failed to update bearer session expiresAt"); });
   } else {
+    // cache-guard: hot-path lastUsedAt bump; nothing authorization-relevant changes
     controlDb
       .update(sessions)
       .set({ lastUsedAt: now })
@@ -115,6 +117,7 @@ async function resolveSession(sessionId: string): Promise<SessionEntry | null> {
   if (!isSessionUsable(entry, Date.now())) {
     sessionCache.delete(sessionId);
     if (entry.authMethod === "bearer" && entry.maxExpiresAt && Date.now() >= entry.maxExpiresAt.getTime()) {
+      // cache-guard: entry already evicted from this process just above; other processes re-check max expiry on every hit
       controlDb
         .delete(sessions)
         .where(eq(sessions.id, sessionId))
@@ -167,6 +170,7 @@ async function loadApiKey(keyHash: string): Promise<ApiKeyEntry | undefined> {
 /** lastUsedAt write: in-memory throttle first, SQL guard second (multi-process). */
 function touchApiKey(keyId: string): void {
   if (!shouldTouchApiKey(keyId)) return;
+  // cache-guard: hot-path lastUsedAt bump (throttled); nothing authorization-relevant changes
   controlDb
     .update(apiKeys)
     .set({ lastUsedAt: new Date() })

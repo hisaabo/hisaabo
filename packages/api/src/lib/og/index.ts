@@ -16,7 +16,8 @@ export interface OgBusiness {
   storeTagline: string | null;
   storeAccentColor: string | null;
   currency: string | null;
-  logoData: Buffer | null;
+  /** Prefer `loadLogo` so cache hits never read the bytea. */
+  logoData?: Buffer | null;
   logoMimeType: string | null;
   logoUpdatedAt: Date | null;
 }
@@ -26,6 +27,8 @@ export interface OgRequest {
   businessId: string;
   slug: string;
   business: OgBusiness;
+  /** Lazily loads the logo bytes; only called on an OG cache miss. */
+  loadLogo?: () => Promise<Buffer | null>;
   /** Public storefront base (no trailing slash) for the footer/URL. */
   storeBaseUrl: string;
 }
@@ -88,7 +91,8 @@ export async function getOrRenderStoreOg(req: OgRequest): Promise<OgResult> {
 
   // Resolve image bytes → data URIs (logo from the businesses row; seller
   // photos from object storage).
-  const logoDataUri = toDataUri(req.business.logoData, req.business.logoMimeType);
+  const logoBytes = req.business.logoData ?? (req.loadLogo ? await req.loadLogo() : null);
+  const logoDataUri = toDataUri(logoBytes, req.business.logoMimeType);
   const sellerModels: OgModel["sellers"] = await Promise.all(
     sellers.map(async (s) => {
       let imageDataUri: string | null = null;
