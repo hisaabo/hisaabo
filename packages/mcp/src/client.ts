@@ -94,6 +94,9 @@ function normalizeTrpcError(raw: unknown): HisaaboError {
 
 // ── HTTP client ────────────────────────────────────────────────────────────
 
+/** Period filter accepted by the item history/summary procedures. */
+export type HistoryPeriod = "6m" | "1y" | "all";
+
 export class HisaaboClient {
   /** Base API URL, exposed for tools that need to construct URLs (e.g. PDF download). */
   readonly apiUrl: string;
@@ -277,14 +280,20 @@ export class HisaaboClient {
       lowStockCount() {
         return c.query("item.lowStockCount");
       },
-      priceHistory(id: string) {
-        return c.query("item.priceHistory", { id });
+      priceHistory(id: string, opts: { period?: HistoryPeriod; limit?: number } = {}) {
+        return c.query("item.priceHistory", { id, ...opts });
+      },
+      priceSummary(input: { id: string; period?: HistoryPeriod; unit?: string; invoiceType?: "sale" | "purchase" }) {
+        return c.query("item.priceSummary", input);
       },
       salesStats(id: string) {
         return c.query("item.salesStats", { id });
       },
-      stockMovements(id: string) {
-        return c.query("item.stockMovements", { id });
+      stockMovements(id: string, opts: { period?: HistoryPeriod; limit?: number } = {}) {
+        return c.query("item.stockMovements", { id, ...opts });
+      },
+      stockSummary(input: { id: string; period?: HistoryPeriod; unit?: string }) {
+        return c.query("item.stockSummary", input);
       },
     };
   }

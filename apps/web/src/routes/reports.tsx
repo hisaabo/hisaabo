@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput, todayISODate } from "@/lib/utils";
+import { formatCurrency, formatDate, downloadCSV, cn, formatDateInput } from "@/lib/utils";
 import { StatCard } from "@/components/ui/StatCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
+import { DocumentLineItemName } from "@/components/DocumentLineItemName";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Combobox } from "@/components/ui/Combobox";
 import { useDateRange } from "@/hooks/useDateRange";
@@ -166,18 +167,9 @@ function DaybookReport({
 }) {
   const [typeFilter, setTypeFilter] = useState<DaybookTypeFilter>("all");
 
-  // Extract date-only strings (YYYY-MM-DD) — daybookInputSchema uses z.string().date()
-  const fromDateOnly = fromDate ? formatDateInput(fromDate) : undefined;
-  const toDateOnly = toDate ? formatDateInput(toDate) : undefined;
-
-  const { data, isLoading, error } = trpc.reports.daybook.useQuery(
-    {
-      fromDate: fromDateOnly ?? todayISODate(),
-      toDate: toDateOnly ?? todayISODate(),
-      typeFilter,
-    },
-    { enabled: !!(fromDateOnly && toDateOnly) }
-  );
+  // Undefined bounds mean "all time"; keep the input referentially simple so
+  // the query key is stable across renders.
+  const { data, isLoading, error } = trpc.reports.daybook.useQuery({ fromDate, toDate, typeFilter });
 
   function handleExport() {
     if (!data) return;
@@ -504,9 +496,8 @@ function OutstandingReport({
     {
       type: routerType,
       // asOfDate accepts datetime string — use toDate if provided, otherwise omit (router defaults to now)
-      asOfDate: toDate ?? undefined,
+      asOfDate: toDate,
     },
-    { enabled: true }
   );
 
   function handleExport() {
@@ -703,7 +694,6 @@ function RegisterReport({
 
   const { data, isLoading, error } = queryFn.useQuery(
     { fromDate, toDate },
-    { enabled: true },
   ) as {
     data: SaleRegisterData | PurchaseRegisterData | undefined;
     isLoading: boolean;
@@ -1547,7 +1537,7 @@ function StockSummaryReport() {
                 >
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
-                      <p className="text-text-primary text-[13px] font-medium">{item.itemName}</p>
+                      <div className="text-[13px]"><DocumentLineItemName itemId={item.itemId} name={item.itemName} /></div>
                       {item.isLowStock && (
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 shrink-0">
                           Low
@@ -1611,7 +1601,7 @@ function StockSummaryReport() {
                           >
                             <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                           </svg>
-                          <p className="text-text-primary text-[13px] font-medium">{item.itemName}</p>
+                          <div className="text-[13px]"><DocumentLineItemName itemId={item.itemId} name={item.itemName} /></div>
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface-2 text-text-tertiary shrink-0">
                             {item.variantDetails.length} variants
                           </span>
@@ -1881,8 +1871,7 @@ function PaymentSummaryReport({
   const [type, setType] = useState<"both" | "received" | "made">("both");
 
   const { data, isLoading, error } = (trpc as any).reports.paymentSummary.useQuery(
-    { fromDate: fromDate || new Date().toISOString(), toDate: toDate || new Date().toISOString(), type },
-    { enabled: true }
+    { fromDate, toDate, type }
   ) as { data: PaymentSummaryData | undefined; isLoading: boolean; error: unknown };
 
   function handleExport() {
@@ -2052,8 +2041,7 @@ function TaxSummaryReport({
   const [type, setType] = useState<"both" | "sales" | "purchases">("both");
 
   const { data, isLoading, error } = (trpc as any).reports.taxSummary.useQuery(
-    { fromDate: fromDate || new Date().toISOString(), toDate: toDate || new Date().toISOString(), type },
-    { enabled: true }
+    { fromDate, toDate, type }
   ) as { data: TaxSummaryData | undefined; isLoading: boolean; error: unknown };
 
   function handleExport() {
@@ -2195,8 +2183,7 @@ function ItemSalesReport({
   const [compareToPrevious, setCompareToPrevious] = useState(false);
 
   const { data, isLoading, error } = (trpc as any).reports.itemSales.useQuery(
-    { fromDate: fromDate || new Date().toISOString(), toDate: toDate || new Date().toISOString(), sortBy, compareToPrevious },
-    { enabled: true }
+    { fromDate, toDate, sortBy, compareToPrevious }
   ) as { data: ItemSalesData | undefined; isLoading: boolean; error: unknown };
 
   function handleExport() {
@@ -2300,7 +2287,7 @@ function ItemSalesReport({
                     className="border-b border-border/40 hover:bg-surface-2/40 transition-colors"
                   >
                     <td className="px-4 py-3">
-                      <p className="text-text-primary text-[13px] font-medium">{row.itemName}</p>
+                      <div className="text-[13px]"><DocumentLineItemName itemId={row.itemId} name={row.itemName} /></div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
                       <span className="text-text-tertiary text-[12px]">{row.category ?? "—"}</span>
@@ -2439,8 +2426,7 @@ function CollectionEfficiencyReport({
   toDate?: string;
 }) {
   const { data, isLoading, error } = (trpc as any).reports.collectionEfficiency.useQuery(
-    { fromDate, toDate },
-    { enabled: true }
+    { fromDate, toDate }
   ) as { data: CollectionEfficiencyData | undefined; isLoading: boolean; error: unknown };
 
   if (isLoading) {
@@ -2657,8 +2643,7 @@ function CashFlowReport({
   toDate?: string;
 }) {
   const { data, isLoading, error } = (trpc as any).reports.cashFlowStatement.useQuery(
-    { fromDate, toDate },
-    { enabled: !!(fromDate && toDate) }
+    { fromDate, toDate }
   ) as { data: CashFlowStatementData | undefined; isLoading: boolean; error: unknown };
 
   if (isLoading) {

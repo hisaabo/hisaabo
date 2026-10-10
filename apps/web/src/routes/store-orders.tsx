@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SkeletonRows } from "@/components/ui/SkeletonRows";
 import { PillTabs } from "@/components/ui/Tabs";
+import { SearchInput } from "@/components/ui/SearchInput";
 
 export const Route = createFileRoute("/store-orders")({
   component: StoreOrdersPage,
@@ -590,24 +591,23 @@ function StoreOrdersPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <PillTabs
-          tabs={STATUS_TABS}
-          value={status}
+        <SearchInput
+          value={search}
           onChange={(v) => {
-            setStatus(v as OrderStatus | "");
+            setSearch(v);
             setPage(1);
           }}
+          placeholder="Search customer, order #…"
+          className="max-w-xs"
         />
         <div className="ml-auto">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
+          <PillTabs
+            tabs={STATUS_TABS}
+            value={status}
+            onChange={(v) => {
+              setStatus(v as OrderStatus | "");
               setPage(1);
             }}
-            placeholder="Search customer, order #…"
-            className="h-8 rounded-lg border border-border-light bg-surface-0 px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-brand-500 w-52"
           />
         </div>
       </div>

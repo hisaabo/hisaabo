@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
+import { isGstRegisteredBusiness } from "@/hooks/useActiveBusiness";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { ShortcutIndicator } from "@/components/ui/ShortcutIndicator";
@@ -12,17 +13,27 @@ import { Logo } from "@/components/ui/Logo";
 import { getRegisteredHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 import { formatRole } from "@/lib/roles";
-import { findRoutePermission } from "@/lib/route-access";
+import { findRoutePermission, getVisibleNavItems } from "@/lib/route-access";
 import { useDesktopDeepLink } from "@/hooks/useDesktopDeepLink";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
+import { MobileAppNotice } from "@/components/MobileAppNotice";
 import { clearDesktopToken } from "@/lib/desktop-session";
 import { useWebMcp } from "@/lib/webmcp/useWebMcp";
 import { resolveWebMcpBusinessId } from "@/lib/webmcp/business-gate";
 import { WebMcpConfirmHost } from "@/components/webmcp/WebMcpConfirmHost";
 import { defineAbilityFor, type Action, type Resource } from "@hisaabo/shared";
 
+function RootWithMobileNotice() {
+  const { pathname } = useLocation();
+  return (
+    <MobileAppNotice pathname={pathname}>
+      <RootLayout />
+    </MobileAppNotice>
+  );
+}
+
 export const Route = createRootRoute({
-  component: RootLayout,
+  component: RootWithMobileNotice,
   errorComponent: RootError,
 });
 
@@ -606,8 +617,7 @@ function RootLayout() {
   }
 
   const activeBusiness = businesses?.find((b) => b.id === (currentBusinessId ?? businesses?.[0]?.id)) ?? businesses?.[0];
-  const isGstRegistered =
-    activeBusiness?.gstRegistrationType !== "unregistered" || !!activeBusiness?.gstin;
+  const isGstRegistered = isGstRegisteredBusiness(activeBusiness);
 
   // No businesses yet — user is in the onboarding flow. Hide the sidebar
   // since nav items are meaningless without a business context.
@@ -666,21 +676,11 @@ function RootLayout() {
         {/* Nav sections */}
         <nav className="flex-1 overflow-y-auto pb-2" onClick={() => setSidebarOpen(false)}>
           {navSections.map((section) => {
-            const visibleItems = section.items
-              .filter((item) =>
-                canAccess(session?.role, item.resource, item.action) &&
-                (!item.gstOnly || isGstRegistered)
-              )
-              .map((item) => {
-                // Rename reports label based on GST status (always visible)
-                if (item.to === "/gst") {
-                  return { ...item, label: isGstRegistered ? "GST Returns" : "Tax Reports" };
-                }
-                if (item.to === "/reports") {
-                  return { ...item, label: "Business Reports" };
-                }
-                return item;
-              });
+            const visibleItems = getVisibleNavItems(
+              section.items,
+              (resource, action) => canAccess(session?.role, resource, action),
+              isGstRegistered,
+            );
             if (visibleItems.length === 0) return null;
             const sectionLabel = section.label === "COMPLIANCE" && !isGstRegistered ? "REPORTS" : section.label;
             return (
@@ -840,7 +840,17 @@ function RootLayout() {
         </div>
       </main>
 
-      <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} />
+      <CommandPalette
+        open={showPalette}
+        onClose={() => setShowPalette(false)}
+        navItems={navSections.flatMap((section) =>
+          getVisibleNavItems(
+            section.items,
+            (resource, action) => canAccess(session?.role, resource, action),
+            isGstRegistered,
+          ),
+        )}
+      />
       <ShortcutsDialog open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ShortcutIndicator />
       <WebMcpConfirmHost />

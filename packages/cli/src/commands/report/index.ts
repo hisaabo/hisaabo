@@ -117,7 +117,7 @@ export async function reportTaxSummaryCommand(opts: ReportOpts): Promise<void> {
   const { from, to } = resolveRange(opts);
 
   try {
-    const result = await client.reports.taxSummary({ fromDate: from, toDate: to });
+    const result = await client.reports.taxSummary({ fromDate: toApiDateTime(from, "start"), toDate: toApiDateTime(to, "end") });
 
     if (opts.json) {
       outputJSON(result);
@@ -158,7 +158,7 @@ export async function reportItemSalesCommand(opts: ReportOpts): Promise<void> {
   const { from, to } = resolveRange(opts);
 
   try {
-    const result = await client.reports.itemSales({ fromDate: from, toDate: to });
+    const result = await client.reports.itemSales({ fromDate: toApiDateTime(from, "start"), toDate: toApiDateTime(to, "end") });
 
     if (opts.json) {
       outputJSON(result);
@@ -238,7 +238,7 @@ export async function reportSalesRegisterCommand(
   const { from, to } = resolveRange(opts);
 
   try {
-    const result = await client.reports.salesRegister({ fromDate: from, toDate: to, partyId: opts.partyId });
+    const result = await client.reports.salesRegister({ fromDate: toApiDateTime(from, "start"), toDate: toApiDateTime(to, "end"), partyId: opts.partyId });
 
     if (opts.json) {
       outputJSON(result);
@@ -288,7 +288,7 @@ export async function reportPurchaseRegisterCommand(
   const { from, to } = resolveRange(opts);
 
   try {
-    const result = await client.reports.purchaseRegister({ fromDate: from, toDate: to, partyId: opts.partyId });
+    const result = await client.reports.purchaseRegister({ fromDate: toApiDateTime(from, "start"), toDate: toApiDateTime(to, "end"), partyId: opts.partyId });
 
     if (opts.json) {
       outputJSON(result);
@@ -394,8 +394,8 @@ export async function reportPaymentSummaryCommand(
 
   try {
     const result = await client.reports.paymentSummary({
-      fromDate: from,
-      toDate: to,
+      fromDate: toApiDateTime(from, "start"),
+      toDate: toApiDateTime(to, "end"),
       type: opts.type as "received" | "made" | "both" | undefined ?? "both",
     });
 
@@ -627,7 +627,7 @@ export async function reportCollectionEfficiencyCommand(opts: ReportOpts): Promi
   const { from, to } = resolveRange(opts);
 
   try {
-    const result = await client.reports.collectionEfficiency({ fromDate: from, toDate: to });
+    const result = await client.reports.collectionEfficiency({ fromDate: toApiDateTime(from, "start"), toDate: toApiDateTime(to, "end") });
 
     if (opts.json) {
       outputJSON(result);

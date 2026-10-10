@@ -6,10 +6,13 @@ import {
 } from "../../output.js";
 import { formatAmount, formatDate } from "../../format.js";
 import type { OutputOf } from "../../api-types.js";
+import { parsePeriod } from "./history-options.js";
 
 interface PriceHistoryOpts {
   json?: boolean;
   format?: string;
+  period?: string;
+  limit?: number;
 }
 
 type PriceHistoryRow = OutputOf<"item.priceHistory">[number];
@@ -19,7 +22,7 @@ export async function itemPriceHistoryCommand(id: string, opts: PriceHistoryOpts
   const client = new HisaaboClient(cfg);
 
   try {
-    const result = await client.item.priceHistory({ id });
+    const result = await client.item.priceHistory({ id, period: parsePeriod(opts.period), limit: opts.limit });
 
     if (opts.json) {
       outputJSON(result);

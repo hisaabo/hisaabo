@@ -2,11 +2,133 @@ import { eq, and, ilike, sql, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
-import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
+import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
+
+// ── Price-history / stock-movement helpers ───────────────────────────────────
+
+const historyPeriods = ["6m", "1y", "all"] as const;
+type HistoryPeriod = typeof historyPeriods[number];
+
+/** Start of the requested window (null = all time). Same semantics the UI always used. */
+function periodCutoff(period: HistoryPeriod): Date | null {
+  if (period === "all") return null;
+  const cutoff = new Date();
+  if (period === "6m") cutoff.setMonth(cutoff.getMonth() - 6);
+  else cutoff.setFullYear(cutoff.getFullYear() - 1);
+  return cutoff;
+}
+
+/**
+ * Number of BASE units in one `unit`. Base unit (or no unit) → 1; an alt unit
+ * → its conversionFactor. Invoice lines store prices/quantities in the unit
+ * they were billed in plus `conversion_factor` (base units per billed unit),
+ * so  price per base = unit_price / cf  and  base qty = quantity * cf.
+ * Multiply a per-base price by this factor (or divide a base qty by it) to
+ * express it in `unit`.
+ */
+async function resolveUnitFactor(
+  db: TenantDatabase,
+  businessId: string,
+  itemId: string,
+  unit: string | undefined,
+): Promise<{ factor: string; unit: string; stockQuantity: string }> {
+  const [item] = await db.select({
+    unit: items.unit,
+    unitVariants: items.unitVariants,
+    stockQuantity: items.stockQuantity,
+  }).from(items).where(and(
+    eq(items.id, itemId),
+    eq(items.businessId, businessId),
+  )).limit(1);
+  // Unknown / foreign item: behave like the legacy endpoints (empty result).
+  if (!item) return { factor: "1", unit: unit ?? "", stockQuantity: "0" };
+  if (!unit || unit === item.unit) return { factor: "1", unit: item.unit, stockQuantity: item.stockQuantity };
+  const variants = (item.unitVariants as Array<{ unit: string; conversionFactor: number | string }> | null) ?? [];
+  const match = variants.find((v) => v.unit === unit);
+  if (!match || !(Number(match.conversionFactor) > 0)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown unit "${unit}" for this item` });
+  }
+  return { factor: String(match.conversionFactor), unit, stockQuantity: item.stockQuantity };
+}
+
+/** True when any invoice/document line or stock adjustment references the item. */
+async function itemHasTransactions(
+  db: TenantDatabase,
+  businessId: string,
+  itemId: string,
+): Promise<boolean> {
+  const rows = (await db.execute(sql`
+    SELECT (
+      EXISTS (
+        SELECT 1 FROM ${invoiceItems}
+        JOIN ${invoices} ON ${invoices.id} = ${invoiceItems.invoiceId}
+        WHERE ${invoiceItems.itemId} = ${itemId} AND ${invoices.businessId} = ${businessId}
+      )
+      OR EXISTS (
+        SELECT 1 FROM ${stockAdjustments}
+        WHERE ${stockAdjustments.itemId} = ${itemId} AND ${stockAdjustments.businessId} = ${businessId}
+      )
+    ) AS has_tx
+  `)) as unknown as Array<{ has_tx: boolean }>;
+  return rows[0]?.has_tx === true;
+}
+
+/** Offset cursor helper: fetch limit+1 rows, trim, and compute the next cursor. */
+function pageOf<T>(rows: T[], cursor: number, limit: number): { rows: T[]; nextCursor: number | null } {
+  const hasMore = rows.length > limit;
+  return { rows: hasMore ? rows.slice(0, limit) : rows, nextCursor: hasMore ? cursor + limit : null };
+}
+
+const historyBase = {
+  id: z.string().uuid(),
+  period: z.enum(historyPeriods).default("all"),
+  /** Display unit: base unit or one of the item's unit variants. Defaults to the base unit. */
+  unit: z.string().min(1).max(50).optional(),
+};
+const pageInput = {
+  cursor: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(100).default(30),
+};
+
+/**
+ * CTE fragment `mv(...), run(...)`: every stock-moving document line of an
+ * item with its signed base-unit delta (direction rules identical to the
+ * legacy `stockMovements`) and the balance AFTER it, derived from the item's
+ * current stock minus the deltas of all newer lines.
+ */
+function stockRunningCte(businessId: string, itemId: string, currentStock: string) {
+  return sql`
+    mv AS (
+      SELECT ${invoiceItems.id} AS id, ${invoices.id} AS invoice_id, ${invoices.invoiceDate} AS d,
+        ${invoices.invoiceNumber} AS invoice_number, ${invoices.type} AS invoice_type,
+        ${invoices.documentType} AS document_type, ${parties.name} AS party_name,
+        (CASE WHEN
+          (CASE WHEN ${invoices.documentType} IN ('sales_return', 'purchase_return')
+            THEN NOT (${invoices.type} = 'sale' OR ${invoices.documentType} = 'delivery_challan')
+            ELSE (${invoices.type} = 'sale' OR ${invoices.documentType} = 'delivery_challan') END)
+          THEN -1 ELSE 1 END)
+          * ${invoiceItems.quantity}::numeric
+          * COALESCE(NULLIF(${invoiceItems.conversionFactor}::numeric, 0), 1) AS delta
+      FROM ${invoiceItems}
+      JOIN ${invoices} ON ${invoices.id} = ${invoiceItems.invoiceId}
+      JOIN ${parties} ON ${parties.id} = ${invoices.partyId}
+      WHERE ${invoiceItems.itemId} = ${itemId}
+        AND ${invoices.businessId} = ${businessId}
+        AND ${invoices.status} NOT IN ('draft', 'cancelled')
+        AND ${invoices.documentType} NOT IN ('credit_note', 'quotation', 'proforma', 'debit_note')
+    ),
+    run AS (
+      SELECT mv.*,
+        ${currentStock}::numeric - COALESCE(
+          SUM(delta) OVER (ORDER BY d DESC, id DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0
+        ) AS bal
+      FROM mv
+    )`;
+}
 
 export const itemRouter = router({
   list: viewerProcedure
@@ -100,14 +222,17 @@ export const itemRouter = router({
         .limit(1);
       if (!item) return null;
 
+      // Drives the item-type lock in the edit form (see `update`).
+      const hasTransactions = await itemHasTransactions(ctx.db, ctx.businessId, item.id);
+
       if (item.itemMode === "variants") {
         const variants = await ctx.db.select().from(itemVariants)
           .where(and(eq(itemVariants.itemId, item.id), isNull(itemVariants.deletedAt)))
           .orderBy(itemVariants.createdAt);
-        return { ...item, variants };
+        return { ...item, variants, hasTransactions };
       }
 
-      return { ...item, variants: [] as typeof itemVariants.$inferSelect[] };
+      return { ...item, variants: [] as typeof itemVariants.$inferSelect[], hasTransactions };
     }),
 
   create: memberProcedure.input(createItemSchema).mutation(async ({ input, ctx }) => {
@@ -269,6 +394,32 @@ export const itemRouter = router({
       // Active-mutation contract: a soft-deleted item cannot be edited via
       // the public API. Re-activation would require an explicit restore
       // endpoint, which is deferred per FIXES.md.
+
+      // Product <-> Service is locked once the item is referenced by any
+      // document line or stock adjustment: stock bookkeeping and tax/ledger
+      // treatment of the existing history depend on it. Enforced here (not
+      // just in the UI) so CLI / MCP / mobile are covered too.
+      if (input.data.itemType !== undefined) {
+        const [current] = await ctx.db.select({ itemType: items.itemType })
+          .from(items)
+          .where(and(
+            eq(items.id, input.id),
+            eq(items.businessId, ctx.businessId),
+            isNull(items.deletedAt),
+          ))
+          .limit(1);
+        if (!current) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+        }
+        if (current.itemType !== input.data.itemType
+          && await itemHasTransactions(ctx.db, ctx.businessId, input.id)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Item type cannot be changed because this item already has invoices, documents or stock movements.",
+          });
+        }
+      }
+
       const [item] = await ctx.db.update(items)
         .set({ ...input.data, updatedAt: new Date() })
         .where(and(
@@ -487,10 +638,19 @@ export const itemRouter = router({
     }),
 
   // Price history: every price this item was sold/purchased at, derived from invoice line items
+  //
+  // Legacy flat list (CLI / MCP): newest `limit` (default 50) lines in the
+  // period. The web/mobile detail screens use `priceSummary` +
+  // `priceHistoryPage` instead, which cover the whole period.
   priceHistory: viewerProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({
+      id: z.string().uuid(),
+      period: z.enum(historyPeriods).default("all"),
+      limit: z.number().int().min(1).max(500).default(50),
+    }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
+      const cutoff = periodCutoff(input.period);
       const rows = await ctx.db.select({
         invoiceId: invoices.id,
         invoiceDate: invoices.invoiceDate,
@@ -512,19 +672,26 @@ export const itemRouter = router({
             eq(invoiceItems.itemId, input.id),
             eq(invoices.businessId, ctx.businessId),
             eq(invoices.documentType, "invoice"),
+            sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
+            cutoff ? sql`${invoices.invoiceDate} >= ${cutoff.toISOString()}::timestamptz` : undefined,
           )
         )
         .orderBy(desc(invoices.invoiceDate))
-        .limit(50);
+        .limit(input.limit);
 
       return rows;
     }),
 
   // Stock movements: every invoice that changed this item's stock (qty sold/purchased)
   stockMovements: viewerProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({
+      id: z.string().uuid(),
+      period: z.enum(historyPeriods).default("all"),
+      limit: z.number().int().min(1).max(500).default(50),
+    }))
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Item");
+      const cutoff = periodCutoff(input.period);
       const rows = await ctx.db.select({
         invoiceDate: invoices.invoiceDate,
         invoiceNumber: invoices.invoiceNumber,
@@ -545,10 +712,11 @@ export const itemRouter = router({
             eq(invoices.businessId, ctx.businessId),
             sql`${invoices.status} NOT IN ('draft', 'cancelled')`,
             sql`${invoices.documentType} NOT IN ('credit_note', 'quotation', 'proforma', 'debit_note')`,
+            cutoff ? sql`${invoices.invoiceDate} >= ${cutoff.toISOString()}::timestamptz` : undefined,
           )
         )
         .orderBy(desc(invoices.invoiceDate))
-        .limit(50);
+        .limit(input.limit);
 
       // Annotate direction: returns reverse the normal flow
       // sale → out, purchase → in, but sales_return/purchase_return flip it
@@ -561,6 +729,250 @@ export const itemRouter = router({
           direction: isOutflow ? "out" as const : "in" as const,
         };
       });
+    }),
+
+  // ── Period-wide price history (web / mobile) ─────────────────────────────
+  //
+  // Why this exists: the old flat `priceHistory` returned the newest 50 lines
+  // and the UI filtered by period client-side, so "All" meant "last 50" (and
+  // the chart further sliced to 10 points), while 6M / 1Y only looked right
+  // because they happened to fit in those 50. Now the period is applied in
+  // SQL, prices are normalised to ONE display unit (price per base unit =
+  // unit_price / conversion_factor, then * the display unit's factor) so lines
+  // billed in different units are comparable, and:
+  //   - `priceSummary`     -> min/max/avg/latest over the FULL period + a
+  //                           downsampled series for the chart (bounded size),
+  //   - `priceHistoryPage` -> cursor-paged table rows.
+  priceSummary: viewerProcedure
+    .input(z.object({
+      ...historyBase,
+      /** Sales and purchase prices are different series; never blend them. */
+      invoiceType: z.enum(["sale", "purchase"]).default("sale"),
+      maxPoints: z.number().int().min(10).max(200).default(60),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const { factor, unit } = await resolveUnitFactor(ctx.db, ctx.businessId, input.id, input.unit);
+      const cutoff = periodCutoff(input.period);
+
+      const pts = sql`
+        SELECT ${invoiceItems.id} AS id, ${invoices.invoiceDate} AS d,
+          (${invoiceItems.unitPrice}::numeric
+            / COALESCE(NULLIF(${invoiceItems.conversionFactor}::numeric, 0), 1)
+            * ${factor}::numeric) AS p
+        FROM ${invoiceItems}
+        JOIN ${invoices} ON ${invoices.id} = ${invoiceItems.invoiceId}
+        WHERE ${invoiceItems.itemId} = ${input.id}
+          AND ${invoices.businessId} = ${ctx.businessId}
+          AND ${invoices.documentType} = 'invoice'
+          AND ${invoices.status} NOT IN ('draft', 'cancelled')
+          AND ${invoices.type} = ${input.invoiceType}
+          ${cutoff ? sql`AND ${invoices.invoiceDate} >= ${cutoff.toISOString()}::timestamptz` : sql``}`;
+
+      const [stats] = (await ctx.db.execute(sql`
+        WITH pts AS (${pts})
+        SELECT COUNT(*)::int AS count,
+          ROUND(MIN(p), 4)::text AS min,
+          ROUND(MAX(p), 4)::text AS max,
+          ROUND(AVG(p), 4)::text AS avg,
+          ROUND((array_agg(p ORDER BY d DESC, id DESC))[1], 4)::text AS latest
+        FROM pts`)) as unknown as Array<{
+          count: number; min: string | null; max: string | null; avg: string | null; latest: string | null;
+        }>;
+
+      const count = stats?.count ?? 0;
+      let series: Array<{ date: Date; price: string; min: string; max: string; count: number }> = [];
+      if (count > 0) {
+        // Equal-count buckets over the time-ordered lines; a bucket is one
+        // chart point (mean price, plus its min/max). When there are fewer
+        // lines than maxPoints every line is its own point (no loss).
+        const buckets = Math.min(count, input.maxPoints);
+        const rows = (await ctx.db.execute(sql`
+          WITH pts AS (${pts}),
+          b AS (SELECT d, p, ntile(${buckets}::int) OVER (ORDER BY d, id) AS bk FROM pts)
+          SELECT MAX(d) AS date,
+            ROUND(AVG(p), 4)::text AS price,
+            ROUND(MIN(p), 4)::text AS min,
+            ROUND(MAX(p), 4)::text AS max,
+            COUNT(*)::int AS count
+          FROM b GROUP BY bk ORDER BY bk`)) as unknown as Array<{
+            date: Date | string; price: string; min: string; max: string; count: number;
+          }>;
+        series = rows.map((r) => ({ ...r, date: new Date(r.date) }));
+      }
+
+      return {
+        unit,
+        invoiceType: input.invoiceType,
+        period: input.period,
+        stats: {
+          count,
+          min: stats?.min ?? null,
+          max: stats?.max ?? null,
+          avg: stats?.avg ?? null,
+          latest: stats?.latest ?? null,
+        },
+        series,
+        downsampled: count > input.maxPoints,
+      };
+    }),
+
+  // Table under the price chart: invoices where the (normalised) price differs
+  // from the previous line in the period ("Price Changes"), newest first,
+  // offset-cursor paged for infinite scroll.
+  priceHistoryPage: viewerProcedure
+    .input(z.object({
+      ...historyBase,
+      ...pageInput,
+      invoiceType: z.enum(["sale", "purchase"]).default("sale"),
+      changesOnly: z.boolean().default(true),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const { factor, unit } = await resolveUnitFactor(ctx.db, ctx.businessId, input.id, input.unit);
+      const cutoff = periodCutoff(input.period);
+
+      const rows = (await ctx.db.execute(sql`
+        WITH pts AS (
+          SELECT ${invoiceItems.id} AS id, ${invoices.id} AS invoice_id,
+            ${invoices.invoiceDate} AS d, ${invoices.invoiceNumber} AS invoice_number,
+            ${invoices.type} AS invoice_type, ${parties.name} AS party_name,
+            ${invoiceItems.unitPrice}::text AS unit_price,
+            ${invoiceItems.quantity}::text AS quantity,
+            ${invoiceItems.selectedUnit} AS selected_unit,
+            ${invoiceItems.conversionFactor}::text AS conversion_factor,
+            (${invoiceItems.unitPrice}::numeric
+              / COALESCE(NULLIF(${invoiceItems.conversionFactor}::numeric, 0), 1)
+              * ${factor}::numeric) AS p,
+            LAG(${invoiceItems.unitPrice}::numeric
+              / COALESCE(NULLIF(${invoiceItems.conversionFactor}::numeric, 0), 1)
+              * ${factor}::numeric) OVER (ORDER BY ${invoices.invoiceDate}, ${invoiceItems.id}) AS prev_p
+          FROM ${invoiceItems}
+          JOIN ${invoices} ON ${invoices.id} = ${invoiceItems.invoiceId}
+          JOIN ${parties} ON ${parties.id} = ${invoices.partyId}
+          WHERE ${invoiceItems.itemId} = ${input.id}
+            AND ${invoices.businessId} = ${ctx.businessId}
+            AND ${invoices.documentType} = 'invoice'
+            AND ${invoices.status} NOT IN ('draft', 'cancelled')
+            AND ${invoices.type} = ${input.invoiceType}
+            ${cutoff ? sql`AND ${invoices.invoiceDate} >= ${cutoff.toISOString()}::timestamptz` : sql``}
+        )
+        SELECT id, invoice_id AS "invoiceId", d AS "invoiceDate", invoice_number AS "invoiceNumber",
+          invoice_type AS "invoiceType", party_name AS "partyName", unit_price AS "unitPrice",
+          quantity, selected_unit AS "selectedUnit", conversion_factor AS "conversionFactor",
+          ROUND(p, 4)::text AS price, COUNT(*) OVER ()::int AS total
+        FROM pts
+        WHERE ${input.changesOnly ? sql`prev_p IS NULL OR ABS(p - prev_p) > 0.01` : sql`TRUE`}
+        ORDER BY d DESC, id DESC
+        LIMIT ${input.limit + 1} OFFSET ${input.cursor}`)) as unknown as Array<{
+          id: string; invoiceId: string; invoiceDate: Date | string; invoiceNumber: string;
+          invoiceType: string; partyName: string; unitPrice: string; quantity: string;
+          selectedUnit: string | null; conversionFactor: string | null; price: string; total: number;
+        }>;
+
+      const page = pageOf(rows, input.cursor, input.limit);
+      return {
+        unit,
+        rows: page.rows.map(({ total: _t, ...r }) => ({ ...r, invoiceDate: new Date(r.invoiceDate) })),
+        /** Rows matching the filter across ALL pages. */
+        total: rows[0]?.total ?? 0,
+        nextCursor: page.nextCursor,
+      };
+    }),
+
+  // ── Period-wide stock movements (web / mobile) ───────────────────────────
+  //
+  // Quantities are stored per billed unit with a conversion factor to base
+  // units. Everything is converted to base units first (qty * cf, signed by
+  // direction), the running balance is derived from the item's CURRENT stock
+  // by walking the FULL history backwards (so it is independent of the period
+  // chosen), and only then divided by the display unit's factor.
+  stockSummary: viewerProcedure
+    .input(z.object({
+      ...historyBase,
+      maxPoints: z.number().int().min(10).max(200).default(60),
+    }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const { factor, unit, stockQuantity } = await resolveUnitFactor(ctx.db, ctx.businessId, input.id, input.unit);
+      const cutoff = periodCutoff(input.period);
+      const run = stockRunningCte(ctx.businessId, input.id, stockQuantity);
+      const inPeriod = cutoff ? sql`WHERE d >= ${cutoff.toISOString()}::timestamptz` : sql``;
+
+      const [stats] = (await ctx.db.execute(sql`
+        WITH ${run}
+        SELECT COUNT(*)::int AS count,
+          ROUND(COALESCE(SUM(GREATEST(delta, 0)), 0) / ${factor}::numeric, 4)::text AS "totalIn",
+          ROUND(COALESCE(-SUM(LEAST(delta, 0)), 0) / ${factor}::numeric, 4)::text AS "totalOut",
+          ROUND(COALESCE(SUM(delta), 0) / ${factor}::numeric, 4)::text AS net
+        FROM run ${inPeriod}`)) as unknown as Array<{ count: number; totalIn: string; totalOut: string; net: string }>;
+
+      const count = stats?.count ?? 0;
+      let series: Array<{ date: Date; balance: string; min: string; max: string }> = [];
+      if (count > 0) {
+        const buckets = Math.min(count, input.maxPoints);
+        const rows = (await ctx.db.execute(sql`
+          WITH ${run},
+          b AS (
+            SELECT d, id, bal, ntile(${buckets}::int) OVER (ORDER BY d, id) AS bk
+            FROM run ${inPeriod}
+          )
+          SELECT MAX(d) AS date,
+            ROUND((array_agg(bal ORDER BY d DESC, id DESC))[1] / ${factor}::numeric, 4)::text AS balance,
+            ROUND(MIN(bal) / ${factor}::numeric, 4)::text AS min,
+            ROUND(MAX(bal) / ${factor}::numeric, 4)::text AS max
+          FROM b GROUP BY bk ORDER BY bk`)) as unknown as Array<{
+            date: Date | string; balance: string; min: string; max: string;
+          }>;
+        series = rows.map((r) => ({ ...r, date: new Date(r.date) }));
+      }
+
+      return {
+        unit,
+        period: input.period,
+        stats: {
+          count,
+          totalIn: stats?.totalIn ?? "0",
+          totalOut: stats?.totalOut ?? "0",
+          net: stats?.net ?? "0",
+        },
+        series,
+        downsampled: count > input.maxPoints,
+      };
+    }),
+
+  stockMovementsPage: viewerProcedure
+    .input(z.object({ ...historyBase, ...pageInput }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const { factor, unit, stockQuantity } = await resolveUnitFactor(ctx.db, ctx.businessId, input.id, input.unit);
+      const cutoff = periodCutoff(input.period);
+      const run = stockRunningCte(ctx.businessId, input.id, stockQuantity);
+
+      const rows = (await ctx.db.execute(sql`
+        WITH ${run}
+        SELECT id, invoice_id AS "invoiceId", d AS "invoiceDate", invoice_number AS "invoiceNumber",
+          invoice_type AS "invoiceType", document_type AS "documentType", party_name AS "partyName",
+          CASE WHEN delta < 0 THEN 'out' ELSE 'in' END AS direction,
+          ROUND(delta / ${factor}::numeric, 4)::text AS "qtyChange",
+          ROUND(bal / ${factor}::numeric, 4)::text AS balance, COUNT(*) OVER ()::int AS total
+        FROM run
+        ${cutoff ? sql`WHERE d >= ${cutoff.toISOString()}::timestamptz` : sql``}
+        ORDER BY d DESC, id DESC
+        LIMIT ${input.limit + 1} OFFSET ${input.cursor}`)) as unknown as Array<{
+          id: string; invoiceId: string; invoiceDate: Date | string; invoiceNumber: string;
+          invoiceType: string; documentType: string; partyName: string;
+          direction: "in" | "out"; qtyChange: string; balance: string; total: number;
+        }>;
+
+      const page = pageOf(rows, input.cursor, input.limit);
+      return {
+        unit,
+        rows: page.rows.map(({ total: _t, ...r }) => ({ ...r, invoiceDate: new Date(r.invoiceDate) })),
+        /** Rows matching the filter across ALL pages. */
+        total: rows[0]?.total ?? 0,
+        nextCursor: page.nextCursor,
+      };
     }),
 
   // Invoices containing this item

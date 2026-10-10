@@ -9,6 +9,9 @@ import { itemStockCommand } from "../../commands/item/stock.js";
 import { itemUpdateCommand } from "../../commands/item/update.js";
 import { itemMergeCommand } from "../../commands/item/merge.js";
 import { itemPriceHistoryCommand } from "../../commands/item/price-history.js";
+import { itemPriceSummaryCommand } from "../../commands/item/price-summary.js";
+import { itemStockMovementsCommand } from "../../commands/item/stock-movements.js";
+import { itemStockSummaryCommand } from "../../commands/item/stock-summary.js";
 import { itemRenameUnitCommand } from "../../commands/item/rename-unit.js";
 import { itemSalesStatsCommand } from "../../commands/item/sales-stats.js";
 import { itemStockHistoryCommand } from "../../commands/item/stock-history.js";
@@ -166,8 +169,42 @@ export function registerItemCommands(program: Command): void {
     .description("Show past invoiced prices for an item")
     .option("--json", "JSON output")
     .option("--format <format>", "Output format: table, tsv, csv")
+    .option("--period <period>", "Time window: 6m, 1y, all (default: all)")
+    .option("--limit <n>", "Max lines to return (1-500, default 50)", parseInt)
     .action(async (id, opts) => {
-      await itemPriceHistoryCommand(id, { json: opts.json, format: opts.format });
+      await itemPriceHistoryCommand(id, { json: opts.json, format: opts.format, period: opts.period, limit: opts.limit });
+    });
+
+  item
+    .command("price-summary <id>")
+    .description("Min / max / average / latest invoiced price over a whole period")
+    .option("--json", "JSON output")
+    .option("--period <period>", "Time window: 6m, 1y, all (default: all)")
+    .option("--unit <unit>", "Display unit (base or alt unit; default: base unit)")
+    .option("--type <type>", "Price series: sale or purchase (default: sale)")
+    .action(async (id, opts) => {
+      await itemPriceSummaryCommand(id, { json: opts.json, period: opts.period, unit: opts.unit, type: opts.type });
+    });
+
+  item
+    .command("stock-movements <id>")
+    .description("Show invoice-driven stock movements (in/out) for an item")
+    .option("--json", "JSON output")
+    .option("--format <format>", "Output format: table, tsv, csv")
+    .option("--period <period>", "Time window: 6m, 1y, all (default: all)")
+    .option("--limit <n>", "Max movements to return (1-500, default 50)", parseInt)
+    .action(async (id, opts) => {
+      await itemStockMovementsCommand(id, { json: opts.json, format: opts.format, period: opts.period, limit: opts.limit });
+    });
+
+  item
+    .command("stock-summary <id>")
+    .description("Total stock in / out / net change over a whole period")
+    .option("--json", "JSON output")
+    .option("--period <period>", "Time window: 6m, 1y, all (default: all)")
+    .option("--unit <unit>", "Display unit (base or alt unit; default: base unit)")
+    .action(async (id, opts) => {
+      await itemStockSummaryCommand(id, { json: opts.json, period: opts.period, unit: opts.unit });
     });
 
   item

@@ -5,6 +5,7 @@ import { formatCurrency, formatDate, cn, todayISODate, toISOString, formatDateIn
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { useCan } from "@/hooks/useCan";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -321,8 +322,9 @@ function JournalEntriesPage() {
         description="Double-entry journal for manual accounting adjustments"
         actions={
           canCreate ? (
-            <button className="btn-primary" onClick={openCreate}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={openCreate}>
               + New Entry
+              <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
             </button>
           ) : null
         }

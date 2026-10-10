@@ -224,7 +224,8 @@ describe("Invoices page", () => {
 
     async function downloadFrom(container: HTMLElement) {
       fireEvent.click(within(container).getByTitle("Download PDF"));
-      fireEvent.click(within(container).getByRole("button", { name: "Invoice (A5)" }));
+      // The menu is portalled to <body> (viewport-safe placement), so look it up globally.
+      fireEvent.click(screen.getByRole("menuitem", { name: "Invoice (A5)" }));
       await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
     }
 
@@ -251,8 +252,9 @@ describe("Invoices page", () => {
     function openDetail(role: string) {
       stub.data["invoice.list"] = { data: [invoice()], total: 1 };
       stub.data["invoice.getById"] = invoice();
+      // The open invoice lives in the URL (?id=), not local state.
+      stub.search = { id: "inv-1" };
       renderAs(role, Invoices);
-      fireEvent.click(screen.getByText("INV-001"));
       return screen.getByRole("dialog", { name: "Invoice INV-001" });
     }
 
@@ -277,8 +279,9 @@ describe("Invoices page", () => {
     function openPanel(role: string, inv: Record<string, unknown>) {
       stub.data["invoice.list"] = { data: [inv], total: 1 };
       stub.data["invoice.getById"] = inv;
+      // The open invoice lives in the URL (?id=), not local state.
+      stub.search = { id: "inv-1" };
       renderAs(role, Invoices);
-      fireEvent.click(screen.getByText("INV-001"));
       return screen.getByRole("dialog", { name: "Invoice INV-001" });
     }
 
@@ -621,8 +624,9 @@ describe("Parties page", () => {
 
   function openDetail(role: string) {
     stub.data["party.getById"] = party;
+    // The open party lives in the URL (?id=), not local state.
+    stub.search = { id: "p1" };
     renderAs(role, Parties);
-    fireEvent.click(screen.getByText("Acme Traders"));
     return screen.getByRole("dialog", { name: "Acme Traders" });
   }
 

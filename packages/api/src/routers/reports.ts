@@ -27,6 +27,7 @@ import {
   stockSummaryInputSchema,
   partyStatementInputSchema,
   paymentSummaryInputSchema,
+  cashFlowStatementInputSchema,
   money,
 } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
@@ -50,8 +51,14 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const dayStart = new Date(`${input.fromDate}T00:00:00`);
-      const dayEnd = new Date(`${input.toDate}T23:59:59.999`);
+      // Accepts YYYY-MM-DD (whole local days) or a full ISO datetime; an
+      // omitted bound leaves that side of the range open (all time).
+      const dayStart = input.fromDate
+        ? new Date(input.fromDate.length === 10 ? `${input.fromDate}T00:00:00` : input.fromDate)
+        : undefined;
+      const dayEnd = input.toDate
+        ? new Date(input.toDate.length === 10 ? `${input.toDate}T23:59:59.999` : input.toDate)
+        : undefined;
 
       const [dayInvoices, dayPayments, dayExpenses] = await Promise.all([
         input.typeFilter === "payments" || input.typeFilter === "expenses"
@@ -699,8 +706,18 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const periodStart = new Date(input.fromDate);
-      const periodEnd = new Date(input.toDate);
+      // Open-ended range ("All time"): start at the first sale invoice, end now.
+      let periodStart: Date;
+      if (input.fromDate) {
+        periodStart = new Date(input.fromDate);
+      } else {
+        const [first] = await ctx.db
+          .select({ d: sql<Date | null>`MIN(${invoices.invoiceDate})` })
+          .from(invoices)
+          .where(and(eq(invoices.businessId, ctx.businessId), eq(invoices.type, "sale"), isNull(invoices.deletedAt)));
+        periodStart = first?.d ? new Date(first.d) : new Date();
+      }
+      const periodEnd = input.toDate ? new Date(input.toDate) : new Date();
       const daysInPeriod = Math.max(
         1,
         Math.round((periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24)),
@@ -802,8 +819,8 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const fromDate = new Date(input.fromDate);
-      const toDate = new Date(input.toDate);
+      const fromDate = input.fromDate ? new Date(input.fromDate) : undefined;
+      const toDate = input.toDate ? new Date(input.toDate) : undefined;
 
       const conditions = [
         eq(invoices.businessId, ctx.businessId),
@@ -860,7 +877,8 @@ export const reportsRouter = router({
       const primaryRows = await queryPeriod(conditions);
 
       let previousRows: typeof primaryRows = [];
-      if (input.compareToPrevious) {
+      // Comparison needs a bounded period; skipped for open-ended (all time) ranges.
+      if (input.compareToPrevious && fromDate && toDate) {
         const periodMs = toDate.getTime() - fromDate.getTime();
         const prevToDate = new Date(fromDate.getTime() - 1);
         const prevFromDate = new Date(prevToDate.getTime() - periodMs);
@@ -1143,8 +1161,8 @@ export const reportsRouter = router({
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const fromDate = new Date(input.fromDate);
-      const toDate = new Date(input.toDate);
+      const fromDate = input.fromDate ? new Date(input.fromDate) : undefined;
+      const toDate = input.toDate ? new Date(input.toDate) : undefined;
 
       const paymentConditions = [
         eq(payments.businessId, ctx.businessId),
@@ -2062,15 +2080,13 @@ export const reportsRouter = router({
 
   // ── 15. Cash Flow Statement (indirect method) ─────────────────
   cashFlowStatement: viewerProcedure
-    .input(z.object({
-      fromDate: z.string().datetime(),
-      toDate: z.string().datetime(),
-    }))
+    .input(cashFlowStatementInputSchema)
     .query(async ({ input, ctx }) => {
       requireCan(ctx.ability, "read", "Report");
 
-      const from = new Date(input.fromDate);
-      const to = new Date(input.toDate);
+      // Omitted bounds = all time (opening balance is then zero).
+      const from = input.fromDate ? new Date(input.fromDate) : new Date("2000-01-01");
+      const to = input.toDate ? new Date(input.toDate) : new Date("2100-01-01");
 
       // ── A. Period ledger entries ─────────────────────────────────
       const entries = await deriveFullLedger(ctx.db, ctx.businessId, from, to);
@@ -2152,72 +2168,74 @@ export const reportsRouter = router({
         adjustments.push({ description: "Add: Depreciation", amount: depreciationAmt });
       }
 
-      // Working capital changes:
-      // Receivables (1100): asset — increase (net debit) = cash outflow (negative)
-      //   Change in receivables = net debit during period; positive debit = receivable went up = LESS cash
-      const receivableChange = netDebit("1100");
-      // Payables (2000): liability — increase (net credit) = cash inflow (positive)
-      //   Change in payables = net credit during period; positive credit = payable went up = MORE cash
-      const payableChange = netCredit("2000");
-      // Inventory (1300): asset — increase (net debit) = cash outflow (negative)
-      const inventoryChange = netDebit("1300");
+      // Account classification (matches the seeded chart of accounts):
+      //   cash & bank           1000, 1010            (the thing being explained)
+      //   current assets        1100 AR, 1200 Inventory, 1300 Advances, 1400 Prepaid, 1510-1512 Input GST
+      //   current liabilities   2000 AP, 2100-2102 Output GST, 2200 TDS, 2300 Other current
+      //   investing             other asset accounts (1500 Fixed Assets, custom 15xx+/16xx...)
+      //   financing             3xxx equity (capital / drawings / other) and other liabilities (loans)
+      const CASH_CODES = new Set(["1000", "1010"]);
+      const CURRENT_ASSET_LABELS: Record<string, string> = {
+        "1100": "Receivables",
+        "1200": "Inventory",
+        "1300": "Advances to Suppliers",
+        "1400": "Prepaid Expenses",
+        "1510": "Input CGST",
+        "1511": "Input SGST",
+        "1512": "Input IGST",
+      };
+      const CURRENT_LIABILITY_LABELS: Record<string, string> = {
+        "2000": "Payables",
+        "2100": "Output CGST Payable",
+        "2101": "Output SGST Payable",
+        "2102": "Output IGST Payable",
+        "2200": "TDS Payable",
+        "2300": "Other Current Liabilities",
+      };
 
       const workingCapitalChanges: Array<{ description: string; amount: string }> = [];
 
-      if (!money.isZero(receivableChange)) {
-        // Positive receivableChange means receivables increased → cash decreased
+      // Current assets: net debit (increase) = cash outflow
+      for (const [code, label] of Object.entries(CURRENT_ASSET_LABELS)) {
+        const change = netDebit(code);
+        if (money.isZero(change)) continue;
         workingCapitalChanges.push({
-          description: money.compare(receivableChange, "0") > 0
-            ? "Increase in Receivables"
-            : "Decrease in Receivables",
-          // Negate: increase in receivable = negative cash flow
-          amount: money.sub("0.00", receivableChange),
+          description: `${money.compare(change, "0") > 0 ? "Increase" : "Decrease"} in ${label}`,
+          amount: money.sub("0.00", change),
         });
       }
 
-      if (!money.isZero(payableChange)) {
+      // Current liabilities: net credit (increase) = cash inflow
+      for (const [code, label] of Object.entries(CURRENT_LIABILITY_LABELS)) {
+        const change = netCredit(code);
+        if (money.isZero(change)) continue;
         workingCapitalChanges.push({
-          description: money.compare(payableChange, "0") > 0
-            ? "Increase in Payables"
-            : "Decrease in Payables",
-          // Positive payable change = positive cash flow (already correct)
-          amount: payableChange,
-        });
-      }
-
-      if (!money.isZero(inventoryChange)) {
-        workingCapitalChanges.push({
-          description: money.compare(inventoryChange, "0") > 0
-            ? "Increase in Inventory"
-            : "Decrease in Inventory",
-          // Negate: increase in inventory = negative cash flow
-          amount: money.sub("0.00", inventoryChange),
+          description: `${money.compare(change, "0") > 0 ? "Increase" : "Decrease"} in ${label}`,
+          amount: change,
         });
       }
 
       const totalWorkingCapital = money.sum(workingCapitalChanges.map((w) => w.amount));
       const totalAdjustments = money.sum(adjustments.map((a) => a.amount));
-      const totalOperating = money.sum([netIncome, totalAdjustments, totalWorkingCapital]);
 
       // ── D. Investing Activities ──────────────────────────────────
-      // Fixed asset accounts: 1xxx codes that are NOT cash/bank/receivable/inventory/tax
-      // Specifically 1400+ (fixed assets: land, building, plant, equipment, vehicles, etc.)
-      const EXCLUDED_ASSET_CODES = new Set(["1000", "1010", "1100", "1300", "1510", "1511", "1512"]);
       const investingItems: Array<{ description: string; amount: string }> = [];
 
       for (const [code, acc] of movMap) {
-        if (!code.startsWith("1") || EXCLUDED_ASSET_CODES.has(code)) continue;
+        if (CASH_CODES.has(code) || code in CURRENT_ASSET_LABELS) continue;
         const acctInfo = coaTypeMap.get(code);
         if (!acctInfo || acctInfo.type !== "asset") continue;
 
+        // Depreciation is a non-cash credit to the asset; it was added back
+        // in operating, so exclude it here to avoid counting it twice.
+        const depreciationCredit = code === "1500" ? depreciationAmt : "0.00";
         // Net debit = asset increased = cash outflow (purchase)
-        const net = netDebit(code);
+        const net = money.add(netDebit(code), depreciationCredit);
         if (!money.isZero(net)) {
           investingItems.push({
             description: money.compare(net, "0") > 0
               ? `Purchase of ${acc.name}`
               : `Proceeds from ${acc.name}`,
-            // Net debit means outflow → negate to get cash flow sign
             amount: money.sub("0.00", net),
           });
         }
@@ -2248,19 +2266,21 @@ export const reportsRouter = router({
         });
       }
 
-      // Loan/financing liabilities (2xxx codes other than 2000 Payable, 2100/2101/2102 GST)
-      const EXCLUDED_LIABILITY_CODES = new Set(["2000", "2100", "2101", "2102"]);
+      // Other equity accounts and non-current liabilities (loans etc.)
       for (const [code, acc] of movMap) {
-        if (!code.startsWith("2") || EXCLUDED_LIABILITY_CODES.has(code)) continue;
+        if (code === "3000" || code === "3100" || code in CURRENT_LIABILITY_LABELS) continue;
         const acctInfo = coaTypeMap.get(code);
-        if (!acctInfo || acctInfo.type !== "liability") continue;
+        if (!acctInfo || (acctInfo.type !== "liability" && acctInfo.type !== "equity")) continue;
+        // Retained earnings is the accumulated P&L (already in net income).
+        if (code === "3200") continue;
 
         const net = netCredit(code);
         if (!money.isZero(net)) {
+          const isLiability = acctInfo.type === "liability";
           financingItems.push({
             description: money.compare(net, "0") > 0
-              ? `Proceeds from ${acc.name}`
-              : `Repayment of ${acc.name}`,
+              ? (isLiability ? `Proceeds from ${acc.name}` : `Increase in ${acc.name}`)
+              : (isLiability ? `Repayment of ${acc.name}` : `Decrease in ${acc.name}`),
             amount: net,
           });
         }
@@ -2269,20 +2289,39 @@ export const reportsRouter = router({
       const totalFinancing = money.sum(financingItems.map((f) => f.amount));
 
       // ── F. Net Cash Flow & Balances ──────────────────────────────
+      // The actual movement in cash + bank accounts is the ground truth. Any
+      // difference from the classified sections (e.g. manual journals touching
+      // accounts we do not classify) is surfaced as an explicit line so the
+      // statement always reconciles to the cash and bank ledgers.
+      let actualNetCash = "0.00";
+      for (const code of CASH_CODES) actualNetCash = money.add(actualNetCash, netDebit(code));
+
+      const classifiedOperating = money.sum([netIncome, totalAdjustments, totalWorkingCapital]);
+      const unclassified = money.sub(
+        actualNetCash,
+        money.sum([classifiedOperating, totalInvesting, totalFinancing]),
+      );
+      if (!money.isZero(unclassified)) {
+        workingCapitalChanges.push({ description: "Other operating items", amount: unclassified });
+      }
+
+      const totalOperating = money.add(classifiedOperating, money.isZero(unclassified) ? "0.00" : unclassified);
       const netCashFlow = money.sum([totalOperating, totalInvesting, totalFinancing]);
 
       // Opening cash balance: all entries from beginning of time up to (but not including) fromDate
-      const openingEntries = await deriveFullLedger(
-        ctx.db,
-        ctx.businessId,
-        new Date("2000-01-01"),
-        new Date(from.getTime() - 1), // 1ms before fromDate
-      );
+      const openingEntries = input.fromDate
+        ? await deriveFullLedger(
+            ctx.db,
+            ctx.businessId,
+            new Date("2000-01-01"),
+            new Date(from.getTime() - 1), // 1ms before fromDate
+          )
+        : [];
 
       let openingCash = "0.00";
       for (const entry of openingEntries) {
         for (const line of entry.lines) {
-          if (line.accountCode === "1000" || line.accountCode === "1010") {
+          if (CASH_CODES.has(line.accountCode)) {
             openingCash = money.add(openingCash, money.sub(line.debit, line.credit));
           }
         }

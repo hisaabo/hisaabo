@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { useDateRange } from "@/hooks/useDateRange";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SlideOver } from "@/components/ui/SlideOver";
@@ -270,8 +271,9 @@ function ExpensesPage() {
         description="Track business expenses and outflows"
         actions={
           canCreate ? (
-            <button className="btn-primary" onClick={openAdd}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={openAdd}>
               + New Expense
+              <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
             </button>
           ) : null
         }

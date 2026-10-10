@@ -58,7 +58,7 @@ summary = resp.json()["result"]["data"]["json"]
 print("Sales:", summary["totalSales"])`,
       },
       gotchas: [
-        "`receivable` and `payable` are always all-time (not period-scoped) — they represent open balances on non-paid, non-cancelled invoices regardless of the date range. Amounts offset by credit notes or sales returns (`totalAdjusted`) are deducted from the outstanding balance before computing these figures.",
+        "`receivable` and `payable` are always all-time (not period-scoped) — they represent open balances regardless of the date range. `receivable` = outstanding on invoices and debit notes, minus open credit notes and sales returns, plus customers' opening balances; drafts, cancelled and deleted documents, quotations, proformas and delivery challans are excluded. It always equals `dashboard.receivablesAging` → `summary.total`.",
         "`cashInHand` is an estimate: cash received from sales minus cash paid for purchases minus expenses in the selected period. It is NOT the actual bank balance.",
         "The financial year start month is read from the business record each time — if it changes, the default period window shifts accordingly.",
       ],
@@ -341,7 +341,7 @@ console.log("Net profit:", pl.netProfit, "(" + pl.netMarginPercent + "%)");`,
       method: "query",
       path: "dashboard.receivablesAging",
       title: "Receivables Aging",
-      description: "Buckets all outstanding sale invoices by age (0–30 days, 31–60 days, 61–90 days, 90+ days) per customer. Uses due date if available, otherwise falls back to invoice date. Returns both per-party rows and an aggregate summary.",
+      description: "Buckets outstanding receivables by age (0–30 days, 31–60 days, 61–90 days, 90+ days) per customer, using the same definition as `dashboard.summary` → `receivable` (the totals always match). Invoices and debit notes age from due date (falling back to invoice date); open credit notes and sales returns reduce the balance and age from their own date; customer opening balances fall in the 90+ bucket. A customer with a net credit shows negative amounts. Returns both per-party rows and an aggregate summary.",
       auth: "business",
       input: [],
       output: {

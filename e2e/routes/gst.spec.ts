@@ -13,8 +13,9 @@
  *   Profit & Loss, Trial Balance, Balance Sheet, Aging Report,
  *   Party Ledger, Tally Export.
  *
- * Period selector (month + year dropdowns) is visible when the GSTR-1 or
- * GSTR-3B tab is active (which is the default).
+ * Period selector (This Month / Last Month / Custom pills; Custom reveals
+ * month + year dropdowns) is visible when the GSTR-1 or GSTR-3B tab is
+ * active (which is the default).
  */
 import { test, expect, waitForPageReady } from "../helpers/fixtures";
 
@@ -46,10 +47,12 @@ test.describe("GST / Tax Reports — Presence", () => {
     }
   });
 
-  test("renders period selector with current year", async ({ page }) => {
-    // Month + year <select> elements are shown for GSTR-1 / GSTR-3B (default tab)
+  test("renders period pills with current year under Custom", async ({ page }) => {
+    // Default period is the current month — the "This Month" pill is pressed
+    await expect(page.getByRole("button", { name: "This Month", exact: true })).toHaveAttribute("aria-pressed", "true");
+    // Custom reveals the month + year <select>s
+    await page.getByRole("button", { name: "Custom", exact: true }).click();
     const currentYear = new Date().getFullYear().toString();
-    // <option> inside a native <select> is hidden per Playwright — assert via select value
-    await expect(page.locator(`select option[value="${currentYear}"]`).first()).toBeAttached();
+    await expect(page.getByLabel("Year", { exact: true })).toHaveValue(currentYear);
   });
 });

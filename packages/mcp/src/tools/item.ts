@@ -17,6 +17,10 @@
  *   item_rename_unit             — rename a unit (base or alt) across all invoices
  *   item_stock_adjustment_history — view the audit log of stock adjustments
  *   item_low_stock_count         — count items below their low-stock alert threshold
+ *   item_price_history           — recent invoiced prices for an item
+ *   item_price_summary           — min/max/avg/latest price + chart series over a period
+ *   item_stock_movements         — recent invoice-driven stock movements for an item
+ *   item_stock_summary           — stock in/out/net + running-balance series over a period
  */
 
 import { z } from "zod";
@@ -504,6 +508,90 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
           text: JSON.stringify({ lowStockCount: count }, null, 2),
         }],
       };
+    })
+  );
+
+  const period = z.enum(["6m", "1y", "all"]).default("all")
+    .describe("Time window: '6m' (last 6 months), '1y' (last year) or 'all'.");
+  const unit = z.string().min(1).max(50).optional()
+    .describe("Display unit: the item's base unit or one of its alt units. Defaults to the base unit.");
+
+  server.tool(
+    "item_price_history",
+    [
+      "List the newest invoice lines for an item (price, quantity, party, date), newest first.",
+      "Limited to `limit` rows (default 50) within the period; for whole-period statistics use item_price_summary.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid().describe("Item UUID."),
+      period,
+      limit: z.number().int().min(1).max(500).default(50)
+        .describe("Maximum number of invoice lines to return."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.item.priceHistory(input.item_id, { period: input.period, limit: input.limit });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    })
+  );
+
+  server.tool(
+    "item_price_summary",
+    [
+      "Price statistics for an item over the WHOLE period: count, min, max, average and latest price,",
+      "plus a downsampled price series. Prices are normalised to one display unit so lines billed in",
+      "different units are comparable. Sales and purchase prices are separate series.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid().describe("Item UUID."),
+      period,
+      unit,
+      invoice_type: z.enum(["sale", "purchase"]).default("sale")
+        .describe("Which price series to summarise: sale prices or purchase prices."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.item.priceSummary({
+        id: input.item_id,
+        period: input.period,
+        unit: input.unit,
+        invoiceType: input.invoice_type,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    })
+  );
+
+  server.tool(
+    "item_stock_movements",
+    [
+      "List the newest invoice-driven stock movements for an item (quantity, direction in/out, party, date), newest first.",
+      "Limited to `limit` rows (default 50) within the period; for whole-period totals use item_stock_summary.",
+      "Manual adjustments are in item_stock_adjustment_history.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid().describe("Item UUID."),
+      period,
+      limit: z.number().int().min(1).max(500).default(50)
+        .describe("Maximum number of movements to return."),
+    },
+    wrapTool(async (input) => {
+      const result = await client.item.stockMovements(input.item_id, { period: input.period, limit: input.limit });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    })
+  );
+
+  server.tool(
+    "item_stock_summary",
+    [
+      "Stock statistics for an item over the WHOLE period: total in, total out and net change,",
+      "plus a downsampled running-balance series, in the chosen display unit.",
+    ].join(" "),
+    {
+      item_id: z.string().uuid().describe("Item UUID."),
+      period,
+      unit,
+    },
+    wrapTool(async (input) => {
+      const result = await client.item.stockSummary({ id: input.item_id, period: input.period, unit: input.unit });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     })
   );
 }

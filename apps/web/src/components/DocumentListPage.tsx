@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -8,10 +9,13 @@ import { PillTabs } from "@/components/ui/Tabs";
 import { SegmentedControl } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { DocumentLineItemName } from "@/components/DocumentLineItemName";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
 import { checkDocumentStatusTransition } from "@hisaabo/shared";
 import { useCan, useCanCreateDocument } from "@/hooks/useCan";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -141,15 +145,26 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   // convert controls follow the active sale/purchase side.
   const canCreate = useCanCreateDocument(documentType, type);
   const canUpdate = useCan("update", "Invoice");
+  // Keyboard shortcut: N to create a new document (same as Invoices)
+  useHotkeys(canCreate ? [
+    { key: "n", handler: () => setShowCreate(true), description: `New ${title.replace(/s$/, "").toLowerCase()}`, scope: "invoices" },
+  ] : []);
   const canDelete = useCan("delete", "Invoice");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
-
-  // Auto-open slider when navigated with ?id= param
-  useEffect(() => {
-    if (initialSelectedId) setSelectedId(initialSelectedId);
-  }, [initialSelectedId]);
+  // The open document lives in the URL (?id=, passed in as initialSelectedId by
+  // the route wrapper) so a line-item link to /items can return here with the
+  // browser back button. Opening pushes a history entry; closing replaces it.
+  const navigate = useNavigate();
+  const selectedId = initialSelectedId ?? null;
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      // The wrappers are all `/<route>?id=` pages, so navigate within the current one.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (navigate as any)({ to: ".", search: id ? { id } : {}, replace: !id });
+    },
+    [navigate],
+  );
 
   const utils = trpc.useUtils();
 
@@ -214,8 +229,9 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
         description={description}
         actions={
           canCreate ? (
-            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setShowCreate(true)}>
               {buttonLabel}
+              <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
             </button>
           ) : null
         }
@@ -482,7 +498,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                     {selectedDoc.lineItems.map((li: any) => (
                       <tr key={li.id}>
                         <td className="px-3 py-2">
-                          <p className="font-medium text-text-primary">{li.itemName}</p>
+                          <DocumentLineItemName itemId={li.itemId} name={li.itemName} />
                           {li.description && (
                             <p className="text-[11px] italic text-text-secondary mt-0.5">{li.description}</p>
                           )}

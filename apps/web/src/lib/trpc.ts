@@ -13,11 +13,21 @@ export const trpc: ReturnType<typeof createTRPCReact<AppRouter>> = createTRPCRea
 
 // Business ID stored in memory — set after user selects a business
 let currentBusinessId: string | null = null;
+const businessIdListeners = new Set<() => void>();
 export function setBusinessId(id: string | null) {
+  if (currentBusinessId === id) return;
   currentBusinessId = id;
+  businessIdListeners.forEach((listener) => listener());
 }
 export function getBusinessId() {
   return currentBusinessId;
+}
+/** Subscribe to business switches (for useSyncExternalStore). */
+export function subscribeBusinessId(listener: () => void) {
+  businessIdListeners.add(listener);
+  return () => {
+    businessIdListeners.delete(listener);
+  };
 }
 
 function commonOptions() {

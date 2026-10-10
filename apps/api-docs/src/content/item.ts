@@ -85,12 +85,13 @@ resp = httpx.get(
         { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
       ],
       output: {
-        description: "Item object with variants array (empty for simple/alt_units mode).",
+        description: "Item object with variants array (empty for simple/alt_units mode) and `hasTransactions`.",
         example: {
           id: "item-uuid",
           name: "T-Shirt",
           itemType: "product",
           itemMode: "variants",
+          hasTransactions: true,
           unit: "pcs",
           taxPercent: "5.00",
           variantAttributes: ["size", "color"],
@@ -294,6 +295,7 @@ resp = httpx.post(
         { name: "data.sku", type: "string", required: false, description: "Updated SKU" },
         { name: "data.lowStockAlert", type: "string (decimal)", required: false, description: "Updated low stock threshold" },
         { name: "data.category", type: "string", required: false, description: "Updated category" },
+        { name: "data.itemType", type: "enum", required: false, description: "Product or service. Locked once the item has transactions (see gotchas)", enumValues: ["product", "service"] },
       ],
       output: {
         description: "Updated item object.",
@@ -317,6 +319,10 @@ resp = httpx.post(
     json={"json": {"id": "item-uuid", "data": {"salePrice": "1499.00"}}},
 )`,
       },
+      gotchas: [
+        "Changing `data.itemType` (product <-> service) is rejected with `BAD_REQUEST` (\"Item type cannot be changed because this item already has invoices, documents or stock movements.\") once the item is referenced by any document line or stock adjustment. Check `hasTransactions` from `item.getById` to know in advance.",
+        "Sending the item's current `itemType` unchanged is always allowed.",
+      ],
       relatedEndpoints: ["item-get-by-id"],
     },
     {
@@ -440,14 +446,16 @@ resp = httpx.get(
       method: "query",
       path: "item.priceHistory",
       title: "Price History",
-      description: "Returns the last 50 invoice line items for this item, showing the price at which it was sold or purchased, along with party name, date, and unit information.",
+      description: "Flat list of the newest invoice line items for this item (default 50), showing the price at which it was sold or purchased, along with party name, date, and unit information. Optionally limited to a period. For full-period charts and tables use `item.priceSummary` and `item.priceHistoryPage`.",
       auth: "business",
       requiredRole: "viewer",
       input: [
         { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Only include invoices within this window", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "limit", type: "number", required: false, description: "Max rows (1-500)", default: "50" },
       ],
       output: {
-        description: "Array of recent price points (max 50).",
+        description: "Array of recent price points (newest first, up to `limit`).",
         example: [
           { invoiceDate: "2026-03-20T00:00:00.000Z", invoiceNumber: "INV-0042", invoiceType: "sale", unitPrice: "1334.75", quantity: "10.000", taxPercent: "18.00", totalAmount: "15750.05", partyName: "Sharma Electronics", selectedUnit: "pcs", conversionFactor: "1" },
         ],
@@ -469,10 +477,10 @@ resp = httpx.get(
 )`,
       },
       gotchas: [
-        "Limited to the 50 most recent entries ordered by invoice date descending.",
+        "Limited to the `limit` (default 50) most recent entries ordered by invoice date descending, after the `period` filter is applied.",
         "Includes both sale and purchase invoice line items.",
       ],
-      relatedEndpoints: ["item-sales-stats"],
+      relatedEndpoints: ["item-sales-stats", "item-price-summary", "item-price-history-page"],
     },
     {
       id: "item-stock-movements",
@@ -484,9 +492,11 @@ resp = httpx.get(
       requiredRole: "viewer",
       input: [
         { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Only include invoices within this window", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "limit", type: "number", required: false, description: "Max rows (1-500)", default: "50" },
       ],
       output: {
-        description: "Array of stock movement entries (max 50).",
+        description: "Array of stock movement entries (newest first, up to `limit`).",
         example: [
           { invoiceDate: "2026-03-20T00:00:00.000Z", invoiceNumber: "INV-0042", invoiceType: "sale", documentType: "invoice", quantity: "10.000", partyName: "Sharma Electronics", invoiceId: "inv-uuid", direction: "out" },
         ],
@@ -509,8 +519,172 @@ resp = httpx.get(
       gotchas: [
         "Draft and cancelled invoices are excluded.",
         "`direction: 'out'` for sales and delivery challans; `'in'` for purchases.",
-        "Limited to the 50 most recent movements.",
+        "Limited to the `limit` (default 50) most recent movements, after the `period` filter is applied.",
+        "For period-wide totals, a running balance and paging use `item.stockSummary` and `item.stockMovementsPage`.",
       ],
+      relatedEndpoints: ["item-stock-summary", "item-stock-movements-page"],
+    },
+    {
+      id: "item-price-summary",
+      method: "query",
+      path: "item.priceSummary",
+      title: "Price Summary",
+      description: "Min / max / average / latest price for an item over the FULL period plus a downsampled series for charting. Prices are normalised to one display unit (price per base unit multiplied by the display unit's factor) so lines billed in different units are comparable.",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Time window applied in SQL", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "unit", type: "string", required: false, description: "Display unit: the item's base unit or one of its unit variants. Defaults to the base unit. Unknown units return `BAD_REQUEST`" },
+        { name: "invoiceType", type: "enum", required: false, description: "Sale and purchase prices are separate series and are never blended", default: "sale", enumValues: ["sale", "purchase"] },
+        { name: "maxPoints", type: "number", required: false, description: "Maximum points in `series` (10-200)", default: "60" },
+      ],
+      output: {
+        description: "Summary stats and chart series. Prices are decimal strings with 4 decimal places.",
+        example: { unit: "pcs", invoiceType: "sale", period: "1y", stats: { count: 42, min: "1250.0000", max: "1400.0000", avg: "1334.7500", latest: "1390.0000" }, series: [{ date: "2026-03-20T00:00:00.000Z", price: "1334.7500", min: "1300.0000", max: "1390.0000", count: 3 }], downsampled: false },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/item.priceSummary?input=%7B%22json%22%3A%7B%22id%22%3A%22item-uuid%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const s = await trpc.item.priceSummary.query({ id: "item-uuid", period: "1y", invoiceType: "sale" });
+console.log(s.stats.min, s.stats.max, s.stats.latest);`,
+        python: `import httpx, json, urllib.parse
+
+params = urllib.parse.quote(json.dumps({"json": {"id": "item-uuid", "period": "1y"}}))
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/item.priceSummary?input={params}",
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
+)`,
+      },
+      gotchas: [
+        "Only finalized `invoice` documents are counted - drafts and cancelled invoices are excluded.",
+        "`stats.min/max/avg/latest` are `null` when there are no lines in the period.",
+        "When there are more lines than `maxPoints`, `series` contains equal-count buckets (mean price with min/max) and `downsampled` is `true`; stats always cover every line.",
+      ],
+      relatedEndpoints: ["item-price-history-page", "item-price-history"],
+    },
+    {
+      id: "item-price-history-page",
+      method: "query",
+      path: "item.priceHistoryPage",
+      title: "Price History (Paged)",
+      description: "Cursor-paged table of price lines for the period, newest first. By default only lines whose normalised price differs from the previous line are returned (price changes).",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Time window applied in SQL", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "unit", type: "string", required: false, description: "Display unit: the item's base unit or one of its unit variants. Defaults to the base unit. Unknown units return `BAD_REQUEST`" },
+        { name: "cursor", type: "number", required: false, description: "Row offset returned as `nextCursor` by the previous page", default: "0" },
+        { name: "limit", type: "number", required: false, description: "Rows per page (1-100)", default: "30" },
+        { name: "invoiceType", type: "enum", required: false, description: "Sale or purchase series", default: "sale", enumValues: ["sale", "purchase"] },
+        { name: "changesOnly", type: "boolean", required: false, description: "Only rows whose price changed (by more than 0.01) from the previous line", default: "true" },
+      ],
+      output: {
+        description: "Page of rows with the total matching count and the cursor for the next page (null on the last page).",
+        example: { unit: "pcs", rows: [{ id: "line-uuid", invoiceId: "inv-uuid", invoiceDate: "2026-03-20T00:00:00.000Z", invoiceNumber: "INV-0042", invoiceType: "sale", partyName: "Sharma Electronics", unitPrice: "1334.75", quantity: "10.000", selectedUnit: "pcs", conversionFactor: "1", price: "1334.7500" }], total: 12, nextCursor: 30 },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/item.priceHistoryPage?input=%7B%22json%22%3A%7B%22id%22%3A%22item-uuid%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `let cursor: number | null = 0;
+while (cursor !== null) {
+  const page = await trpc.item.priceHistoryPage.query({ id: "item-uuid", cursor });
+  page.rows.forEach(r => console.log(r.invoiceNumber, r.price));
+  cursor = page.nextCursor;
+}`,
+        python: `import httpx, json, urllib.parse
+
+params = urllib.parse.quote(json.dumps({"json": {"id": "item-uuid", "cursor": 0, "limit": 30}}))
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/item.priceHistoryPage?input={params}",
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
+)`,
+      },
+      gotchas: [
+        "`total` counts all matching rows across every page, not just this one.",
+        "`price` is normalised to the display `unit`; `unitPrice`, `selectedUnit` and `conversionFactor` are the values as billed.",
+      ],
+      relatedEndpoints: ["item-price-summary"],
+    },
+    {
+      id: "item-stock-summary",
+      method: "query",
+      path: "item.stockSummary",
+      title: "Stock Summary",
+      description: "Total in / total out / net movement over the FULL period plus a downsampled running-balance series. The balance is derived from the item's current stock by walking the full history backwards, so it does not depend on the chosen period.",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Time window applied in SQL", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "unit", type: "string", required: false, description: "Display unit: the item's base unit or one of its unit variants. Defaults to the base unit. Unknown units return `BAD_REQUEST`" },
+        { name: "maxPoints", type: "number", required: false, description: "Maximum points in `series` (10-200)", default: "60" },
+      ],
+      output: {
+        description: "Stats and balance series in the display unit (decimal strings, 4 places).",
+        example: { unit: "pcs", period: "6m", stats: { count: 18, totalIn: "200.0000", totalOut: "155.0000", net: "45.0000" }, series: [{ date: "2026-03-20T00:00:00.000Z", balance: "245.0000", min: "230.0000", max: "260.0000" }], downsampled: false },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/item.stockSummary?input=%7B%22json%22%3A%7B%22id%22%3A%22item-uuid%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const s = await trpc.item.stockSummary.query({ id: "item-uuid", period: "6m" });
+console.log("net", s.stats.net);`,
+        python: `import httpx, json, urllib.parse
+
+params = urllib.parse.quote(json.dumps({"json": {"id": "item-uuid", "period": "6m"}}))
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/item.stockSummary?input={params}",
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
+)`,
+      },
+      gotchas: [
+        "Quantities are converted to base units (quantity x conversionFactor), signed by direction, then divided by the display unit's factor.",
+        "Returns reverse the normal direction (sales return = in, purchase return = out).",
+      ],
+      relatedEndpoints: ["item-stock-movements-page"],
+    },
+    {
+      id: "item-stock-movements-page",
+      method: "query",
+      path: "item.stockMovementsPage",
+      title: "Stock Movements (Paged)",
+      description: "Cursor-paged stock movements for the period, newest first, each with the signed quantity change and the running balance after it.",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "id", type: "string (UUID)", required: true, description: "Item ID" },
+        { name: "period", type: "enum", required: false, description: "Time window applied in SQL", default: "all", enumValues: ["6m", "1y", "all"] },
+        { name: "unit", type: "string", required: false, description: "Display unit: the item's base unit or one of its unit variants. Defaults to the base unit. Unknown units return `BAD_REQUEST`" },
+        { name: "cursor", type: "number", required: false, description: "Row offset returned as `nextCursor` by the previous page", default: "0" },
+        { name: "limit", type: "number", required: false, description: "Rows per page (1-100)", default: "30" },
+      ],
+      output: {
+        description: "Page of rows with the total matching count and the cursor for the next page (null on the last page).",
+        example: { unit: "pcs", rows: [{ id: "line-uuid", invoiceId: "inv-uuid", invoiceDate: "2026-03-20T00:00:00.000Z", invoiceNumber: "INV-0042", invoiceType: "sale", documentType: "invoice", partyName: "Sharma Electronics", direction: "out", qtyChange: "-10.0000", balance: "245.0000" }], total: 18, nextCursor: null },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/item.stockMovementsPage?input=%7B%22json%22%3A%7B%22id%22%3A%22item-uuid%22%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const page = await trpc.item.stockMovementsPage.query({ id: "item-uuid", limit: 30 });
+page.rows.forEach(r => console.log(r.invoiceNumber, r.qtyChange, r.balance));`,
+        python: `import httpx, json, urllib.parse
+
+params = urllib.parse.quote(json.dumps({"json": {"id": "item-uuid", "cursor": 0}}))
+resp = httpx.get(
+    f"https://api.hisaabo.in/api/trpc/item.stockMovementsPage?input={params}",
+    headers={"Authorization": f"Bearer {session_token}", "x-business-id": business_id},
+)`,
+      },
+      gotchas: [
+        "`balance` is the stock after the movement, independent of the selected `period`.",
+        "`total` counts all rows in the period across every page.",
+      ],
+      relatedEndpoints: ["item-stock-summary", "item-stock-movements"],
     },
     {
       id: "item-related-invoices",

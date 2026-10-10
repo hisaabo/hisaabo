@@ -11,12 +11,19 @@ interface CommandItem {
   action: () => void;
 }
 
+export interface CommandPaletteNavItem {
+  to: string;
+  label: string;
+}
+
 export interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
+  /** Visible sidebar destinations (role- and GST-filtered). */
+  navItems: CommandPaletteNavItem[];
 }
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps): React.JSX.Element | null {
+export function CommandPalette({ open, onClose, navItems }: CommandPaletteProps): React.JSX.Element | null {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -24,18 +31,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): React.JS
   const listRef = useRef<HTMLUListElement>(null);
   const navigate = useNavigate();
 
-  // Commands hardcoded per spec
+  // Navigation commands come from the sidebar nav definition (already filtered
+  // by role and GST status), so the palette can't drift from the sidebar.
+  // Settings lives in the sidebar footer rather than the nav sections.
   const allCommands: CommandItem[] = [
-    { id: "nav-dashboard",    label: "Go to Dashboard",    section: "Navigation", action: () => navigate({ to: "/" }) },
-    { id: "nav-invoices",     label: "Go to Invoices",     section: "Navigation", action: () => navigate({ to: "/invoices" }) },
-    { id: "nav-parties",      label: "Go to Parties",      section: "Navigation", action: () => navigate({ to: "/parties" }) },
-    { id: "nav-items",        label: "Go to Items",        section: "Navigation", action: () => navigate({ to: "/items" }) },
-    { id: "nav-payments",     label: "Go to Payments",     section: "Navigation", action: () => navigate({ to: "/payments" }) },
-    { id: "nav-gst",          label: "Go to GST Reports",  section: "Navigation", action: () => navigate({ to: "/gst" }) },
-    { id: "nav-settings",     label: "Go to Settings",     section: "Navigation", action: () => navigate({ to: "/settings" }) },
-    { id: "nav-quotations",   label: "Go to Quotations",   section: "Navigation", action: () => navigate({ to: "/quotations" }) },
-    { id: "nav-credit-notes", label: "Go to Credit Notes", section: "Navigation", action: () => navigate({ to: "/credit-notes" }) },
-    { id: "nav-cash-bank",    label: "Go to Cash & Bank",  section: "Navigation", action: () => navigate({ to: "/cash-and-bank" }) },
+    ...navItems.map((item) => ({
+      id: `nav-${item.to === "/" ? "dashboard" : item.to.slice(1)}`,
+      label: `Go to ${item.label}`,
+      section: "Navigation",
+      action: () => navigate({ to: item.to }),
+    })),
+    { id: "nav-settings", label: "Go to Settings", section: "Navigation", action: () => navigate({ to: "/settings" }) },
   ];
 
   const filtered = query.trim()
