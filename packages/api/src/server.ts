@@ -1473,11 +1473,13 @@ app.get("/store/:slug/catalog.json", async (c) => {
     // public store, even if `store_enabled` was not cleared before deletion.
     isNull(items.deletedAt),
   ];
+  // Category chips cover the whole store, not just the filtered page.
+  const baseConditions = [...conditions];
   if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
   if (search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(search) + "%"}`);
 
   // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
-  const [catalog, [{ total }]] = await Promise.all([
+  const [catalog, [{ total }], categoryRows] = await Promise.all([
     db.select({
       id: items.id,
       name: items.name,
@@ -1495,11 +1497,18 @@ app.get("/store/:slug/catalog.json", async (c) => {
       variantAttributes: items.variantAttributes,
     }).from(items)
       .where(and(...conditions))
-      .orderBy(items.storeSortOrder, items.name)
+      // id tiebreaker keeps offset pages stable when names repeat
+      .orderBy(items.storeSortOrder, items.name, items.id)
       .limit(limit)
       .offset(offset),
     db.select({ total: sql<number>`count(*)::int` }).from(items)
       .where(and(...conditions)),
+    // Ordered by each category's first item in store order (as the chips were before)
+    db.select({ category: sql<string | null>`COALESCE(${items.storeCategory}, ${items.category})` })
+      .from(items)
+      .where(and(...baseConditions))
+      .groupBy(sql`1`)
+      .orderBy(sql`MIN(${items.storeSortOrder})`, sql`MIN(${items.name})`),
   ]);
 
   // Fetch store-enabled variants for any variant-mode items in this page
@@ -1579,9 +1588,7 @@ app.get("/store/:slug/catalog.json", async (c) => {
     imagesByItem.set(img.itemId, arr);
   }
 
-  const categories = [...new Set(
-    catalog.map((i) => i.category).filter(Boolean) as string[]
-  )];
+  const categories = categoryRows.map((r) => r.category).filter(Boolean) as string[];
 
   // When allowNegativeStock is on, out-of-stock items show as "low stock" instead of hidden
   const allowNeg = biz.storeAllowNegativeStock;
