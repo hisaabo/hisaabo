@@ -27,6 +27,7 @@ export interface PlanLimits {
   dataExport: boolean;
   onlineStore: boolean;
   pdfBranding: boolean;         // true = shows "Powered by hisaabo.in"
+  pushPerDay: number;           // mobile pushes per tenant per day (cloud only; see notifications/quota.ts)
 }
 
 const PLAN_LIMITS: Record<string, PlanLimits> = {
@@ -41,6 +42,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     dataExport: false,
     onlineStore: false,
     pdfBranding: true,
+    pushPerDay: 500,
   },
   pro: {
     maxOwnedOrgs: 3,
@@ -53,6 +55,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     dataExport: true,
     onlineStore: true,
     pdfBranding: false,
+    pushPerDay: 5_000,
   },
   business: {
     maxOwnedOrgs: Infinity,
@@ -65,6 +68,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     dataExport: true,
     onlineStore: true,
     pdfBranding: false,
+    pushPerDay: 20_000,
   },
   enterprise: {
     maxOwnedOrgs: Infinity,
@@ -77,6 +81,7 @@ const PLAN_LIMITS: Record<string, PlanLimits> = {
     dataExport: true,
     onlineStore: true,
     pdfBranding: false,
+    pushPerDay: Infinity,
   },
 };
 
@@ -91,7 +96,7 @@ export const RECURRING_RUNS_PER_MONTH_FREE = PLAN_LIMITS.free.recurringRunsPerMo
 
 // ── Enforcement helpers ───────────────────────────────────────────────────────
 
-async function getTenantPlan(tenantId: string): Promise<string> {
+export async function getTenantPlan(tenantId: string): Promise<string> {
   const [row] = await controlDb
     .select({ plan: tenants.plan })
     .from(tenants)

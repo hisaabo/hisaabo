@@ -1,6 +1,6 @@
 # Notifications Architecture for Hisaabo
 
-**Status**: Proposed (design agreed, not yet built)
+**Status**: Phase 1 backend implemented (see [§17](#17-implementation-status)); client UIs and push spikes pending
 **Date**: 2026-10-10
 **Supersedes**: [online-store.md §10](online-store.md#10-notification-flow) (store-order notifications become one channel of this system)
 
@@ -24,6 +24,7 @@
 14. [Phases](#14-phases)
 15. [Decision log](#15-decision-log)
 16. [Open items](#16-open-items)
+17. [Implementation status](#17-implementation-status)
 
 ---
 
@@ -98,7 +99,7 @@ The starting point only; users override per channel.
 | Collections | Everyone's · push | Everyone's · push | Mine · push | Everyone's · push |
 | Sales activity | **Digest only** | Everyone's · push | Mine · inbox | Off |
 | Store & shipping | Push | Push | Off | Off |
-| Payables & expenses | Inbox | — | — | Push |
+| Payables & expenses | Inbox | Off | — | Push |
 | Banking & recon | Inbox | — | — | Push |
 | GST & compliance | Push (failures locked) | — | — | Push (failures locked) |
 | Inventory | Inbox | Push | Off | Off |
@@ -108,11 +109,11 @@ The starting point only; users override per channel.
 | General | Inbox | Inbox | Inbox | Inbox |
 | Promotions | Off | Off | Off | Off |
 
-"—" = not eligible ([§3.1](#31-eligibility-hard-gate)).
+"—" = not eligible ([§3.1](#31-eligibility-hard-gate)). Seller managers can read expenses, so they may opt into payables; it is off by default. Promotions default to inbox but nothing is delivered until the user opts in ([§11.3](#113-promotions-opt-in)).
 
 ### 3.3 Preference knobs (per channel)
 
-- **Delivery**: `push` (push + inbox) · `inbox` (inbox only) · `digest` (only appears in the summary) · `off`
+- **Delivery**: `push` (push + inbox) · `inbox` (inbox only) · `digest` (only appears in the summary; until the digest ships in Phase 2 it behaves like `inbox`) · `off`
 - **Scope**: `mine` · `everyone` (only on channels where records have an owner: `money_in`, `collections`, `sales`, `targets`)
 - **Threshold** (optional): minimum amount, for `money_in`, `payables`, `sales`
 - **Email copy**: on/off (default on for `compliance` and `digest` only)
@@ -141,14 +142,14 @@ UI: one list per tenant by default. A **"Customise for each business"** link app
 
 1. **Notification identity is `(user, tenant, business)`.** Someone who is an owner in tenant A and an accountant in tenant B gets different defaults and eligibility in each.
 2. **Data placement** follows the existing control/tenant split:
-   - **Tenant DB** (`tenant-schema.ts`): event outbox, inbox entries, per-business preferences. Tenant data never leaves the tenant DB and is deleted with it.
-   - **Control DB** (`control-schema.ts`): device registrations (push tokens + device public keys), user-global settings (quiet hours, pause all, language, lock-screen privacy), per-tenant unread counters for the cross-tenant badge, quota counters.
+   - **Tenant DB** (`tenant-schema.ts`): event outbox and inbox entries. Both carry `tenant_id` (and `business_id`, null for tenant-level events such as team changes) because in self-hosted mode every tenant shares one database; every query filters on `tenant_id`. Tenant data never leaves the tenant DB and is deleted with it.
+   - **Control DB** (`control-schema.ts`): preferences (per user, tenant and optionally business — they hold no business data, and the dispatcher already reads memberships there), device registrations (push tokens + device public keys), user-global settings (quiet hours, pause all, language, lock-screen privacy, promotions consent), quota counters. Preferences cascade-delete with the tenant or the user.
 3. **Every push carries `tenantId` and `businessId`** inside the encrypted payload. When the user taps a notification, the client switches to that tenant and business *before* navigating to the record. A notification must never open into the wrong tenant context. If the user is no longer a member, show "You no longer have access to this business" and drop the deep link.
 4. **Recipients are resolved at dispatch, not at emit time.** Removed members, pending invitations, suspended tenants and deleted users get nothing.
-5. **Device registrations are bound to sessions.** Sign-out, session revocation and session rotation (`session-rotation.ts`) delete or re-bind the registration, so a revoked session stops receiving push immediately.
+5. **Device registrations are bound to sessions** (`push_devices.session_id` → `sessions.id ON DELETE CASCADE`). Sign-out, session revocation and session rotation delete the registration, so a revoked session stops receiving push immediately; clients re-register on every launch.
 6. **Business time zone** governs quiet hours, digest delivery time and due-date reminders. Default `Asia/Kolkata`.
 7. **Tenant lifecycle**: suspension pauses dispatch (outbox rows are kept and expire). Deletion removes the tenant's outbox, inbox and preferences with the tenant DB. Control-side counters for that tenant are purged in the same flow.
-8. **User deletion** (DPDP right to erasure): delete device registrations and global settings in the control DB. Inbox rows in each tenant are anonymised (recipient cleared) on the next sweep.
+8. **User deletion** (DPDP right to erasure): device registrations, settings and preferences cascade-delete with the user in the control DB. Inbox rows in tenant DBs hold only a recipient UUID and expire with the 90-day retention; an explicit purge on user deletion is a follow-up (§17).
 
 ---
 
@@ -201,7 +202,7 @@ Desktop (Tauri) uses web push in its webview where supported. Otherwise `tauri-p
 
 **Event emission** is a single helper, `emitNotificationEvent(tx, { type, businessId, subjectId, actorUserId, actorKind, payload, dedupeKey })`, called inside the same transaction as the domain write. If the write rolls back, the notification never exists. `actorKind` is `user | api_key | agent | system`, so agent/API activity can be reported distinctly.
 
-**Self-notification suppression**: the actor is never notified of their own action (except security events such as "new sign-in").
+**Self-notification suppression**: the actor is never notified of their own action, except security events about their own account (e.g. "API key created"): if the account is compromised, that alert and its email copy are how the real owner finds out. An admin changing someone else's role is not notified of it.
 
 **Templates** live in `@hisaabo/shared` as `{type → (payload, locale) → {title, body, deepLink}}`. They are rendered at dispatch time (so a later locale change applies) and shared with the CLI/MCP for parity. **Launch locales: English (`en`) and Hindi (`hi`).** Every template must exist in both before an event type ships, enforced by a unit test. Amounts use Indian digit grouping (₹1,20,000) in both locales. The recipient's locale comes from the user's app language setting, falling back to `en`. Other Indian languages come later.
 
@@ -216,19 +217,17 @@ Indicative only; final column names are decided at implementation.
 ### Tenant DB
 
 ```ts
-notification_outbox     id, business_id, event_type, channel, subject_type, subject_id,
+notification_outbox     id, tenant_id, business_id NULL, event_type, channel, subject_type, subject_id,
                         actor_user_id, actor_kind, payload jsonb, dedupe_key (unique),
-                        status (pending|dispatched|expired), attempts, available_at, created_at
+                        status (pending|processing|dispatched|expired|failed), attempts,
+                        available_at, last_error, created_at, dispatched_at
+                        unique (tenant_id, dedupe_key)
 
-notification_inbox      id, business_id, recipient_user_id, channel, event_type,
-                        title, body, deep_link, subject_type, subject_id, group_key,
-                        priority, read_at, archived_at, created_at
-                        idx (recipient_user_id, read_at, created_at desc)
+notification_inbox      id, tenant_id, business_id NULL, recipient_user_id, outbox_id,
+                        channel, event_type, title, body, locale, target jsonb,
+                        locked, read_at, archived_at, created_at
+                        unique (outbox_id, recipient_user_id)  -- idempotent retries
 
-notification_prefs      user_id, business_id NULL = tenant default, channel,
-                        delivery (push|inbox|digest|off), scope (mine|everyone),
-                        threshold_paise bigint NULL, email boolean, updated_at
-                        unique (user_id, business_id, channel)
 ```
 
 ### Control DB
@@ -245,9 +244,12 @@ user_notification_settings  user_id, quiet_start, quiet_end, pause_until,
                             lock_screen_privacy boolean, promotions_opt_in_at,
                             promotions_opt_in_source
 
-tenant_unread_counters  user_id, tenant_id, unread_count, updated_at
+notification_preferences  user_id, tenant_id, business_id NULL = tenant default, channel,
+                        delivery, scope, threshold_paise, email (all nullable = inherit)
+                        partial unique indexes for the tenant and business levels
 
-push_quota_usage        scope (instance|tenant|user), scope_id, window_start, count
+push_quota_usage        scope (instance_day|instance_minute|tenant_day|user_hour|user_day),
+                        scope_id, window_start, count
 ```
 
 ---
@@ -474,7 +476,7 @@ Due-date reminders in `compliance` remain mutable. Only failures (IRN failed, e-
 
 - **Dedupe**: `dedupe_key` is unique in the outbox (e.g. `payment.captured:<gatewayPaymentId>`), so retried webhooks never double-notify.
 - **Grouping**: events of the same type, business and recipient within a 10-minute window are collapsed ("5 new store orders"). This uses `group_key` in the inbox, `collapse_key` on Android and `thread-id`/`collapse_id` on iOS.
-- **Quiet hours**: default 22:00–08:00 in the business time zone. Only `security` and locked `compliance` events bypass them. Everything else is held and delivered at the end of quiet hours (or folded into the digest).
+- **Quiet hours**: default 22:00–08:00 in the business time zone. Only `security` and locked `compliance` events bypass them. Everything else goes to the inbox without a push (Phase 1); holding pushes until quiet hours end, or folding them into the digest, comes with the digest in Phase 2.
 - **Caps**: per user per channel per day (e.g. `sales` 20, `inventory` 10, `general` 1, `promotions` 2/week). Overflow goes to the digest.
 - **Actionable notifications** (Phase 3): "Send reminder", "Record payment", "Accept order". These call the same tRPC procedures with the user's session and are subject to the same permission checks.
 - **Feedback loop**: per-channel delivery, open and opt-out rates (aggregated, no content) reviewed monthly. A channel whose opt-out rate climbs is too noisy, so fix its defaults or thresholds.
@@ -487,15 +489,15 @@ New tRPC router `notification`:
 
 | Procedure | Purpose |
 |---|---|
-| `notification.list` | Inbox, paginated, filter by channel / unread / business |
-| `notification.unreadCounts` | Per business and per tenant (cross-tenant badge) |
+| `notification.list` | Inbox for the active business plus tenant-level entries; keyset pagination, filter by channel / unread |
+| `notification.unreadCounts` | Total, tenant-level and per-business unread counts for the tenant |
 | `notification.markRead` / `markAllRead` / `archive` | Inbox state |
-| `notification.prefs.get` / `prefs.update` | Resolved preferences with source (`role-default` / `tenant` / `business`) and `locked` flags |
-| `notification.devices.register` / `unregister` / `list` | Push registrations for the current session |
-| `notification.settings.get` / `update` | Quiet hours, pause, lock-screen privacy, promotions consent |
-| `notification.transports` | Which transports this server supports (§10) |
+| `notification.getPreferences` / `updatePreference` | Effective preference per channel with its source (`role_default` / `tenant` / `business`) and `locked` / `available` flags; set or reset one override |
+| `notification.registerDevice` / `unregisterDevice` / `listDevices` | Push registrations, bound to the calling session (API keys rejected) |
+| `notification.getSettings` / `updateSettings` | Quiet hours, pause, language, lock-screen privacy, promotions consent (API keys cannot give consent) |
+| `notification.transports` | Which transports this server supports (§10) and today's push usage vs the plan limit |
 
-CLI: `hisaabo notifications [list|read|prefs]`. MCP: `notifications_list`, `notifications_mark_read`, `notification_prefs_get`. These are covered by the parity check like every other procedure, with no entries in `parity-exceptions.yaml`. Agents get read access to their own inbox, so an agent can act on "Invoice INV-104 is 30 days overdue".
+CLI: `hisaabo notifications list|read|prefs|set`. MCP: `notification_list`, `notification_unread_counts`, `notification_mark_read`, `notification_mark_all_read`, `notification_preferences_get`, `notification_preference_update`. Device registration and marketing consent are deliberately not exposed to MCP. These are covered by the parity check like every other procedure, with no entries in `parity-exceptions.yaml`. Agents get read access to their own inbox, so an agent can act on "Invoice INV-104 is 30 days overdue".
 
 ---
 
@@ -537,3 +539,33 @@ CLI: `hisaabo notifications [list|read|prefs]`. MCP: `notifications_list`, `noti
 2. **Digest content** per role: exact sections and numbers, designed together with the dashboard so figures match `dashboard.ts` exactly. Must be settled before launch.
 3. **Quota defaults** in §9 are estimates. Revisit after four weeks of Phase 1 data.
 4. **Customer-facing messages** (payment reminders, invoice sent, order confirmation *to parties and store customers*): separate design (D13). Needs DLT registration (SMS) and WhatsApp templates, sent on the business's behalf.
+
+---
+
+## 17. Implementation status
+
+### Built (Phase 1 backend)
+
+| Area | Where |
+|---|---|
+| Channel / event catalog, role defaults, eligibility, locks, preference resolution, quiet hours, en + hi templates | `packages/shared/src/notifications/` |
+| Schema + migrations (unified, control, tenant) | `packages/db/src/{control,tenant}-schema.ts`, `drizzle*/…_notifications.sql` |
+| `emitNotificationEvent` (transactional outbox), tenant resolution for public endpoints | `packages/api/src/lib/notifications/emit.ts` |
+| Dispatcher (claim with `SKIP LOCKED`, per-recipient decisions, idempotent inbox, push, email copies, retries with backoff, retention) | `…/notifications/dispatcher.ts` |
+| RFC 8291 payload encryption (verified against the RFC test vector) | `…/notifications/push-crypto.ts` |
+| Gorush and no-op push providers, dead-token pruning | `…/notifications/push-provider.ts` |
+| Instance / tenant / user quotas; `pushPerDay` in plan limits | `…/notifications/quota.ts`, `lib/plan-limits.ts` |
+| Collections sweep (due today, 7/30/60 days overdue) | `…/notifications/collections-sweep.ts` |
+| Events emitted: `payment.received`, `payment.made`, `store.order_placed`, `einvoice.failed`, `team.member_joined`, `team.role_changed`, `api_key.created`, `invoice.due_today`, `invoice.overdue` | payment, store order, e-invoice, tenant and API-key code paths |
+| tRPC router, CLI command, MCP tools | `routers/notification.ts`, `packages/cli/src/commands/notification/`, `packages/mcp/src/tools/notification.ts` |
+| Tests | `packages/shared/src/__tests__/notifications.test.ts`, `packages/api/src/__tests__/notifications-push.test.ts`, `…/integration/notifications.test.ts` |
+
+### Not yet built
+
+1. **Clients**: inbox (bell) and notification settings screens on web/desktop and mobile; push registration and on-device decryption (Phase 0 spike). Until web uses `notification.*`, the parity check has nothing to compare.
+2. **Gorush deployment**: `docker-compose.push.yml` (§8.3) is specified here but not committed; add it with the credentials when cloud push goes live.
+3. Web push (VAPID) and UnifiedPush transports; the encryption they need already exists.
+4. Digest (daily/weekly summary), grouping of bursts, holding pushes through quiet hours.
+5. Remaining event types: sales activity, inventory, banking, payables due dates, GST return due dates, ITC ageing, targets, general announcements tooling.
+6. Explicit inbox purge on user deletion (rows currently expire after 90 days).
+

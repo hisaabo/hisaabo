@@ -43,6 +43,13 @@
       "when": 1791290127242,
       "tag": "0005_youthful_fallen_one",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791661237085,
+      "tag": "0006_notifications",
+      "breakpoints": true
     }
   ]
 }

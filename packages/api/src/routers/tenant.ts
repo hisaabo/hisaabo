@@ -11,6 +11,7 @@ import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { emailService } from "../lib/email.js";
 import { lockSignup, isOpenSignupEnabled, hasPendingInvitation, SIGNUP_CLOSED_MESSAGE } from "../lib/signup-policy.js";
 import { enforceTeamMemberLimit, enforceOrgCreationLimit, getLimits } from "../lib/plan-limits.js";
+import { emitTenantEvent, userDisplayName } from "../lib/notifications/index.js";
 
 function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -62,6 +63,13 @@ async function claimInvitationAndAddMember(invitation: InvitationRow, userId: st
       invitedBy: invitation.invitedBy ?? undefined,
       acceptedAt: new Date(),
     });
+  });
+  await emitTenantEvent(invitation.tenantId, {
+    type: "team.member_joined",
+    payload: { memberUserId: userId, memberName: await userDisplayName(userId), role: invitation.role },
+    actorUserId: userId,
+    subjectUserId: userId,
+    dedupeKey: `team.member_joined:${invitation.id}`,
   });
 }
 
@@ -645,6 +653,21 @@ export const tenantRouter = router({
       // Keys minted under the previous role must not outlive it.
       await controlDb.delete(apiKeys).where(and(eq(apiKeys.tenantId, ctx.tenantId), eq(apiKeys.userId, input.userId)));
       invalidateMembershipCache(ctx.tenantId, input.userId);
+
+      if (targetMembership && targetMembership.role !== input.role) {
+        await emitTenantEvent(ctx.tenantId, {
+          type: "team.role_changed",
+          payload: {
+            memberUserId: input.userId,
+            memberName: await userDisplayName(input.userId),
+            fromRole: targetMembership.role,
+            toRole: input.role,
+          },
+          actorUserId: ctx.user.id,
+          subjectUserId: input.userId,
+          dedupeKey: `team.role_changed:${input.userId}:${Date.now()}`,
+        });
+      }
 
       return { success: true };
     }),

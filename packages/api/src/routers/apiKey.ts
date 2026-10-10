@@ -6,6 +6,7 @@ import { controlDb, apiKeys } from "@hisaabo/db";
 import { createApiKeySchema, revokeApiKeySchema } from "@hisaabo/shared";
 import { enforceApiKeyLimit } from "../lib/plan-limits.js";
 import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
+import { emitTenantEvent } from "../lib/notifications/index.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const API_KEY_DEFAULT_TTL_MS = 90 * DAY_MS;
@@ -101,6 +102,15 @@ export const apiKeyRouter = router({
         keyPrefix: apiKeys.keyPrefix,
         expiresAt: apiKeys.expiresAt,
       });
+
+    // Tell the creator (and the other admins) — a key is a standing credential.
+    await emitTenantEvent(ctx.tenantId, {
+      type: "api_key.created",
+      payload: { keyName: created.name, keyPrefix: created.keyPrefix, createdByName: ctx.user.name || ctx.user.email },
+      actorUserId: ctx.user.id,
+      subjectUserId: ctx.user.id,
+      dedupeKey: `api_key.created:${created.id}`,
+    });
 
     // Return the raw key ONCE — it will never be accessible again
     return {

@@ -37,6 +37,7 @@ import { escapeLike } from "../lib/escape-like.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
 import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
+import { emitNotificationEventSafe } from "../lib/notifications/index.js";
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
@@ -48,6 +49,8 @@ async function generateIRNForInvoice(
   invoiceId: string,
   businessId: string,
   db: TenantDatabase,
+  // Who to attribute a failure notification to (notifications §2, "compliance")
+  notify?: { tenantId: string | null; actorUserId: string },
 ) {
   const [rawConfig] = await db
     .select()
@@ -198,6 +201,20 @@ async function generateIRNForInvoice(
       })
       .where(eq(invoices.id, invoiceId));
 
+    // A permanent failure leaves an invoice that cannot legally be shared:
+    // owners and accountants are always told (locked channel, inbox + email).
+    if (!isRetryable) {
+      await emitNotificationEventSafe(db, {
+        tenantId: notify?.tenantId ?? null,
+        businessId,
+        type: "einvoice.failed",
+        payload: { invoiceId, invoiceNumber: invoice.invoiceNumber, error: errorMsg.slice(0, 200) },
+        actorUserId: notify?.actorUserId ?? null,
+        ownerUserId: invoice.createdByUserId,
+        dedupeKey: `einvoice.failed:${invoiceId}:${retryCount}`,
+      });
+    }
+
     throw new TRPCError({
       code: isRetryable ? "INTERNAL_SERVER_ERROR" : "BAD_REQUEST",
       message: `IRP submission failed: ${errorMsg}`,
@@ -346,7 +363,7 @@ export const eInvoiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot regenerate IRN for a cancelled e-invoice" });
       }
 
-      return generateIRNForInvoice(input.invoiceId, ctx.businessId, ctx.db);
+      return generateIRNForInvoice(input.invoiceId, ctx.businessId, ctx.db, { tenantId: ctx.tenantId, actorUserId: ctx.user.id });
     }),
 
   /**
@@ -470,7 +487,7 @@ export const eInvoiceRouter = router({
       }
 
       // Run the generate logic inline (reuse same helper)
-      return generateIRNForInvoice(invoice.id, ctx.businessId, ctx.db);
+      return generateIRNForInvoice(invoice.id, ctx.businessId, ctx.db, { tenantId: ctx.tenantId, actorUserId: ctx.user.id });
     }),
 
   /**
@@ -651,7 +668,7 @@ export const eInvoiceRouter = router({
 
     for (const inv of failedInvoices) {
       try {
-        await generateIRNForInvoice(inv.id, ctx.businessId, ctx.db);
+        await generateIRNForInvoice(inv.id, ctx.businessId, ctx.db, { tenantId: ctx.tenantId, actorUserId: ctx.user.id });
         results.succeeded++;
       } catch {
         results.failed++;

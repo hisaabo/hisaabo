@@ -36,6 +36,13 @@
       "when": 1791290126332,
       "tag": "0004_mature_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791661235379,
+      "tag": "0005_notifications",
+      "breakpoints": true
     }
   ]
 }

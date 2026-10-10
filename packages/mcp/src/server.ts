@@ -21,6 +21,7 @@ import { registerBankAccountTools } from "./tools/bankAccount.js";
 import { registerReportTools } from "./tools/reports.js";
 import { registerStoreTools } from "./tools/store.js";
 import { registerTargetTools } from "./tools/target.js";
+import { registerNotificationTools } from "./tools/notification.js";
 import { registerImportTools } from "./tools/import.js";
 import { registerTenantTools } from "./tools/tenant.js";
 import { registerDocumentTools } from "./tools/document.js";
@@ -74,6 +75,9 @@ function registerAllTools(server: ToolRegistry, client: HisaaboClient): void {
 
   // Sales targets
   registerTargetTools(server, client);
+
+  // Notification inbox and preferences
+  registerNotificationTools(server, client);
 
   // Data import
   registerImportTools(server, client);

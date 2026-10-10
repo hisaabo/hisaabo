@@ -40,6 +40,7 @@ import { systemRouter } from "./routers/system.js";
 import { selfExportRouter } from "./routers/selfExport.js";
 import { selfImportRouter } from "./routers/selfImport.js";
 import { posRouter } from "./routers/pos.js";
+import { notificationRouter } from "./routers/notification.js";
 
 export const appRouter = router({
   auth: authRouter,
@@ -81,6 +82,7 @@ export const appRouter = router({
   selfExport: selfExportRouter,
   selfImport: selfImportRouter,
   pos: posRouter,
+  notification: notificationRouter,
 });
 
 export type AppRouter = typeof appRouter;

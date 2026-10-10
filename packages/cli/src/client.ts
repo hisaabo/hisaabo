@@ -713,6 +713,30 @@ export class HisaaboClient {
 
   // ── Target ────────────────────────────────────────────────────
 
+  get notification() {
+    const c = this;
+    return {
+      list(input: { limit?: number; cursor?: string; unreadOnly?: boolean; channel?: NotificationChannel }) {
+        return c.query("notification.list", input);
+      },
+      unreadCounts() {
+        return c.query("notification.unreadCounts");
+      },
+      markRead(ids: string[]) {
+        return c.mutate("notification.markRead", { ids });
+      },
+      markAllRead() {
+        return c.mutate("notification.markAllRead");
+      },
+      getPreferences(businessId?: string | null) {
+        return c.query("notification.getPreferences", { businessId });
+      },
+      updatePreference(input: NotificationPreferenceUpdate) {
+        return c.mutate("notification.updatePreference", input);
+      },
+    };
+  }
+
   get target() {
     const c = this;
     return {
@@ -1431,3 +1455,22 @@ export type RecurringInvoiceExecution = OutputOf<"recurringInvoice.executionHist
 
 
 export type RecurringInvoiceSuggestion = OutputOf<"recurringInvoice.suggestions">[number];
+
+export const NOTIFICATION_CHANNELS = [
+  "money_in", "collections", "sales", "store", "payables", "banking", "compliance",
+  "inventory", "targets", "security", "digest", "general", "promotions",
+] as const;
+export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
+
+export interface NotificationPreferenceUpdate {
+  businessId: string | null;
+  channel: NotificationChannel;
+  delivery?: "push" | "inbox" | "digest" | "off" | null;
+  scope?: "mine" | "everyone" | null;
+  thresholdPaise?: number | null;
+  email?: boolean | null;
+  reset?: boolean;
+}
+
+export type NotificationRow = OutputOf<"notification.list">["items"][number];
+export type NotificationChannelPreference = OutputOf<"notification.getPreferences">["channels"][number];
