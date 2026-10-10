@@ -117,7 +117,7 @@ The starting point only; users override per channel.
 - **Threshold** (optional): minimum amount, for `money_in`, `payables`, `sales`
 - **Email copy**: on/off (default on for `compliance` and `digest` only)
 
-"Mine" means the record's `created_by_user_id` (invoices, payments) or the target's `user_id`. For collections, it is the invoice creator. If we later add a "party owner" or "assigned salesperson" field, scope follows that instead.
+"Mine" means the record's `created_by_user_id` (invoices, payments) or the target's `user_id`. For collections, it is the invoice creator. Seller managers receive collections for **every** invoice in the business (default scope `everyone`), so a seller's overdue invoice always reaches both the seller and the seller manager(s). There is no reporting-line field today, so a seller manager sees all sellers' collections rather than only their own team's. If manager→seller reporting lines are added later, the seller manager's default narrows to "my team".
 
 ### 3.4 Preference resolution (per business)
 
@@ -203,7 +203,7 @@ Desktop (Tauri) uses web push in its webview where supported. Otherwise `tauri-p
 
 **Self-notification suppression**: the actor is never notified of their own action (except security events such as "new sign-in").
 
-**Templates** live in `@hisaabo/shared` as `{type → (payload, locale) → {title, body, deepLink}}`. They are rendered at dispatch time (so a later locale change applies) and shared with the CLI/MCP for parity.
+**Templates** live in `@hisaabo/shared` as `{type → (payload, locale) → {title, body, deepLink}}`. They are rendered at dispatch time (so a later locale change applies) and shared with the CLI/MCP for parity. **Launch locales: English (`en`) and Hindi (`hi`).** Every template must exist in both before an event type ships, enforced by a unit test. Amounts use Indian digit grouping (₹1,20,000) in both locales. The recipient's locale comes from the user's app language setting, falling back to `en`. Other Indian languages come later.
 
 **Retention**: inbox rows kept for 90 days, outbox rows deleted 7 days after dispatch. Both handled by the existing cleanup timers in `server.ts`.
 
@@ -384,6 +384,21 @@ Goal: FCM, APNs and Gorush only ever see ciphertext. This satisfies App Store gu
 
 ---
 
+### 8.5 Why Firebase at all
+
+We use exactly **one** Firebase product: **Firebase Cloud Messaging (FCM)**. No Analytics, Crashlytics, Remote Config or Auth. FCM is free.
+
+- **Android needs it.** On Android devices with Google Play services (practically every phone sold in India), FCM is the only way to wake an app that is not running. Android's battery management (Doze, app standby, OEM task killers on Xiaomi, Vivo, Oppo, Realme) kills an app's own background connections. The OS keeps one shared connection open to Google for every app, and FCM is how an app uses it. A "Firebase project" is just the container Google requires for the FCM credentials (the service-account JSON) and the `google-services.json` built into the app.
+- **iOS does not need it.** Gorush talks to APNs directly with our `.p8` key. Firebase is not involved on iOS.
+- **Alternatives considered for Android:**
+  - *UnifiedPush*: works without Google, but the user must install and configure a separate distributor app (e.g. ntfy). Fine for F-Droid users and self-hosters, but too much friction for a Play Store shopkeeper. It is the `fdroid` flavor's transport, not the default.
+  - *Our own persistent connection*: needs a permanent foreground-service notification, drains battery, is still killed by aggressive OEMs, and Play restricts foreground-service types. Rejected.
+  - *Huawei (HMS) devices without Google services*: Gorush supports HMS. Add it only if usage data shows meaningful Huawei/Honor installs.
+- **Privacy cost is small.** Payloads are end-to-end encrypted ([§8.4](#84-end-to-end-encrypted-payloads)), so Google sees only a device token, the timing and size of messages, and ciphertext.
+- **Ownership**: the Firebase project and the Apple Developer account belong to the Hisaabo organisation, not an individual, with at least two admins and documented key rotation ([§8.3](#83-bringing-up-gorush-docker)).
+
+---
+
 ## 9. Quotas and rate limits
 
 Push volume costs money (infrastructure, support) and, more importantly, **sender reputation**: Apple and Google throttle senders that look abusive. Quotas protect the shared credentials from one runaway tenant, bug or loop.
@@ -509,15 +524,16 @@ CLI: `hisaabo notifications [list|read|prefs]`. MCP: `notifications_list`, `noti
 | D8 | WhatsApp is Phase 3 and paid plans only. | 2026-10-10 |
 | D9 | Push payloads are end-to-end encrypted to the device. | 2026-10-10 |
 | D10 | F-Droid build ships without Firebase and uses UnifiedPush. | 2026-10-10 |
+| D11 | Collections: "mine" = invoice creator; seller managers get collections for all invoices by default. | 2026-10-10 |
+| D12 | Launch locales are English and Hindi; other languages later. | 2026-10-10 |
+| D13 | Customer-facing messaging (to parties/store customers) is out of scope and designed separately. | 2026-10-10 |
+| D14 | Only FCM is used from Firebase (Android delivery); iOS uses APNs directly. Firebase and Apple accounts are org-owned with 2+ admins. | 2026-10-10 |
 
 ---
 
 ## 16. Open items
 
 1. **Phase 0 feasibility**: Expo 55 prebuild with an iOS Notification Service Extension, Android data-message decryption, and a Firebase-free `fdroid` flavor with a maintained React Native UnifiedPush library.
-2. **"Mine" for collections**: invoice creator for now. Do we want an explicit "assigned salesperson / party owner" field?
-3. **Customer-facing messages** (payment reminders, invoice sent, order confirmation *to parties and store customers*) are a separate system, not part of this design. They need DLT registration (SMS) and WhatsApp templates, and are sent on the business's behalf. To be designed separately.
-4. **Localisation**: template locales at launch (English + Hindi?), and the per-user locale source.
-5. **Digest content** per role: exact sections and numbers. To be designed with the dashboard team so figures match `dashboard.ts` exactly.
-6. **Quota defaults** in §9 are estimates. Revisit after four weeks of Phase 1 data.
-7. **Ownership of Apple/Firebase accounts**: credentials held by the Hisaabo org (not an individual), with 2+ admins and documented rotation.
+2. **Digest content** per role: exact sections and numbers, designed together with the dashboard so figures match `dashboard.ts` exactly. Must be settled before launch.
+3. **Quota defaults** in §9 are estimates. Revisit after four weeks of Phase 1 data.
+4. **Customer-facing messages** (payment reminders, invoice sent, order confirmation *to parties and store customers*): separate design (D13). Needs DLT registration (SMS) and WhatsApp templates, sent on the business's behalf.
