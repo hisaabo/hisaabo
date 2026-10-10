@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import tarStream from "tar-stream";
-import { getTableColumns, sql } from "drizzle-orm";
+import { getTableColumns, sql, eq, isNotNull } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { TenantDatabase } from "@hisaabo/db";
 import { businesses } from "@hisaabo/db";
@@ -21,6 +21,7 @@ import { TABLE_REGISTRY } from "./tableRegistry.js";
 import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import type { Logger } from "./logger.js";
+import { registerImportedSlugs } from "./store-slug-registry.js";
 import {
   APP_VERSION,
   SCHEMA_CHECKSUM,
@@ -580,4 +581,52 @@ export async function importTenantBackup(
     durationMs,
     compatibility,
   };
+}
+
+/**
+ * Multi-tenant only: register the slugs of just-imported businesses in the
+ * control-DB registry under `tenantId` (the AUTHENTICATED tenant from the
+ * import token — never anything from the backup file). The backup is
+ * untrusted: a slug that is taken elsewhere is cleared from the tenant DB and
+ * the store disabled, so the tenant never displays a slug the registry will
+ * not serve. Never throws; the restore itself has already committed.
+ */
+export async function registerImportedStoreSlugs(
+  tenantDb: TenantDatabase,
+  tenantId: string,
+  warnings: ImportResult["warnings"],
+  log: Logger,
+): Promise<void> {
+  try {
+    const rows = await tenantDb
+      .select({ id: businesses.id, storeSlug: businesses.storeSlug, storeEnabled: businesses.storeEnabled })
+      .from(businesses)
+      .where(isNotNull(businesses.storeSlug));
+    const results = await registerImportedSlugs(tenantId, rows);
+    for (const r of results) {
+      if (r.status === "registered") continue;
+      if (r.status === "conflict") {
+        await tenantDb.update(businesses)
+          .set({ storeSlug: null, storeEnabled: false, updatedAt: new Date() })
+          .where(eq(businesses.id, r.businessId));
+        warnings.push({
+          table: "businesses",
+          message: `Store URL '${r.slug}' is already used by another account; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
+          context: { businessId: r.businessId },
+        });
+      } else {
+        warnings.push({
+          table: "businesses",
+          message: `Store URL '${r.slug}' could not be registered; re-save Store settings to publish the storefront.`,
+          context: { businessId: r.businessId },
+        });
+      }
+    }
+  } catch (err) {
+    log.error({ err, tenantId }, "import: store slug registration failed");
+    warnings.push({
+      table: "businesses",
+      message: "Storefront URLs could not be registered; re-save Store settings to publish the storefront.",
+    });
+  }
 }

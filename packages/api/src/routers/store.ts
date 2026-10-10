@@ -8,6 +8,17 @@ import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { isSmsConfigured } from "../lib/sms.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
+import { cacheBus } from "../lib/cache/bus.js";
+import {
+  isRegistryEnabled,
+  checkAvailability,
+  applyStoreChange,
+  SlugConflictError,
+  isUniqueViolation,
+} from "../lib/store-slug-registry.js";
+import { logger } from "../lib/logger.js";
+
+const SLUG_TAKEN_MESSAGE = "This store URL is already taken. Please choose a different one.";
 
 // ── Validators ─────────────────────────────────────────────────
 
@@ -48,7 +59,13 @@ export const storeRouter = router({
           sql`${businesses.id} != ${ctx.businessId}`,
         ))
         .limit(1);
-      return { available: !existing };
+      if (existing) return { available: false };
+      // Multi-tenant: slugs are globally unique across tenants — ask the
+      // registry (tenant/business come from the authenticated context).
+      if (isRegistryEnabled()) {
+        return { available: await checkAvailability(input.slug, ctx.tenantId, ctx.businessId) };
+      }
+      return { available: true };
     }),
 
   getSettings: viewerProcedure.query(async ({ ctx }) => {
@@ -100,31 +117,74 @@ export const storeRouter = router({
         if (existing) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "This store URL is already taken. Please choose a different one.",
+            message: SLUG_TAKEN_MESSAGE,
           });
         }
       }
 
-      const [updated] = await ctx.db.update(businesses)
-        .set({
-          ...input,
-          updatedAt: new Date(),
-        })
-        .where(eq(businesses.id, ctx.businessId))
-        .returning({
-          storeEnabled: businesses.storeEnabled,
-          storeSlug: businesses.storeSlug,
-          storeTagline: businesses.storeTagline,
-          storeAccentColor: businesses.storeAccentColor,
-          storeMinOrderAmount: businesses.storeMinOrderAmount,
-          storeDeliveryNote: businesses.storeDeliveryNote,
-          storeWhatsappNumber: businesses.storeWhatsappNumber,
-          storeAllowNegativeStock: businesses.storeAllowNegativeStock,
-          storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
-          storeOrderPrefix: businesses.storeOrderPrefix,
-        });
+      const runUpdate = async () => {
+        const [row] = await ctx.db.update(businesses)
+          .set({
+            ...input,
+            updatedAt: new Date(),
+          })
+          .where(eq(businesses.id, ctx.businessId))
+          .returning({
+            storeEnabled: businesses.storeEnabled,
+            storeSlug: businesses.storeSlug,
+            storeTagline: businesses.storeTagline,
+            storeAccentColor: businesses.storeAccentColor,
+            storeMinOrderAmount: businesses.storeMinOrderAmount,
+            storeDeliveryNote: businesses.storeDeliveryNote,
+            storeWhatsappNumber: businesses.storeWhatsappNumber,
+            storeAllowNegativeStock: businesses.storeAllowNegativeStock,
+            storeRequirePhoneOtp: businesses.storeRequirePhoneOtp,
+            storeOrderPrefix: businesses.storeOrderPrefix,
+          });
+        return row;
+      };
 
-      return updated;
+      const touchesStore = input.storeSlug !== undefined || input.storeEnabled !== undefined;
+      if (!isRegistryEnabled() || !touchesStore) {
+        try {
+          return await runUpdate();
+        } finally {
+          // Self-hosted: drop cached slug resolutions (old slug unknown here).
+          if (touchesStore) cacheBus.invalidate({ kind: "storeSlug" });
+        }
+      }
+
+      // Multi-tenant: one control transaction around the tenant write.
+      const [cur] = await ctx.db.select({
+        storeSlug: businesses.storeSlug,
+        storeEnabled: businesses.storeEnabled,
+      }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
+      if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+
+      const newSlug = input.storeSlug === undefined ? cur.storeSlug : input.storeSlug;
+      const newEnabled = input.storeEnabled ?? cur.storeEnabled;
+
+      try {
+        return await applyStoreChange({
+          tenantId: ctx.tenantId,
+          businessId: ctx.businessId,
+          oldSlug: cur.storeSlug,
+          newSlug,
+          newEnabled,
+          runTenantUpdate: runUpdate,
+          revertTenant: async () => {
+            await ctx.db.update(businesses)
+              .set({ storeSlug: cur.storeSlug, storeEnabled: cur.storeEnabled, updatedAt: new Date() })
+              .where(eq(businesses.id, ctx.businessId));
+          },
+        });
+      } catch (err) {
+        if (err instanceof SlugConflictError || isUniqueViolation(err)) {
+          throw new TRPCError({ code: "CONFLICT", message: SLUG_TAKEN_MESSAGE });
+        }
+        logger.error({ err, tenantId: ctx.tenantId, businessId: ctx.businessId }, "store.updateSettings failed");
+        throw err;
+      }
     }),
 
   // ── Item Visibility ──────────────────────────────────────────
