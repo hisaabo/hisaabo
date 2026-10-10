@@ -37,6 +37,10 @@ async function rows(slug: string) {
 async function hideFromTenantDb(businessId: string) {
   await getTenantTestDb().update(businesses).set({ storeSlug: null, storeEnabled: false }).where(eq(businesses.id, businessId));
 }
+/** The slug is set-once; grant the single extra change (what a duplicate auto-rename does). */
+async function allowChange(businessId: string) {
+  await getTenantTestDb().update(businesses).set({ storeSlugAutoAssigned: true }).where(eq(businesses.id, businessId));
+}
 const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() } as any;
 
 beforeAll(async () => {
@@ -51,7 +55,7 @@ beforeEach(async () => {
   vi.stubEnv("MULTI_TENANT", "true");
   await controlDb.execute(sql`DELETE FROM store_slugs`);
   await controlDb.execute(sql`DELETE FROM system_config WHERE key = ${STORE_SLUG_MARKER_KEY}`);
-  await getTenantTestDb().update(businesses).set({ storeSlug: null, storeEnabled: false });
+  await getTenantTestDb().update(businesses).set({ storeSlug: null, storeEnabled: false, storeSlugAutoAssigned: false });
   _resetStoreSlugCacheState();
   // marker present by default: no legacy scan
   await controlDb.execute(sql`INSERT INTO system_config (key, value) VALUES (${STORE_SLUG_MARKER_KEY}, '{}'::jsonb)`);
@@ -94,6 +98,7 @@ describe("registry resolve + write path", () => {
     await callerA().store.updateSettings({ storeSlug: "old-name", storeEnabled: true });
     expect(await resolveStoreSlug("old-name")).not.toBeNull(); // warm positive cache
     expect(await resolveStoreSlug("new-name")).toBeNull(); // warm negative cache
+    await allowChange(world.business1.id);
     await callerA().store.updateSettings({ storeSlug: "new-name" });
     expect(await resolveStoreSlug("old-name")).toBeNull();
     expect(await resolveStoreSlug("new-name")).toEqual({ tenantId: world.tenant1.id, businessId: world.business1.id });
@@ -104,6 +109,7 @@ describe("registry resolve + write path", () => {
 
   it("released slug: other tenant blocked < 30 days, same tenant may reclaim, other tenant after 30 days", async () => {
     await callerA().store.updateSettings({ storeSlug: "old-name", storeEnabled: true });
+    await allowChange(world.business1.id);
     await callerA().store.updateSettings({ storeSlug: "new-name" });
     await hideFromTenantDb(world.business1.id);
 
@@ -114,6 +120,7 @@ describe("registry resolve + write path", () => {
     // same tenant reclaims at any time
     await callerA().store.updateSettings({ storeSlug: "old-name" });
     expect((await rows("old-name"))[0]!.released_at).toBeNull();
+    await allowChange(world.business1.id);
     await callerA().store.updateSettings({ storeSlug: "new-name" }); // release again
     await hideFromTenantDb(world.business1.id);
 
@@ -129,6 +136,7 @@ describe("registry resolve + write path", () => {
 
   it("clearing the slug releases it", async () => {
     await callerA().store.updateSettings({ storeSlug: "alpha-shop", storeEnabled: true });
+    await allowChange(world.business1.id);
     await callerA().store.updateSettings({ storeSlug: null });
     expect(await resolveSlug("alpha-shop")).toBeNull();
     expect((await rows("alpha-shop"))[0]!.released_at).not.toBeNull();
@@ -244,6 +252,7 @@ describe("cross-tenant attacks", () => {
 
   it("tenant B's API calls never alter A's row (updateSettings with other slug / disable)", async () => {
     await callerB().store.updateSettings({ storeSlug: "b-shop", storeEnabled: false });
+    await allowChange(world.business2.id);
     await callerB().store.updateSettings({ storeSlug: null });
     await callerB().store.updateSettings({ storeEnabled: false });
     expect((await rows("victim-shop"))[0]).toMatchObject({ tenant_id: world.tenant1.id, released_at: null, store_enabled: true });
@@ -260,14 +269,18 @@ describe("cross-tenant attacks", () => {
     });
     expect(warnings.length).toBe(1);
     expect(warnings[0].message).toContain("victim-shop");
-    // conflict path: tenant DB cleaned
+    // conflict path: renamed under tenant B's own authority, store stays enabled
     const [b2] = await db.select().from(businesses).where(eq(businesses.id, world.business2.id));
-    expect(b2).toMatchObject({ storeSlug: null, storeEnabled: false });
+    expect(b2!.storeSlug).toMatch(/^[a-z0-9]{4}-victim-shop$/);
+    expect(b2).toMatchObject({ storeEnabled: true, storeSlugAutoAssigned: true });
+    expect((await rows(b2!.storeSlug!))[0]).toMatchObject({
+      tenant_id: world.tenant2.id, business_id: world.business2.id, released_at: null, store_enabled: true,
+    });
   });
 });
 
 describe("self-import registration", () => {
-  it("registers non-conflicting slugs, warns and clears conflicting ones, never throws", async () => {
+  it("registers non-conflicting slugs, renames conflicting ones (store stays enabled) with a warning, never throws", async () => {
     await callerA().store.updateSettings({ storeSlug: "taken-slug", storeEnabled: true });
     await hideFromTenantDb(world.business1.id);
     const db = getTenantTestDb();
@@ -279,13 +292,89 @@ describe("self-import registration", () => {
       expect((await rows("fresh-slug"))[0]).toMatchObject({ tenant_id: world.tenant2.id, business_id: extra.id, store_enabled: true });
       expect(await resolveStoreSlug("fresh-slug")).toEqual({ tenantId: world.tenant2.id, businessId: extra.id });
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toMatchObject({ table: "businesses", context: { businessId: world.business2.id } });
       const [b2] = await db.select().from(businesses).where(eq(businesses.id, world.business2.id));
-      expect(b2).toMatchObject({ storeSlug: null, storeEnabled: false });
+      expect(b2!.storeSlug).toMatch(/^[a-z0-9]{4}-taken-slug$/);
+      expect(b2).toMatchObject({ storeEnabled: true, storeSlugAutoAssigned: true });
+      expect(warnings[0]).toMatchObject({
+        table: "businesses",
+        context: { businessId: world.business2.id, oldSlug: "taken-slug", newSlug: b2!.storeSlug },
+      });
+      expect(warnings[0].message).toContain("taken-slug");
+      expect(warnings[0].message).toContain(b2!.storeSlug!);
+      expect((await rows(b2!.storeSlug!))[0]).toMatchObject({ tenant_id: world.tenant2.id, business_id: world.business2.id, store_enabled: true });
       expect((await rows("taken-slug"))[0]!.tenant_id).toBe(world.tenant1.id);
     } finally {
       await db.delete(businesses).where(eq(businesses.id, extra.id));
     }
+  });
+});
+
+describe("set-once slug rule (multi-tenant)", () => {
+  const biz1 = () => getTenantTestDb().select().from(businesses).where(eq(businesses.id, world.business1.id)).then((r) => r[0]!);
+
+  it("first choice allowed, second change FORBIDDEN, registry untouched", async () => {
+    await callerA().store.updateSettings({ storeSlug: "first-pick", storeEnabled: true });
+    await expect(callerA().store.updateSettings({ storeSlug: "second-pick" }))
+      .rejects.toMatchObject({ code: "FORBIDDEN", message: "Your store link can only be set once." });
+    await expect(callerA().store.updateSettings({ storeSlug: null }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await biz1()).storeSlug).toBe("first-pick");
+    expect((await rows("second-pick")).length).toBe(0);
+    expect((await rows("first-pick"))[0]!.released_at).toBeNull();
+  });
+
+  it("re-saving the same slug and changing other settings stay allowed", async () => {
+    await callerA().store.updateSettings({ storeSlug: "first-pick", storeEnabled: true });
+    await callerA().store.updateSettings({ storeSlug: "first-pick", storeTagline: "hello" });
+    await callerA().store.updateSettings({ storeTagline: "again", storeAccentColor: "#112233", storeEnabled: false });
+    const b = await biz1();
+    expect(b).toMatchObject({ storeSlug: "first-pick", storeTagline: "again", storeEnabled: false });
+  });
+
+  it("auto-assigned: exactly one change, the flag then clears, third change rejected", async () => {
+    await callerA().store.updateSettings({ storeSlug: "ab12-dup-shop", storeEnabled: true });
+    await allowChange(world.business1.id);
+    expect((await callerA().store.getSettings()).storeSlugAutoAssigned).toBe(true);
+    const out = await callerA().store.updateSettings({ storeSlug: "my-choice" });
+    expect(out).toMatchObject({ storeSlug: "my-choice", storeSlugAutoAssigned: false });
+    expect((await callerA().store.getSettings())).toMatchObject({ storeSlug: "my-choice", storeSlugAutoAssigned: false });
+    await expect(callerA().store.updateSettings({ storeSlug: "third-try" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("auto-assigned flag survives saves that keep the slug", async () => {
+    await callerA().store.updateSettings({ storeSlug: "ab12-dup-shop", storeEnabled: true });
+    await allowChange(world.business1.id);
+    await callerA().store.updateSettings({ storeSlug: "ab12-dup-shop", storeTagline: "x" });
+    expect((await biz1()).storeSlugAutoAssigned).toBe(true);
+  });
+
+  it("concurrent double-change: at most one succeeds", async () => {
+    await callerA().store.updateSettings({ storeSlug: "ab12-dup-shop", storeEnabled: true });
+    await allowChange(world.business1.id);
+    const res = await Promise.allSettled([
+      callerA().store.updateSettings({ storeSlug: "race-one" }),
+      callerA().store.updateSettings({ storeSlug: "race-two" }),
+      callerA().store.updateSettings({ storeSlug: "race-three" }),
+    ]);
+    expect(res.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    for (const r of res) if (r.status === "rejected") expect(r.reason).toMatchObject({ code: "FORBIDDEN" });
+    const live = await controlDb.execute(sql`SELECT slug FROM store_slugs WHERE business_id = ${world.business1.id} AND released_at IS NULL`);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.slug).toBe((await biz1()).storeSlug);
+  });
+
+  it("self-hosted path enforces the same rule, including a concurrent race", async () => {
+    vi.stubEnv("MULTI_TENANT", "false");
+    await callerA().store.updateSettings({ storeSlug: "solo-one", storeEnabled: true });
+    await expect(callerA().store.updateSettings({ storeSlug: "solo-two" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await callerA().store.updateSettings({ storeSlug: "solo-one", storeTagline: "ok" });
+    await allowChange(world.business1.id);
+    const res = await Promise.allSettled([
+      callerA().store.updateSettings({ storeSlug: "solo-a" }),
+      callerA().store.updateSettings({ storeSlug: "solo-b" }),
+    ]);
+    expect(res.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect((await biz1()).storeSlugAutoAssigned).toBe(false);
   });
 });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "businesses" ADD COLUMN "store_slug_auto_assigned" boolean DEFAULT false NOT NULL;

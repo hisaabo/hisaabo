@@ -119,6 +119,7 @@ export const businessRowSchema = z.object({
   annualTurnover: money2Nullable,
   storeEnabled: z.boolean(),
   storeSlug: z.string().nullable(),
+  storeSlugAutoAssigned: z.boolean().default(false),
   storeTagline: z.string().nullable(),
   storeAccentColor: z.string().nullable(),
   storeMinOrderAmount: money2Nullable,

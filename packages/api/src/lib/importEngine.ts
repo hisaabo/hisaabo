@@ -21,7 +21,7 @@ import { TABLE_REGISTRY } from "./tableRegistry.js";
 import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import type { Logger } from "./logger.js";
-import { registerImportedSlugs } from "./store-slug-registry.js";
+import { registerImportedSlugs, claimFallbackSlug } from "./store-slug-registry.js";
 import {
   APP_VERSION,
   SCHEMA_CHECKSUM,
@@ -587,7 +587,9 @@ export async function importTenantBackup(
  * Multi-tenant only: register the slugs of just-imported businesses in the
  * control-DB registry under `tenantId` (the AUTHENTICATED tenant from the
  * import token — never anything from the backup file). The backup is
- * untrusted: a slug that is taken elsewhere is cleared from the tenant DB and
+ * untrusted: a slug that is taken elsewhere is replaced by a unique fallback
+ * (random prefix + original, flagged store_slug_auto_assigned) and the store
+ * stays as imported; only if no fallback can be claimed is the slug cleared and
  * the store disabled, so the tenant never displays a slug the registry will
  * not serve. Never throws; the restore itself has already committed.
  */
@@ -606,12 +608,35 @@ export async function registerImportedStoreSlugs(
     for (const r of results) {
       if (r.status === "registered") continue;
       if (r.status === "conflict") {
+        // Rename instead of disabling: keep the storefront working at a new URL.
+        const biz = rows.find((x) => x.id === r.businessId);
+        let newSlug: string | null = null;
+        try {
+          newSlug = await claimFallbackSlug({
+            tenantId, businessId: r.businessId, original: r.slug, storeEnabled: biz?.storeEnabled ?? false,
+            applyTenant: async (slug) => {
+              await tenantDb.update(businesses)
+                .set({ storeSlug: slug, storeSlugAutoAssigned: true, updatedAt: new Date() })
+                .where(eq(businesses.id, r.businessId));
+            },
+          });
+        } catch (err) {
+          log.error({ err, tenantId, businessId: r.businessId }, "import: fallback slug claim failed");
+        }
+        if (newSlug) {
+          warnings.push({
+            table: "businesses",
+            message: `Store URL '${r.slug}' is already used by another account; it was changed to '${newSlug}'. You can choose a new URL once in Store settings.`,
+            context: { businessId: r.businessId, oldSlug: r.slug, newSlug },
+          });
+          continue;
+        }
         await tenantDb.update(businesses)
-          .set({ storeSlug: null, storeEnabled: false, updatedAt: new Date() })
+          .set({ storeSlug: null, storeEnabled: false, storeSlugAutoAssigned: false, updatedAt: new Date() })
           .where(eq(businesses.id, r.businessId));
         warnings.push({
           table: "businesses",
-          message: `Store URL '${r.slug}' is already used by another account; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
+          message: `Store URL '${r.slug}' is already used by another account and no replacement could be assigned; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
           context: { businessId: r.businessId },
         });
       } else {
