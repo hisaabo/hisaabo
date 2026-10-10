@@ -78,6 +78,35 @@ jobs:
       - name: Check ownership scoping
         run: tsx scripts/check-ownership-scoping.ts --scan
 
+  migration-safety:
+    name: Migration Safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NODE_TS: node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # --experimental-strip-types needs Node >= 22.6
+          node-version: 22
+
+      - name: Test migration checker
+        run: $NODE_TS --test scripts/check-migrations.test.ts
+
+      # Fails when a new migration would break the previous app version while
+      # both run during a rollout (drop, rename, type change, NOT NULL without a
+      # default, index/constraint on an existing table) or an applied migration
+      # was edited. Intentional exceptions carry a `-- migration-lint-allow`
+      # marker; see scripts/check-migrations.ts.
+      - name: Check new migrations
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: $NODE_TS scripts/check-migrations.ts --base "$BASE_SHA"
+
   test:
     name: Test
     runs-on: ubuntu-latest
