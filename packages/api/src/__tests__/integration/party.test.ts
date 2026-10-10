@@ -1064,3 +1064,29 @@ describe("party.list N+1 detection", () => {
     }
   });
 });
+
+// ── party.list — balance is identical regardless of sort ─────────────────────
+
+describe("party.list — balance across sort modes", () => {
+  it("returns the same balance (opening + invoices - credit notes) for name and balance sorts", async () => {
+    const db = getTenantTestDb();
+    const party = await createParty(db, business1.id, {
+      name: "Sort Balance Customer", type: "customer", openingBalance: "100.00",
+    });
+    await createInvoiceWithItems(db, business1.id, party.id,
+      [{ description: "Line", quantity: "1", unitPrice: "1000.00" }],
+      { status: "sent", type: "sale", documentType: "invoice" });
+    await createInvoiceWithItems(db, business1.id, party.id,
+      [{ description: "Line", quantity: "1", unitPrice: "300.00" }],
+      { status: "sent", type: "sale", documentType: "credit_note" });
+    await createInvoiceWithItems(db, business1.id, party.id,
+      [{ description: "Line", quantity: "1", unitPrice: "500.00" }],
+      { status: "cancelled", type: "sale", documentType: "invoice" });
+
+    const byName = await callerRamesh.party.list({ page: 1, limit: 100, sortBy: "name", sortDir: "asc", search: "Sort Balance" });
+    const byBalance = await callerRamesh.party.list({ page: 1, limit: 100, sortBy: "balance", sortDir: "desc", search: "Sort Balance" });
+    expect(byName.data).toHaveLength(1);
+    expect(parseFloat(byName.data[0]!.balance)).toBeCloseTo(800, 2); // 100 + 1000 - 300, cancelled ignored
+    expect(byBalance.data[0]!.balance).toBe(byName.data[0]!.balance);
+  });
+});

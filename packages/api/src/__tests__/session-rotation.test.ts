@@ -50,30 +50,23 @@ vi.mock("@hisaabo/db", () => {
   };
 });
 
-vi.mock("../context.js", () => ({
-  revokeAllUserSessions: vi.fn(),
-  invalidateSessionCache: vi.fn(),
-}));
-
 // Import AFTER mocks are registered — vitest hoists the vi.mock calls
 // above imports, but the helper below needs the mocked module graph.
 import { rotateSessionsOnPrivilegeEvent } from "../lib/session-rotation.js";
 import { controlDb } from "@hisaabo/db";
-import { revokeAllUserSessions, invalidateSessionCache } from "../context.js";
+import { cacheBus } from "../lib/cache/bus.js";
 
 // Extract the mock handles from the mocked module. The cast through
 // `unknown` is a test-only shortcut; `__mocks` is a private stash we
 // attached in the factory above just for test access.
 const dbMocks = (controlDb as unknown as { __mocks: { returning: ReturnType<typeof vi.fn>; where: ReturnType<typeof vi.fn>; del: ReturnType<typeof vi.fn> } }).__mocks;
-const revokeAllUserSessionsMock = vi.mocked(revokeAllUserSessions);
-const invalidateSessionCacheMock = vi.mocked(invalidateSessionCache);
+const invalidateSpy = vi.spyOn(cacheBus, "invalidate");
 
 beforeEach(() => {
   dbMocks.returning.mockReset();
   dbMocks.where.mockReset().mockImplementation(() => ({ returning: dbMocks.returning }));
   dbMocks.del.mockReset().mockImplementation(() => ({ where: dbMocks.where }));
-  revokeAllUserSessionsMock.mockReset();
-  invalidateSessionCacheMock.mockReset();
+  invalidateSpy.mockClear();
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -129,38 +122,35 @@ describe("rotateSessionsOnPrivilegeEvent — keepSessionId preserves the caller'
 // Cache purge — the 60-second-window guard
 // ─────────────────────────────────────────────────────────────────────────
 describe("rotateSessionsOnPrivilegeEvent — cache coherence", () => {
-  it("calls revokeAllUserSessions(userId) — without this, a cached session row keeps serving requests for up to 60s after the row is deleted", async () => {
-    dbMocks.returning.mockResolvedValue([]);
+  it("emits session{userId} on the cache bus — without it a cached session keeps serving requests after its row is deleted", async () => {
+    dbMocks.returning.mockResolvedValue([{ id: "a" }, { id: "b" }]);
     await rotateSessionsOnPrivilegeEvent("user-42");
-    expect(revokeAllUserSessionsMock).toHaveBeenCalledTimes(1);
-    expect(revokeAllUserSessionsMock).toHaveBeenCalledWith("user-42");
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith([{ kind: "session", userId: "user-42" }]);
   });
 
-  it("calls invalidateSessionCache for each deleted session id — defense-in-depth against future cache structures that decouple user→session", async () => {
-    dbMocks.returning.mockResolvedValue([{ id: "a" }, { id: "b" }, { id: "c" }]);
-    await rotateSessionsOnPrivilegeEvent("user-42");
-    expect(invalidateSessionCacheMock).toHaveBeenCalledTimes(3);
-    expect(invalidateSessionCacheMock).toHaveBeenNthCalledWith(1, "a");
-    expect(invalidateSessionCacheMock).toHaveBeenNthCalledWith(2, "b");
-    expect(invalidateSessionCacheMock).toHaveBeenNthCalledWith(3, "c");
-  });
-
-  it("calls revokeAllUserSessions AFTER the DELETE completes — reversing the order would create a tiny window where the cache is purged but the DB still has the rows, and an in-flight cache miss would re-populate", async () => {
+  it("emits AFTER the DELETE completes — emitting earlier would let an in-flight cache miss re-populate", async () => {
     const callOrder: string[] = [];
     dbMocks.returning.mockImplementation(() => {
       callOrder.push("delete");
       return Promise.resolve([]);
     });
-    revokeAllUserSessionsMock.mockImplementation(() => {
-      callOrder.push("revoke");
+    invalidateSpy.mockImplementationOnce(() => {
+      callOrder.push("invalidate");
     });
     await rotateSessionsOnPrivilegeEvent("user-42");
-    expect(callOrder).toEqual(["delete", "revoke"]);
+    expect(callOrder).toEqual(["delete", "invalidate"]);
   });
 
-  it("even with zero deletions, revokeAllUserSessions still fires — a concurrent request that cached a stale row before our DELETE must still see it purged", async () => {
+  it("even with zero deletions the event fires — a concurrent request that cached a stale row before our DELETE must still see it purged", async () => {
     dbMocks.returning.mockResolvedValue([]);
     await rotateSessionsOnPrivilegeEvent("user-42");
-    expect(revokeAllUserSessionsMock).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("also fires when the DELETE throws (a partially applied write must not leave a stale cache)", async () => {
+    dbMocks.returning.mockRejectedValue(new Error("db down"));
+    await expect(rotateSessionsOnPrivilegeEvent("user-42")).rejects.toThrow("db down");
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
   });
 });

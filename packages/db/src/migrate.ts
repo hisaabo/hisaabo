@@ -26,6 +26,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { backfillStoreSlugRegistry, formatBackfillReport } from "./backfill-store-slugs.js";
 
 // ── Path resolution ──────────────────────────────────────────
 //
@@ -361,7 +362,49 @@ async function migrateMultiTenant(): Promise<boolean> {
     log("warn", `${report.failed} tenant(s) failed migration — they may experience errors`);
   }
 
+  // Step 3: one-time store-slug registry backfill (marker-guarded). Must run
+  // after tenant migrations (needs businesses.store_slug). Never fails boot.
+  try {
+    await backfillStoreSlugRegistry({
+      controlUrl,
+      buildTenantUrl: buildTenantConnectionString,
+      logger: log,
+    });
+  } catch (err) {
+    log("error", "Store slug backfill failed — continuing startup (retried on next boot)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return true; // control DB succeeded, which is what matters for startup
+}
+
+/**
+ * `--reconcile-store-slugs [--dry-run] [--prune]`: multi-tenant only, runs no
+ * schema migrations. --dry-run is read-only and safe against production before
+ * upgrading (works even if store_slugs does not exist yet).
+ */
+async function reconcileStoreSlugs(argv: string[]): Promise<boolean> {
+  if (process.env.MULTI_TENANT !== "true") {
+    log("error", "--reconcile-store-slugs is only available in multi-tenant mode (MULTI_TENANT=true)");
+    return false;
+  }
+  const controlUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  if (!controlUrl) {
+    log("error", "CONTROL_DATABASE_URL or DATABASE_URL is not set");
+    return false;
+  }
+  const dryRun = argv.includes("--dry-run");
+  const prune = argv.includes("--prune");
+  if (dryRun && prune) {
+    log("error", "--prune cannot be combined with --dry-run");
+    return false;
+  }
+  const report = await backfillStoreSlugRegistry({
+    controlUrl, force: true, dryRun, prune, buildTenantUrl: buildTenantConnectionString, logger: log,
+  });
+  console.log("\n" + formatBackfillReport(report, { dryRun }));
+  return report.failures.length === 0;
 }
 
 async function migrateAllTenants(controlUrl: string): Promise<TenantMigrationReport> {
@@ -460,7 +503,7 @@ async function migrateAllTenants(controlUrl: string): Promise<TenantMigrationRep
  * per-tenant user so application queries stay least-privileged. This
  * function is migration-specific.
  */
-async function buildTenantConnectionString(tenant: {
+export async function buildTenantConnectionString(tenant: {
   db_host: string | null;
   db_port: string | null;
   db_user: string | null;       // retained in signature for logging/compat
@@ -549,7 +592,12 @@ export function assertMigrationsPresent(): string[] {
 // API server to attempt migrations and crash on startup when tsup bundled
 // @hisaabo/db into packages/api/dist/ (wrong path resolution + process.exit).
 
-export async function main() {
+export async function main(argv: string[] = process.argv.slice(2)) {
+  if (argv.includes("--reconcile-store-slugs")) {
+    const ok = await reconcileStoreSlugs(argv);
+    if (!ok) process.exit(1);
+    return;
+  }
   const isMultiTenant = process.env.MULTI_TENANT === "true";
   const mode = isMultiTenant ? "multi-tenant" : "self-hosted";
 

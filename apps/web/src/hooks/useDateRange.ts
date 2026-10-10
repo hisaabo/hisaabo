@@ -41,8 +41,11 @@ export function getDatePreset(preset: string): { fromDate: string; toDate: strin
     }
     case "last-30": {
       return {
-        fromDate: now.subtract(30, "day").toISOString(),
-        toDate: now.toISOString(),
+        // Day-aligned so the range (and every query key built from it) is
+        // stable across remounts within a day, and includes records created
+        // later today.
+        fromDate: now.subtract(30, "day").startOf("day").toISOString(),
+        toDate: now.endOf("day").toISOString(),
       };
     }
     case "this-fy": {
@@ -51,7 +54,7 @@ export function getDatePreset(preset: string): { fromDate: string; toDate: strin
       const fyYear = mm >= 3 ? yyyy : yyyy - 1;
       return {
         fromDate: dayjs.utc().year(fyYear).month(3).date(1).startOf("day").toISOString(),
-        toDate: now.toISOString(),
+        toDate: now.endOf("day").toISOString(),
       };
     }
     case "last-fy": {

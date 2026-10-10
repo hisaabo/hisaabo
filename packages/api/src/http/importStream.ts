@@ -21,7 +21,8 @@ import type { Hono } from "hono";
 import { getTenantDb, businesses, controlDb, tenants } from "@hisaabo/db";
 import { count as sqlCount, eq } from "drizzle-orm";
 import { verifyImportToken } from "../lib/importToken.js";
-import { importTenantBackup } from "../lib/importEngine.js";
+import { importTenantBackup, registerImportedStoreSlugs } from "../lib/importEngine.js";
+import { isRegistryEnabled } from "../lib/store-slug-registry.js";
 import { logger } from "../lib/logger.js";
 import { getTenantRole, hasRole, OWNER_ROLES } from "../lib/tenant-access.js";
 
@@ -199,6 +200,10 @@ export function registerImportRoute(app: Hono): void {
         },
         422,
       );
+    }
+
+    if (isRegistryEnabled()) {
+      await registerImportedStoreSlugs(tenantDb as any, tenantId, result.warnings, log);
     }
 
     log.info(

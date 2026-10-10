@@ -228,10 +228,14 @@ function ItemsPage() {
         const variantDataMap: Record<string, any[]> = {};
         for (const item of variantItems) {
           for (const attr of (item.variantAttributes || [])) allAttrs.add(attr);
+        }
+        // Batched fetch (one request per 500 items) instead of one per item.
+        const CHUNK = 500;
+        for (let i = 0; i < variantItems.length; i += CHUNK) {
+          const itemIds = variantItems.slice(i, i + CHUNK).map((it: any) => it.id as string);
           try {
-            const variants = await utils.item.listVariants.fetch({ itemId: item.id });
-            variantDataMap[item.id] = variants;
-          } catch { variantDataMap[item.id] = []; }
+            Object.assign(variantDataMap, await utils.item.listVariantsForItems.fetch({ itemIds }));
+          } catch { /* chunk failed: those items export without variant rows */ }
         }
         const attrCols = [...allAttrs];
         const headers = ["Parent Item", ...attrCols, "SKU", "Sale Price", "Purchase Price", "Stock", "Category"];

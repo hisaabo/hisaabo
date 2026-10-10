@@ -73,7 +73,7 @@ export const shipmentRouter = router({
           .leftJoin(invoices, eq(invoices.id, shipments.invoiceId))
           .leftJoin(parties, eq(parties.id, shipments.partyId))
           .where(and(...conditions))
-          .orderBy(desc(shipments.createdAt))
+          .orderBy(desc(shipments.createdAt), desc(shipments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(shipments)

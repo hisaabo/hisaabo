@@ -65,7 +65,7 @@ export default function ExpenseDetailScreen() {
   // The list is cached, so this is typically free after the list screen loads.
   const { data: expenseData, isLoading: expenseLoading, refetch: refetchExpense, isRefetching: isRefetchingExpense } =
     trpc.expense.list.useQuery(
-      { page: 1, limit: 200 },
+      { page: 1, limit: 100 },
       { enabled: !!id }
     );
 

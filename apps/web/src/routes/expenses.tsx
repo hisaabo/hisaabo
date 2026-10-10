@@ -108,7 +108,7 @@ function ExpensesPage() {
     },
   ] : []);
 
-  const { data, isFetching, isLoading } = trpc.expense.list.useQuery({
+  const { data, isFetching, isLoading, isPlaceholderData } = trpc.expense.list.useQuery({
     page,
     limit: EXPENSE_PAGE_SIZE,
     search: debouncedSearch || undefined,
@@ -125,6 +125,7 @@ function ExpensesPage() {
     total: data?.total ?? 0,
     page,
     isFetching,
+    isPlaceholderData,
     onLoadMore: loadMore,
     resetDeps: [debouncedSearch, categoryFilter, dateRange.fromDate, dateRange.toDate],
   });

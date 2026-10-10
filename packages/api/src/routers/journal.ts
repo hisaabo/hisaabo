@@ -25,7 +25,20 @@ export const journalRouter = router({
       const conditions = [eq(journalEntries.businessId, ctx.businessId)];
       conditions.push(...buildBusinessDateFilter(journalEntries, { from: input.fromDate, to: input.toDate }));
 
-      // Return entries with line count and total amount via subqueries
+      // Aggregate line count / debit total once per entry (grouped subquery + LEFT JOIN)
+      // instead of two correlated subqueries per row.
+      const lineTotals = ctx.db
+        .select({
+          journalEntryId: journalEntryLines.journalEntryId,
+          lineCount: sql<number>`COUNT(*)`.as("line_count"),
+          totalAmount: sql<string>`COALESCE(SUM(${journalEntryLines.debit}::numeric), 0)::text`.as("total_amount"),
+        })
+        .from(journalEntryLines)
+        .innerJoin(journalEntries, eq(journalEntries.id, journalEntryLines.journalEntryId))
+        .where(eq(journalEntries.businessId, ctx.businessId))
+        .groupBy(journalEntryLines.journalEntryId)
+        .as("line_totals");
+
       const entries = await ctx.db
         .select({
           id: journalEntries.id,
@@ -40,16 +53,11 @@ export const journalRouter = router({
           createdByName: journalEntries.createdByName,
           createdAt: journalEntries.createdAt,
           updatedAt: journalEntries.updatedAt,
-          lineCount: sql<number>`(
-            SELECT COUNT(*) FROM journal_entry_lines
-            WHERE journal_entry_id = ${journalEntries.id}
-          )`,
-          totalAmount: sql<string>`(
-            SELECT COALESCE(SUM(debit::numeric), 0)::text FROM journal_entry_lines
-            WHERE journal_entry_id = ${journalEntries.id}
-          )`,
+          lineCount: sql<number>`COALESCE(${lineTotals.lineCount}, 0)`,
+          totalAmount: sql<string>`COALESCE(${lineTotals.totalAmount}, '0')`,
         })
         .from(journalEntries)
+        .leftJoin(lineTotals, eq(lineTotals.journalEntryId, journalEntries.id))
         .where(and(...conditions))
         .orderBy(desc(journalEntries.entryDate));
 

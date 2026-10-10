@@ -158,15 +158,28 @@ describe("Field-level encryption (crypto.ts)", () => {
       expect(decryptField(encrypted)).toBe("secret");
     });
 
-    it("fails gracefully when neither key works (returns raw value)", () => {
+    it("fails closed when neither key works on a versioned value", () => {
       setKeys(TEST_KEY_A);
       const encrypted = encryptField("secret");
 
       // Switch to a completely different key with no previous
       setKeys(TEST_KEY_B);
-      // Should return the raw encrypted string since decryption fails
-      const result = decryptField(encrypted);
-      expect(result).toBe(encrypted);
+      expect(() => decryptField(encrypted)).toThrow(/Failed to decrypt/);
+      expect(() => reEncryptField(encrypted)).toThrow(/Failed to decrypt/);
+    });
+
+    it("fails closed on a versioned value when no key is configured", () => {
+      setKeys(TEST_KEY_A);
+      const encrypted = encryptField("secret");
+      clearKeys();
+      expect(() => decryptField(encrypted)).toThrow(/no ENCRYPTION_KEY/);
+    });
+
+    it("still returns undecryptable unversioned hex:hex:hex values as legacy plaintext", () => {
+      setKeys(TEST_KEY_A);
+      const legacyLooking = "abcdef0123456789abcdef0123456789:aabbccdd00112233aabbccdd00112233:deadbeef";
+      expect(decryptField(legacyLooking)).toBe(legacyLooking);
+      expect(decryptField("plain-password")).toBe("plain-password");
     });
   });
 

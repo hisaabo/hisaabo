@@ -1,6 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { controlDb, tenants, tenantMembers } from "@hisaabo/db";
-import { eq, and } from "drizzle-orm";
+import { getMembership, getActiveMembership, authzDenialError } from "./authz.js";
 
 /** Roles that hold full control of a tenant. superadmin is treated as owner. */
 export const OWNER_ROLES = ["owner", "superadmin"] as const;
@@ -11,13 +10,14 @@ export function hasRole(role: string | null | undefined, roles: readonly string[
   return !!role && roles.includes(role);
 }
 
+/**
+ * Role of `userId` in `tenantId` (null = not a member). Read through the shared
+ * authz cache (lib/authz.ts) so role gates, CASL and the tenant/business
+ * middlewares always see one value; invalidated by `membership` events.
+ */
 export async function getTenantRole(tenantId: string, userId: string): Promise<string | null> {
-  const [membership] = await controlDb
-    .select({ role: tenantMembers.role })
-    .from(tenantMembers)
-    .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, userId)))
-    .limit(1);
-  return membership?.role ?? null;
+  const m = await getMembership(tenantId, userId);
+  return m?.role ?? null;
 }
 
 /**
@@ -39,48 +39,12 @@ export async function requireTenantRole(
   return role;
 }
 
-// ── Membership / tenant-status cache ───────────────────────────────────────
-// Sessions and API keys carry a tenantId that was valid when issued; this
-// re-validates it on each tenant-scoped request without a DB hit every time.
-const MEMBERSHIP_TTL_MS = 30_000;
-const MEMBERSHIP_CACHE_MAX = 5000;
-const membershipCache = new Map<string, number>();
-
-export function invalidateMembershipCache(tenantId: string, userId?: string): void {
-  if (userId) {
-    membershipCache.delete(`${tenantId}:${userId}`);
-    return;
-  }
-  for (const key of membershipCache.keys()) {
-    if (key.startsWith(`${tenantId}:`)) membershipCache.delete(key);
-  }
-}
-
-/** Throws FORBIDDEN unless the user is a member of an active tenant. */
+/**
+ * Throws FORBIDDEN unless the user is a member of an active tenant. Sessions
+ * and API keys carry a tenantId that was valid when issued; this re-validates
+ * it per request from the positive-only authz cache (lib/authz.ts).
+ */
 export async function assertActiveMembership(tenantId: string, userId: string): Promise<void> {
-  const key = `${tenantId}:${userId}`;
-  const expiry = membershipCache.get(key);
-  if (expiry && Date.now() < expiry) return;
-
-  const [row] = await controlDb
-    .select({ status: tenants.status })
-    .from(tenantMembers)
-    .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
-    .where(and(eq(tenantMembers.tenantId, tenantId), eq(tenantMembers.userId, userId)))
-    .limit(1);
-
-  if (!row) {
-    membershipCache.delete(key);
-    throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this organization" });
-  }
-  if (row.status !== "active") {
-    membershipCache.delete(key);
-    throw new TRPCError({ code: "FORBIDDEN", message: "Organization is not active" });
-  }
-
-  if (membershipCache.size >= MEMBERSHIP_CACHE_MAX) {
-    const first = membershipCache.keys().next().value;
-    if (first) membershipCache.delete(first);
-  }
-  membershipCache.set(key, Date.now() + MEMBERSHIP_TTL_MS);
+  const r = await getActiveMembership(tenantId, userId);
+  if (!r.ok) throw authzDenialError(r.reason);
 }

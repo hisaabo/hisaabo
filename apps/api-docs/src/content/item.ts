@@ -789,6 +789,36 @@ resp = httpx.get(
       gotchas: ["Returns NOT_FOUND if the item does not belong to the active business."],
     },
     {
+      id: "item-list-variants-for-items",
+      method: "query",
+      path: "item.listVariantsForItems",
+      title: "List Variants For Items",
+      description: "Batched `item.listVariants`: fetch the variants of up to 500 items in one request. Same rows and creation-date ordering as `listVariants`, returned as a map keyed by item ID.",
+      auth: "business",
+      requiredRole: "viewer",
+      input: [
+        { name: "itemIds", type: "string[] (UUID, max 500)", required: true, description: "Parent item IDs" },
+      ],
+      output: {
+        description: "Object mapping item ID to its array of variant rows.",
+        example: {
+          "item-uuid": [
+            { id: "v-uuid", itemId: "item-uuid", attributeValues: { size: "M" }, sku: "TS-M", salePrice: "599.00", stockQuantity: "45.000" },
+          ],
+        },
+      },
+      codeExamples: {
+        curl: `curl "https://api.hisaabo.in/api/trpc/item.listVariantsForItems?input=%7B%22json%22%3A%7B%22itemIds%22%3A%5B%22item-uuid%22%5D%7D%7D" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
+  -H "x-business-id: YOUR_BUSINESS_ID"`,
+        javascript: `const byItem = await trpc.item.listVariantsForItems.query({ itemIds: ["item-uuid"] });`,
+      },
+      gotchas: [
+        "Items that are missing, soft-deleted, or in another business are omitted from the result (no NOT_FOUND, unlike `listVariants`).",
+        "Items with no active variants have no key in the map.",
+      ],
+    },
+    {
       id: "item-create-variant",
       method: "mutation",
       path: "item.createVariant",

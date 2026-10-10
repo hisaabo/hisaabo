@@ -655,7 +655,7 @@ export const ewayBillRouter = router({
         .leftJoin(invoices, eq(ewayBills.invoiceId, invoices.id))
         .leftJoin(parties, eq(invoices.partyId, parties.id))
         .where(and(...conditions))
-        .orderBy(desc(ewayBills.createdAt))
+        .orderBy(desc(ewayBills.createdAt), desc(ewayBills.id))
         .limit(input.limit)
         .offset(offset);
 

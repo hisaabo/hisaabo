@@ -82,6 +82,7 @@ async function fetchCurrentValue(): Promise<MaintenanceValue> {
 }
 
 async function upsertValue(value: MaintenanceValue): Promise<void> {
+  // cache-guard: CLI process, no in-process caches; running servers are invalidated by the system_config DB trigger (NOTIFY)
   await controlDb
     .insert(systemConfig)
     .values({

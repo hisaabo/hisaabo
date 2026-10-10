@@ -1,4 +1,4 @@
-import type { StoreConfig, OrderResult } from "./types";
+import type { CatalogPage, OrderResult } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
 
@@ -26,12 +26,21 @@ export function assetUrl(path: string | null | undefined): string | undefined {
   return `${API_URL}${path}`;
 }
 
-export async function fetchCatalog(slug: string): Promise<StoreConfig> {
+export async function fetchCatalog(
+  slug: string,
+  opts: { page?: number; search?: string; category?: string } = {}
+): Promise<CatalogPage> {
+  const params = new URLSearchParams();
+  if (opts.page && opts.page > 1) params.set("page", String(opts.page));
+  if (opts.search) params.set("search", opts.search);
+  if (opts.category) params.set("category", opts.category);
+  const query = params.toString();
+
   // `credentials: "omit"` — the store is fully public. Never attach the
   // admin session_id cookie from a same-origin self-hosted deploy. If we
   // ever did, the (now removed) global CSRF gate would trip and the
   // storefront would break on checkout.
-  const res = await fetch(`${STORE_PREFIX}/${slug}/catalog.json`, {
+  const res = await fetch(`${STORE_PREFIX}/${slug}/catalog.json${query ? `?${query}` : ""}`, {
     credentials: "omit",
   });
   if (!res.ok) throw new Error("Store not found");

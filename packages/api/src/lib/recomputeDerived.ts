@@ -2,8 +2,8 @@
  * Post-import recompute helpers.
  *
  * Each function recomputes a denormalised column from first principles,
- * compares it against the imported value, updates the row unconditionally
- * (authoritative recompute wins over snapshot), and returns a list of
+ * compares it against the imported value, updates rows whose stored value
+ * differs (authoritative recompute wins over snapshot), and returns a list of
  * warnings for any delta > 0.01.
  *
  * None of these functions throw — the import proceeds regardless of
@@ -81,6 +81,7 @@ export async function recomputeBankBalances(
 
     const netByAccount = new Map(txnRows.map((r) => [r.bankAccountId, r.net]));
 
+    const balanceRows: Array<{ id: string; computed: string }> = [];
     for (const acct of accounts) {
       const net = netByAccount.get(acct.id) ?? "0";
       const computed = (
@@ -98,12 +99,22 @@ export async function recomputeBankBalances(
           delta: delta.toFixed(2),
         });
       }
+      balanceRows.push({ id: acct.id, computed });
+    }
 
-      // Update unconditionally — recomputed value is authoritative
-      await db
-        .update(bankAccounts)
-        .set({ currentBalance: computed, updatedAt: new Date() })
-        .where(eq(bankAccounts.id, acct.id));
+    // Recomputed value is authoritative; write only rows that drift (compared
+    // in SQL numeric), one set-based UPDATE per chunk.
+    for (let i = 0; i < balanceRows.length; i += 1000) {
+      const values = sql.join(
+        balanceRows.slice(i, i + 1000).map((r) => sql`(${r.id}::uuid, ${r.computed}::numeric)`),
+        sql`, `,
+      );
+      await db.execute(sql`
+        UPDATE bank_accounts SET current_balance = v.computed, updated_at = NOW()
+        FROM (VALUES ${values}) AS v(id, computed)
+        WHERE bank_accounts.id = v.id
+          AND bank_accounts.current_balance::numeric IS DISTINCT FROM v.computed
+      `);
     }
   } catch (err) {
     logger.error({ err }, "[recomputeBankBalances] Failed");
@@ -300,6 +311,7 @@ export async function recomputeAmountPaid(
       .from(invoices)
       .where(inArray(invoices.businessId, businessIds));
 
+    const amountRows: Array<{ id: string; computed: string }> = [];
     for (const inv of allInvoices) {
       const computed = paidByInvoice.get(inv.id) ?? "0.00";
       const delta = Math.abs(parseFloat(computed) - parseFloat(inv.amountPaid));
@@ -314,12 +326,22 @@ export async function recomputeAmountPaid(
           delta: delta.toFixed(2),
         });
       }
+      amountRows.push({ id: inv.id, computed });
+    }
 
-      // Update unconditionally
-      await db
-        .update(invoices)
-        .set({ amountPaid: computed, updatedAt: new Date() })
-        .where(eq(invoices.id, inv.id));
+    // Write only rows that drift (compared in SQL numeric), one set-based
+    // UPDATE per chunk.
+    for (let i = 0; i < amountRows.length; i += 1000) {
+      const values = sql.join(
+        amountRows.slice(i, i + 1000).map((r) => sql`(${r.id}::uuid, ${r.computed}::numeric)`),
+        sql`, `,
+      );
+      await db.execute(sql`
+        UPDATE invoices SET amount_paid = v.computed, updated_at = NOW()
+        FROM (VALUES ${values}) AS v(id, computed)
+        WHERE invoices.id = v.id
+          AND invoices.amount_paid::numeric IS DISTINCT FROM v.computed
+      `);
     }
   } catch (err) {
     logger.error({ err }, "[recomputeAmountPaid] Failed");

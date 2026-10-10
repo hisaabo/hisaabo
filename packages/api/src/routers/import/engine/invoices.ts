@@ -225,20 +225,23 @@ export async function runInvoicesImport(
         }
       }
 
-      // Apply sale stock adjustments (subtract)
-      for (const [itemId, totalQty] of saleDeltas) {
-        await tx.update(items).set({
-          stockQuantity: sql`${items.stockQuantity}::numeric - ${totalQty.toFixed(3)}::numeric`,
-          updatedAt: new Date(),
-        }).where(eq(items.id, itemId));
-      }
-
-      // Apply purchase stock adjustments (add)
-      for (const [itemId, totalQty] of purchaseDeltas) {
-        await tx.update(items).set({
-          stockQuantity: sql`${items.stockQuantity}::numeric + ${totalQty.toFixed(3)}::numeric`,
-          updatedAt: new Date(),
-        }).where(eq(items.id, itemId));
+      // Apply sale (subtract) and purchase (add) stock adjustments with
+      // set-based UPDATEs instead of one UPDATE per item.
+      const stockItemIds = Array.from(new Set([...saleDeltas.keys(), ...purchaseDeltas.keys()]));
+      for (let j = 0; j < stockItemIds.length; j += 1000) {
+        const stockValues = sql.join(
+          stockItemIds.slice(j, j + 1000).map((itemId) =>
+            sql`(${itemId}::uuid, ${(saleDeltas.get(itemId) ?? 0).toFixed(3)}::numeric, ${(purchaseDeltas.get(itemId) ?? 0).toFixed(3)}::numeric)`,
+          ),
+          sql`, `,
+        );
+        await tx.execute(sql`
+          UPDATE items SET
+            stock_quantity = items.stock_quantity::numeric - v.sale_qty + v.purchase_qty,
+            updated_at = NOW()
+          FROM (VALUES ${stockValues}) AS v(id, sale_qty, purchase_qty)
+          WHERE items.id = v.id
+        `);
       }
 
       // Bulk insert auto-payment records if any

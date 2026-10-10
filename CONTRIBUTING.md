@@ -117,6 +117,10 @@ Open a GitHub issue with the `enhancement` label. Describe:
 - **No emojis** in code, comments, or UI
 - Prefer explicit over clever — readable code wins
 
+## Indexes
+
+Indexes speed up reads but tax every write (insert, update of an indexed column, delete) and cost memory and vacuum time. Add one only when you can point to a concrete query that needs it (check with `EXPLAIN`), and prefer widening an existing index (extra trailing column, partial predicate) over adding a new one. Explain in the schema comment which query the index serves. Hot tables (sessions, invoices, payments) deserve the most scepticism. See also [docs/architecture/caching.md](docs/architecture/caching.md) for what is cached instead of indexed.
+
 ## Areas Where Help is Needed
 
 - **Translations** — Hindi, Tamil, Bengali, Marathi, Gujarati, and other Indian languages
