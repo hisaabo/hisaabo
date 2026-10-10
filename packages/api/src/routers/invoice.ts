@@ -11,6 +11,7 @@ import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+import { applyStockDeltas } from "../lib/stock-adjust.js";
 
 // Reverse the stock (and purchase ITC) impact an invoice had at creation.
 // Shared by delete and cancel so both undo exactly the same effects.
@@ -25,28 +26,12 @@ async function reverseInvoiceEffects(
     .from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, inv.id));
 
-  // Reverse stock per line item using PostgreSQL NUMERIC arithmetic
-  for (const li of lineItemRows) {
-    if (li.variantId) {
-      await tx.update(itemVariants).set({
-        stockQuantity: inv.type === "sale"
-          ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
-          : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
-        updatedAt: new Date(),
-      }).where(and(
-        eq(itemVariants.id, li.variantId),
-        sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${businessId})`
-      ));
-    } else if (li.itemId) {
-      const cf = li.conversionFactor ?? "1";
-      await tx.update(items).set({
-        stockQuantity: inv.type === "sale"
-          ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
-          : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
-        updatedAt: new Date(),
-      }).where(and(eq(items.id, li.itemId), eq(items.businessId, businessId)));
-    }
-  }
+  // Reverse stock per line item (batched, NUMERIC arithmetic in SQL)
+  await applyStockDeltas(
+    tx,
+    lineItemRows.map((li) => ({ ...li, sign: inv.type === "sale" ? (1 as const) : (-1 as const) })),
+    { businessId },
+  );
 
   // Auto-reverse ITC when a purchase invoice is deleted/cancelled
   if (inv.type === "purchase" && inv.documentType === "invoice") {
@@ -417,30 +402,14 @@ export const invoiceRouter = router({
       // Update stock quantities for sale/purchase invoices.
       // Skip when skipStockAdjustment is set — used when converting from
       // delivery_challan (which already decremented stock) to avoid double-counting.
-      // Separate tracking for items (with conversion factor) and variants (no conversion)
-      // Update stock per line item using PostgreSQL NUMERIC arithmetic to avoid
-      // JS floating-point drift. One UPDATE per line item is safe within the
-      // transaction and avoids intermediate JS accumulation.
-      if (!input.skipStockAdjustment) for (const li of input.lineItems) {
-        if (li.variantId) {
-          await tx.update(itemVariants).set({
-            stockQuantity: input.type === "sale"
-              ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
-              : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
-            updatedAt: new Date(),
-          }).where(and(
-            eq(itemVariants.id, li.variantId),
-            sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-          ));
-        } else if (li.itemId) {
-          const cf = li.conversionFactor || "1";
-          await tx.update(items).set({
-            stockQuantity: input.type === "sale"
-              ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
-              : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
-            updatedAt: new Date(),
-          }).where(eq(items.id, li.itemId));
-        }
+      // Variant lines adjust the variant only (no conversion); item lines adjust
+      // the item by quantity * conversion factor. Batched into one UPDATE per table.
+      if (!input.skipStockAdjustment) {
+        await applyStockDeltas(
+          tx,
+          input.lineItems.map((li) => ({ ...li, sign: input.type === "sale" ? -1 : 1 })),
+          { businessId: ctx.businessId },
+        );
       }
 
       // Auto-create a shipment entry only when a shipping charge is present on a
@@ -907,28 +876,8 @@ export const invoiceRouter = router({
             variantId: invoiceItems.variantId,
           }).from(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
 
-          // Step 2: Reverse old stock adjustments using PostgreSQL NUMERIC arithmetic
-          for (const li of oldLineItems) {
-            if (li.variantId) {
-              await tx.update(itemVariants).set({
-                stockQuantity: existing.type === "sale"
-                  ? sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`
-                  : sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`,
-                updatedAt: new Date(),
-              }).where(and(
-                eq(itemVariants.id, li.variantId),
-                sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-              ));
-            } else if (li.itemId) {
-              const cf = li.conversionFactor || "1";
-              await tx.update(items).set({
-                stockQuantity: existing.type === "sale"
-                  ? sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`
-                  : sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`,
-                updatedAt: new Date(),
-              }).where(eq(items.id, li.itemId));
-            }
-          }
+          // Steps 2 and 5 (reverse old stock effect, apply new) are netted into a
+          // single batched adjustment after the new lines are inserted.
 
           // Step 3: Delete existing line items
           await tx.delete(invoiceItems).where(eq(invoiceItems.invoiceId, input.id));
@@ -963,28 +912,16 @@ export const invoiceRouter = router({
             await tx.insert(invoiceItems).values(processedItems);
           }
 
-          // Step 5: Apply new stock adjustments using PostgreSQL NUMERIC arithmetic
-          for (const li of input.lineItems) {
-            if (li.variantId) {
-              await tx.update(itemVariants).set({
-                stockQuantity: existing.type === "sale"
-                  ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
-                  : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
-                updatedAt: new Date(),
-              }).where(and(
-                eq(itemVariants.id, li.variantId),
-                sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-              ));
-            } else if (li.itemId) {
-              const cf = li.conversionFactor || "1";
-              await tx.update(items).set({
-                stockQuantity: existing.type === "sale"
-                  ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
-                  : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
-                updatedAt: new Date(),
-              }).where(eq(items.id, li.itemId));
-            }
-          }
+          // Step 5: Net stock adjustment — reverse old lines, apply new lines
+          const sign: 1 | -1 = existing.type === "sale" ? 1 : -1;
+          await applyStockDeltas(
+            tx,
+            [
+              ...oldLineItems.map((li) => ({ ...li, sign })),
+              ...input.lineItems.map((li) => ({ ...li, sign: -sign as 1 | -1 })),
+            ],
+            { businessId: ctx.businessId },
+          );
 
           updates.subtotal = totals.subtotal;
           updates.taxAmount = totals.taxTotal;

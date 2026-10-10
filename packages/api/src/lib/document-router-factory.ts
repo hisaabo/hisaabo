@@ -5,7 +5,6 @@ import {
   invoices,
   invoiceItems,
   items,
-  itemVariants,
   businesses,
   parties,
 } from "@hisaabo/db";
@@ -26,6 +25,7 @@ import { logAudit } from "./audit.js";
 import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
 import { buildBusinessDateFilter } from "./business-date.js";
 import { reverseDocumentStockEffect } from "./document-stock-reversal.js";
+import { applyStockDeltas } from "./stock-adjust.js";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "partial" | "overdue" | "cancelled";
 
@@ -380,39 +380,15 @@ export function createDocumentRouter(config: DocumentRouterConfig) {
               .values(processedItems.map((li) => ({ ...li, invoiceId: result.id })));
           }
 
-          // Stock effects (adjusted for unit conversion)
-          // Group by itemId and sum quantities to avoid redundant per-row updates.
+          // Stock effects (adjusted for unit conversion). Deltas are grouped per
+          // item/variant and applied in one batched NUMERIC UPDATE per table.
           // skipStockAdjustment lets callers (e.g. challan→invoice conversion) opt out.
-          // Stock effects — one UPDATE per line item using PostgreSQL NUMERIC
-          // arithmetic to avoid JS floating-point drift in accumulation
           if (config.stockEffect !== "none" && !input.skipStockAdjustment) {
-            for (const li of input.lineItems) {
-              if (li.variantId) {
-                await tx
-                  .update(itemVariants)
-                  .set({
-                    stockQuantity: config.stockEffect === "decrement"
-                      ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
-                      : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
-                    updatedAt: new Date(),
-                  })
-                  .where(and(
-                    eq(itemVariants.id, li.variantId),
-                    sql`EXISTS (SELECT 1 FROM items WHERE items.id = item_variants.item_id AND items.business_id = ${ctx.businessId})`
-                  ));
-              } else if (li.itemId) {
-                const cf = li.conversionFactor || "1";
-                await tx
-                  .update(items)
-                  .set({
-                    stockQuantity: config.stockEffect === "decrement"
-                      ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
-                      : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
-                    updatedAt: new Date(),
-                  })
-                  .where(and(eq(items.id, li.itemId), eq(items.businessId, ctx.businessId)));
-              }
-            }
+            await applyStockDeltas(
+              tx,
+              input.lineItems.map((li) => ({ ...li, sign: config.stockEffect === "decrement" ? -1 : 1 })),
+              { businessId: ctx.businessId },
+            );
           }
 
           // Auto-update referenced invoice status to "adjusted" when fully covered

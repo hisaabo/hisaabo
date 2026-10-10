@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { isSmsConfigured } from "../lib/sms.js";
+import { applyStockDeltas } from "../lib/stock-adjust.js";
 
 // ── Validators ─────────────────────────────────────────────────
 
@@ -470,20 +471,7 @@ export const storeRouter = router({
             conversionFactor: invoiceItems.conversionFactor,
           }).from(invoiceItems).where(eq(invoiceItems.invoiceId, order.invoiceId));
 
-          for (const li of lines) {
-            if (li.variantId) {
-              await tx.update(itemVariants).set({
-                stockQuantity: sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
-                updatedAt: new Date(),
-              }).where(eq(itemVariants.id, li.variantId));
-            } else if (li.itemId) {
-              const cf = li.conversionFactor || "1";
-              await tx.update(items).set({
-                stockQuantity: sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
-                updatedAt: new Date(),
-              }).where(eq(items.id, li.itemId));
-            }
-          }
+          await applyStockDeltas(tx, lines.map((li) => ({ ...li, sign: 1 })));
         }
 
         return { success: true, orderId: input.orderId };
