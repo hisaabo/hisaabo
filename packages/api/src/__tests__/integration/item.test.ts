@@ -962,3 +962,48 @@ describe("item.list N+1 detection", () => {
     }
   });
 });
+
+// ── item.listVariantsForItems ────────────────────────────────────────────────
+
+describe("item.listVariantsForItems", () => {
+  const mk = (name: string, sizes: string[]) =>
+    callerRamesh.item.create({
+      name,
+      itemType: "product",
+      itemMode: "variants",
+      unit: "pcs",
+      variantAttributes: ["Size"],
+      variants: sizes.map((s) => ({ attributeValues: { Size: s }, salePrice: "100.00" })),
+    });
+
+  it("matches listVariants per item (same rows, same order) in one call", async () => {
+    const a = await mk("Batched Variants A", ["S", "M", "L"]);
+    const b = await mk("Batched Variants B", ["XL"]);
+    const grouped = await callerRamesh.item.listVariantsForItems({ itemIds: [a.id, b.id] });
+    expect(grouped[a.id]).toEqual(await callerRamesh.item.listVariants({ itemId: a.id }));
+    expect(grouped[b.id]).toEqual(await callerRamesh.item.listVariants({ itemId: b.id }));
+  });
+
+  it("omits soft-deleted variants and soft-deleted parents", async () => {
+    const a = await mk("Batched Deleted Variant", ["S", "M"]);
+    const gone = await mk("Batched Deleted Parent", ["S"]);
+    const [first] = await callerRamesh.item.listVariants({ itemId: a.id });
+    await callerRamesh.item.deleteVariant({ variantId: first.id });
+    await callerRamesh.item.delete({ id: gone.id });
+    const grouped = await callerRamesh.item.listVariantsForItems({ itemIds: [a.id, gone.id] });
+    expect(grouped[a.id]).toHaveLength(1);
+    expect(grouped[gone.id]).toBeUndefined();
+  });
+
+  it("does not expose another business's variants", async () => {
+    const a = await mk("Batched Isolation", ["S"]);
+    const grouped = await callerKiran.item.listVariantsForItems({ itemIds: [a.id] });
+    expect(grouped).toEqual({});
+  });
+
+  it("returns an empty map for no ids and rejects oversized input", async () => {
+    expect(await callerRamesh.item.listVariantsForItems({ itemIds: [] })).toEqual({});
+    const ids = Array.from({ length: 501 }, () => crypto.randomUUID());
+    await expect(callerRamesh.item.listVariantsForItems({ itemIds: ids })).rejects.toThrow();
+  });
+});

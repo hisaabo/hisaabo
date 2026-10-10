@@ -1,4 +1,4 @@
-import { eq, and, ilike, sql, desc, isNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
 import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
@@ -1069,6 +1069,32 @@ export const itemRouter = router({
       return ctx.db.select().from(itemVariants)
         .where(and(eq(itemVariants.itemId, input.itemId), isNull(itemVariants.deletedAt)))
         .orderBy(itemVariants.createdAt);
+    }),
+
+  /**
+   * Batched `listVariants` for many items in one round trip (CSV export).
+   * Same scoping/ordering as `listVariants`; items that are missing, in another
+   * business, or soft-deleted are silently omitted instead of raising NOT_FOUND.
+   * Returns variants grouped by item id.
+   */
+  listVariantsForItems: viewerProcedure
+    .input(z.object({ itemIds: z.array(z.string().uuid()).max(500) }))
+    .query(async ({ input, ctx }) => {
+      requireCan(ctx.ability, "read", "Item");
+      const result: Record<string, (typeof itemVariants.$inferSelect)[]> = {};
+      if (input.itemIds.length === 0) return result;
+
+      const rows = await ctx.db.select({ variant: itemVariants }).from(itemVariants)
+        .innerJoin(items, eq(items.id, itemVariants.itemId))
+        .where(and(
+          inArray(itemVariants.itemId, input.itemIds),
+          eq(items.businessId, ctx.businessId),
+          isNull(items.deletedAt),
+          isNull(itemVariants.deletedAt),
+        ))
+        .orderBy(itemVariants.createdAt);
+      for (const { variant } of rows) (result[variant.itemId] ??= []).push(variant);
+      return result;
     }),
 
   createVariant: memberProcedure
