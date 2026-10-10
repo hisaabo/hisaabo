@@ -33,6 +33,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Every deployed artifact reads its version from the committed manifests
+      # (web/desktop UI and API from package.json, Tauri from tauri.conf.json,
+      # Android from app.json, npm from the package). Refuse a tag that does
+      # not match them all, so a release can never ship mixed versions.
+      # Bump with `pnpm release <version>` before tagging.
+      - name: Check tag matches every version manifest
+        run: node scripts/versions.mjs check "$GITHUB_REF_NAME"
+
       - name: Get previous tag
         id: prev
         env:
@@ -225,8 +233,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Set version from git tag
-        run: node -e "const fs=require('fs'),f='apps/desktop/src-tauri/tauri.conf.json',c=JSON.parse(fs.readFileSync(f));c.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
+      - name: Install Tauri CLI
+        # Same pin as build-desktop.yml; tauri-action would otherwise fetch a
+        # floating @tauri-apps/cli. The Rust cache may restore ~/.cargo/bin, so
+        # reuse the binary only when it is exactly the pinned version.
+        shell: bash
+        env:
+          TAURI_CLI_VERSION: "2.12.1"
+        run: |
+          if [ "$(cargo tauri --version 2>/dev/null)" = "tauri-cli ${TAURI_CLI_VERSION}" ]; then
+            echo "Using cached tauri-cli ${TAURI_CLI_VERSION}"
+          else
+            cargo install tauri-cli --version "=${TAURI_CLI_VERSION}" --locked --force
+          fi
+          cargo tauri --version
 
       - name: Note optional Tauri updater signing key
         env:
@@ -248,6 +268,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
+          tauriScript: cargo tauri
           # Apply the production CSP overlay (strips localhost:3000 —
           # needed for `tauri dev` but dangerous in a signed release). See
           # apps/desktop/src-tauri/tauri.conf.prod.json.
@@ -310,10 +331,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
         if: steps.signing.outputs.enabled == 'true'
-
-      - name: Set version from git tag
-        if: steps.signing.outputs.enabled == 'true'
-        run: node -e "const fs=require('fs'),f='apps/mobile/app.json',c=JSON.parse(fs.readFileSync(f));c.expo.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
 
       - name: Expo prebuild
         if: steps.signing.outputs.enabled == 'true'
@@ -416,9 +433,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Set version from git tag
-        run: node -e "const fs=require('fs'),f='packages/cli/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-
       - run: pnpm --filter @hisaabo/cli build
 
       # Publishes via npm Trusted Publishing (OIDC). Requires a Trusted
@@ -465,9 +479,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Set version from git tag
-        run: node -e "const fs=require('fs'),f='packages/mcp/package.json',p=JSON.parse(fs.readFileSync(f));p.version=process.env.GITHUB_REF_NAME.replace(/^v/,'');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-
       - run: pnpm --filter @hisaabo/mcp build
 
       # Publishes via npm Trusted Publishing (OIDC). Requires a Trusted
@@ -489,7 +500,8 @@ jobs:
   release-notes:
     name: Publish Release Notes
     needs: [changes, docker, desktop, mobile, cli, mcp]
-    if: always()
+    # Not for a tag the version check rejected: nothing was built for it.
+    if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
