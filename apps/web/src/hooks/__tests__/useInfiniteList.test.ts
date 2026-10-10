@@ -373,11 +373,26 @@ describe("useInfiniteList — scroll/depth restore", () => {
     return { ...hook, el, onLoadMore, base };
   }
 
-  const save = (state: object) =>
-    sessionStorage.setItem("hisaabo-scroll-test", JSON.stringify(state));
+  /**
+   * Seeds saved state through the hook's own save path (onScroll) by mounting a
+   * throwaway instance with the given filter signature and scroll state.
+   */
+  function save(state: { scrollTop: number; itemCount: number }, resetDeps: unknown[] = ["a"]) {
+    const seed = renderHook((props: Props) => useInfiniteList(props), {
+      initialProps: {
+        key: "test", data: makeItems(1, state.itemCount), total: state.itemCount, page: 1,
+        isFetching: false, onLoadMore: vi.fn(), resetDeps,
+      } as Props,
+    });
+    const el = document.createElement("div");
+    el.scrollTop = state.scrollTop;
+    (seed.result.current.scrollRef as { current: HTMLDivElement | null }).current = el;
+    act(() => seed.result.current.onScroll());
+    seed.unmount();
+  }
 
   it("keeps saved state on mount and restores scroll once depth is reached", () => {
-    save({ scrollTop: 120, itemCount: 5, signature: '["a"]' });
+    save({ scrollTop: 120, itemCount: 5 });
     const { el, rerender, base } = mountWithContainer();
     expect(sessionStorage.getItem("hisaabo-scroll-test")).not.toBeNull();
     rerender({ ...base, data: page1, isFetching: false });
@@ -385,7 +400,7 @@ describe("useInfiniteList — scroll/depth restore", () => {
   });
 
   it("loads more pages until the saved depth is reached", () => {
-    save({ scrollTop: 50, itemCount: 10, signature: '["a"]' });
+    save({ scrollTop: 50, itemCount: 10 });
     const { el, rerender, base, onLoadMore } = mountWithContainer();
     rerender({ ...base, data: page1, isFetching: false });
     expect(onLoadMore).toHaveBeenCalledTimes(1);
@@ -396,7 +411,7 @@ describe("useInfiniteList — scroll/depth restore", () => {
   });
 
   it("does not keep loading when the total shrank below the saved depth", () => {
-    save({ scrollTop: 80, itemCount: 20, signature: '["a"]' });
+    save({ scrollTop: 80, itemCount: 20 });
     const { el, rerender, base, onLoadMore } = mountWithContainer({ total: 5 });
     rerender({ ...base, total: 5, data: page1, isFetching: false });
     expect(onLoadMore).not.toHaveBeenCalled();
@@ -404,7 +419,7 @@ describe("useInfiniteList — scroll/depth restore", () => {
   });
 
   it("stops when a requested page adds no new items", () => {
-    save({ scrollTop: 80, itemCount: 20, signature: '["a"]' });
+    save({ scrollTop: 80, itemCount: 20 });
     const { el, rerender, base, onLoadMore } = mountWithContainer({ total: 30 });
     rerender({ ...base, total: 30, data: page1, isFetching: false });
     expect(onLoadMore).toHaveBeenCalledTimes(1);
@@ -414,8 +429,22 @@ describe("useInfiniteList — scroll/depth restore", () => {
     expect(el.scrollTop).toBe(80);
   });
 
+  it("never persists filter values in sessionStorage", () => {
+    save({ scrollTop: 10, itemCount: 5 }, ["secret search text"]);
+    expect(sessionStorage.getItem("hisaabo-scroll-test")).not.toContain("secret");
+    expect(JSON.parse(sessionStorage.getItem("hisaabo-scroll-test")!)).toEqual({ scrollTop: 10, itemCount: 5 });
+  });
+
+  it("skips restore when no in-memory signature exists (e.g. after reload)", () => {
+    sessionStorage.setItem("hisaabo-scroll-reload-test", JSON.stringify({ scrollTop: 120, itemCount: 10 }));
+    const { el, rerender, base, onLoadMore } = mountWithContainer({ key: "reload-test" });
+    rerender({ ...base, data: page1, isFetching: false });
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(el.scrollTop).toBe(0);
+  });
+
   it("skips restore when the filter signature does not match", () => {
-    save({ scrollTop: 120, itemCount: 10, signature: '["b"]' });
+    save({ scrollTop: 120, itemCount: 10 }, ["b"]);
     const { el, rerender, base, onLoadMore } = mountWithContainer();
     rerender({ ...base, data: page1, isFetching: false });
     expect(onLoadMore).not.toHaveBeenCalled();
@@ -423,7 +452,7 @@ describe("useInfiniteList — scroll/depth restore", () => {
   });
 
   it("still resets and clears saved state on a real filter change after mount", () => {
-    save({ scrollTop: 120, itemCount: 5, signature: '["a"]' });
+    save({ scrollTop: 120, itemCount: 5 });
     const { result, rerender, base } = mountWithContainer();
     rerender({ ...base, data: page1, isFetching: false });
     rerender({ ...base, data: makeItems(100, 3), total: 3, isFetching: false, resetDeps: ["b"] });

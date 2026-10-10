@@ -26,11 +26,20 @@ interface UseInfiniteListOptions<T> {
 /** Cap on rows re-fetched when restoring depth, to avoid a request waterfall. */
 const MAX_RESTORE_ITEMS = 250;
 
+/** Persisted to sessionStorage: numbers only. */
 interface SavedScroll {
   scrollTop: number;
   itemCount: number;
-  signature: string;
 }
+
+/**
+ * storageKey -> filter signature at the time of the last save. Kept in memory
+ * (not sessionStorage) because the signature contains user-entered filter
+ * values such as search text, which must not be persisted to browser storage.
+ * Module state survives in-app route changes, so back-navigation still
+ * restores; a full page reload drops it and the restore is skipped.
+ */
+const savedSignatures = new Map<string, string>();
 
 interface UseInfiniteListReturn<T> {
   /** All accumulated items across pages */
@@ -87,6 +96,7 @@ export function useInfiniteList<T extends { id: string }>({
     restoredRef.current = false;
     lastLoadMoreCountRef.current = -1;
     sessionStorage.removeItem(storageKey);
+    savedSignatures.delete(storageKey);
   }, [signature, storageKey]);
 
   // Accumulate pages — NEVER replace accumulated items when page > 1.
@@ -147,7 +157,7 @@ export function useInfiniteList<T extends { id: string }>({
     } catch {
       saved = null;
     }
-    if (!saved || saved.signature !== signatureRef.current) {
+    if (!saved || savedSignatures.get(storageKey) !== signatureRef.current) {
       restoredRef.current = true;
       return;
     }
@@ -196,9 +206,9 @@ export function useInfiniteList<T extends { id: string }>({
       JSON.stringify({
         scrollTop: el.scrollTop,
         itemCount: itemCountRef.current,
-        signature: signatureRef.current,
       } satisfies SavedScroll)
     );
+    savedSignatures.set(storageKey, signatureRef.current);
 
     // Load more when within 150px of the bottom
     if (!isFetchingRef.current && hasMoreRef.current && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
