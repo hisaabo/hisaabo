@@ -19,6 +19,7 @@
  */
 
 import postgres from "postgres";
+import { resetAllCaches } from "../../lib/cache/ttl-cache.js";
 import { drizzle } from "drizzle-orm/postgres-js";
 // Import schema namespaces via the package barrel. The barrel re-exports all
 // named exports from both control-schema and tenant-schema. We need separate
@@ -29,6 +30,7 @@ import {
   // leaks across vitest's per-file module isolation)
   closeControlClient,
   closeAllTenantPools,
+  installCacheTriggers,
   // Control schema tables (used only for typing ControlTestDb)
   users,
   tenants,
@@ -197,6 +199,8 @@ export function getTenantTestDb(): TenantTestDb {
  */
 export async function truncateAllTables(): Promise<void> {
   const client = getTestClient();
+  // Rows are about to vanish: no in-process cache may keep serving them.
+  resetAllCaches();
 
   // Single statement: cascade handles FK order for us. The explicit list
   // is here so we never accidentally miss a new table added to the schema.
@@ -290,4 +294,18 @@ export async function closeTestDb(): Promise<void> {
   pending.push(closeAllTenantPools());
 
   await Promise.all(pending);
+}
+
+// ── Cache invalidation triggers ────────────────────────────────────────────────
+
+let _triggersInstalled: Promise<void> | null = null;
+
+/**
+ * Installs the cache-invalidation triggers (NOTIFY) on the test DB. CI builds
+ * the DB with `pnpm db:push`, which never runs SQL migrations, so suites that
+ * rely on triggers must call this in beforeAll. Idempotent; once per worker.
+ */
+export function ensureCacheTriggers(): Promise<void> {
+  _triggersInstalled ??= installCacheTriggers(getTestClient() as never).then(() => undefined);
+  return _triggersInstalled;
 }

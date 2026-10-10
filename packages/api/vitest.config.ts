@@ -12,7 +12,11 @@ export default defineConfig({
     hookTimeout: 15000,
     // env-setup.ts must be first — it sets DATABASE_URL before any module
     // (including @hisaabo/db) is evaluated and opens its postgres.js connections.
-    setupFiles: ["./src/__tests__/helpers/env-setup.ts"],
+    setupFiles: [
+      "./src/__tests__/helpers/env-setup.ts",
+      // After env-setup: global beforeEach(resetAllCaches).
+      "./src/__tests__/helpers/cache-setup.ts",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
