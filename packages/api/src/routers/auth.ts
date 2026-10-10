@@ -8,7 +8,8 @@ import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, in
 import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema, nativeStartSchema, nativeExchangeSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
-import { invalidateSessionCache, getSessionIdFromRequest, revokeAllUserSessions } from "../context.js";
+import { getSessionIdFromRequest } from "../context.js";
+import { cacheBus, type CacheEvent } from "../lib/cache/bus.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
@@ -93,6 +94,27 @@ function isBearerClient(req: Request): boolean {
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
 
+// Cache invalidation for the sign-up / sign-in transactions. The ids are
+// recorded as the transaction body learns them; the events are emitted AFTER
+// the transaction settled (commit or rollback — a rollback invalidates
+// harmlessly). Emitting inside the tx would let a concurrent read re-cache the
+// pre-commit state. `session{userId}` also covers sessions evicted by
+// enforceSessionLimit(…, tx) and `user` the emailVerified flip.
+interface SignInTouched { userId?: string; tenantId?: string }
+
+async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise<T> {
+  try {
+    return await run;
+  } finally {
+    const events: CacheEvent[] = [];
+    if (touched.userId) {
+      events.push({ kind: "user", userId: touched.userId }, { kind: "session", userId: touched.userId });
+    }
+    if (touched.tenantId) events.push({ kind: "membership", tenantId: touched.tenantId, userId: touched.userId });
+    if (events.length) cacheBus.invalidate(events);
+  }
+}
+
 async function getOrCreateDefaultTenant(userId: string, parentTx?: ControlTx): Promise<string> {
   const run = async (tx: ControlTx) => {
     let [existing] = await tx
@@ -145,8 +167,12 @@ async function createSessionForUser(
 
   const previousSessionId = getSessionIdFromRequest(ctx.req);
   if (previousSessionId && !previousSessionId.startsWith("hisaabo_key_")) {
-    controlDb.delete(sessions).where(eq(sessions.id, previousSessionId)).catch(() => {});
-    invalidateSessionCache(previousSessionId);
+    // Delete first, invalidate after it settled (never the other way round).
+    await cacheBus
+      .afterWrite([{ kind: "session", sessionId: previousSessionId }], () =>
+        controlDb.delete(sessions).where(eq(sessions.id, previousSessionId)),
+      )
+      .catch(() => {});
   }
 
   const now = Date.now();
@@ -329,10 +355,11 @@ export const authRouter = router({
     // Insert user, assign tenant, and create session in one outer transaction.
     // On any failure (including COMMIT failure), withProvisionedTenantCleanup
     // drops the orphan physical tenant DB.
+    const touched: SignInTouched = {};
     const { user, sessionToken } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
-        controlDb.transaction(async (tx) => {
+        settleSignIn(touched, controlDb.transaction(async (tx) => {
           await enforceSelfHostedSignup(tx, emailLower);
 
           const [user] = await tx.insert(users).values({
@@ -340,6 +367,7 @@ export const authRouter = router({
             name: input.name,
             passwordHash,
           }).returning({ id: users.id, email: users.email, name: users.name });
+          touched.userId = user.id;
 
           // Re-check invitation inside the tx (actual state, not the peek)
           const [pendingInvite] = await tx.select({ id: invitations.id })
@@ -366,10 +394,10 @@ export const authRouter = router({
                 message: "Sign-up state changed — please try again.",
               });
             }
-            await writeNewTenantRows(tx, user.id, provisioned);
+            touched.tenantId = await writeNewTenantRows(tx, user.id, provisioned);
             markUsed();
           } else {
-            await getOrCreateDefaultTenant(user.id, tx);
+            touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
           }
 
           const sessionId = nanoid(64);
@@ -397,7 +425,7 @@ export const authRouter = router({
           });
 
           return { user, sessionToken: sessionId };
-        }),
+        })),
     );
 
     // Set-Cookie only after the tx has committed. If COMMIT fails, the error
@@ -612,10 +640,11 @@ export const authRouter = router({
       : null;
 
     // ── Phase 3 (tx) + Phase 4 (compensate on failure or unused) ─────
+    const touched: SignInTouched = {};
     const { user, sessionToken, isNewUser, email } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
-        controlDb.transaction(async (tx) => {
+        settleSignIn(touched, controlDb.transaction(async (tx) => {
           // Atomically claim the token. Must be the first write in the tx so
           // that concurrent verifiers for the same token serialize on the row
           // lock. Rolls back on any downstream throw, so failed provisioning
@@ -679,10 +708,10 @@ export const authRouter = router({
                   message: "Sign-in state changed — please try again.",
                 });
               }
-              await writeNewTenantRows(tx, user.id, provisioned);
+              touched.tenantId = await writeNewTenantRows(tx, user.id, provisioned);
               markUsed();
             } else {
-              await getOrCreateDefaultTenant(user.id, tx);
+              touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
             }
           } else {
             // Existing user path — mark email verified
@@ -691,6 +720,7 @@ export const authRouter = router({
               .where(eq(users.id, user.id));
           }
 
+          touched.userId = user.id;
           const sessionId = nanoid(64);
           const memberships = await tx
             .select({ tenantId: tenantMembers.tenantId })
@@ -716,7 +746,7 @@ export const authRouter = router({
           });
 
           return { user, sessionToken: sessionId, isNewUser: isNew, email: emailLocal };
-        }),
+        })),
     );
 
     // ── Phase 5 (cookie, outside tx) ─────────────────────────────────
@@ -850,14 +880,14 @@ export const authRouter = router({
 
   // ── Complete profile (first magic link sign-in) ──────────────
   completeProfile: protectedProcedure.input(completeProfileSchema).mutation(async ({ input, ctx }) => {
-    await controlDb.update(users)
-      .set({ name: input.name, updatedAt: new Date() })
-      .where(eq(users.id, ctx.user!.id));
-
-    // Invalidate ALL session cache entries for this user so `me` returns fresh data
-    // (the cache stores by sessionId, so we need to find and clear the right entry)
-    const sessionId = getSessionIdFromContext(ctx);
-    if (sessionId) invalidateSessionCache(sessionId);
+    // name is embedded in every cached session / access token / API key of the
+    // user: invalidate by user (all their sessions, not just this one) after
+    // the write settled.
+    await cacheBus.afterWrite([{ kind: "user", userId: ctx.user!.id }], () =>
+      controlDb.update(users)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(users.id, ctx.user!.id)),
+    );
 
     return { success: true };
   }),
@@ -866,13 +896,12 @@ export const authRouter = router({
   updateName: protectedProcedure
     .input(z.object({ name: z.string().min(2).max(100) }))
     .mutation(async ({ input, ctx }) => {
-      await controlDb.update(users)
-        .set({ name: input.name, updatedAt: new Date() })
-        .where(eq(users.id, ctx.user!.id));
-
-      // Invalidate session cache so `me` returns fresh data
-      const sessionId = getSessionIdFromContext(ctx);
-      if (sessionId) invalidateSessionCache(sessionId);
+      // Every session of the user embeds the name: invalidate by user.
+      await cacheBus.afterWrite([{ kind: "user", userId: ctx.user!.id }], () =>
+        controlDb.update(users)
+          .set({ name: input.name, updatedAt: new Date() })
+          .where(eq(users.id, ctx.user!.id)),
+      );
 
       return { success: true };
     }),
@@ -940,9 +969,14 @@ export const authRouter = router({
       }
 
       // Update the user's email using the userId stored in the token — never from client input
-      await controlDb.update(users)
-        .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, tokenRow.userId));
+      // The email is embedded in every cached session / access token / API key
+      // of the user: invalidate by user once the write settled.
+      const changedUserId = tokenRow.userId;
+      await cacheBus.afterWrite([{ kind: "user", userId: changedUserId }], () =>
+        controlDb.update(users)
+          .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
+          .where(eq(users.id, changedUserId)),
+      );
 
       return { success: true, newEmail: tokenRow.email };
     }),
@@ -952,8 +986,9 @@ export const authRouter = router({
     const sessionId = getSessionIdFromContext(ctx);
 
     if (sessionId) {
-      await controlDb.delete(sessions).where(eq(sessions.id, sessionId));
-      invalidateSessionCache(sessionId);
+      await cacheBus.afterWrite([{ kind: "session", sessionId }], () =>
+        controlDb.delete(sessions).where(eq(sessions.id, sessionId)),
+      );
     }
 
     clearSessionCookie(ctx.resHeaders);
@@ -962,20 +997,17 @@ export const authRouter = router({
 
   // ── Logout all sessions ──────────────────────────────────────
   logoutAll: protectedProcedure.mutation(async ({ ctx }) => {
-    // Fetch all session IDs before deleting so we can evict them from the in-memory cache
-    const userSessions = await controlDb
-      .select({ id: sessions.id })
-      .from(sessions)
-      .where(eq(sessions.userId, ctx.user!.id));
-
-    await controlDb.delete(sessions).where(eq(sessions.userId, ctx.user!.id));
-    // "Log out everywhere" also kills every API key the user minted, in all tenants.
-    await controlDb.delete(apiKeys).where(eq(apiKeys.userId, ctx.user!.id));
-
-    revokeAllUserSessions(ctx.user!.id);
-    for (const s of userSessions) {
-      invalidateSessionCache(s.id);
-    }
+    const userId = ctx.user!.id;
+    // Events are emitted after BOTH deletes settled (also if one throws):
+    // every session, access token and API key of the user is dropped by user.
+    await cacheBus.afterWrite(
+      [{ kind: "session", userId }, { kind: "apiKey", userId }],
+      async () => {
+        await controlDb.delete(sessions).where(eq(sessions.userId, userId));
+        // "Log out everywhere" also kills every API key the user minted, in all tenants.
+        await controlDb.delete(apiKeys).where(eq(apiKeys.userId, userId));
+      },
+    );
 
     clearSessionCookie(ctx.resHeaders);
     return { success: true };
@@ -1030,11 +1062,11 @@ export const authRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot revoke your current session. Use logout instead." });
       }
 
-      await controlDb
-        .delete(sessions)
-        .where(and(eq(sessions.id, target.id), eq(sessions.userId, ctx.user!.id)));
-
-      invalidateSessionCache(target.id);
+      await cacheBus.afterWrite([{ kind: "session", sessionId: target.id }], () =>
+        controlDb
+          .delete(sessions)
+          .where(and(eq(sessions.id, target.id), eq(sessions.userId, ctx.user!.id))),
+      );
       return { success: true };
     }),
 

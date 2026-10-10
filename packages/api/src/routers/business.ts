@@ -10,6 +10,7 @@ import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
+import { cacheBus } from "../lib/cache/bus.js";
 import { requireTenantRole, getTenantRole, hasRole, ADMIN_ROLES } from "../lib/tenant-access.js";
 import { csvRow } from "@hisaabo/shared";
 import { getTenantMemberUserIds, businessTenantScope, assertBusinessInTenant } from "../lib/tenant-businesses.js";
@@ -89,6 +90,10 @@ export const businessRouter = router({
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
     await enforceBusinessLimit(ctx.tenantId!, ctx.db);
+    // `business` is emitted after the transaction settled (authz business
+    // entries are positive-only, so this keeps the contract rather than fixing
+    // a stale negative).
+    let createdBizId: string | undefined;
     const biz = await ctx.db.transaction(async (tx) => {
       const [biz] = await tx.insert(businesses).values({
         ...input,
@@ -122,7 +127,10 @@ export const businessRouter = router({
       // the same transaction so a partial failure rolls back cleanly.
       await seedChartOfAccounts(tx, biz.id);
 
+      createdBizId = biz.id;
       return biz;
+    }).finally(() => {
+      cacheBus.invalidate({ kind: "business", tenantId: ctx.tenantId!, businessId: createdBizId });
     });
 
     logAudit(ctx.db, {

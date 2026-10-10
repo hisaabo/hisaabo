@@ -13,6 +13,8 @@ import { controlDb, tenants, tenantMembers, invitations } from "@hisaabo/db";
 import type { TenantDatabase } from "../trpc.js";
 import { businesses } from "@hisaabo/db";
 import { getTenantMemberUserIds, businessTenantScope } from "./tenant-businesses.js";
+import { TtlCache } from "./cache/ttl-cache.js";
+import { cacheBus } from "./cache/bus.js";
 
 // ── Plan limit definitions ────────────────────────────────────────────────────
 
@@ -91,13 +93,29 @@ export const RECURRING_RUNS_PER_MONTH_FREE = PLAN_LIMITS.free.recurringRunsPerMo
 
 // ── Enforcement helpers ───────────────────────────────────────────────────────
 
+// Tenant plan: 60s, tag tenant:T, dropped by the `tenant` event (plan/status
+// change; the tenants trigger emits it for out-of-process writers). Only the
+// plan string is cached — never counters or usage (those are always queried).
+const planCache = new TtlCache<string>({ name: "tenantPlan", max: 2000, ttlMs: 60_000 });
+cacheBus.on("tenant", (e) => {
+  planCache.deleteByTag(`tenant:${e.tenantId}`);
+});
+
 async function getTenantPlan(tenantId: string): Promise<string> {
-  const [row] = await controlDb
-    .select({ plan: tenants.plan })
-    .from(tenants)
-    .where(eq(tenants.id, tenantId))
-    .limit(1);
-  return row?.plan ?? "free";
+  const plan = await planCache.getOrLoad(
+    tenantId,
+    async () => {
+      const [row] = await controlDb
+        .select({ plan: tenants.plan })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1);
+      // A missing tenant is not cached (positive-only).
+      return row ? (row.plan ?? "free") : undefined;
+    },
+    { tags: [`tenant:${tenantId}`] },
+  );
+  return plan ?? "free";
 }
 
 /**
@@ -231,7 +249,7 @@ export async function enforceApiKeyLimit(tenantId: string): Promise<void> {
  */
 type ControlTxLike = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
 
-export async function enforceSessionLimit(userId: string, parentTx?: ControlTxLike): Promise<void> {
+export async function enforceSessionLimit(userId: string, parentTx?: ControlTxLike): Promise<string[]> {
   const { sessions } = await import("@hisaabo/db");
   const { asc } = await import("drizzle-orm");
   const db = parentTx ?? controlDb;
@@ -245,7 +263,7 @@ export async function enforceSessionLimit(userId: string, parentTx?: ControlTxLi
 
   const plan = membership ? await getTenantPlan(membership.tenantId) : "free";
   const limits = getLimits(plan);
-  if (limits.maxConcurrentSessions === Infinity) return;
+  if (limits.maxConcurrentSessions === Infinity) return [];
 
   const activeSessions = await db
     .select({ id: sessions.id, createdAt: sessions.createdAt })
@@ -261,8 +279,21 @@ export async function enforceSessionLimit(userId: string, parentTx?: ControlTxLi
   if (toEvict > 0) {
     const evictIds = activeSessions.slice(0, toEvict).map((s) => s.id);
     const { inArray } = await import("drizzle-orm");
-    await db.delete(sessions).where(inArray(sessions.id, evictIds));
+    if (parentTx) {
+      // Inside the caller's transaction the eviction is not visible until the
+      // OUTER tx commits, so invalidating here would let a concurrent read
+      // re-cache the still-present sessions. The caller emits
+      // `session{userId}` after its transaction settles (see auth.ts).
+      await db.delete(sessions).where(inArray(sessions.id, evictIds));
+    } else {
+      await cacheBus.afterWrite(
+        evictIds.map((sessionId) => ({ kind: "session" as const, sessionId })),
+        () => db.delete(sessions).where(inArray(sessions.id, evictIds)),
+      );
+    }
+    return evictIds;
   }
+  return [];
 }
 
 /**

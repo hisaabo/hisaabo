@@ -1,6 +1,6 @@
 import { and, eq, ne } from "drizzle-orm";
 import { controlDb, sessions } from "@hisaabo/db";
-import { revokeAllUserSessions, invalidateSessionCache } from "../context.js";
+import { cacheBus } from "./cache/bus.js";
 
 /**
  * Force-rotate every session for a user, optionally keeping one alive.
@@ -22,13 +22,11 @@ import { revokeAllUserSessions, invalidateSessionCache } from "../context.js";
  *
  * WHAT THIS DOES:
  *   1. Deletes all matching rows in the `sessions` table (authoritative).
- *   2. Marks the user as revoked in the in-memory cache so any cached
- *      session entries get invalidated within the 65-second cache TTL.
- *      (The DB delete is the truth; the cache hint just closes the
- *      window during which a pre-rotation request could have been
- *      served from cache.)
- *   3. Explicitly evicts the cache entry for each deleted session so
- *      the very next request on an old session cannot find a cached hit.
+ *   2. AFTER the delete settled, emits `session{userId}` on the cache bus:
+ *      every cached session / access-token entry of the user is dropped and
+ *      any session load still in flight is discarded (no-resurrection), so the
+ *      very next request on a rotated session is rejected. The kept session
+ *      simply reloads once.
  *
  * WHY NOT REUSE logoutAll:
  * `auth.logoutAll` is a tRPC mutation wired to a specific HTTP handler.
@@ -47,31 +45,17 @@ export async function rotateSessionsOnPrivilegeEvent(
   userId: string,
   keepSessionId?: string,
 ): Promise<{ deletedIds: string[] }> {
-  // Collect the ids we're about to delete so we can precisely evict the
-  // cache afterwards. Using `.returning({ id })` on the DELETE keeps
-  // this to a single round-trip.
   const whereClauses = keepSessionId
     ? and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId))
     : eq(sessions.userId, userId);
 
-  const deleted = await controlDb
-    .delete(sessions)
-    .where(whereClauses)
-    .returning({ id: sessions.id });
-
-  // Purge cache: `revokeAllUserSessions` both adds a short-TTL revoked
-  // marker (so any concurrent cache-hit read gets dropped) and clears
-  // existing cache entries for this user. That's load-bearing — without
-  // it, a request already in flight could be served from cache using
-  // the now-deleted session for up to 60s.
-  revokeAllUserSessions(userId);
-
-  // Belt-and-braces: explicitly drop each deleted session's cache entry
-  // by id, in case a future refactor adds per-session cache entries
-  // that revokeAllUserSessions misses.
-  for (const row of deleted) {
-    invalidateSessionCache(row.id);
-  }
+  // `.returning({ id })` keeps this to a single round-trip. The bus event is
+  // emitted in `finally` after the DELETE settles — also when it throws, and
+  // also with zero deleted rows: a concurrent request that cached a row just
+  // before our DELETE must still see it purged.
+  const deleted = await cacheBus.afterWrite([{ kind: "session", userId }], () =>
+    controlDb.delete(sessions).where(whereClauses).returning({ id: sessions.id }),
+  );
 
   return { deletedIds: deleted.map((r) => r.id) };
 }

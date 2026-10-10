@@ -41,7 +41,8 @@ import { apiKeyRouter, resolveApiKeyExpiry, API_KEY_MAX_TTL_MS, API_KEY_DEFAULT_
 import { trackingUrlSchema } from "../routers/shipment.js";
 import { targetUserScope } from "../routers/target.js";
 import { sessionHandle } from "../routers/auth.js";
-import { requireTenantRole, hasRole, OWNER_ROLES, ADMIN_ROLES, invalidateMembershipCache } from "../lib/tenant-access.js";
+import { requireTenantRole, hasRole, OWNER_ROLES, ADMIN_ROLES } from "../lib/tenant-access.js";
+import { cacheBus } from "../lib/cache/index.js";
 import { normalizeEmail } from "../lib/normalize-email.js";
 import { deriveKey } from "../lib/derive-key.js";
 import { signExportToken, verifyExportToken } from "../lib/exportToken.js";
@@ -71,11 +72,14 @@ function caller(router: typeof tenantRouter | typeof apiKeyRouter, extra: Record
 beforeEach(() => {
   selects.length = 0;
   queue.length = 0;
-  invalidateMembershipCache(TENANT);
+  cacheBus.invalidate({ kind: "membership", tenantId: TENANT });
 });
 
-// Every tenantProcedure call first runs the membership check (one select).
-const membershipOk = () => queue.push([{ status: "active" }]);
+// Every tenantProcedure call first runs the membership check (one select, role
+// + tenant status in one row). Role gates read the SAME cached membership, so
+// there is no separate role select any more.
+const membershipOk = (role = "owner") => queue.push([{ role, status: "active" }]);
+const dropMembership = () => cacheBus.invalidate({ kind: "membership", tenantId: TENANT, userId: USER });
 
 describe("tenant.current", () => {
   it("never selects db connection columns", async () => {
@@ -91,28 +95,24 @@ describe("tenant.current", () => {
 
 describe("tenant.members / pendingInvitations role gate", () => {
   it("rejects a plain seller", async () => {
-    membershipOk();
-    queue.push([{ role: "seller" }]);
+    membershipOk("seller");
     await expect(caller(tenantRouter).members()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("rejects an accountant for pending invitations", async () => {
-    membershipOk();
-    queue.push([{ role: "accountant" }]);
+    membershipOk("accountant");
     await expect(caller(tenantRouter).pendingInvitations()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("allows admin and hides nothing", async () => {
-    membershipOk();
-    queue.push([{ role: "admin" }]);
+    membershipOk("admin");
     queue.push([{ id: "m1", userEmail: "a@b.in" }]);
     const rows = await caller(tenantRouter).members();
     expect(rows[0].userEmail).toBe("a@b.in");
   });
 
   it("gives seller_manager the roster without emails", async () => {
-    membershipOk();
-    queue.push([{ role: "seller_manager" }]);
+    membershipOk("seller_manager");
     queue.push([{ id: "m1", userEmail: "a@b.in" }]);
     const rows = await caller(tenantRouter).members();
     expect(rows[0].userEmail).toBe("");
@@ -126,32 +126,38 @@ describe("hasTenantAccess membership check", () => {
   });
 
   it("rejects a suspended tenant", async () => {
-    queue.push([{ status: "suspended" }]);
+    queue.push([{ role: "owner", status: "suspended" }]);
     await expect(caller(tenantRouter).members()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("caches a positive result briefly and honours invalidation", async () => {
     membershipOk();
-    queue.push([{ role: "owner" }], []);
+    queue.push([]);
     await caller(tenantRouter).members();
     const before = selects.length;
-    queue.push([{ role: "owner" }], []);
+    queue.push([]);
     await caller(tenantRouter).members();
-    // second call: no membership select, only role + members selects
-    expect(selects.length - before).toBe(2);
-    invalidateMembershipCache(TENANT, USER);
+    // second call: no membership select (cached), only the members select
+    expect(selects.length - before).toBe(1);
+    dropMembership();
     queue.push([]);
     await expect(caller(tenantRouter).members()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
-});
 
-describe("requireTenantRole", () => {
-  it("treats superadmin like owner and rejects admin for owner-only gates", async () => {
-    queue.push([{ role: "superadmin" }]);
+  it("never caches a denial or an inactive tenant", async () => {
+    queue.push([{ role: "owner", status: "suspended" }]);
+    await expect(caller(tenantRouter).members()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    membershipOk();
+    queue.push([]);
+    await expect(caller(tenantRouter).members()).resolves.toEqual([]);
+  });
+
+  it("requireTenantRole reads the live role (via the cache, invalidated on change)", async () => {
+    queue.push([{ role: "superadmin", status: "active" }]);
     await expect(requireTenantRole({ user: { id: USER }, tenantId: TENANT }, OWNER_ROLES)).resolves.toBe("superadmin");
-    queue.push([{ role: "admin" }]);
+    dropMembership();
+    queue.push([{ role: "admin", status: "active" }]);
     await expect(requireTenantRole({ user: { id: USER }, tenantId: TENANT }, OWNER_ROLES)).rejects.toBeInstanceOf(TRPCError);
-    queue.push([{ role: "admin" }]);
     await expect(requireTenantRole({ user: { id: USER }, tenantId: TENANT }, ADMIN_ROLES)).resolves.toBe("admin");
   });
 
@@ -179,9 +185,10 @@ describe("apiKey router", () => {
   });
 
   it("requires an admin-level role", async () => {
-    queue.push([{ role: "seller" }]);
+    queue.push([{ role: "seller", status: "active" }]);
     await expect(caller(apiKeyRouter).create({ name: "k" })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    queue.push([{ role: "accountant" }]);
+    dropMembership();
+    queue.push([{ role: "accountant", status: "active" }]);
     await expect(caller(apiKeyRouter).list()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 

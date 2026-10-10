@@ -35,7 +35,8 @@ import { randomBytes } from "node:crypto";
 
 import { createUser, createTenant, addMember } from "./helpers/fixtures.js";
 import { getControlDb, truncateAllTables, closeTestDb } from "./helpers/test-db.js";
-import { createContext, revokeAllUserSessions, invalidateSessionCache } from "../context.js";
+import { createContext } from "../context.js";
+import { cacheBus } from "../lib/cache/index.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,9 +141,7 @@ afterAll(async () => {
 
 // Each test uses a freshly inserted session with a newly generated nanoid,
 // so module-level cache collisions can't happen. We deliberately DO NOT
-// call revokeAllUserSessions here — it would poison the revokedUsers map
-// for 65s and cause subsequent positive-path tests to see the shared
-// user as revoked.
+// reset caches by hand — the global beforeEach already does.
 beforeEach(async () => {
   await ensureWorld();
 });
@@ -183,16 +182,21 @@ describe("createContext — at_* Bearer path (P1 #1)", () => {
     expect(ctx.authTokenKind).toBeNull();
   });
 
-  it("at_* Bearer for a revoked user is rejected even though the token row is valid", async () => {
+  it("at_* Bearer is rejected right after its user's sessions are revoked (warm cache, same process)", async () => {
     // Create a FRESH user so we can revoke them without affecting shared state
     const freshUser = await createUser();
     await addMember(tenantId, freshUser.id, "member");
     const sessionId = await insertBearerSession(freshUser.id, tenantId);
     const atId = await insertAccessToken(sessionId, new Date(Date.now() + 15 * 60 * 1000));
 
-    // Flag the user as revoked — the in-memory revokedUsers map short-circuits
-    // the lookup even when the DB row is still valid.
-    revokeAllUserSessions(freshUser.id);
+    // Warm the access-token cache.
+    const warm = await resolveContext(makeBearerReq(atId));
+    expect(warm.user?.id).toBe(freshUser.id);
+
+    // Revoke: the DB delete is authoritative (cascades to access_tokens), the
+    // bus event drops the cached entry. The very next request is anonymous.
+    await getControlDb().delete(sessions).where(eq(sessions.id, sessionId));
+    cacheBus.invalidate({ kind: "session", userId: freshUser.id });
 
     const ctx = await resolveContext(makeBearerReq(atId));
 
@@ -316,7 +320,7 @@ describe("createContext — cached cookie session respects idle timeout", () => 
       .update(sessions)
       .set({ lastUsedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000) })
       .where(eq(sessions.id, sessionId));
-    invalidateSessionCache(sessionId);
+    cacheBus.invalidate({ kind: "session", sessionId });
 
     const third = await resolveContext(makeCookieReq(sessionId));
     expect(third.user).toBeNull();
@@ -347,7 +351,7 @@ describe("createContext — cached cookie session respects idle timeout", () => 
     });
 
     // Ensure no prior cache entry influences this call.
-    invalidateSessionCache(sessionId);
+    cacheBus.invalidate({ kind: "session", sessionId });
 
     const ctx = await resolveContext(makeCookieReq(sessionId));
 
