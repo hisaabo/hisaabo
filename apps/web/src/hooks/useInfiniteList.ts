@@ -15,6 +15,21 @@ interface UseInfiniteListOptions<T> {
   onLoadMore: () => void;
   /** Dependencies that should reset the list (filter changes) */
   resetDeps: unknown[];
+  /**
+   * True when `data` is placeholder data kept from a previous query key
+   * (`placeholderData: keepPreviousData`). It is ignored so rows from the old
+   * filter never populate a freshly reset list.
+   */
+  isPlaceholderData?: boolean;
+}
+
+/** Cap on rows re-fetched when restoring depth, to avoid a request waterfall. */
+const MAX_RESTORE_ITEMS = 250;
+
+interface SavedScroll {
+  scrollTop: number;
+  itemCount: number;
+  signature: string;
 }
 
 interface UseInfiniteListReturn<T> {
@@ -46,6 +61,7 @@ export function useInfiniteList<T extends { id: string }>({
   isFetching,
   onLoadMore,
   resetDeps,
+  isPlaceholderData = false,
 }: UseInfiniteListOptions<T>): UseInfiniteListReturn<T> {
   const [allItems, setAllItems] = useState<T[]>([]);
   const [lastBatchSize, setLastBatchSize] = useState(0);
@@ -53,17 +69,25 @@ export function useInfiniteList<T extends { id: string }>({
   const restoredRef = useRef(false);
   const pageRef = useRef(page);
   const storageKey = `hisaabo-scroll-${key}`;
+  const signature = JSON.stringify(resetDeps);
+  const signatureRef = useRef(signature);
+  const lastLoadMoreCountRef = useRef(-1);
 
   pageRef.current = page;
+  signatureRef.current = signature;
 
-  // Reset on filter change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Reset on filter change. Skipped on mount so saved scroll/depth survives
+  // until the restore effect below has read it.
+  const prevSignatureRef = useRef(signature);
   useEffect(() => {
+    if (prevSignatureRef.current === signature) return;
+    prevSignatureRef.current = signature;
     setAllItems([]);
     setLastBatchSize(0);
     restoredRef.current = false;
+    lastLoadMoreCountRef.current = -1;
     sessionStorage.removeItem(storageKey);
-  }, resetDeps);
+  }, [signature, storageKey]);
 
   // Accumulate pages — NEVER replace accumulated items when page > 1.
   // When page === 1 and we already have accumulated items from pages > 1,
@@ -71,7 +95,7 @@ export function useInfiniteList<T extends { id: string }>({
   // (preserves scroll) and prepend any genuinely new items (so newly created
   // records appear at the top immediately without a page refresh).
   useEffect(() => {
-    if (!data) return;
+    if (!data || isPlaceholderData) return;
 
     setAllItems((prev) => {
       if (page === 1 && prev.length === 0) {
@@ -107,35 +131,51 @@ export function useInfiniteList<T extends { id: string }>({
       setLastBatchSize(newItems.length);
       return [...merged, ...newItems];
     });
-  }, [data, page]);
+  }, [data, page, isPlaceholderData]);
 
-  // Restore scroll position after data loads
+  const hasMore = allItems.length < total;
+
+  // Restore loaded depth + scroll position after remount. Loads further pages
+  // (capped) until the saved depth is reached, the list is exhausted, or a
+  // page adds nothing (rows deleted since), then restores scrollTop.
   useEffect(() => {
     if (restoredRef.current || !scrollRef.current || allItems.length === 0) return;
-    const saved = sessionStorage.getItem(storageKey);
-    if (saved) {
-      const { scrollTop, itemCount } = JSON.parse(saved) as {
-        scrollTop: number;
-        itemCount: number;
-      };
-      if (allItems.length >= itemCount) {
-        requestAnimationFrame(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollTop;
-          }
-        });
-        restoredRef.current = true;
-      } else if (!isFetching) {
+    let saved: SavedScroll | null = null;
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      saved = raw ? (JSON.parse(raw) as SavedScroll) : null;
+    } catch {
+      saved = null;
+    }
+    if (!saved || saved.signature !== signatureRef.current) {
+      restoredRef.current = true;
+      return;
+    }
+    const savedState = saved;
+    const target = Math.min(saved.itemCount, MAX_RESTORE_ITEMS);
+    const restoreScroll = () => {
+      const { scrollTop } = savedState;
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollTop;
+        }
+      });
+      restoredRef.current = true;
+    };
+    if (allItems.length >= target || !hasMore) {
+      restoreScroll();
+    } else if (!isFetching) {
+      // Idle but the last requested page added nothing — stop instead of looping.
+      if (allItems.length <= lastLoadMoreCountRef.current) {
+        restoreScroll();
+      } else {
+        lastLoadMoreCountRef.current = allItems.length;
         onLoadMore();
       }
-    } else {
-      restoredRef.current = true;
     }
   // onLoadMore is intentionally excluded — it's a stable callback from the parent
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allItems.length, isFetching, storageKey]);
-
-  const hasMore = allItems.length < total;
+  }, [allItems.length, isFetching, storageKey, hasMore]);
 
   // Use refs for values that onScroll needs but shouldn't cause re-creation
   const isFetchingRef = useRef(isFetching);
@@ -153,7 +193,11 @@ export function useInfiniteList<T extends { id: string }>({
     // Persist scroll position to sessionStorage (survives navigation within tab)
     sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ scrollTop: el.scrollTop, itemCount: itemCountRef.current })
+      JSON.stringify({
+        scrollTop: el.scrollTop,
+        itemCount: itemCountRef.current,
+        signature: signatureRef.current,
+      } satisfies SavedScroll)
     );
 
     // Load more when within 150px of the bottom

@@ -348,3 +348,97 @@ describe("useInfiniteList — loadMore (accessibility fallback)", () => {
     expect(onLoadMore).not.toHaveBeenCalled();
   });
 });
+
+describe("useInfiniteList — scroll/depth restore", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+  });
+
+  type Props = Parameters<typeof useInfiniteList>[0];
+
+  /** Mounts with no data, attaches a scroll container, then supplies data. */
+  function mountWithContainer(initial: Partial<Props> = {}) {
+    const onLoadMore = vi.fn();
+    const base: Props = {
+      key: "test", data: undefined, total: 13, page: 1,
+      isFetching: true, onLoadMore, resetDeps: ["a"], ...initial,
+    };
+    const hook = renderHook((props: Props) => useInfiniteList(props), { initialProps: base });
+    const el = document.createElement("div");
+    (hook.result.current.scrollRef as { current: HTMLDivElement | null }).current = el;
+    return { ...hook, el, onLoadMore, base };
+  }
+
+  const save = (state: object) =>
+    sessionStorage.setItem("hisaabo-scroll-test", JSON.stringify(state));
+
+  it("keeps saved state on mount and restores scroll once depth is reached", () => {
+    save({ scrollTop: 120, itemCount: 5, signature: '["a"]' });
+    const { el, rerender, base } = mountWithContainer();
+    expect(sessionStorage.getItem("hisaabo-scroll-test")).not.toBeNull();
+    rerender({ ...base, data: page1, isFetching: false });
+    expect(el.scrollTop).toBe(120);
+  });
+
+  it("loads more pages until the saved depth is reached", () => {
+    save({ scrollTop: 50, itemCount: 10, signature: '["a"]' });
+    const { el, rerender, base, onLoadMore } = mountWithContainer();
+    rerender({ ...base, data: page1, isFetching: false });
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(el.scrollTop).toBe(0);
+    rerender({ ...base, data: page2, page: 2, isFetching: false });
+    expect(el.scrollTop).toBe(50);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not keep loading when the total shrank below the saved depth", () => {
+    save({ scrollTop: 80, itemCount: 20, signature: '["a"]' });
+    const { el, rerender, base, onLoadMore } = mountWithContainer({ total: 5 });
+    rerender({ ...base, total: 5, data: page1, isFetching: false });
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(el.scrollTop).toBe(80);
+  });
+
+  it("stops when a requested page adds no new items", () => {
+    save({ scrollTop: 80, itemCount: 20, signature: '["a"]' });
+    const { el, rerender, base, onLoadMore } = mountWithContainer({ total: 30 });
+    rerender({ ...base, total: 30, data: page1, isFetching: false });
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    rerender({ ...base, total: 30, data: page1, page: 2, isFetching: true });
+    rerender({ ...base, total: 30, data: page1, page: 2, isFetching: false });
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(el.scrollTop).toBe(80);
+  });
+
+  it("skips restore when the filter signature does not match", () => {
+    save({ scrollTop: 120, itemCount: 10, signature: '["b"]' });
+    const { el, rerender, base, onLoadMore } = mountWithContainer();
+    rerender({ ...base, data: page1, isFetching: false });
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(el.scrollTop).toBe(0);
+  });
+
+  it("still resets and clears saved state on a real filter change after mount", () => {
+    save({ scrollTop: 120, itemCount: 5, signature: '["a"]' });
+    const { result, rerender, base } = mountWithContainer();
+    rerender({ ...base, data: page1, isFetching: false });
+    rerender({ ...base, data: makeItems(100, 3), total: 3, isFetching: false, resetDeps: ["b"] });
+    expect(result.current.items.map((i) => i.id)).toEqual(["item-100", "item-101", "item-102"]);
+    expect(sessionStorage.getItem("hisaabo-scroll-test")).toBeNull();
+  });
+
+  it("ignores placeholder data so stale rows of the old filter never appear", () => {
+    const { result, rerender, base } = mountWithContainer({ resetDeps: ["a"] });
+    rerender({ ...base, data: page1, isFetching: false });
+    rerender({ ...base, data: page2, page: 2, isFetching: false });
+    // Filter changes: placeholder (old data) still served at page 1
+    rerender({ ...base, data: page2, page: 1, isFetching: true, isPlaceholderData: true, resetDeps: ["b"] });
+    expect(result.current.items).toHaveLength(0);
+    rerender({ ...base, data: makeItems(100, 2), total: 2, page: 1, isFetching: false, isPlaceholderData: false, resetDeps: ["b"] });
+    expect(result.current.items.map((i) => i.id)).toEqual(["item-100", "item-101"]);
+  });
+});
