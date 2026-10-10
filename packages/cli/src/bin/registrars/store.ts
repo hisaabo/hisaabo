@@ -17,7 +17,7 @@ export function registerStoreCommands(program: Command): void {
   store
     .command("update-settings")
     .description("Update store settings")
-    .option("--slug <slug>", "Store URL slug")
+    .option("--slug <slug>", "Store URL slug (can only be set once)")
     .option("--tagline <text>", "Store tagline / description")
     .option("--enabled <bool>", "Enable or disable store (true/false)")
     .option("--require-phone-otp <bool>", "Require customers to verify their phone by SMS code (true/false; needs an SMS provider on the server)")

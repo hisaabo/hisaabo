@@ -19,6 +19,30 @@ import {
 import { logger } from "../lib/logger.js";
 
 const SLUG_TAKEN_MESSAGE = "This store URL is already taken. Please choose a different one.";
+const SLUG_SET_ONCE_MESSAGE = "Your store link can only be set once.";
+
+/**
+ * Set-once rule for the public store slug. Must be evaluated on the current
+ * row while holding the per-business lock (multi-tenant: advisory lock in
+ * applyStoreChange; self-hosted: SELECT ... FOR UPDATE), so two concurrent
+ * requests cannot both spend the single allowed change.
+ *  - no slug yet: first choice allowed
+ *  - same slug / slug omitted: no-op, allowed
+ *  - different slug (or clearing it): allowed only while store_slug_auto_assigned
+ * Returns whether the slug is changing (the caller then clears the flag).
+ */
+function assertSlugChangeAllowed(
+  cur: { storeSlug: string | null; storeSlugAutoAssigned: boolean },
+  requested: string | null | undefined,
+): { changing: boolean } {
+  if (requested === undefined) return { changing: false };
+  const next = requested || null;
+  if (next === cur.storeSlug) return { changing: false };
+  if (cur.storeSlug && !cur.storeSlugAutoAssigned) {
+    throw new TRPCError({ code: "FORBIDDEN", message: SLUG_SET_ONCE_MESSAGE });
+  }
+  return { changing: true };
+}
 
 // ── Validators ─────────────────────────────────────────────────
 
@@ -73,6 +97,7 @@ export const storeRouter = router({
     const [biz] = await ctx.db.select({
       storeEnabled: businesses.storeEnabled,
       storeSlug: businesses.storeSlug,
+      storeSlugAutoAssigned: businesses.storeSlugAutoAssigned,
       storeTagline: businesses.storeTagline,
       storeAccentColor: businesses.storeAccentColor,
       storeMinOrderAmount: businesses.storeMinOrderAmount,
@@ -122,16 +147,20 @@ export const storeRouter = router({
         }
       }
 
-      const runUpdate = async () => {
-        const [row] = await ctx.db.update(businesses)
+      type Db = typeof ctx.db;
+      // `clearAutoAssigned`: the slug is changing, so the one allowed change is spent.
+      const runUpdate = async (db: Db, clearAutoAssigned: boolean) => {
+        const [row] = await db.update(businesses)
           .set({
             ...input,
+            ...(clearAutoAssigned ? { storeSlugAutoAssigned: false } : {}),
             updatedAt: new Date(),
           })
           .where(eq(businesses.id, ctx.businessId))
           .returning({
             storeEnabled: businesses.storeEnabled,
             storeSlug: businesses.storeSlug,
+            storeSlugAutoAssigned: businesses.storeSlugAutoAssigned,
             storeTagline: businesses.storeTagline,
             storeAccentColor: businesses.storeAccentColor,
             storeMinOrderAmount: businesses.storeMinOrderAmount,
@@ -147,38 +176,63 @@ export const storeRouter = router({
       const touchesStore = input.storeSlug !== undefined || input.storeEnabled !== undefined;
       if (!isRegistryEnabled() || !touchesStore) {
         try {
-          return await runUpdate();
+          // Row lock: serialises concurrent slug changes on this business.
+          return await ctx.db.transaction(async (tx) => {
+            const [cur] = await tx.select({
+              storeSlug: businesses.storeSlug,
+              storeSlugAutoAssigned: businesses.storeSlugAutoAssigned,
+            }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1).for("update");
+            if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+            const { changing } = assertSlugChangeAllowed(cur, input.storeSlug);
+            return await runUpdate(tx as unknown as Db, changing);
+          });
         } finally {
           // Self-hosted: drop cached slug resolutions (old slug unknown here).
           if (touchesStore) cacheBus.invalidate({ kind: "storeSlug" });
         }
       }
 
-      // Multi-tenant: one control transaction around the tenant write.
-      const [cur] = await ctx.db.select({
-        storeSlug: businesses.storeSlug,
-        storeEnabled: businesses.storeEnabled,
-      }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
-      if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
-
-      const newSlug = input.storeSlug === undefined ? cur.storeSlug : input.storeSlug;
-      const newEnabled = input.storeEnabled ?? cur.storeEnabled;
+      // Multi-tenant: one control transaction around the tenant write. The
+      // set-once check runs in `prepare`, under the per-business advisory
+      // lock and before any registry or tenant write.
+      let cur: { storeSlug: string | null; storeEnabled: boolean; storeSlugAutoAssigned: boolean } | undefined;
+      let changing = false;
 
       try {
         return await applyStoreChange({
           tenantId: ctx.tenantId,
           businessId: ctx.businessId,
-          oldSlug: cur.storeSlug,
-          newSlug,
-          newEnabled,
-          runTenantUpdate: runUpdate,
+          oldSlug: null,
+          newSlug: null,
+          newEnabled: false,
+          prepare: async () => {
+            const [row] = await ctx.db.select({
+              storeSlug: businesses.storeSlug,
+              storeEnabled: businesses.storeEnabled,
+              storeSlugAutoAssigned: businesses.storeSlugAutoAssigned,
+            }).from(businesses).where(eq(businesses.id, ctx.businessId)).limit(1);
+            if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+            cur = row;
+            ({ changing } = assertSlugChangeAllowed(row, input.storeSlug));
+            return {
+              oldSlug: row.storeSlug,
+              newSlug: input.storeSlug === undefined ? row.storeSlug : input.storeSlug,
+              newEnabled: input.storeEnabled ?? row.storeEnabled,
+            };
+          },
+          runTenantUpdate: () => runUpdate(ctx.db, changing),
           revertTenant: async () => {
+            if (!cur) return;
             await ctx.db.update(businesses)
-              .set({ storeSlug: cur.storeSlug, storeEnabled: cur.storeEnabled, updatedAt: new Date() })
+              .set({
+                storeSlug: cur.storeSlug, storeEnabled: cur.storeEnabled,
+                storeSlugAutoAssigned: cur.storeSlugAutoAssigned, updatedAt: new Date(),
+              })
               .where(eq(businesses.id, ctx.businessId));
           },
         });
       } catch (err) {
+        if (err instanceof TRPCError) throw err;
         if (err instanceof SlugConflictError || isUniqueViolation(err)) {
           throw new TRPCError({ code: "CONFLICT", message: SLUG_TAKEN_MESSAGE });
         }

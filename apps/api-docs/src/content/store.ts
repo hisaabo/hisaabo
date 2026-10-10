@@ -104,7 +104,7 @@ settings = resp.json()["result"]["data"]["json"]`,
       requiredRole: "admin",
       input: [
         { name: "storeEnabled", type: "boolean", required: false, description: "Enable or disable the online store" },
-        { name: "storeSlug", type: "string", required: false, description: "URL slug (3-50 chars, lowercase alphanumeric with hyphens). Set to null to clear." },
+        { name: "storeSlug", type: "string", required: false, description: "URL slug (3-50 chars, lowercase alphanumeric with hyphens). Can only be set once: changing or clearing an existing slug returns FORBIDDEN unless it was auto-assigned (see gotchas)." },
         { name: "storeTagline", type: "string", required: false, description: "Store tagline displayed on the storefront (max 200 chars)" },
         { name: "storeAccentColor", type: "string", required: false, description: "Hex color code for store branding (e.g. '#E53E3E')" },
         { name: "storeMinOrderAmount", type: "string", required: false, description: "Minimum order amount (e.g. '500.00'). Set to null to remove minimum." },
@@ -159,6 +159,7 @@ resp = httpx.post(
       },
       gotchas: [
         "Returns CONFLICT if the slug is already taken by another business.",
+        "The store slug can only be set once. Setting it the first time is allowed; any later change (or clearing it) returns FORBIDDEN \"Your store link can only be set once.\" Re-sending the same slug, or updating other settings, is always allowed. Exception: when the system had to rename a duplicate slug (`storeSlugAutoAssigned: true` in `store.getSettings`), exactly one change is allowed, after which the flag clears.",
         "The slug must match the pattern `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/` — no uppercase, no leading/trailing hyphens.",
         "Monetary values like `storeMinOrderAmount` must be strings matching `/^\\d+(\\.\\d{1,2})?$/`.",
         "`storeRequirePhoneOtp` can only be turned on when the server sets `SMS_PROVIDER` (`webhook` in production; `console` is development-only). Once on, the storefront asks for an SMS code and `POST /store/{slug}/order` is rejected without a valid `otpToken`.",
