@@ -62,53 +62,72 @@ export async function runTransfersImport(
     }
   }
 
-  // Process transfers
+  // Validate up front: the only per-row failures are unresolvable/identical
+  // accounts, so valid rows can be written in bulk.
+  const valid: Array<{ t: CanonicalTransfer; fromId: string; toId: string }> = [];
   for (const t of canonicalTransfers) {
-    const fromType = modeToType[t.fromMode] || "savings";
-    const toType = modeToType[t.toMode] || "savings";
-    const fromAccount = accountByType.get(fromType);
-    const toAccount = accountByType.get(toType);
+    const fromAccount = accountByType.get(modeToType[t.fromMode] || "savings");
+    const toAccount = accountByType.get(modeToType[t.toMode] || "savings");
 
     if (!fromAccount || !toAccount || fromAccount.id === toAccount.id) {
       errors.push(`Cannot transfer: ${t.fromMode} → ${t.toMode}`);
       continue;
     }
+    valid.push({ t, fromId: fromAccount.id, toId: toAccount.id });
+  }
+
+  // One transaction per chunk: multi-row insert of withdrawal+deposit rows
+  // (kept in per-transfer order) and a single balance UPDATE per distinct
+  // account, with deltas summed in SQL numeric.
+  const CHUNK = 500;
+  for (let i = 0; i < valid.length; i += CHUNK) {
+    const chunk = valid.slice(i, i + CHUNK);
 
     await db.transaction(async (tx) => {
-      const amount = t.amount;
+      await tx.insert(bankTransactions).values(
+        chunk.flatMap(({ t, fromId, toId }) => [
+          {
+            bankAccountId: fromId,
+            businessId,
+            type: "withdrawal" as const,
+            amount: t.amount,
+            description: t.notes || `Transfer to ${modeToName[t.toMode] || t.toMode}`,
+            referenceType: "transfer",
+            transactionDate: t.date,
+          },
+          {
+            bankAccountId: toId,
+            businessId,
+            type: "deposit" as const,
+            amount: t.amount,
+            description: t.notes || `Transfer from ${modeToName[t.fromMode] || t.fromMode}`,
+            referenceType: "transfer",
+            transactionDate: t.date,
+          },
+        ]),
+      );
 
-      // Withdraw from source
-      await tx.insert(bankTransactions).values({
-        bankAccountId: fromAccount.id,
-        businessId,
-        type: "withdrawal",
-        amount,
-        description: t.notes || `Transfer to ${modeToName[t.toMode] || t.toMode}`,
-        referenceType: "transfer",
-        transactionDate: t.date,
-      });
-      await tx.update(bankAccounts).set({
-        currentBalance: sql`${bankAccounts.currentBalance}::numeric - ${amount}::numeric`,
-        updatedAt: new Date(),
-      }).where(eq(bankAccounts.id, fromAccount.id));
-
-      // Deposit to destination
-      await tx.insert(bankTransactions).values({
-        bankAccountId: toAccount.id,
-        businessId,
-        type: "deposit",
-        amount,
-        description: t.notes || `Transfer from ${modeToName[t.fromMode] || t.fromMode}`,
-        referenceType: "transfer",
-        transactionDate: t.date,
-      });
-      await tx.update(bankAccounts).set({
-        currentBalance: sql`${bankAccounts.currentBalance}::numeric + ${amount}::numeric`,
-        updatedAt: new Date(),
-      }).where(eq(bankAccounts.id, toAccount.id));
+      const deltaRows = sql.join(
+        chunk.flatMap(({ t, fromId, toId }) => [
+          sql`(${fromId}::uuid, ${t.amount}::numeric, -1)`,
+          sql`(${toId}::uuid, ${t.amount}::numeric, 1)`,
+        ]),
+        sql`, `,
+      );
+      await tx.execute(sql`
+        UPDATE bank_accounts SET
+          current_balance = bank_accounts.current_balance::numeric + d.delta,
+          updated_at = NOW()
+        FROM (
+          SELECT id, SUM(amount * sign) AS delta
+          FROM (VALUES ${deltaRows}) AS x(id, amount, sign)
+          GROUP BY id
+        ) d
+        WHERE bank_accounts.id = d.id
+      `);
     });
 
-    created++;
+    created += chunk.length;
   }
 
   // Return the account IDs so frontend knows what was created

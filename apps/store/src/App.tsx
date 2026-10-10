@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { StoreConfig, CartItem, OrderResult, StoreItem } from "./types";
 import { cartItemKey } from "./types";
 import { fetchCatalog, assetUrl } from "./api";
@@ -30,6 +30,11 @@ function saveCart(cart: CartItem[]) {
   } catch {
     // ignore storage errors
   }
+}
+
+// Keep categories seen so far: a filtered response only lists its own categories.
+function mergeCategories(prev: string[] = [], next: string[]): string[] {
+  return [...prev, ...next.filter((c) => !prev.includes(c))];
 }
 
 function applyAccentColor(hex?: string) {
@@ -99,7 +104,14 @@ export function App() {
     return parts[0] || "";
   });
 
+  // `catalog.items` holds every page loaded so far for the current filters.
   const [catalog, setCatalog] = useState<StoreConfig | null>(null);
+  const [pageInfo, setPageInfo] = useState({ page: 1, total: 0, limit: 24 });
+  const [fetching, setFetching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped per filter fetch so stale responses (older filters) are dropped.
+  const requestSeq = useRef(0);
+  const loadingMoreRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -114,6 +126,7 @@ export function App() {
   const [otpToken, setOtpToken] = useState<string | undefined>(undefined);
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("");
 
   // Item the customer is viewing in the detail modal (null = grid only).
@@ -124,7 +137,13 @@ export function App() {
     saveCart(cart);
   }, [cart]);
 
-  // Fetch catalog
+  // Debounce search so the server is queried once typing pauses
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Fetch first page of the catalog (search/category are filtered server-side)
   useEffect(() => {
     if (!slug) {
       setError("No store found at this URL");
@@ -132,17 +151,67 @@ export function App() {
       return;
     }
 
-    fetchCatalog(slug)
+    const seq = ++requestSeq.current;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    setFetching(true);
+    fetchCatalog(slug, { search: debouncedSearch, category: activeCategory })
       .then((data) => {
-        setCatalog(data);
+        if (seq !== requestSeq.current) return;
+        setCatalog((prev) => ({
+          ...data,
+          categories: mergeCategories(prev?.categories, data.categories),
+        }));
+        setPageInfo({ page: data.page, total: data.total, limit: data.limit });
         applyAccentColor(data.business.accentColor);
         applyFavicon(data.business.logoUrl);
         // Update page title
         document.title = `${data.business.name} \u2014 Online Store`;
       })
-      .catch(() => setError("Store not found or unavailable"))
-      .finally(() => setLoading(false));
-  }, [slug]);
+      .catch(() => {
+        if (seq === requestSeq.current) setError("Store not found or unavailable");
+      })
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setFetching(false);
+        setLoading(false);
+      });
+  }, [slug, debouncedSearch, activeCategory]);
+
+  const hasMore = pageInfo.page * pageInfo.limit < pageInfo.total;
+
+  const loadMore = useCallback(() => {
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const seq = requestSeq.current;
+    fetchCatalog(slug, {
+      page: pageInfo.page + 1,
+      search: debouncedSearch,
+      category: activeCategory,
+    })
+      .then((data) => {
+        if (seq !== requestSeq.current) return;
+        setCatalog((prev) => {
+          if (!prev) return prev;
+          const known = new Set(prev.items.map((i) => i.id));
+          return {
+            ...prev,
+            items: [...prev.items, ...data.items.filter((i) => !known.has(i.id))],
+            categories: mergeCategories(prev.categories, data.categories),
+          };
+        });
+        setPageInfo({ page: data.page, total: data.total, limit: data.limit });
+      })
+      .catch(() => {
+        // Leave the "Load more" button in place so the customer can retry.
+      })
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      });
+  }, [slug, pageInfo.page, debouncedSearch, activeCategory]);
 
   const addToCart = useCallback((entry: Omit<CartItem, "quantity">) => {
     setCart((prev) => {
@@ -217,7 +286,7 @@ export function App() {
   }
 
   // ── Error state ──
-  if (error || !catalog) {
+  if (!catalog) {
     return (
       <div
         className="flex flex-col items-center justify-center min-h-dvh px-4 text-center"
@@ -373,11 +442,15 @@ export function App() {
               search={search}
               activeCategory={activeCategory}
               onOpenDetail={setDetailItem}
+              loading={fetching}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={loadMore}
             />
           </main>
 
           {/* Empty state for empty catalog */}
-          {catalog.items.length === 0 && (
+          {catalog.items.length === 0 && !fetching && !search && !activeCategory && (
             <div className="flex flex-col items-center justify-center py-20 px-4 text-center">
               <div
                 className="w-20 h-20 rounded-full flex items-center justify-center mb-4"

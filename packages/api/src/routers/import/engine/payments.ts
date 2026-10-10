@@ -1,7 +1,7 @@
 import { parties, invoices, payments, paymentAllocations, businesses } from "@hisaabo/db";
 import { eq, and, sql } from "drizzle-orm";
 import { money } from "@hisaabo/shared";
-import { buildInvoiceStatusUpdate } from "../helpers.js";
+import { buildInvoiceStatusBatchUpdate } from "../helpers.js";
 import type { TenantDatabase } from "../../../trpc.js";
 import type { CanonicalPayment } from "../types.js";
 
@@ -207,9 +207,13 @@ export async function runPaymentsImport(
         invoiceUpdates.set(alloc.invoiceId, (invoiceUpdates.get(alloc.invoiceId) || 0) + alloc.allocAmount);
       }
 
-      // Apply one UPDATE per affected invoice
-      for (const [invoiceId, totalAlloc] of invoiceUpdates) {
-        await tx.execute(buildInvoiceStatusUpdate(invoiceId, businessId, totalAlloc.toFixed(2)));
+      // Apply set-based UPDATEs (one per chunk of 500 affected invoices)
+      const statusRows = Array.from(invoiceUpdates, ([invoiceId, totalAlloc]) => ({
+        invoiceId,
+        addAmount: totalAlloc.toFixed(2),
+      }));
+      for (let i = 0; i < statusRows.length; i += 500) {
+        await tx.execute(buildInvoiceStatusBatchUpdate(statusRows.slice(i, i + 500), businessId));
       }
 
       // Bulk insert payment allocation records
@@ -294,8 +298,13 @@ export async function runPaymentsImport(
         }
 
         // Update amountPaid + status on these invoices
-        for (const dp of directPaymentRows) {
-          await tx.execute(buildInvoiceStatusUpdate(dp.invoiceId!, businessId, dp.amount));
+        // (one row per invoice, so ids are unique)
+        const directStatusRows = directPaymentRows.map((dp) => ({
+          invoiceId: dp.invoiceId,
+          addAmount: dp.amount,
+        }));
+        for (let i = 0; i < directStatusRows.length; i += 500) {
+          await tx.execute(buildInvoiceStatusBatchUpdate(directStatusRows.slice(i, i + 500), businessId));
         }
 
         directCreated = directPaymentRows.length;

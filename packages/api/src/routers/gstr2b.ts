@@ -204,7 +204,7 @@ export const gstr2bRouter = router({
         .select()
         .from(gstr2bUploads)
         .where(eq(gstr2bUploads.businessId, ctx.businessId))
-        .orderBy(desc(gstr2bUploads.uploadedAt))
+        .orderBy(desc(gstr2bUploads.uploadedAt), desc(gstr2bUploads.id))
         .limit(limit)
         .offset(offset);
 
@@ -251,7 +251,7 @@ export const gstr2bRouter = router({
         .select()
         .from(gstr2bRecords)
         .where(and(...conditions))
-        .orderBy(gstr2bRecords.supplierName, gstr2bRecords.invoiceDate)
+        .orderBy(gstr2bRecords.supplierName, gstr2bRecords.invoiceDate, gstr2bRecords.id)
         .limit(input.limit)
         .offset(offset);
 
@@ -429,7 +429,7 @@ export const gstr2bRouter = router({
         .select()
         .from(gstr2bRecords)
         .where(conditions)
-        .orderBy(gstr2bRecords.supplierName, gstr2bRecords.invoiceDate)
+        .orderBy(gstr2bRecords.supplierName, gstr2bRecords.invoiceDate, gstr2bRecords.id)
         .limit(input.limit)
         .offset(offset);
 

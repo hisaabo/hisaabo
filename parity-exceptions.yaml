@@ -117,6 +117,10 @@ exceptions:
       - store.updateItemStoreSettings
       - store.updateVariantStoreSettings
 
+      # --- Item variants (batched read) ---
+      # Batched variant read used only by the web catalog CSV export; mobile reads variants per item via item.listVariants.
+      - item.listVariantsForItems
+
       # --- Item Images ---
       # Item photo gallery management (upload, reorder, primary selection,
       # alt-text editing) is a web-admin workflow built on a file picker and
@@ -303,6 +307,8 @@ exceptions:
       # with period + limit, and item.priceSummary / item.stockSummary for totals.
       - item.priceHistoryPage
       - item.stockMovementsPage
+      # Batched variant read used only by the web catalog CSV export; the CLI reads variants per item via item.listVariants.
+      - item.listVariantsForItems
 
       # --- GST JSON / Party ledger CSV ---
       # Browser download flows. The CLI exposes the same data as structured
@@ -402,6 +408,8 @@ exceptions:
       # with period + limit, and item.priceSummary / item.stockSummary for totals.
       - item.priceHistoryPage
       - item.stockMovementsPage
+      # Batched variant read used only by the web catalog CSV export; MCP reads variants per item via item.listVariants.
+      - item.listVariantsForItems
 
       # --- GST JSON / Party ledger CSV ---
       # File-download formats for the GST portal / spreadsheets. MCP agents read

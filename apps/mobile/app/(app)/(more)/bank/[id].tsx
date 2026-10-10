@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDate } from "../../../../src/lib/utils";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
@@ -165,6 +166,7 @@ export default function BankAccountDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [page, setPage] = useState(1);
+  const [allTransactions, setAllTransactions] = useState<NonNullable<typeof txData>["data"]>([]);
   const [showAddTx, setShowAddTx] = useState(false);
   const utils = trpc.useUtils();
   const canUpdate = useCan("update", "BankAccount");
@@ -214,10 +216,18 @@ export default function BankAccountDetailScreen() {
     { enabled: !!id }
   );
 
-  const { data: txData, isLoading: txLoading } = trpc.bankAccount.listTransactions.useQuery(
-    { bankAccountId: id!, page, limit: PAGE_SIZE },
-    { enabled: !!id }
-  );
+  const { data: txData, isLoading: txLoading, isPlaceholderData: txIsPlaceholder } =
+    trpc.bankAccount.listTransactions.useQuery(
+      { bankAccountId: id!, page, limit: PAGE_SIZE },
+      { enabled: !!id, placeholderData: (prev) => prev }
+    );
+
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  useEffect(() => {
+    if (txData?.data && !txIsPlaceholder) {
+      setAllTransactions((prev) => accumulatePages(prev, txData.data, page));
+    }
+  }, [txData?.data, page, txIsPlaceholder]);
 
   const invalidate = () => {
     utils.bankAccount.getById.invalidate({ id: id! });
@@ -256,9 +266,8 @@ export default function BankAccountDetailScreen() {
   const config = ACCOUNT_TYPE_CONFIG[account.accountType as AccountType] ?? ACCOUNT_TYPE_CONFIG.other;
   const balance = parseFloat(account.currentBalance || "0");
   const isNegative = balance < 0;
-  const transactions = txData?.data ?? [];
   const total = txData?.total ?? 0;
-  const hasMore = total > page * PAGE_SIZE;
+  const hasMore = allTransactions.length < total;
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -295,7 +304,7 @@ export default function BankAccountDetailScreen() {
       </View>
 
       <FlatList
-        data={transactions}
+        data={allTransactions}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={

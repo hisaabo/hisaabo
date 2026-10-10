@@ -76,23 +76,24 @@ describe("getDatePreset (pure helper)", () => {
     expect(toDate).toBe("");
   });
 
-  it("last-30: fromDate is exactly 30 days before 'now', toDate is 'now'", () => {
+  it("last-30: spans start of day 30 days ago through end of today (UTC)", () => {
     const { fromDate, toDate } = getDatePreset("last-30");
 
-    // toDate === fixed "now"
-    expect(toDate).toBe(FIXED_NOW.toISOString());
+    const expectedTo = new Date(FIXED_NOW);
+    expectedTo.setUTCHours(23, 59, 59, 999);
+    expect(toDate).toBe(expectedTo.toISOString());
 
-    // fromDate === now - 30 days (UTC)
     const expectedFrom = new Date(FIXED_NOW);
     expectedFrom.setUTCDate(expectedFrom.getUTCDate() - 30);
+    expectedFrom.setUTCHours(0, 0, 0, 0);
     expect(fromDate).toBe(expectedFrom.toISOString());
   });
 
-  it("last-30: fromDate-to-toDate spans exactly 30 days", () => {
-    const { fromDate, toDate } = getDatePreset("last-30");
-    const spanMs = new Date(toDate).getTime() - new Date(fromDate).getTime();
-    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-    expect(spanMs).toBe(thirtyDaysMs);
+  it("now-relative presets are stable within a day (stable query keys across remounts)", () => {
+    const first = [getDatePreset("last-30"), getDatePreset("this-fy")];
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 60 * 60 * 1000));
+    const later = [getDatePreset("last-30"), getDatePreset("this-fy")];
+    expect(later).toEqual(first);
   });
 
   it("unknown preset: falls back to empty strings (default branch)", () => {

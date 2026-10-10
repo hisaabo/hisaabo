@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
@@ -40,21 +41,36 @@ export default function ExpensesScreen() {
   const canCreate = useCan("create", "Expense");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [allExpenses, setAllExpenses] = useState<NonNullable<typeof data>["data"]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data: categoriesData } = trpc.expense.categories.useQuery();
 
-  const { data, isLoading, refetch } = trpc.expense.list.useQuery({
-    page,
-    limit: PAGE_SIZE,
-    category: selectedCategory ?? undefined,
-  });
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } = trpc.expense.list.useQuery(
+    {
+      page,
+      limit: PAGE_SIZE,
+      category: selectedCategory ?? undefined,
+    },
+    { placeholderData: (prev) => prev }
+  );
 
   const { data: summaryData } = trpc.expense.summary.useQuery({});
+
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  // Placeholder data (previous page/filter) is never merged in, and
+  // `dataUpdatedAt` re-runs the merge after a refetch that returned
+  // structurally identical data (e.g. pull-to-refresh with no changes).
+  useEffect(() => {
+    if (data?.data && !isPlaceholderData) {
+      setAllExpenses((prev) => accumulatePages(prev, data.data, page));
+    }
+  }, [data?.data, page, isPlaceholderData, dataUpdatedAt]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setPage(1);
+    setAllExpenses([]);
     await refetch();
     setIsRefreshing(false);
   }, [refetch]);
@@ -62,9 +78,9 @@ export default function ExpensesScreen() {
   const handleCategorySelect = useCallback((cat: string | null) => {
     setSelectedCategory(cat);
     setPage(1);
+    setAllExpenses([]);
   }, []);
 
-  const expenses = data?.data ?? [];
   const categories = (categoriesData ?? []).filter(Boolean);
   const summary = summaryData ?? [];
   const totalExpenses = summary.reduce((acc, s) => acc + parseFloat(s.total || "0"), 0);
@@ -137,7 +153,7 @@ export default function ExpensesScreen() {
         </View>
       ) : (
         <FlatList
-          data={expenses}
+          data={allExpenses}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           keyboardDismissMode="on-drag"
@@ -187,7 +203,7 @@ export default function ExpensesScreen() {
             );
           }}
           onEndReached={() => {
-            if (data && page * PAGE_SIZE < data.total) {
+            if (!isFetching && data && allExpenses.length < data.total) {
               setPage((p) => p + 1);
             }
           }}

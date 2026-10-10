@@ -1,10 +1,12 @@
 import { useState, useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { keepPreviousData } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Pagination } from "@/components/ui/Pagination";
 import { PillTabs } from "@/components/ui/Tabs";
 import { SegmentedControl } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -102,6 +104,8 @@ function isTransitionAllowed(documentType: string, from: string, to: string): bo
 
 // ── Component ─────────────────────────────────────────────────────
 
+const PAGE_SIZE = 50;
+
 const typeOptions = [
   { value: "sale", label: "Sales" },
   { value: "purchase", label: "Purchases" },
@@ -137,6 +141,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
     hasTypeFilter ? "sale" : defaultInvoiceType
   );
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   // All these document types are Invoice-backed on the server, so the role
   // permission they require is "create:Invoice" / "update:Invoice" /
@@ -187,8 +192,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   const { data, isLoading } = router.list.useQuery({
     type,
     status: (status || undefined) as never,
-    page: 1,
-    limit: 50,
+    page,
+    limit: PAGE_SIZE,
+  }, {
+    // Keep the current rows visible while the next page loads.
+    placeholderData: keepPreviousData,
   });
 
   const updateStatus = router.updateStatus.useMutation({
@@ -249,11 +257,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           <SegmentedControl
             tabs={typeOptions}
             value={type}
-            onChange={(v) => setType(v as "sale" | "purchase")}
+            onChange={(v) => { setType(v as "sale" | "purchase"); setPage(1); }}
           />
         )}
         <div className={hasTypeFilter ? "ml-auto" : undefined}>
-          <PillTabs tabs={statusTabs} value={status} onChange={setStatus} />
+          <PillTabs tabs={statusTabs} value={status} onChange={(v) => { setStatus(v); setPage(1); }} />
         </div>
       </div>
 
@@ -387,6 +395,13 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
               ))}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            totalPages={Math.ceil(data.total / PAGE_SIZE)}
+            onPageChange={setPage}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+          />
         </div>
       )}
 

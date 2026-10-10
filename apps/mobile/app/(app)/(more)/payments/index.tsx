@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatCurrency, formatDateShort } from "../../../../src/lib/utils";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, SearchBar, PressableRow, EmptyState } from "../../../../src/components/ui";
@@ -48,17 +49,32 @@ export default function PaymentsScreen() {
   const canCreate = useCan("create", "Payment");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [allPayments, setAllPayments] = useState<NonNullable<typeof data>["data"]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } = trpc.payment.list.useQuery({
-    page,
-    limit: PAGE_SIZE,
-    search: search.length > 0 ? search : undefined,
-  });
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } = trpc.payment.list.useQuery(
+    {
+      page,
+      limit: PAGE_SIZE,
+      search: search.length > 0 ? search : undefined,
+    },
+    { placeholderData: (prev) => prev }
+  );
+
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  // Placeholder data (previous page/filter) is never merged in, and
+  // `dataUpdatedAt` re-runs the merge after a refetch that returned
+  // structurally identical data (e.g. pull-to-refresh with no changes).
+  useEffect(() => {
+    if (data?.data && !isPlaceholderData) {
+      setAllPayments((prev) => accumulatePages(prev, data.data, page));
+    }
+  }, [data?.data, page, isPlaceholderData, dataUpdatedAt]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setPage(1);
+    setAllPayments([]);
     await refetch();
     setIsRefreshing(false);
   }, [refetch]);
@@ -66,9 +82,8 @@ export default function PaymentsScreen() {
   const handleSearch = useCallback((text: string) => {
     setSearch(text);
     setPage(1);
+    setAllPayments([]);
   }, []);
-
-  const payments = data?.data ?? [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -97,7 +112,7 @@ export default function PaymentsScreen() {
         </View>
       ) : (
         <FlatList
-          data={payments}
+          data={allPayments}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           keyboardDismissMode="on-drag"
@@ -137,7 +152,7 @@ export default function PaymentsScreen() {
             </PressableRow>
           )}
           onEndReached={() => {
-            if (data && page * PAGE_SIZE < data.total) {
+            if (!isFetching && data && allPayments.length < data.total) {
               setPage((p) => p + 1);
             }
           }}

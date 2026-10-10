@@ -324,10 +324,8 @@ export async function generateGSTR9(
   // Fetch all 12 months in parallel
   const monthlyData: MonthlyAggregate[] = await Promise.all(
     months.map(async ({ year, month }) => {
-      const [gstr1, gstr3b] = await Promise.all([
-        generateGSTR1(businessId, year, month, db),
-        generateGSTR3B(businessId, year, month, db),
-      ]);
+      const gstr1 = await generateGSTR1(businessId, year, month, db);
+      const gstr3b = await generateGSTR3B(businessId, year, month, db, gstr1);
       return { year, month, gstr1, gstr3b };
     }),
   );

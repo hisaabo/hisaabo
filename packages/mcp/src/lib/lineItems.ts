@@ -32,17 +32,20 @@ export async function toApiLineItems(
   client: Pick<HisaaboClient, "item">,
   items: readonly McpLineItem[],
 ): Promise<InvoiceLineItemInput[]> {
-  const itemTax = new Map<string, string | undefined>();
+  // Resolve tax for each distinct linked item lacking an explicit rate, in parallel.
+  const needTax = [...new Set(
+    items.filter((li) => li.tax_percent === undefined && li.item_id).map((li) => li.item_id as string),
+  )];
+  const itemTax = new Map<string, string | undefined>(
+    await Promise.all(needTax.map(async (id) => {
+      const item = await client.item.get(id).catch(() => null);
+      return [id, item?.taxPercent ?? undefined] as const;
+    })),
+  );
   const out: InvoiceLineItemInput[] = [];
   for (const li of items) {
     let taxPercent = li.tax_percent;
-    if (taxPercent === undefined && li.item_id) {
-      if (!itemTax.has(li.item_id)) {
-        const item = await client.item.get(li.item_id).catch(() => null);
-        itemTax.set(li.item_id, item?.taxPercent ?? undefined);
-      }
-      taxPercent = itemTax.get(li.item_id);
-    }
+    if (taxPercent === undefined && li.item_id) taxPercent = itemTax.get(li.item_id);
     out.push({
       itemId: li.item_id,
       itemName: li.description,

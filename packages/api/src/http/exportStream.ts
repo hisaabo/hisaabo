@@ -261,11 +261,11 @@ export function registerExportRoute(app: Hono): void {
           // Businesses table — only this tenant's businesses (see businessIds above)
           let offset = 0;
           let done = businessIds.length === 0;
-          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
+          const bizIdList = sql.join(businessIds.map((id) => sql`${assertUuid(id)}`), sql`, `);
 
           while (!done) {
             const rows = (await db.execute(
-              sql`SELECT * FROM ${sql.raw(tableName)} WHERE id IN (${sql.raw(bizIdList)}) ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
+              sql`SELECT * FROM ${sql.identifier(tableName)} WHERE id IN (${bizIdList}) ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
             )) as Array<Record<string, unknown>>;
 
             for (const row of rows) {
@@ -287,15 +287,15 @@ export function registerExportRoute(app: Hono): void {
           // Empty tenant — write empty NDJSON file
         } else if (scope.type === "direct") {
           // Table has a direct business_id column
-          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
-          const whereClause = sql.raw(`business_id IN (${bizIdList})`);
+          const bizIdList = sql.join(businessIds.map((id) => sql`${assertUuid(id)}`), sql`, `);
+          const whereClause = sql`business_id IN (${bizIdList})`;
 
           let offset = 0;
           let done = false;
 
           while (!done) {
             const rows = (await db.execute(
-              sql`SELECT * FROM ${sql.raw(tableName)} WHERE ${whereClause} ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
+              sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${whereClause} ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
             )) as Array<Record<string, unknown>>;
 
             for (const row of rows) {
@@ -319,17 +319,15 @@ export function registerExportRoute(app: Hono): void {
           assertSafeTableName(scope.parentTable);
           assertSafeTableName(scope.parentFk);
 
-          const bizIdList = businessIds.map((id) => `'${assertUuid(id)}'`).join(", ");
-          const whereClause = sql.raw(
-            `${scope.parentFk} IN (SELECT id FROM ${scope.parentTable} WHERE business_id IN (${bizIdList}))`,
-          );
+          const bizIdList = sql.join(businessIds.map((id) => sql`${assertUuid(id)}`), sql`, `);
+          const whereClause = sql`${sql.identifier(scope.parentFk)} IN (SELECT id FROM ${sql.identifier(scope.parentTable)} WHERE business_id IN (${bizIdList}))`;
 
           let offset = 0;
           let done = false;
 
           while (!done) {
             const rows = (await db.execute(
-              sql`SELECT * FROM ${sql.raw(tableName)} WHERE ${whereClause} ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
+              sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${whereClause} ORDER BY id LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
             )) as Array<Record<string, unknown>>;
 
             for (const row of rows) {

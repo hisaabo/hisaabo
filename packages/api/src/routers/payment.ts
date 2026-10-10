@@ -10,6 +10,14 @@ import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
 
+const ASSIGN_CHUNK_SIZE = 500;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 type PaymentTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 
 // Allocations must fit inside the payment itself.
@@ -117,7 +125,7 @@ export const paymentRouter = router({
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...conditions))
-          .orderBy(desc(payments.paymentDate))
+          .orderBy(desc(payments.paymentDate), desc(payments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
@@ -875,6 +883,7 @@ export const paymentRouter = router({
 
       const conditions = [
         eq(payments.businessId, ctx.businessId),
+        isNull(payments.deletedAt),
         sql`${payments.bankAccountId} IS NULL`,
       ];
       if (input.search) {
@@ -900,7 +909,7 @@ export const paymentRouter = router({
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...conditions))
-          .orderBy(desc(payments.paymentDate))
+          .orderBy(desc(payments.paymentDate), desc(payments.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(payments)
@@ -944,6 +953,7 @@ export const paymentRouter = router({
         if (input.allMatching) {
           const matchConditions = [
             eq(payments.businessId, ctx.businessId),
+            isNull(payments.deletedAt),
             sql`${payments.bankAccountId} IS NULL`,
           ];
           if (input.search) {
@@ -963,9 +973,14 @@ export const paymentRouter = router({
 
         if (paymentIds.length === 0) return { assigned: 0 };
 
-        for (const paymentId of paymentIds) {
-          // Get the payment (only if untracked and owned by this business)
-          const [pmt] = await tx.select({
+        // Load every eligible payment (untracked and owned by this business) up front.
+        // Chunked so "allMatching" cannot exceed the Postgres bind-parameter limit.
+        const uniqueIds = [...new Set(paymentIds)];
+        const pmts: Array<{
+          id: string; amount: string; paymentDate: Date; paymentNumber: string | null; invoiceId: string | null;
+        }> = [];
+        for (const ids of chunk(uniqueIds, ASSIGN_CHUNK_SIZE)) {
+          pmts.push(...await tx.select({
             id: payments.id,
             amount: payments.amount,
             paymentDate: payments.paymentDate,
@@ -973,38 +988,36 @@ export const paymentRouter = router({
             invoiceId: payments.invoiceId,
           }).from(payments)
             .where(and(
-              eq(payments.id, paymentId),
+              inArray(payments.id, ids),
               eq(payments.businessId, ctx.businessId),
+              isNull(payments.deletedAt),
               sql`${payments.bankAccountId} IS NULL`,
-            ))
-            .limit(1);
+            )));
+        }
+        // Keep the caller's ordering; unknown or already-assigned ids are skipped.
+        const order = new Map(uniqueIds.map((id, i) => [id, i]));
+        pmts.sort((x, y) => order.get(x.id)! - order.get(y.id)!);
 
-          if (!pmt) continue; // already assigned or not found
+        // Linked invoice types decide deposit vs withdrawal.
+        const invoiceIds = [...new Set(pmts.flatMap((p) => (p.invoiceId ? [p.invoiceId] : [])))];
+        const invoiceTypes = new Map<string, string>();
+        for (const ids of chunk(invoiceIds, ASSIGN_CHUNK_SIZE)) {
+          const rows = await tx.select({ id: invoices.id, type: invoices.type })
+            .from(invoices)
+            .where(inArray(invoices.id, ids));
+          for (const row of rows) invoiceTypes.set(row.id, row.type);
+        }
 
-          // Update payment with bank account
-          await tx.update(payments)
-            .set({ bankAccountId: input.bankAccountId })
-            .where(eq(payments.id, paymentId));
-
-          // Determine deposit/withdrawal based on linked invoice type
-          let txType: "deposit" | "withdrawal" = "deposit";
-          if (pmt.invoiceId) {
-            const [inv] = await tx.select({ type: invoices.type })
-              .from(invoices)
-              .where(eq(invoices.id, pmt.invoiceId))
-              .limit(1);
-            if (inv?.type === "purchase") txType = "withdrawal";
-          }
+        const txRows: Array<typeof bankTransactions.$inferInsert> = [];
+        for (const pmt of pmts) {
+          const txType: "deposit" | "withdrawal" =
+            pmt.invoiceId && invoiceTypes.get(pmt.invoiceId) === "purchase" ? "withdrawal" : "deposit";
 
           totalDeposited = txType === "deposit"
             ? money.add(totalDeposited, pmt.amount)
             : money.sub(totalDeposited, pmt.amount);
 
-          // Calculate running balance after this transaction
-          const _currentBal = money.add(account.currentBalance, totalDeposited);
-
-          // Create bank transaction
-          await tx.insert(bankTransactions).values({
+          txRows.push({
             businessId: ctx.businessId,
             bankAccountId: input.bankAccountId,
             type: txType,
@@ -1012,9 +1025,15 @@ export const paymentRouter = router({
             description: `Payment ${pmt.paymentNumber || pmt.id} (assigned)`,
             referenceType: "payment",
             referenceId: pmt.id,
-
             transactionDate: pmt.paymentDate,
           });
+        }
+
+        for (const rows of chunk(txRows, ASSIGN_CHUNK_SIZE)) {
+          await tx.update(payments)
+            .set({ bankAccountId: input.bankAccountId })
+            .where(inArray(payments.id, rows.map((r) => r.referenceId!)));
+          await tx.insert(bankTransactions).values(rows);
         }
 
         // Update account balance once with net change

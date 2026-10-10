@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatDateShort } from "../../../../src/lib/utils";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { FAB, EmptyState } from "../../../../src/components/ui";
@@ -57,19 +58,32 @@ export default function AutomatedInvoicesScreen() {
   const canCreate = useCan("create", "RecurringInvoice");
   const [selectedStatus, setSelectedStatus] = useState<TemplateStatus | null>(null);
   const [page, setPage] = useState(1);
+  const [allTemplates, setAllTemplates] = useState<NonNullable<typeof data>["data"]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } = trpc.recurringInvoice.list.useQuery({
-    page,
-    limit: PAGE_SIZE,
-    status: selectedStatus ?? undefined,
-  });
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } =
+    trpc.recurringInvoice.list.useQuery(
+      {
+        page,
+        limit: PAGE_SIZE,
+        status: selectedStatus ?? undefined,
+      },
+      { placeholderData: (prev) => prev }
+    );
 
   const { data: usageData } = trpc.recurringInvoice.planUsage.useQuery();
+
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  useEffect(() => {
+    if (data?.data && !isPlaceholderData) {
+      setAllTemplates((prev) => accumulatePages(prev, data.data, page));
+    }
+  }, [data?.data, page, isPlaceholderData, dataUpdatedAt]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setPage(1);
+    setAllTemplates([]);
     await refetch();
     setIsRefreshing(false);
   }, [refetch]);
@@ -77,9 +91,9 @@ export default function AutomatedInvoicesScreen() {
   const handleStatusSelect = useCallback((status: TemplateStatus | null) => {
     setSelectedStatus(status);
     setPage(1);
+    setAllTemplates([]);
   }, []);
 
-  const templates = data?.data ?? [];
   const usage = usageData ?? { runsThisMonth: 0, totalTemplates: 0 };
 
   return (
@@ -151,7 +165,7 @@ export default function AutomatedInvoicesScreen() {
         </View>
       ) : (
         <FlatList
-          data={templates}
+          data={allTemplates}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           keyboardDismissMode="on-drag"
@@ -215,7 +229,7 @@ export default function AutomatedInvoicesScreen() {
             );
           }}
           onEndReached={() => {
-            if (data && page * PAGE_SIZE < data.total) {
+            if (!isFetching && data && allTemplates.length < data.total) {
               setPage((p) => p + 1);
             }
           }}

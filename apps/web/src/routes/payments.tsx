@@ -286,7 +286,7 @@ function PaymentsPage() {
 
   const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
-  const { data, isFetching, isLoading } = trpc.payment.list.useQuery({
+  const { data, isFetching, isLoading, isPlaceholderData } = trpc.payment.list.useQuery({
     page,
     limit: PAYMENTS_PAGE_SIZE,
     search: debouncedSearch || undefined,
@@ -302,6 +302,7 @@ function PaymentsPage() {
     total: data?.total ?? 0,
     page,
     isFetching,
+    isPlaceholderData,
     onLoadMore: loadMore,
     resetDeps: [debouncedSearch, dateRange.fromDate, dateRange.toDate],
   });
