@@ -120,6 +120,20 @@
       "when": 1791617564903,
       "tag": "0016_lean_salo",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791656772279,
+      "tag": "0017_futuristic_kabuki",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791656777273,
+      "tag": "0018_cache_invalidation_triggers",
+      "breakpoints": true
     }
   ]
 }

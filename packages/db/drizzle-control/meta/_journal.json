@@ -36,6 +36,20 @@
       "when": 1791290126332,
       "tag": "0004_mature_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791656773174,
+      "tag": "0005_clean_the_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791656780103,
+      "tag": "0006_cache_invalidation_triggers",
+      "breakpoints": true
     }
   ]
 }

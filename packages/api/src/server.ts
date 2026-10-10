@@ -1460,8 +1460,8 @@ app.get("/store/:slug/catalog.json", async (c) => {
 
   if (!biz) return c.json({ error: "Store not found" }, 404);
 
-  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10)));
+  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10) || 24));
   const category = c.req.query("category");
   const search = c.req.query("search");
   const offset = (page - 1) * limit;
