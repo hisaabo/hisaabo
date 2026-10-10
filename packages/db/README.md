@@ -121,6 +121,37 @@ Migration files are in `packages/db/drizzle/`. These are committed to the reposi
 4. Commit the schema change and the migration file together.
 5. The Docker entrypoint runs `pnpm db:migrate` on startup in production.
 
+### Migration safety (expand/contract)
+
+During a rollout the previous app version keeps serving traffic against the new schema, and in cloud mode tenants are migrated one database at a time. So every migration must work with **both** the old and the new code:
+
+- **Expand** — add tables, add nullable columns or columns with a `DEFAULT`. Safe at any time.
+- **Contract** — drop or rename the old shape in a **later** release, once no deployed code uses it.
+
+CI (`Migration Safety` job) runs `scripts/check-migrations.ts` on every new migration file and fails on drops, renames, column type changes, `NOT NULL` without a default, `SET NOT NULL`, and indexes or constraints added to existing tables. It also fails if an already-committed migration is edited or deleted. Statements on tables created in the same change are exempt. Run it locally with:
+
+```bash
+pnpm db:check-migrations   # compares against origin/main, includes uncommitted files
+```
+
+For an intentional contract step, put a marker comment with a reason directly above the statement:
+
+```sql
+-- migration-lint-allow drop: contract step — column unused since v0.10
+ALTER TABLE "items" DROP COLUMN "legacy_code";
+```
+
+The rules and allowable rule names are documented at the top of `scripts/check-migrations.ts`.
+
+### Lock timeout
+
+The migrator sets `lock_timeout` on its connection, so a migration stuck behind a long-running transaction gives up quickly and retries with backoff (1s, 2s, 4s … capped at 30s) instead of making every query on that table queue behind it. drizzle applies pending migrations in a single transaction, so each retry starts clean. If all retries fail, the migrator exits non-zero as before.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MIGRATION_LOCK_TIMEOUT` | `5s` | Postgres duration (`500ms`, `5s`, `1min`); `0` disables |
+| `MIGRATION_LOCK_RETRIES` | `5` | Retries after the first attempt |
+
 ---
 
 ## Drizzle Studio

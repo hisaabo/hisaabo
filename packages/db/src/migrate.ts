@@ -103,6 +103,77 @@ const ADVISORY_LOCK_ID = 72919283;
 // Max tenant migrations to run in parallel
 const TENANT_CONCURRENCY = 5;
 
+// ── Lock timeout ─────────────────────────────────────────────
+//
+// DDL needs ACCESS EXCLUSIVE (or similar) locks. Without a lock_timeout, a
+// migration waiting behind one long-running transaction makes every later
+// query on that table queue behind the migration — a full outage for that
+// table. With it, the migration gives up quickly and is retried with backoff
+// instead, so live traffic is never stuck behind it.
+//
+// drizzle applies all pending migrations in one transaction, so a timed-out
+// attempt rolls back cleanly and the retry starts from the same state.
+//
+//   MIGRATION_LOCK_TIMEOUT  Postgres duration, e.g. "5s", "500ms" (default 5s; "0" disables)
+//   MIGRATION_LOCK_RETRIES  retries after the first attempt (default 5)
+
+const DEFAULT_LOCK_TIMEOUT = "5s";
+const DEFAULT_LOCK_RETRIES = 5;
+const LOCK_NOT_AVAILABLE = "55P03";
+
+function lockTimeoutSetting(): string {
+  const raw = (process.env.MIGRATION_LOCK_TIMEOUT ?? DEFAULT_LOCK_TIMEOUT).trim();
+  // Interpolated into SET, so only accept a plain duration.
+  if (/^\d+(ms|s|min)?$/.test(raw)) return raw;
+  log("warn", `Invalid MIGRATION_LOCK_TIMEOUT "${raw}" — using ${DEFAULT_LOCK_TIMEOUT}`);
+  return DEFAULT_LOCK_TIMEOUT;
+}
+
+function lockRetries(): number {
+  const raw = process.env.MIGRATION_LOCK_RETRIES;
+  if (raw === undefined) return DEFAULT_LOCK_RETRIES;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 0) return n;
+  log("warn", `Invalid MIGRATION_LOCK_RETRIES "${raw}" — using ${DEFAULT_LOCK_RETRIES}`);
+  return DEFAULT_LOCK_RETRIES;
+}
+
+/** True if err (or anything in its cause chain) is Postgres lock_not_available. */
+export function isLockTimeout(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; cur && depth < 5; depth++) {
+    if ((cur as { code?: string }).code === LOCK_NOT_AVAILABLE) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Runs fn, retrying with exponential backoff (1s, 2s, 4s … capped at 30s,
+ * plus jitter) when it fails because a lock could not be acquired within
+ * lock_timeout. Any other error is rethrown immediately.
+ */
+export async function withLockRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  retries = lockRetries(),
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isLockTimeout(err)) throw err;
+      if (attempt >= retries) {
+        log("error", `${label}: could not acquire a lock after ${attempt + 1} attempt(s) — a long-running transaction is likely holding it (check pg_stat_activity)`);
+        throw err;
+      }
+      const delayMs = Math.min(30_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
+      log("warn", `${label}: lock timeout — retrying`, { attempt: attempt + 1, retries, delayMs });
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 // ── Logging ──────────────────────────────────────────────────
 export function log(level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) {
   const entry = { level, msg, ts: new Date().toISOString(), ...data };
@@ -214,7 +285,8 @@ async function runLenientMigrations(
 
     for (const stmt of statements) {
       try {
-        await client.unsafe(stmt);
+        // Statements run outside a transaction here, so retry each one on its own.
+        await withLockRetry(`${label}: ${entry.tag}`, () => client.unsafe(stmt));
       } catch (err: unknown) {
         const pgCode = (err as { code?: string }).code;
         if (pgCode && ALREADY_EXISTS_CODES.has(pgCode)) {
@@ -223,6 +295,7 @@ async function runLenientMigrations(
           // Real error — abort
           throw new Error(
             `${label}: migration ${entry.tag} failed on statement: ${(err as Error).message}\nSQL: ${stmt.slice(0, 200)}`,
+            { cause: err },
           );
         }
       }
@@ -260,6 +333,12 @@ async function runMigrations(
     await client.unsafe(`SELECT pg_advisory_lock(${ADVISORY_LOCK_ID})`);
 
     try {
+      // Set only after the advisory lock is held: lock_timeout also applies to
+      // advisory locks, and a second replica must keep waiting for the first
+      // one's migrations rather than time out.
+      const lockTimeout = lockTimeoutSetting();
+      await client.unsafe(`SET lock_timeout = '${lockTimeout}'`);
+
       const table = opts?.migrationsTable ?? "__drizzle_migrations";
       const lenient = await needsLenientMode(client, table);
 
@@ -273,10 +352,12 @@ async function runMigrations(
         log("info", `${label}: lenient mode complete`, { applied, skippedStatements });
       } else {
         // Normal path: drizzle-orm handles tracking and only applies pending migrations
-        await migrate(db, {
-          migrationsFolder,
-          ...(opts?.migrationsTable ? { migrationsTable: opts.migrationsTable } : {}),
-        });
+        await withLockRetry(label, () =>
+          migrate(db, {
+            migrationsFolder,
+            ...(opts?.migrationsTable ? { migrationsTable: opts.migrationsTable } : {}),
+          }),
+        );
       }
     } finally {
       await client.unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`);
