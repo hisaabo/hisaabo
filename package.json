@@ -26,7 +26,7 @@
     "versions:check": "node scripts/versions.mjs check"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.0",
     "oxlint": "^1.86.0",
     "turbo": "^2.11.7",
     "typescript": "^5.9.3"
