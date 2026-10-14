@@ -107,6 +107,22 @@ export const businesses = pgTable("businesses", {
   uniqueIndex("businesses_store_slug_idx").on(t.storeSlug),
 ]);
 
+export const tdsSectionConfigs = pgTable("tds_section_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  sectionCode: text("section_code").notNull(),
+  sectionLabel: text("section_label").notNull(),
+  effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+  effectiveTo: timestamp("effective_to", { withTimezone: true }),
+  status: text("status").notNull().default("active"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("tds_section_configs_business_code_version_idx").on(t.businessId, t.sectionCode, t.version),
+  index("tds_section_configs_active_idx").on(t.businessId, t.sectionCode, t.effectiveFrom),
+]);
+
 // ── Parties (Customers / Suppliers) ────────────────────────────
 
 export const parties = pgTable("parties", {
@@ -118,6 +134,7 @@ export const parties = pgTable("parties", {
   email: text("email"),
   gstin: text("gstin"),
   pan: text("pan"),
+  tan: text("tan"),
   billingAddress: text("billing_address"),
   shippingAddress: text("shipping_address"),
   city: text("city"),
@@ -393,6 +410,9 @@ export const paymentAllocations = pgTable("payment_allocations", {
   paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
   invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  tdsAmount: numeric("tds_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  tdsSectionCode: text("tds_section_code"),
+  tdsRate: numeric("tds_rate", { precision: 5, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("payment_alloc_payment_idx").on(t.paymentId),

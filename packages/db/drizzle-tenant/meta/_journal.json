@@ -50,6 +50,13 @@
       "when": 1791617568446,
       "tag": "0006_confused_kree",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791818216979,
+      "tag": "0007_little_archangel",
+      "breakpoints": true
     }
   ]
 }

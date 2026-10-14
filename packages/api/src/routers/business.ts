@@ -9,6 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
+import { seedTdsSections } from "../lib/tds-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
 import { cacheBus } from "../lib/cache/bus.js";
 import { requireTenantRole, getTenantRole, hasRole, ADMIN_ROLES } from "../lib/tenant-access.js";
@@ -126,6 +127,7 @@ export const businessRouter = router({
       // Seed the default Chart of Accounts for this business — must be inside
       // the same transaction so a partial failure rolls back cleanly.
       await seedChartOfAccounts(tx, biz.id);
+      await seedTdsSections(tx, biz.id);
 
       createdBizId = biz.id;
       return biz;

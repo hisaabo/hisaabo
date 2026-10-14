@@ -1,3 +1,4 @@
+import { money } from "@hisaabo/shared";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -15,6 +16,9 @@ interface CreateOpts {
   date?: string;
   notes?: string;
   yes?: boolean;
+  tdsAmount?: string;
+  tdsSection?: string;
+  tdsRate?: string;
 }
 
 async function prompt(rl: readline.Interface, q: string): Promise<string> {
@@ -102,6 +106,22 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
     if (!amount) fatalError("--amount is required", EXIT.USAGE);
     if (!mode) mode = "cash";
 
+    if (opts.tdsAmount && !opts.invoiceId) {
+      fatalError("--invoice-id is required when recording TDS", EXIT.USAGE);
+    }
+
+    const allocations = opts.tdsAmount && opts.invoiceId
+      ? [
+          {
+            invoiceId: opts.invoiceId,
+            amount: money.add(amount, opts.tdsAmount),
+            tdsAmount: opts.tdsAmount,
+            tdsSectionCode: opts.tdsSection,
+            tdsRate: opts.tdsRate,
+          },
+        ]
+      : undefined;
+
     const payment = await client.payment.create({
       partyId,
       amount,
@@ -110,6 +130,7 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
       paymentDate,
       notes,
       invoiceId: opts.invoiceId,
+      allocations,
     });
 
     if (opts.json) {

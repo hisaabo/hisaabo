@@ -57,7 +57,13 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         invoice_id: z.string().uuid()
           .describe("Invoice UUID to allocate part of this payment to."),
         amount: z.string().regex(/^\d+(\.\d{1,2})?$/)
-          .describe("Amount to allocate to this invoice."),
+          .describe("Gross amount settled against this invoice."),
+        tds_amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+          .describe("TDS amount deducted for this invoice."),
+        tds_section_code: z.string().max(20).optional()
+          .describe("TDS section code (e.g. '194C', '194J')."),
+        tds_rate: z.string().regex(/^\d+(\.\d{1,4})?$/).optional()
+          .describe("TDS percentage rate (e.g. '1.0' or '10.0')."),
       })).optional()
         .describe("Allocate a single payment across multiple invoices. Use instead of invoice_id when splitting a payment."),
     },
@@ -75,6 +81,9 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         allocations: input.allocations?.map((a) => ({
           invoiceId: a.invoice_id,
           amount: a.amount,
+          tdsAmount: a.tds_amount,
+          tdsSectionCode: a.tds_section_code,
+          tdsRate: a.tds_rate,
         })),
       });
       return {
@@ -136,7 +145,13 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         invoice_id: z.string().uuid()
           .describe("Invoice UUID to allocate part of this payment to."),
         amount: z.string().regex(/^\d+(\.\d{1,2})?$/)
-          .describe("Amount to allocate."),
+          .describe("Gross amount settled against this invoice."),
+        tds_amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
+          .describe("TDS amount deducted for this invoice."),
+        tds_section_code: z.string().max(20).optional()
+          .describe("TDS section code (e.g. '194C', '194J')."),
+        tds_rate: z.string().regex(/^\d+(\.\d{1,4})?$/).optional()
+          .describe("TDS percentage rate (e.g. '1.0' or '10.0')."),
       })).optional()
         .describe("Updated invoice allocations. Replaces all existing allocations."),
     },
@@ -153,6 +168,9 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         allocations: input.allocations?.map((a) => ({
           invoiceId: a.invoice_id,
           amount: a.amount,
+          tdsAmount: a.tds_amount,
+          tdsSectionCode: a.tds_section_code,
+          tdsRate: a.tds_rate,
         })),
       });
       return {
