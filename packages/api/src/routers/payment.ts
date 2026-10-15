@@ -629,12 +629,16 @@ export const paymentRouter = router({
         tdsRate: paymentAllocations.tdsRate,
       }).from(paymentAllocations).where(eq(paymentAllocations.paymentId, existing.id));
 
-      if (!input.allocations && input.amount !== undefined && existingAllocations.length > 0
-        && money.compare(input.amount, existing.amount) !== 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Allocations are required when changing the payment amount",
-        });
+      const hasExistingTds = existingAllocations.some((a) => money.compare(a.tdsAmount || "0", "0") > 0);
+      const isMultiAllocation = existingAllocations.length > 1;
+
+      if (!input.allocations && input.amount !== undefined && money.compare(input.amount, existing.amount) !== 0) {
+        if (hasExistingTds || isMultiAllocation) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Allocations are required when changing the payment amount",
+          });
+        }
       }
 
       if (existingAllocations.length > 0) {
@@ -713,7 +717,9 @@ export const paymentRouter = router({
 
       const primaryInvoiceId = input.allocations !== undefined
         ? input.allocations[0]?.invoiceId ?? null
-        : existing.invoiceId;
+        : existingAllocations.length === 1 && !hasExistingTds
+          ? existingAllocations[0].invoiceId
+          : existing.invoiceId;
 
       if (input.allocations !== undefined && input.allocations.length > 0) {
         await assertInvoicesExist(tx, ctx.businessId, input.allocations.map((a) => a.invoiceId));
@@ -736,11 +742,13 @@ export const paymentRouter = router({
       // 5. Apply new allocations
       const newAllocations = input.allocations !== undefined
         ? input.allocations
-        : existingAllocations.length > 0
-          ? existingAllocations
-          : primaryInvoiceId
-          ? [{ invoiceId: primaryInvoiceId, amount: newAmount, tdsAmount: "0" }]
-          : [];
+        : existingAllocations.length === 1 && !hasExistingTds
+          ? [{ invoiceId: existingAllocations[0].invoiceId, amount: newAmount, tdsAmount: "0" }]
+          : existingAllocations.length > 0
+            ? existingAllocations
+            : primaryInvoiceId
+            ? [{ invoiceId: primaryInvoiceId, amount: newAmount, tdsAmount: "0" }]
+            : [];
 
       for (const alloc of newAllocations) {
         await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc, newDate);

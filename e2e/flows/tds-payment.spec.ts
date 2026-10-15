@@ -80,6 +80,16 @@ test.describe("TDS payment allocation", () => {
     await updateInvoiceStatus(seedApi, seed.businessId, replacementInvoice.id, "sent");
     await seedTdsSection(seedApi, seed.businessId, Date.now() % 1_000_000);
 
+    const beforeTrialBalance = await api.query<{ accounts: Array<{ accountCode: string; debit: string; credit: string }> }>(
+      "reports.trialBalance",
+      { asOfDate: "2026-12-31T23:59:59.999Z", fromDate: "2026-01-01T00:00:00.000Z" },
+      { "x-business-id": seed.businessId },
+    );
+    const beforeAccount = (code: string) => beforeTrialBalance.accounts.find((entry) => entry.accountCode === code);
+    const initialCash = parseFloat(beforeAccount("1000")?.debit ?? "0");
+    const initialTds = parseFloat(beforeAccount("1600")?.debit ?? "0");
+    const initialArCredit = parseFloat(beforeAccount("1100")?.credit ?? "0");
+
     const paymentPanel = await openPaymentPanel(page, invoice.id, invoice.invoiceNumber);
     await paymentPanel.locator('input[type="number"]').nth(2).fill("100000.00");
     await expect(paymentPanel.locator("option").filter({ hasText: `${REGISTRY_CODE} - ${REGISTRY_LABEL}` })).toHaveCount(1);
@@ -118,9 +128,9 @@ test.describe("TDS payment allocation", () => {
       { "x-business-id": seed.businessId },
     );
     const account = (code: string) => trialBalance.accounts.find((entry) => entry.accountCode === code);
-    expect(account("1000")?.debit).toBe("98000.00");
-    expect(account("1600")?.debit).toBe("2000.00");
-    expect(account("1100")).toMatchObject({ debit: "200000.00", credit: "100000.00" });
+    expect((parseFloat(account("1000")?.debit ?? "0") - initialCash).toFixed(2)).toBe("98000.00");
+    expect((parseFloat(account("1600")?.debit ?? "0") - initialTds).toFixed(2)).toBe("2000.00");
+    expect((parseFloat(account("1100")?.credit ?? "0") - initialArCredit).toFixed(2)).toBe("100000.00");
     expect(trialBalance.totalDebit).toBe(trialBalance.totalCredit);
 
     await page.goto("/payments");
