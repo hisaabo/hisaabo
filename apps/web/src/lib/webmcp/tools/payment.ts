@@ -48,7 +48,24 @@ const allocationSchema = objectSchema(
     amount: {
       type: "string",
       pattern: MONEY_PATTERN,
-      description: "Amount applied to that invoice as a decimal string, greater than zero, e.g. '5000.00'.",
+      description:
+        "Gross settlement applied to that invoice as a decimal string, greater than zero, e.g. '5000.00'. This may be greater than the net cash payment when TDS is deducted.",
+    },
+    tdsAmount: {
+      type: "string",
+      pattern: MONEY_PATTERN,
+      description:
+        "TDS deducted from this invoice as a decimal string. Gross settlement equals net cash received plus TDS deducted.",
+    },
+    tdsSectionCode: {
+      type: "string",
+      maxLength: 20,
+      description: "Active TDS section code for this deduction, such as '194C' or '194J'.",
+    },
+    tdsRate: {
+      type: "string",
+      pattern: "^\\d+(\\.\\d{1,4})?$",
+      description: "TDS percentage rate for this deduction, such as '1.0' or '10.0'.",
     },
   },
   ["invoiceId", "amount"],
@@ -114,7 +131,7 @@ const paymentCreate: WebMcpToolDefinition = {
   description: [
     "Record money received from a customer or paid to a supplier. This moves real balances: the party's ledger, the invoice's amountPaid, and the invoice status, which Hisaabo recalculates to 'paid' or 'partial' by itself. Confirm the party, the amount and the date with the user before calling, and never use invoice_update_status to fake a payment.",
     "Three ways to apply the money. One invoice: set invoiceId. Several invoices: leave invoiceId out and pass 'allocations', where the amounts should add up to 'amount' (call payment_unpaid_invoices first to get the per-invoice balances). Neither: an advance or on-account payment that sits against the party's balance until it is applied.",
-    "'amount' and 'discount' are decimal strings with 2 decimals and no currency symbol ('5000.00'); amount must be greater than zero. 'discount' is a write-off settled alongside the payment, not a deduction from what was received. paymentDate defaults to today.",
+    "'amount' and 'discount' are decimal strings with 2 decimals and no currency symbol ('5000.00'); amount must be greater than zero. For a TDS payment, 'amount' is the net cash received and each allocation amount is the gross invoice settlement, with gross settlement = net cash received + TDS deducted. Provide tdsAmount, tdsSectionCode and tdsRate on the allocation when TDS is deducted. 'discount' is a write-off settled alongside the payment, not a deduction from what was received. paymentDate defaults to today.",
     "Example: { partyId: '3f1c…', amount: '12700.00', mode: 'upi', referenceNumber: '432198765432', allocations: [{ invoiceId: '8a2d…', amount: '12700.00' }] }",
   ].join(" "),
   inputSchema: objectSchema(
@@ -133,7 +150,7 @@ const paymentCreate: WebMcpToolDefinition = {
         items: allocationSchema,
         minItems: 1,
         description:
-          "Split one payment across several invoices. Use instead of invoiceId; the amounts should sum to 'amount'. Get the invoices and their balances from payment_unpaid_invoices.",
+          "Split one payment across several invoices. Use instead of invoiceId. For non-TDS payments, allocation amounts should sum to `amount`. For TDS payments, gross allocation amounts should sum to `amount` plus the total TDS deducted. Get the invoices and their balances from `payment_unpaid_invoices`.",
       },
       discount: money("Discount or write-off settled together with this payment, e.g. '100.00'. Defaults to '0'."),
       referenceNumber: { type: "string", maxLength: 100, description: "UTR, cheque number or transaction reference." },
@@ -155,6 +172,9 @@ const paymentCreate: WebMcpToolDefinition = {
     const allocations = objectArray(input.allocations)?.map((a) => ({
       invoiceId: str(a.invoiceId) ?? "",
       amount: str(a.amount) ?? "",
+      ...(str(a.tdsAmount) !== undefined ? { tdsAmount: str(a.tdsAmount) } : {}),
+      ...(str(a.tdsSectionCode) !== undefined ? { tdsSectionCode: str(a.tdsSectionCode) } : {}),
+      ...(str(a.tdsRate) !== undefined ? { tdsRate: str(a.tdsRate) } : {}),
     }));
 
     return await ctx.client.payment.create.mutate({

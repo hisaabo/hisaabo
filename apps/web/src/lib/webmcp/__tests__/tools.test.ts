@@ -20,6 +20,7 @@ import {
   itemTools,
   paymentTools,
   expenseTools,
+  tdsSectionTools,
 } from "../tools";
 import { resolvePeriod } from "../tools/dashboard";
 import { indianFinancialYear } from "../tools/app";
@@ -68,6 +69,9 @@ function makeClient() {
       categories: { query: vi.fn().mockResolvedValue(["Rent", "Travel"]) },
       create: { mutate: vi.fn().mockResolvedValue({ id: "exp-1" }) },
     },
+    tdsSection: {
+      list: { query: vi.fn().mockResolvedValue([{ sectionCode: "194J", sectionLabel: "Professional services" }]) },
+    },
   };
 }
 
@@ -105,6 +109,7 @@ describe("WebMCP catalog — shape every tool must satisfy", () => {
       ...itemTools,
       ...paymentTools,
       ...expenseTools,
+      ...tdsSectionTools,
     ];
     expect(webMcpTools).toHaveLength(domains.length);
     expect(webMcpTools.map((t) => t.name)).toEqual(domains.map((t) => t.name));
@@ -187,6 +192,13 @@ describe("WebMCP catalog — shape every tool must satisfy", () => {
     for (const name of webMcpTools.map((t) => t.name)) {
       expect(name).not.toMatch(/delete|remove|pdf|download|settings|team|tenant|invite/);
     }
+  });
+
+  it("gates TDS section discovery behind payment read permission", () => {
+    const t = tool("tds_section_list");
+    expect(t.annotations.readOnlyHint).toBe(true);
+    expect(t.annotations.untrustedContentHint).toBe(true);
+    expect(t.requires).toEqual({ resource: "Payment", action: "read" });
   });
 });
 
@@ -676,6 +688,17 @@ describe("payment tools", () => {
     expect(arg.referenceNumber).toBe("432198765432");
   });
 
+  it("payment_create declares all receivable-side TDS allocation fields", () => {
+    const allocation = tool("payment_create").inputSchema.properties?.allocations?.items;
+    expect(Object.keys(allocation?.properties ?? {})).toEqual([
+      "invoiceId",
+      "amount",
+      "tdsAmount",
+      "tdsSectionCode",
+      "tdsRate",
+    ]);
+  });
+
   it("payment_create sends a split payment as allocations", async () => {
     await tool("payment_create").execute(
       {
@@ -697,6 +720,52 @@ describe("payment tools", () => {
     ]);
   });
 
+  it("payment_create forwards TDS allocation values", async () => {
+    await tool("payment_create").execute(
+      {
+        partyId: UUID_A,
+        amount: "9000.00",
+        mode: "bank",
+        allocations: [{
+          invoiceId: UUID_B,
+          amount: "10000.00",
+          tdsAmount: "1000.00",
+          tdsSectionCode: "194J",
+          tdsRate: "10.0",
+        }],
+      },
+      ctx,
+    );
+    const arg = client.payment.create.mutate.mock.calls[0][0] as { allocations: unknown };
+    expect(arg.allocations).toEqual([{
+      invoiceId: UUID_B,
+      amount: "10000.00",
+      tdsAmount: "1000.00",
+      tdsSectionCode: "194J",
+      tdsRate: "10.0",
+    }]);
+  });
+
+  it("payment_create keeps ordinary allocations free of TDS fields", async () => {
+    await tool("payment_create").execute(
+      {
+        partyId: UUID_A,
+        amount: "5000.00",
+        mode: "upi",
+        allocations: [{ invoiceId: UUID_B, amount: "5000.00" }],
+      },
+      ctx,
+    );
+    const arg = client.payment.create.mutate.mock.calls[0][0] as { allocations: unknown };
+    expect(arg.allocations).toEqual([{ invoiceId: UUID_B, amount: "5000.00" }]);
+  });
+
+  it("tds_section_list discovers active sections through the tenant client", async () => {
+    const out = await tool("tds_section_list").execute({}, ctx);
+    expect(client.tdsSection.list.query).toHaveBeenCalledWith({});
+    expect(out).toEqual([{ sectionCode: "194J", sectionLabel: "Professional services" }]);
+  });
+
   it("payment_create rejects a missing amount or an unknown mode", async () => {
     await expect(tool("payment_create").execute({ partyId: UUID_A, mode: "upi" }, ctx)).rejects.toThrow(
       /amount is required/,
@@ -712,6 +781,7 @@ describe("payment tools", () => {
     expect(d).toMatch(/invoiceId/);
     expect(d).toMatch(/allocations/);
     expect(d).toMatch(/advance/i);
+    expect(d).toMatch(/gross settlement = net cash received \+ TDS deducted/i);
   });
 });
 
