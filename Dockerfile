@@ -10,6 +10,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
 COPY packages/api/package.json packages/api/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
+COPY apps/ops/package.json apps/ops/
 
 # Install ALL deps (need devDependencies for build)
 # Mount pnpm store cache to avoid re-downloading packages across builds
@@ -23,6 +24,12 @@ COPY packages/api/ packages/api/
 
 # Build the API (tsup bundles server.ts + pdf-worker via tsup.config.ts)
 RUN pnpm --filter @hisaabo/api build
+
+# Operator dashboard (/ops): static React app served by the API from
+# dist/ops-public under a strict CSP. See docs/architecture/queue.md §9.
+COPY apps/ops/ apps/ops/
+RUN pnpm --filter @hisaabo/ops build && \
+    cp -r apps/ops/dist packages/api/dist/ops-public
 
 # Bundle the migration runner into a standalone JS file (no tsx needed at runtime).
 # External: node_modules (resolved at runtime), built-ins handled by node.

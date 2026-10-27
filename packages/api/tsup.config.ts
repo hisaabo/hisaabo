@@ -37,4 +37,11 @@ export default defineConfig([
     outDir: "dist/bin",
     ...shared,
   },
+  // /ops operators + queue CLI (docs/architecture/queue.md §10):
+  // `docker compose exec api node packages/api/dist/bin/ops.js help`
+  {
+    entry: ["src/bin/ops.ts"],
+    outDir: "dist/bin",
+    ...shared,
+  },
 ]);

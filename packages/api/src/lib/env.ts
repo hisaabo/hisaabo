@@ -1,4 +1,5 @@
 import { logger } from "./logger.js";
+import { opsConfig } from "../ops/config.js";
 
 interface EnvCheck {
   key: string;
@@ -83,6 +84,23 @@ export function validateEnv(opts: { role?: "api" | "worker" } = {}): void {
     !process.env.EXPORT_SECRET
   ) {
     errors.push("A signing secret is required in production: set ENCRYPTION_KEY (or SESSION_SECRET / EXPORT_SECRET).");
+  }
+
+  // /ops operator dashboard (docs/architecture/queue.md §7.2). TOTP secrets
+  // are encrypted with ENCRYPTION_KEY, so the dashboard needs a real key in
+  // every mode.
+  if (opts.role !== "worker" && process.env.QUEUE_DASHBOARD_ENABLED === "true") {
+    if (!encKey || !isValidEncryptionKey(encKey)) {
+      errors.push("QUEUE_DASHBOARD_ENABLED=true requires ENCRYPTION_KEY (64 hex characters): operator TOTP secrets are encrypted with it.");
+    }
+    try {
+      opsConfig();
+    } catch (err) {
+      errors.push((err as Error).message);
+    }
+    if (!process.env.OPS_IP_ALLOWLIST) {
+      logger.warn("QUEUE_DASHBOARD_ENABLED=true without OPS_IP_ALLOWLIST: /ops is reachable from any IP (still behind sign-in + TOTP). Set OPS_IP_ALLOWLIST to restrict it.");
+    }
   }
 
   const publicUrl = process.env.API_PUBLIC_URL;

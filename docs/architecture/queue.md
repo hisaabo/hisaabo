@@ -1,9 +1,9 @@
 # Background jobs: queue, workers and the operator dashboard
 
 Status: **Phase 1 (foundations) in progress.** Steps 1–3 (queue core, worker,
-deployment wiring) are implemented; steps 4–6 (operator auth, `/ops`, TUI)
-follow. Phase 2 moves existing in-request and in-process work onto the queue,
-one PR per process.
+deployment wiring) and 4–5 (operator auth, `/ops` API and dashboard, `ops`
+CLI) are implemented; step 6 (admin TUI Queues view) follows. Phase 2 moves
+existing in-request and in-process work onto the queue, one PR per process.
 
 ## 1. Why
 
@@ -386,15 +386,34 @@ every 5 s while the tab is visible.
 - **Sign-in**: confirms the Hisaabo session, then asks for TOTP.
 - **Dashboard**: jobs/min, failed/min, p50/p95 wait and runtime, queued
   backlog, oldest waiting job, active workers, recent failures.
-- **Queues**: per-queue counts by state, throughput chart, pause/resume.
-- **Jobs**: Pending, Active, Completed, Failed and Dead tabs, filterable by
-  queue, tenant handle and tag; bulk retry/delete for failed jobs.
-- **Job detail**: timeline (created → started → attempts → finished),
-  attempts, masked error, progress, tags, tenant handle, and
-  "Reveal payload" (admin + step-up).
-- **Workers**: pg-boss instances with last heartbeat and pools.
-- **Schedules**: cron, next run, last result.
-- **Audit**: filterable log.
+- **Queues**: per-queue counts by state, rate and oldest waiting job,
+  pause/resume (admin).
+- **Jobs**: Pending, Active, Completed and Failed tabs, filterable by queue,
+  tenant handle and tag, keyset-paginated; bulk retry/delete (admin). The
+  Failed tab is the dead-letter queues (§6): that is where failed jobs live.
+- **Job detail**: timeline (created → started → finished), attempts, masked
+  error, tags, tenant and business handles, payload field names, and
+  "Reveal payload" (admin + step-up). Progress is Phase 3.
+- **Workers**: pg-boss instances (API and workers) with last heartbeat.
+- **Schedules**: cron, time zone, next run.
+- **Audit**: filterable log, newest first.
+
+Implementation (steps 4–5): `packages/api/src/ops/` (`routes.ts` gate and
+API, `data.ts` read models and actions, `operators.ts`, `sessions.ts`,
+`totp.ts`, `cidr.ts`, `audit.ts`, `config.ts`), `packages/api/src/bin/ops.ts`
+and `apps/ops`. The built app is copied to `packages/api/dist/ops-public` by
+both Dockerfiles (`pnpm --filter @hisaabo/api build:ops` locally). Notes:
+
+- Job listing reads `pgboss.job` directly (pg-boss has no filtered,
+  paginated listing): bounded, read-only, keyset on `(created_on, id)`,
+  through pg-boss's own connection. Everything else uses pg-boss APIs.
+- "Retry" of a failed job is pg-boss `redrive()` from the dead-letter queue
+  back to its source queue; "Delete" is `deleteJob()`.
+- Tenant filtering takes the 6-hex handle and maps it back to tenant ids
+  seen in the queue (bounded scan), so raw ids never leave the server.
+- A disabled dashboard, or a client outside `OPS_IP_ALLOWLIST`, gets the
+  API's ordinary 404 page. Failed second-factor attempts also emit the
+  `ops_auth_fail` security event (matched by the fail2ban filter).
 
 The operator API lives under `/ops/api/` (all JSON; Hono routes, not tRPC,
 to keep it out of the tenant API surface):
@@ -409,7 +428,7 @@ to keep it out of the tenant API surface):
 | GET | `/queues` | |
 | GET | `/queues/:name` | |
 | POST | `/queues/:name/pause`, `/queues/:name/resume` | admin + step-up |
-| GET | `/jobs?queue&state&tenant&tag&cursor` | |
+| GET | `/jobs?tab&queue&tenant&tag&cursor&limit` | `tab` = pending, active, completed, failed |
 | GET | `/jobs/:queue/:id` | |
 | POST | `/jobs/:queue/:id/reveal` | admin + step-up |
 | POST | `/jobs/retry`, `/jobs/delete` | admin + step-up; bulk, max 500 ids |
@@ -429,9 +448,9 @@ ops operator enroll <email>           # (re)generate TOTP secret + recovery code
 ops operator revoke-sessions <email>
 ops queue list | stats [queue]
 ops queue failed [--queue q] [--limit n]
-ops queue retry <id…> | --queue q --all-failed
-ops queue forget <id…>
-ops queue flush [--queue q]          # delete failed jobs
+ops queue retry <id…> | --queue q --all-failed   # redrive failed jobs
+ops queue forget <id…>               # delete failed jobs by id
+ops queue flush [--queue q]          # delete all failed jobs
 ops queue clear <queue>              # delete queued jobs (asks for confirmation)
 ops queue pause <queue> | resume <queue>
 ```
