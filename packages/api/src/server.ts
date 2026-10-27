@@ -39,6 +39,7 @@ import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
 import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
 import { serveBusinessLogo, LOGO_SAFE_HEADERS } from "./lib/logo-response.js";
@@ -193,6 +194,27 @@ app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   if (trpcProcedures(c.req.path).length > MAX_TRPC_BATCH) {
     return c.json({ error: `Batch too large (max ${MAX_TRPC_BATCH} calls)` }, 400);
+  }
+  await next();
+});
+
+// Oversized arrays exhaust memory in zod 3 validation (see lib/json-limits.ts).
+// Only bodies big enough to hold such an array are parsed here; malformed JSON
+// is left for tRPC to reject as usual.
+app.use("/api/trpc/*", async (c: Context, next: Next) => {
+  if (c.req.method === "POST") {
+    const length = Number(c.req.header("content-length") ?? NaN);
+    if (!(length < ARRAY_SCAN_MIN_BYTES)) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await c.req.raw.clone().text());
+      } catch {
+        body = undefined;
+      }
+      if (body !== undefined && exceedsArrayLimits(body)) {
+        return c.json({ error: `Request has too many items (max ${MAX_ARRAY_ITEMS} per list)` }, 413);
+      }
+    }
   }
   await next();
 });
