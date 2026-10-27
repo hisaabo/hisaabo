@@ -23,7 +23,7 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.json ./
 COPY packages/api/package.json packages/api/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
