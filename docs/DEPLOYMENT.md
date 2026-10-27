@@ -40,13 +40,26 @@
 
 **`ci.yml`** runs typecheck, lint, and build for the entire monorepo. On PRs it also does a Docker build dry-run (no push) to catch Dockerfile issues early.
 
-### On push to `main` (path-filtered)
+### On push to `main` (path-filtered): previews only
 
-| Workflow | Trigger paths | Action |
+Nothing reaches production from `main`. Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
+
+| Workflow | Trigger paths | Preview |
 |---|---|---|
-| `deploy-web.yml` | `apps/web/**`, `packages/shared/**`, `packages/api/src/index.ts` | Build web SPA, deploy to Cloudflare Pages |
-| `deploy-store.yml` | `apps/store/**` | Build store SPA, deploy to Cloudflare Pages |
-| `deploy-api.yml` | `packages/api/**`, `packages/db/**`, `packages/shared/**`, `Dockerfile` | Build Docker image, push to GHCR |
+| `deploy-web.yml` | `apps/web/**`, `packages/shared/**`, `packages/api/src/{index,router}.ts`, `packages/api/src/routers/**` | Web SPA, only when the `PREVIEW_API_URL` repository variable is set |
+| `deploy-store.yml` | `apps/store/**` | Store SPA, only when `PREVIEW_API_URL` is set |
+| `deploy-api-docs.yml` | `apps/api-docs/**`, the API router files | API reference site |
+| `deploy-docs.yml` | `apps/docs/**` | Documentation site: deploys to production on `main` (it documents, it doesn't run against the API) |
+
+Web and store previews are built against `PREVIEW_API_URL` (a staging API) rather than production, so unreleased frontend code never talks to the production API with real sessions. Without a staging API, set nothing and no preview is built. The staging API's `CORS_ORIGINS` must include the preview origins, and the Turnstile widget must allow the preview hostnames.
+
+### On a release tag (`v*`): production
+
+**`release.yml`** checks that the tag matches every version manifest, builds and signs the Docker images, then calls `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` to deploy the tagged commit to production (only the apps that changed since the previous tag). The frontend deploys wait for the API image job, so a new frontend never ships ahead of its API image. The release notes report each deploy's result.
+
+- **Hold until the API is live (recommended):** the production deploy jobs run in the `production` GitHub environment. Add required reviewers to it (Settings → Environments → production) to approve the frontend deploy once the API containers of the same tag are running.
+- **Rollback / redeploy:** run the workflow manually (Actions → Deploy Web / Deploy Store / Deploy API Docs → Run workflow) with a release tag such as `v0.9.1`. Only tags are accepted.
+- **Cloudflare settings:** the projects use direct uploads from these workflows. If a Pages project is also connected to the GitHub repository in the Cloudflare dashboard, disconnect it (or disable automatic production deployments), otherwise Cloudflare keeps deploying `main` itself. The production branch name defaults to `main`; set the `CF_PAGES_PRODUCTION_BRANCH` repository variable if a project uses another.
 
 ## Environment Variables
 
@@ -107,9 +120,16 @@
 
 | Secret | Used by | Description |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | deploy-web, deploy-store | Cloudflare API token with Pages edit permission |
-| `CLOUDFLARE_ACCOUNT_ID` | deploy-web, deploy-store | Cloudflare account ID |
-| `VITE_API_URL` | deploy-web, deploy-store | API URL injected at build time |
+| `CLOUDFLARE_API_TOKEN` | deploy-web, deploy-store, deploy-api-docs, deploy-docs | Cloudflare API token with Pages edit permission |
+| `CLOUDFLARE_ACCOUNT_ID` | deploy-web, deploy-store, deploy-api-docs, deploy-docs | Cloudflare account ID |
+| `VITE_API_URL` | deploy-web, deploy-store | Production API URL injected into production builds |
+
+### GitHub Actions Variables
+
+| Variable | Used by | Description |
+|---|---|---|
+| `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
+| `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
 
