@@ -25,6 +25,7 @@ import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
+import { stopSenderBoss } from "./queue/boss.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
@@ -2372,6 +2373,7 @@ function shutdown(signal: string) {
   logger.info({ signal }, `Shutting down (${signal})...`);
   stopRecurringScheduler();
   void cacheListener?.stop().catch(() => {});
+  void stopSenderBoss();
   server.close(() => {
     logger.info("HTTP server closed");
     process.exit(0);

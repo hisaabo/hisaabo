@@ -5,11 +5,12 @@ interface EnvCheck {
   required: boolean;
   condition?: () => boolean; // only required when condition returns true
   hint?: string;
+  apiOnly?: boolean; // not needed by the queue worker process
 }
 
 const checks: EnvCheck[] = [
   { key: "DATABASE_URL", required: true, hint: "PostgreSQL connection string" },
-  { key: "CORS_ORIGINS", required: true, hint: "Comma-separated allowed origins (e.g. https://app.hisaabo.in)" },
+  { key: "CORS_ORIGINS", required: true, apiOnly: true, hint: "Comma-separated allowed origins (e.g. https://app.hisaabo.in)" },
   { key: "APP_URL", required: false, hint: "Frontend URL for magic link emails" },
   {
     key: "API_PUBLIC_URL",
@@ -51,10 +52,11 @@ function isValidHttpUrl(value: string): boolean {
  * Validate required environment variables at startup.
  * Logs warnings for missing optional vars, throws for required vars.
  */
-export function validateEnv(): void {
+export function validateEnv(opts: { role?: "api" | "worker" } = {}): void {
   const errors: string[] = [];
 
   for (const check of checks) {
+    if (check.apiOnly && opts.role === "worker") continue;
     const value = process.env[check.key];
     const isRequired = check.required || (check.condition ? check.condition() : false);
 

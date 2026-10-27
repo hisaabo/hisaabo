@@ -31,6 +31,7 @@ import {
   closeControlClient,
   closeAllTenantPools,
   installCacheTriggers,
+  installQueueSchema,
   // Control schema tables (used only for typing ControlTestDb)
   users,
   tenants,
@@ -242,6 +243,10 @@ export async function truncateAllTables(): Promise<void> {
       parties,
       businesses,
       -- Control schema
+      ops_audit_log,
+      ops_sessions,
+      ops_operators,
+      queue_controls,
       access_tokens,
       api_keys,
       magic_link_tokens,
@@ -308,4 +313,25 @@ let _triggersInstalled: Promise<void> | null = null;
 export function ensureCacheTriggers(): Promise<void> {
   _triggersInstalled ??= installCacheTriggers(getTestClient() as never).then(() => undefined);
   return _triggersInstalled;
+}
+
+// ── Job queue schema ───────────────────────────────────────────────────────────
+
+let _queueInstalled: Promise<void> | null = null;
+
+/**
+ * Installs the pg-boss `pgboss` schema on the test DB (CI uses `db:push`, which
+ * never runs the migration step that normally installs it). Idempotent; once
+ * per worker.
+ */
+export function ensureQueueSchema(): Promise<void> {
+  _queueInstalled ??= installQueueSchema(process.env.DATABASE_URL!).then(() => undefined);
+  return _queueInstalled;
+}
+
+/** Remove every job, schedule and queue so a suite starts with an empty queue. */
+export async function resetQueue(): Promise<void> {
+  await getTestClient().unsafe(
+    "TRUNCATE pgboss.job, pgboss.schedule, pgboss.queue CASCADE",
+  );
 }
