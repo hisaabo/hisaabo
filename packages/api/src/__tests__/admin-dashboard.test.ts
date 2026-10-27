@@ -23,6 +23,7 @@ import { buildDemoStats } from "../lib/admin/demo.js";
 import { parseEnvFile, pickPsqlError, DirectRunner } from "../lib/admin/runners.js";
 import { maskEmail, maskName, maskWord, maskDbName, tenantHandle, maskStats, maskFreeText } from "../lib/admin/privacy.js";
 import { deriveAlerts } from "../lib/admin/alerts.js";
+import { emptyQueueStats } from "../lib/admin/queues.js";
 import { compareMigrations, readJournal, loadJournals, journalDirCandidates, appliedMigrationsSql, MIGRATION_TABLES, type Journal } from "../lib/admin/migrations.js";
 import { parseInfra, journalKindFor } from "../lib/admin/stats.js";
 import { sortDbs } from "../lib/admin/screens.js";
@@ -645,7 +646,7 @@ describe("ops metrics", () => {
     const firstYellow = alerts.findIndex((a) => a.level === "yellow");
     expect(alerts.slice(0, firstYellow).every((a) => a.level === "red")).toBe(true);
     // A clean platform has no alerts.
-    const clean = { ...st, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [] };
+    const clean = { ...st, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [], queues: emptyQueueStats(true) };
     expect(deriveAlerts(clean)).toEqual([]);
   });
 
@@ -667,7 +668,7 @@ describe("ops metrics", () => {
     expect(renderFrame(quiet, 150).join("\n")).toContain("no recent failures");
     // All-clear strip.
     const calm = stateFor("overview", true);
-    calm.stats = { ...calm.stats!, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [] };
+    calm.stats = { ...calm.stats!, databases: { queried: 1, failed: 0 }, totals: emptyMetrics(NOW), dbs: [], queues: emptyQueueStats(true) };
     expect(renderFrame(calm, 120, 30)[1]).toContain("all systems nominal");
   });
 

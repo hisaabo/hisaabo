@@ -40,13 +40,26 @@
 
 **`ci.yml`** runs typecheck, lint, and build for the entire monorepo. On PRs it also does a Docker build dry-run (no push) to catch Dockerfile issues early.
 
-### On push to `main` (path-filtered)
+### On push to `main` (path-filtered): previews only
 
-| Workflow | Trigger paths | Action |
+Nothing reaches production from `main`. Frontend changes deploy a **preview** to each Cloudflare Pages project's `preview` branch alias (for example `preview.hisaabo-web.pages.dev`):
+
+| Workflow | Trigger paths | Preview |
 |---|---|---|
-| `deploy-web.yml` | `apps/web/**`, `packages/shared/**`, `packages/api/src/index.ts` | Build web SPA, deploy to Cloudflare Pages |
-| `deploy-store.yml` | `apps/store/**` | Build store SPA, deploy to Cloudflare Pages |
-| `deploy-api.yml` | `packages/api/**`, `packages/db/**`, `packages/shared/**`, `Dockerfile` | Build Docker image, push to GHCR |
+| `deploy-web.yml` | `apps/web/**`, `packages/shared/**`, `packages/api/src/{index,router}.ts`, `packages/api/src/routers/**` | Web SPA, only when the `PREVIEW_API_URL` repository variable is set |
+| `deploy-store.yml` | `apps/store/**` | Store SPA, only when `PREVIEW_API_URL` is set |
+| `deploy-api-docs.yml` | `apps/api-docs/**`, the API router files | API reference site |
+| `deploy-docs.yml` | `apps/docs/**` | Documentation site: deploys to production on `main` (it documents, it doesn't run against the API) |
+
+Web and store previews are built against `PREVIEW_API_URL` (a staging API) rather than production, so unreleased frontend code never talks to the production API with real sessions. Without a staging API, set nothing and no preview is built. The staging API's `CORS_ORIGINS` must include the preview origins, and the Turnstile widget must allow the preview hostnames.
+
+### On a release tag (`v*`): production
+
+**`release.yml`** checks that the tag matches every version manifest, builds and signs the Docker images, then calls `deploy-web.yml`, `deploy-store.yml` and `deploy-api-docs.yml` to deploy the tagged commit to production (only the apps that changed since the previous tag). The frontend deploys wait for the API image job, so a new frontend never ships ahead of its API image. The release notes report each deploy's result.
+
+- **Hold until the API is live (recommended):** the production deploy jobs run in the `production` GitHub environment. Add required reviewers to it (Settings → Environments → production) to approve the frontend deploy once the API containers of the same tag are running.
+- **Rollback / redeploy:** run the workflow manually (Actions → Deploy Web / Deploy Store / Deploy API Docs → Run workflow) with a release tag such as `v0.9.1`. Only tags are accepted.
+- **Cloudflare settings:** the projects use direct uploads from these workflows. If a Pages project is also connected to the GitHub repository in the Cloudflare dashboard, disconnect it (or disable automatic production deployments), otherwise Cloudflare keeps deploying `main` itself. The production branch name defaults to `main`; set the `CF_PAGES_PRODUCTION_BRANCH` repository variable if a project uses another.
 
 ## Environment Variables
 
@@ -91,14 +104,32 @@
 | `SMS_WEBHOOK_SECRET` | With `SMS_PROVIDER=webhook` | HMAC-SHA256 key; each request carries `X-Hisaabo-Signature` (hex of the body HMAC) | |
 | `SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP` | No | `true` rejects carrier webhooks that lack a valid timestamp (optional by default) | `false` |
 | `BACKUP_ENCRYPTION_KEY` | With offsite backup | Passphrase for backup encryption; offsite upload is refused without it | |
+| `QUEUE_DATABASE_URL` | No | Database holding the job queue (`pgboss` schema). Defaults to `CONTROL_DATABASE_URL`, then `DATABASE_URL`; only set it to point at the same database through a different (e.g. direct) URL | `postgresql://...` |
+| `QUEUE_POOLS` | No | Worker only. Comma-separated pools this worker runs: `default`, `heavy`, `system` (default: all) | `heavy` |
+| `QUEUE_CONCURRENCY_DEFAULT` / `_HEAVY` / `_SYSTEM` | No | Worker only. Jobs worked at once per queue in that pool, per worker process (defaults 8 / 2 / 2) | `4` |
+| `QUEUE_COMPLETED_RETENTION_HOURS` | No | How long completed jobs are kept (default 24) | `24` |
+| `QUEUE_FAILED_RETENTION_DAYS` | No | How long failed (dead-lettered) jobs are kept for retry (default 14) | `14` |
+| `QUEUE_SHUTDOWN_GRACE_SECONDS` | No | Worker only. Time in-flight jobs get to finish on SIGTERM before they are aborted (default 25) | `25` |
+| `QUEUE_POLLING_INTERVAL_SECONDS` | No | Worker only. Idle poll interval in seconds (default 2, minimum 0.5) | `2` |
+| `QUEUE_PING_SCHEDULE` | No | Worker only. `true` schedules the hourly `system.ping` diagnostic job | `false` |
+| `QUEUE_DASHBOARD_ENABLED` | No | `true` serves the operator dashboard at `/ops` (off by default; every `/ops` path is a plain 404 otherwise). Requires `ENCRYPTION_KEY` | `false` |
+| `OPS_IP_ALLOWLIST` | No (recommended with `/ops`) | Comma-separated CIDRs (IPv4/IPv6) allowed to reach `/ops`; others get a plain 404. Uses the same client-IP rules as rate limiting (`TRUST_PROXY_HOPS`) | `203.0.113.0/24` |
+| `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | No | `/ops` session idle timeout, absolute lifetime, and how long a TOTP step-up covers destructive actions (defaults 15 / 8 / 5) | `15` |
 
 ### GitHub Actions Secrets
 
 | Secret | Used by | Description |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | deploy-web, deploy-store | Cloudflare API token with Pages edit permission |
-| `CLOUDFLARE_ACCOUNT_ID` | deploy-web, deploy-store | Cloudflare account ID |
-| `VITE_API_URL` | deploy-web, deploy-store | API URL injected at build time |
+| `CLOUDFLARE_API_TOKEN` | deploy-web, deploy-store, deploy-api-docs, deploy-docs | Cloudflare API token with Pages edit permission |
+| `CLOUDFLARE_ACCOUNT_ID` | deploy-web, deploy-store, deploy-api-docs, deploy-docs | Cloudflare account ID |
+| `VITE_API_URL` | deploy-web, deploy-store | Production API URL injected into production builds |
+
+### GitHub Actions Variables
+
+| Variable | Used by | Description |
+|---|---|---|
+| `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
+| `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
 
@@ -144,12 +175,52 @@ curl http://localhost:3000/health
 
 ### Updating
 
+Read [UPGRADING.md](UPGRADING.md) first. Some releases need env, compose or client changes; upgrading from v0.9.0 does.
+
 ```bash
-docker compose -f docker-compose.prod.yml pull api
-docker compose -f docker-compose.prod.yml up -d api
+# 1. Back up every database (copy the files off the host)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec backup backup.sh
+# 2. Pull and restart
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api worker
 ```
 
-The entrypoint script runs pending migrations automatically before starting the server.
+The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
+
+### Background job worker
+
+Long-running and scheduled work runs in a separate `worker` container built from the same image (`command: worker`); see [the queue design](architecture/queue.md). Jobs live in Postgres (the `pgboss` schema, installed by the API's migration step), so the worker needs no extra services.
+
+- The worker never runs migrations. It starts after the API is healthy and, if the queue schema is not there yet, retries with backoff until it is.
+- It writes `/tmp/worker-heartbeat` every 10 seconds; the compose healthcheck fails when that file is older than 60 seconds.
+- On `SIGTERM` it stops taking jobs and gives running ones `QUEUE_SHUTDOWN_GRACE_SECONDS` to finish. Jobs that still don't finish are retried by another worker once they time out.
+- Scale out by running more worker containers (`docker compose up -d --scale worker=2`), or dedicate containers to a pool with `QUEUE_POOLS=heavy`.
+- Check it is consuming jobs: `docker compose -f docker-compose.prod.yml logs worker` shows `queue worker started`; set `QUEUE_PING_SCHEDULE=true` to get an hourly `pong` line.
+
+### Operator dashboard (`/ops`)
+
+A Horizon-style dashboard for the job queue (throughput, queues, pending/active/completed/failed jobs, workers, schedules, audit log) is served by the API at `/ops`. It is **off** unless `QUEUE_DASHBOARD_ENABLED=true`; the full threat model is in [the queue design](architecture/queue.md) §7.2.
+
+Getting in takes three things, all required: a normal Hisaabo sign-in (magic link) in the same browser, an operator record for that email, and a code from an authenticator app (TOTP). Operators can only be created and enrolled from the server shell — there is no web or API path — so access to the shell is the root of trust:
+
+```bash
+# 1. Make sure ENCRYPTION_KEY is set (TOTP secrets are encrypted with it), then enable the dashboard
+#    in .env.prod: QUEUE_DASHBOARD_ENABLED=true and, strongly recommended, OPS_IP_ALLOWLIST=<your VPN/office CIDRs>
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api
+
+# 2. Add an operator (admin can act; viewer is read-only)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/ops.js operator add you@example.com --role admin
+
+# 3. Enroll their authenticator. The secret, otpauth:// URI and 10 recovery codes are printed ONCE:
+#    add the secret to an authenticator app and store the recovery codes offline.
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/ops.js operator enroll you@example.com
+```
+
+Then sign in to the web app as that email and open `https://<API_PUBLIC_URL host>/ops/`. Destructive actions (retry, delete, pause/resume) and revealing a job's payload ask for a fresh code. Every sign-in attempt, step-up and action is written to the audit log (Audit page, or the `ops_audit_log` table).
+
+Other operator commands: `ops operator list`, `ops operator remove <email>`, `ops operator revoke-sessions <email>`, and re-running `enroll` to replace a lost authenticator (signs them out everywhere). Queue commands mirror Laravel's: `ops queue list | failed | retry <id…> | retry --queue q --all-failed | forget <id…> | flush | clear <queue> | pause <queue> | resume <queue>` (`ops help` for details). In the ONCE image run the same tool with `docker exec -it <container> su-exec node node /app/packages/api/dist/bin/ops.js …`.
+
+The bundled `nginx/nginx.conf` proxies `/ops/` with its own small rate limit and shows how to add an `allow`/`deny` list there as well.
 
 ### Admin dashboard
 
@@ -240,7 +311,7 @@ Desktop, mobile and the CLI do not show a password or magic-link form. They open
 
 ## ONCE all-in-one image
 
-`Dockerfile.once` bundles PostgreSQL 16 and the API under s6-overlay. Persistent state lives in `/storage` (`pgdata`, `run`, `backups`, `wal_archive`, `secrets`).
+`Dockerfile.once` bundles PostgreSQL 16, the API and the background job worker under s6-overlay (the worker is its own s6 service and waits for the API's migrations). Persistent state lives in `/storage` (`pgdata`, `run`, `backups`, `wal_archive`, `secrets`).
 
 - **Database password:** PostgreSQL uses `scram-sha-256` for the local socket, `127.0.0.1` and `::1`; `trust` is never used. A random password is generated on first boot and kept at `/storage/secrets/pg_app_password` (mode `0600`). The API, migrations and the `/hooks/pre-backup` and `/hooks/post-restore` hooks read it automatically, so no configuration is needed.
 - **Upgrading an existing install:** on the first boot of the new image the password is created and applied and `pg_hba.conf` is rewritten; the previous file is kept as `/storage/pgdata/pg_hba.conf.bak.<timestamp>`. Later boots change nothing.

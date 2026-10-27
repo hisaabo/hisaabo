@@ -99,14 +99,14 @@ This document maps every workflow in the Hisaabo application — verified agains
 
 ### Branch conditions
 
-- **Magic link registration** creates a nameless user, which requires the complete-profile step. There is no password registration UI; `auth.register` remains an API-only endpoint.
+- **Magic link sign-up** creates a nameless user, which requires the complete-profile step. There is no password sign-up or sign-in anywhere: the `auth.register` / `auth.login` API endpoints were removed.
 - **GST registered?**: If `gstRegistrationType !== "unregistered"` and GSTIN provided, invoice PDFs render as full GST invoices; reports show GST terminology. If unregistered, UI shows "Sales Report" / "Tax Summary" labels instead.
 - **Multi-tenant mode**: If `MULTI_TENANT=true`, a new tenant is created for the user's org. If `MULTI_TENANT=false` (default self-hosted), the user joins the shared "Default Organization" tenant. The first joiner gets `owner` role; subsequent users must hold an invitation (`ALLOW_OPEN_SIGNUP=true` restores open joining) and get the invited role.
 - **Has existing data?**: Import wizard shown post-setup. Skippable.
 
 ### Failure modes
 
-- **Duplicate email during registration**: `auth.register` throws `CONFLICT`. User sees "Email already registered" error. No account created.
+- **Existing email at sign-up**: a magic link for an email that already has an account signs into that account (the email is verified on first use; anything issued to a never-verified account before then is revoked). No duplicate account is created.
 - **Invalid GSTIN format**: Client-side validation rejects the format before submission.
 - **Business name already used**: No uniqueness constraint on business name — two businesses with the same name can exist. Gap: no deduplication warning.
 - **Session expired during setup**: Root layout detects no session → redirects to `/login`. Setup progress is lost — resume is not implemented. The user must restart business creation.

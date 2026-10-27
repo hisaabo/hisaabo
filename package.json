@@ -2,7 +2,7 @@
   "name": "hisaabo",
   "private": true,
   "scripts": {
-    "dev": "turbo dev --filter=!@hisaabo/mobile --filter=!@hisaabo/mcp --filter=!@hisaabo/cli",
+    "dev": "turbo dev dev:worker --filter=!@hisaabo/mobile --filter=!@hisaabo/mcp --filter=!@hisaabo/cli",
     "dev:mobile": "pnpm --filter @hisaabo/mobile dev",
     "dev:mobile:android": "pnpm --filter @hisaabo/mobile dev:android",
     "build": "turbo build",
@@ -33,7 +33,7 @@
   },
   "packageManager": "pnpm@9.15.0",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.12"
   },
   "pnpm": {
     "overrides": {
@@ -67,7 +67,10 @@
       "seroval@^1": "^1.6.8",
       "fast-uri@^3": "^3.1.8",
       "proxy-addr@^2": "^2.0.8",
-      "ip-address@^10": "^10.7.3"
+      "ip-address@^10": "^10.7.3",
+      "zod@^4": "^4.6.6",
+      "body-parser@^2": "^2.4.0",
+      "undici@^8": "^8.12.2"
     },
     "auditConfig": {
       "ignoreGhsas": [

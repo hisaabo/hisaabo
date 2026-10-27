@@ -17,6 +17,7 @@ import {
   compareMigrations, appliedMigrationsSql, MIGRATION_TABLES,
   type Journals, type JournalKind, type MigrationState, type AppliedMigrations,
 } from "./migrations.js";
+import { collectQueueStats, type QueueStats } from "./queues.js";
 
 // ── Runner contract ─────────────────────────────────────────────
 
@@ -184,6 +185,8 @@ export interface PlatformStats {
   tenants: TenantWithMetrics[];
   /** Number of distinct tenant databases queried, and how many failed. */
   databases: { queried: number; failed: number };
+  /** Background-job queue (pg-boss in the control database). */
+  queues: QueueStats;
   errors: string[];
 }
 
@@ -835,6 +838,8 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
     };
   });
 
+  const queues = await collectQueueStats(opts.runner, new Map(control.tenants.map((t) => [t.id, t.name])));
+
   const allErrors = [...errors, ...(controlError ? [`${CONTROL_KEY}: ${controlError}`] : [])];
   return {
     dbs,
@@ -847,6 +852,7 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
     totals: sumMetrics(results.flatMap((r) => (r.metrics ? [r.metrics] : [])), now()),
     tenants,
     databases: { queried: keys.length, failed: results.filter((r) => !r.metrics).length },
+    queues,
     errors: allErrors,
   };
 }

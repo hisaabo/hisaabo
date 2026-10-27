@@ -22,6 +22,7 @@ const JSON_FILES = [
   ["apps/api-docs/package.json", "version"],
   ["apps/docs/package.json", "version"],
   ["apps/mobile/package.json", "version"],
+  ["apps/ops/package.json", "version"],
   ["apps/store/package.json", "version"],
   ["apps/web/package.json", "version"],
   ["packages/api/package.json", "version"],

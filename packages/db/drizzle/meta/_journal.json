@@ -134,6 +134,20 @@
       "when": 1791656777273,
       "tag": "0018_cache_invalidation_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793081256650,
+      "tag": "0019_null_password_hashes",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793081987066,
+      "tag": "0020_queue_and_ops",
+      "breakpoints": true
     }
   ]
 }

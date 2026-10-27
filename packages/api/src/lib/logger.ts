@@ -29,8 +29,7 @@ export type SecurityEvent =
   | "rate_limit_order"
   | "csrf_fail"
   | "origin_block"
-  | "login_fail"
-  | "login_lockout";
+  | "ops_auth_fail";
 
 export function logSecurityEvent(
   event: SecurityEvent,

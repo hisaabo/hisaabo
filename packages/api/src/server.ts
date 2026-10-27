@@ -25,6 +25,8 @@ import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
+import { stopSenderBoss } from "./queue/boss.js";
+import { registerOpsRoutes } from "./ops/routes.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
@@ -37,6 +39,7 @@ import { getStorage } from "./lib/storage/index.js";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { getTrustedClientIp } from "./lib/client-ip.js";
 import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRateTier, STRICT_AUTH_LIMIT_PER_MIN, MAX_TRPC_BATCH } from "./lib/rate-limit-tier.js";
+import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
 import { serveBusinessLogo, LOGO_SAFE_HEADERS } from "./lib/logo-response.js";
@@ -74,7 +77,10 @@ const app = new Hono();
 
 // ── Security headers ───────────────────────────────────────────
 // Hono's defaults include X-Content-Type-Options: nosniff on every response.
-app.use("*", secureHeaders());
+const defaultSecureHeaders = secureHeaders();
+// /ops (operator dashboard) is never framed and never leaks a referrer.
+const opsSecureHeaders = secureHeaders({ xFrameOptions: "DENY", referrerPolicy: "no-referrer" });
+app.use("*", (c, next) => (isOpsPath(c.req.path) ? opsSecureHeaders(c, next) : defaultSecureHeaders(c, next)));
 
 // Locked-down CSP for the self-contained branded HTML pages (/pay/upi,
 // landing, 404). They have inline <style> and data: images only, no scripts.
@@ -119,13 +125,19 @@ const allowedOrigins = [
   ...TAURI_DESKTOP_ORIGINS,
 ];
 
-app.use("*", cors({
+const corsMiddleware = cors({
   origin: allowedOrigins,
   credentials: true,
   allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   maxAge: 86400,
-}));
+});
+// /ops (operator dashboard) is same-origin only: it never sends CORS headers.
+app.use("*", (c, next) => (isOpsPath(c.req.path) ? next() : corsMiddleware(c, next)));
+
+function isOpsPath(path: string): boolean {
+  return path === "/ops" || path.startsWith("/ops/");
+}
 
 // ── Safe IP extraction ─────────────────────────────────────────
 // Forwarding headers are only honoured as configured in lib/client-ip.ts
@@ -182,6 +194,27 @@ app.use("/api/trpc/*", bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 app.use("/api/trpc/*", async (c: Context, next: Next) => {
   if (trpcProcedures(c.req.path).length > MAX_TRPC_BATCH) {
     return c.json({ error: `Batch too large (max ${MAX_TRPC_BATCH} calls)` }, 400);
+  }
+  await next();
+});
+
+// Oversized arrays exhaust memory in zod 3 validation (see lib/json-limits.ts).
+// Only bodies big enough to hold such an array are parsed here; malformed JSON
+// is left for tRPC to reject as usual.
+app.use("/api/trpc/*", async (c: Context, next: Next) => {
+  if (c.req.method === "POST") {
+    const length = Number(c.req.header("content-length") ?? NaN);
+    if (!(length < ARRAY_SCAN_MIN_BYTES)) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await c.req.raw.clone().text());
+      } catch {
+        body = undefined;
+      }
+      if (body !== undefined && exceedsArrayLimits(body)) {
+        return c.json({ error: `Request has too many items (max ${MAX_ARRAY_ITEMS} per list)` }, 413);
+      }
+    }
   }
   await next();
 });
@@ -2103,6 +2136,10 @@ app.post("/store/:slug/order", async (c) => {
   }
 });
 
+// ── Operator dashboard (/ops) ─────────────────────────────────
+// Off unless QUEUE_DASHBOARD_ENABLED=true; see docs/architecture/queue.md §7.2.
+registerOpsRoutes(app, { notFound: notFoundResponse, clientIp: getClientIp });
+
 // ── Self-export download endpoint ─────────────────────────────
 registerExportRoute(app);
 
@@ -2306,7 +2343,9 @@ app.get("/", (c) => {
 });
 
 // 404 handler — catch-all for unmatched routes
-app.notFound((c) => {
+app.notFound(notFoundResponse);
+
+function notFoundResponse(c: Context) {
   // Return JSON for API-like paths
   if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/store/")) {
     return c.json({ error: "Not found" }, 404);
@@ -2318,7 +2357,7 @@ app.notFound((c) => {
     "The page you're looking for doesn't exist. If you're looking for the Hisaabo app, visit <a href=\"https://app.hisaabo.in\">app.hisaabo.in</a>",
     404,
   ), 404);
-});
+}
 
 // ── Startup sanity check ─────────────────────────────────────
 // Refuse to boot if the migration SQL directories aren't where the bundled
@@ -2372,6 +2411,7 @@ function shutdown(signal: string) {
   logger.info({ signal }, `Shutting down (${signal})...`);
   stopRecurringScheduler();
   void cacheListener?.stop().catch(() => {});
+  void stopSenderBoss();
   server.close(() => {
     logger.info("HTTP server closed");
     process.exit(0);

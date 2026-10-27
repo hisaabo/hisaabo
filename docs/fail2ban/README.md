@@ -1,7 +1,7 @@
 # Fail2ban configuration for Hisaabo
 
 Hisaabo emits a structured **security event log** that fail2ban can parse to
-ban IPs that are attempting brute-force logins, hammering rate limits, or
+ban IPs that are hammering sign-in or other rate limits, or
 sending requests from disallowed origins.
 
 This directory contains drop-in config files for the **host** running
@@ -45,7 +45,7 @@ Every ban-worthy event lands on stdout as a single-line pino JSON record
 with this stable shape:
 
 ```json
-{"level":40,"time":1742900000000,"sec":true,"event":"login_fail","ip":"203.0.113.42","path":"/api/trpc/auth.login","reason":"bad_password","msg":"sec login_fail"}
+{"level":40,"time":1742900000000,"sec":true,"event":"rate_limit","ip":"203.0.113.42","path":"/api/trpc/auth.sendMagicLink","reason":"auth-strict","msg":"sec rate_limit"}
 ```
 
 The fields fail2ban relies on:
@@ -56,7 +56,7 @@ The fields fail2ban relies on:
 | `event` | One of the values listed below — used to scope jails.            |
 | `ip`    | Client IP as derived by the API from `TRUST_PROXY_HOPS` / `TRUST_CLOUDFLARE` (see below). |
 | `path`  | Request path (helpful for triage; not part of the regex).        |
-| `reason`| Free-form sub-reason (`bad_password`, `phone`, etc.).            |
+| `reason`| Free-form sub-reason (`auth-strict`, `phone`, etc.).             |
 
 **Event types (these are the contract — renaming them breaks installed jails):**
 
@@ -67,8 +67,6 @@ The fields fail2ban relies on:
 - `rate_limit_order` — per-phone order rate limit tripped.
 - `csrf_fail` — cookie-authed POST without the `X-Requested-With` header.
 - `origin_block` — Origin/Referer not on the allow-list.
-- `login_fail` — password login attempt failed.
-- `login_lockout` — per-email lockout threshold hit.
 
 If you add new event types in `packages/api/src/lib/logger.ts`, update
 the regex in `filter.d/hisaabo-api.conf` to include them.
@@ -110,7 +108,7 @@ appear as the `ip` in `journalctl CONTAINER_TAG=hisaabo-api`. Also see
    ```sh
    sudo systemctl reload fail2ban
    sudo fail2ban-client status
-   sudo fail2ban-client status hisaabo-api-login
+   sudo fail2ban-client status hisaabo-api-abuse
    ```
 
 4. (Optional) Bound journald disk usage on the host. Edit

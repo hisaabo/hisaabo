@@ -29,6 +29,7 @@ export {
   encryptField,
   decryptField,
   reEncryptField,
+  hasEncryptionKey,
   isEncrypted,
   getKeyVersion,
   encryptDbPassword,
@@ -56,3 +57,6 @@ export {
   type TenantReader,
   type TenantRow,
 } from "./backfill-store-slugs.js";
+
+// Job queue (pg-boss) schema install — run by the migration step
+export { QUEUE_SCHEMA, installQueueSchema } from "./queue-schema.js";

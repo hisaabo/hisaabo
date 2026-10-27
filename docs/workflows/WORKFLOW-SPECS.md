@@ -42,123 +42,12 @@
 
 ## 1. Auth & Onboarding
 
-### WORKFLOW 1A: Password Registration
+### WORKFLOW 1A / 1B: Password Registration and Login (removed)
 
-**Trigger**: `auth.register` (publicProcedure)
-**Input**: `{ email, name, password, confirmPassword, turnstileToken? }`
-
-```
-STEP 1: Turnstile verification
-  BRANCH: TURNSTILE_SECRET_KEY is set
-    BRANCH: turnstileToken missing -> FAILURE(BAD_REQUEST, "Turnstile verification required")
-    BRANCH: turnstileToken present
-      ACTION: verifyTurnstile(token, ip)
-      BRANCH: invalid -> FAILURE(FORBIDDEN, "Verification failed")
-      BRANCH: valid -> STEP 2
-  BRANCH: TURNSTILE_SECRET_KEY not set -> STEP 2
-
-STEP 2: Duplicate check
-  ACTION: SELECT user by email
-  BRANCH: exists -> FAILURE(CONFLICT, "Email already registered")
-  BRANCH: not found -> STEP 3
-
-STEP 3: Transactional user creation
-  BEGIN TRANSACTION on controlDb
-    STEP 3a: Hash password (argon2id, memoryCost=65536, timeCost=3, parallelism=4)
-    STEP 3b: INSERT user (email, name, passwordHash)
-    STEP 3c: Check for pending invitation
-      ACTION: SELECT invitation WHERE email=input.email AND acceptedAt IS NULL AND expiresAt > now()
-      BRANCH: pending invite exists -> SKIP tenant creation (user will join via invite)
-      BRANCH: no pending invite -> STEP 3d
-    STEP 3d: Tenant assignment
-      BRANCH: MULTI_TENANT=true
-        ACTION: Create tenant (name="{name}'s Organization", slug=generateSlug)
-        ACTION: provisionTenantDatabase(tenantId, slug) -- CREATE DATABASE, user, schema push
-          BRANCH: provision fails -> DELETE orphaned tenant row, THROW
-        ACTION: UPDATE tenant with dbName, dbHost, dbPort, dbUser, dbPassword
-        ACTION: INSERT tenantMember (role="owner", acceptedAt=now())
-      BRANCH: MULTI_TENANT=false (self-hosted)
-        ACTION: getOrCreateDefaultTenant(userId)
-          BEGIN INNER TX
-            SELECT tenant WHERE slug="default" (create if not exists)
-            INSERT tenantMember (role="owner" if first member, else "member")
-          END INNER TX
-    STEP 3e: Resolve tenant for session
-      ACTION: SELECT memberships for user
-      BRANCH: exactly 1 membership -> tenantId = that tenant
-      BRANCH: 0 or >1 memberships -> tenantId = null
-    STEP 3f: Enforce session limit (FIFO eviction of oldest)
-    STEP 3g: INSERT session (id=nanoid(64), userId, tenantId, expiresAt=30days)
-    STEP 3h: Set-Cookie session_id (HttpOnly, SameSite=Lax, Secure in production)
-  COMMIT TRANSACTION
-
-OUTPUT: { user: { id, email, name }, sessionToken }
-```
-
-**Observable state after success**:
-- `users` row created (emailVerified=false)
-- `tenants` row created (if MULTI_TENANT)
-- `tenant_members` row created (role=owner)
-- `sessions` row created (expiresAt = now + 30 days)
-- Cookie `session_id` set in response
-
-**Failure modes**:
-| Failure | tRPC Code | Recovery |
-|---------|-----------|----------|
-| Turnstile token missing (prod) | BAD_REQUEST | Client must provide Turnstile token |
-| Turnstile verification fails | FORBIDDEN | Refresh page, retry |
-| Email already registered | CONFLICT | Login instead, or use different email |
-| Password mismatch | BAD_REQUEST (Zod) | Fix client-side validation |
-| DB provisioning fails | INTERNAL_SERVER_ERROR | Orphaned tenant row deleted; user can retry |
-
----
-
-### WORKFLOW 1B: Password Login
-
-**Trigger**: `auth.login` (publicProcedure)
-**Input**: `{ email, password }`
-
-```
-STEP 1: Rate limit check
-  ACTION: Check failedLoginAttempts map for email
-  BRANCH: >= 5 attempts within 15min window -> FAILURE(TOO_MANY_REQUESTS)
-  BRANCH: under limit -> STEP 2
-
-STEP 2: User lookup
-  ACTION: SELECT user by email (id, email, name, passwordHash)
-  BRANCH: not found -> increment failedLoginAttempts, FAILURE(UNAUTHORIZED, "Invalid email or password")
-  BRANCH: found but no passwordHash (magic-link-only account) -> increment attempts, FAILURE(UNAUTHORIZED)
-  BRANCH: found with passwordHash -> STEP 3
-
-STEP 3: Password verification
-  ACTION: argon2.verify(passwordHash, inputPassword)
-  BRANCH: invalid -> increment failedLoginAttempts, FAILURE(UNAUTHORIZED)
-  BRANCH: valid -> clear failedLoginAttempts for email, STEP 4
-
-STEP 4: Membership check
-  ACTION: SELECT tenantMembers for user
-  BRANCH: 0 memberships -> FAILURE(FORBIDDEN, "Account has no organization membership")
-  BRANCH: >= 1 -> STEP 5
-
-STEP 5: Create session
-  ACTION: createSessionForUser(userId, ctx)
-    Resolve tenantId (single membership -> auto-select, multiple -> null)
-    enforceSessionLimit (evict oldest if at plan cap)
-    INSERT session
-    Set-Cookie
-
-OUTPUT: { user: { id, email, name }, sessionToken }
-```
-
-**Observable state**: Session row created; oldest session may be deleted if at limit.
-
-**Failure modes**:
-| Failure | tRPC Code | Side Effect |
-|---------|-----------|-------------|
-| Rate limited | TOO_MANY_REQUESTS | 15-minute cooldown |
-| User not found | UNAUTHORIZED | Attempt counter incremented |
-| Wrong password | UNAUTHORIZED | Attempt counter incremented |
-| No memberships | FORBIDDEN | User exists but cannot access any tenant |
+`auth.register` and `auth.login` no longer exist. Sign-in is magic link (1C, 1D) on
+the web and native PKCE (system browser) on desktop, mobile and the CLI; programmatic
+access uses API keys. Stored password hashes were cleared by a migration, and the
+`users.password_hash` column is unused until it is dropped.
 
 ---
 
@@ -168,7 +57,7 @@ OUTPUT: { user: { id, email, name }, sessionToken }
 **Input**: `{ email, turnstileToken?, source: "web"|"desktop"|"mobile" }`
 
 ```
-STEP 1: Optional Turnstile verification (same as register)
+STEP 1: Turnstile verification (required whenever TURNSTILE_SECRET_KEY is set)
 
 STEP 2: Rate limit check
   ACTION: COUNT magicLinkTokens WHERE email AND createdAt > 15min ago
@@ -199,32 +88,48 @@ OUTPUT: { success: true } -- ALWAYS, regardless of email existence (anti-enumera
 **Input**: `{ token }`
 
 ```
-STEP 1: Atomic token consumption
-  ACTION: UPDATE magicLinkTokens SET usedAt=now()
-    WHERE tokenHash=sha256(token) AND expiresAt > now() AND usedAt IS NULL
-    RETURNING row
-  BRANCH: no row returned -> FAILURE(BAD_REQUEST, "Invalid, expired, or already used link")
-  BRANCH: row returned -> STEP 2
+STEP 1: Pre-transaction peek (dirty read)
+  ACTION: SELECT token row by sha256(token), unexpired and unused
+  BRANCH: none -> FAILURE(BAD_REQUEST, "Invalid, expired, or already used link")
+  BRANCH: new email, no pending invite, MULTI_TENANT=true
+    -> provision the tenant database OUTSIDE the transaction (CREATE DATABASE is
+       non-transactional); dropped again if the transaction fails or does not use it
 
-STEP 2: User upsert (inside transaction)
-  BEGIN TRANSACTION
-    STEP 2a: SELECT user by email
-      BRANCH: user exists
-        -> SET emailVerified=true
-        -> isNewUser=false
+STEP 2: Transaction
+  BEGIN TRANSACTION on controlDb
+    STEP 2a: Atomic token consumption
+      ACTION: UPDATE magicLinkTokens SET usedAt=now()
+        WHERE tokenHash=sha256(token) AND expiresAt > now() AND usedAt IS NULL
+        RETURNING row
+      BRANCH: no row returned -> FAILURE(BAD_REQUEST, "Invalid, expired, or already used link")
+    STEP 2b: SELECT user by email
       BRANCH: user does not exist
-        -> INSERT user (email, emailVerified=true, name=null)
-        -> isNewUser=true
-        -> Check for pending invitation (same logic as register)
-          BRANCH: pending invite -> skip tenant creation
-          BRANCH: no invite -> assignTenantToNewUser
-    STEP 2b: Create session (same as login STEP 5)
+        -> enforceSelfHostedSignup (self-hosted, closed server, uninvited -> FAILURE(FORBIDDEN))
+        -> INSERT user (email, emailVerified=true, name=null), isNewUser=true
+        -> Check for pending invitation
+          BRANCH: pending invite -> skip tenant creation (user joins via the invite)
+          BRANCH: no invite, MULTI_TENANT=true -> INSERT tenant (provisioned in STEP 1) + owner membership
+          BRANCH: no invite, self-hosted -> getOrCreateDefaultTenant (owner if first member, else member)
+      BRANCH: user exists, emailVerified=false (e.g. legacy password sign-up)
+        -> DELETE every session (access tokens cascade) and API key of the user
+        -> SET emailVerified=true, passwordHash=null
+        -> isNewUser=false
+      BRANCH: user exists, emailVerified=true
+        -> isNewUser=false (existing sessions and API keys untouched)
+    STEP 2c: Resolve tenant for session (exactly 1 membership -> that tenant, else null)
+    STEP 2d: Enforce session limit (FIFO eviction of oldest)
+    STEP 2e: INSERT session (cookie: 30 days; bearer clients: 7-day sliding, 30-day cap)
   COMMIT
+  Set-Cookie session_id only after COMMIT (cookie clients)
 
-OUTPUT: { user, sessionToken, isNewUser, needsProfile: !user.name }
+OUTPUT: { user, sessionToken (bearer clients only), isNewUser, needsProfile: !user.name }
 ```
 
-**Key decision**: `needsProfile=true` signals the UI to show the profile completion form.
+**Key decisions**:
+- `needsProfile=true` signals the UI to show the profile completion form.
+- The first verification of an unverified account revokes everything issued to it
+  before the mailbox was proven, so whoever created the account without owning the
+  email keeps no access.
 
 ---
 
@@ -342,7 +247,7 @@ STEP 5: Auto-select tenant in session
 OUTPUT: { tenantId, tenantName }
 ```
 
-**Critical path**: Registration with pending invite skips auto-tenant creation. User registers, then accepts invite, and gets added to the inviting tenant.
+**Critical path**: A first magic-link sign-in with a pending invite skips auto-tenant creation. The user signs in, then accepts the invite, and gets added to the inviting tenant.
 
 ---
 
@@ -1544,17 +1449,7 @@ Every branch in the workflow trees above maps to a BDD test case. Below is the c
 
 | ID | Workflow | Branch | Test Description |
 |----|----------|--------|-----------------|
-| AUTH-01 | 1A | Happy path | Register with valid data, verify session created |
-| AUTH-02 | 1A | Turnstile required | Register without token when TURNSTILE_SECRET_KEY set -> BAD_REQUEST |
-| AUTH-03 | 1A | Turnstile fails | Register with invalid token -> FORBIDDEN |
-| AUTH-04 | 1A | Duplicate email | Register with existing email -> CONFLICT |
-| AUTH-05 | 1A | Pending invite | Register with email that has pending invite -> no auto-tenant, user has 0 memberships |
-| AUTH-06 | 1A | Self-hosted mode | Register without MULTI_TENANT -> default tenant created/joined |
-| AUTH-07 | 1B | Happy path | Login with correct credentials -> session |
-| AUTH-08 | 1B | Wrong password | Login with wrong password -> UNAUTHORIZED, attempt counted |
-| AUTH-09 | 1B | Rate limited | Login 5+ times with wrong password -> TOO_MANY_REQUESTS |
-| AUTH-10 | 1B | No memberships | Login for user with 0 memberships -> FORBIDDEN |
-| AUTH-11 | 1B | Password-less account | Login with password for magic-link-only user -> UNAUTHORIZED |
+| AUTH-01 | 1A/1B | Removed | `auth.register` and `auth.login` are not routable -> NOT_FOUND |
 | AUTH-12 | 1C | Happy path | Request magic link -> always returns success |
 | AUTH-13 | 1C | Rate limited | Request 6th link in 15min -> returns success (silent) |
 | AUTH-14 | 1D | Happy path, new user | Verify magic link -> new user created, needsProfile=true |
@@ -1562,6 +1457,9 @@ Every branch in the workflow trees above maps to a BDD test case. Below is the c
 | AUTH-16 | 1D | Expired token | Verify expired token -> BAD_REQUEST |
 | AUTH-17 | 1D | Used token | Verify already-used token -> BAD_REQUEST |
 | AUTH-18 | 1D | New user with invite | Magic link creates user, skips auto-tenant |
+| AUTH-26 | 1D | Unverified existing user | Prior sessions and API keys revoked, passwordHash cleared, emailVerified=true |
+| AUTH-27 | 1D | Verified existing user | Prior sessions and API keys kept |
+| AUTH-28 | 1D | Closed self-hosted server | Uninvited new email -> FORBIDDEN, token not burned |
 | AUTH-19 | 1E | Happy path | Complete profile -> name updated |
 | AUTH-20 | 1F | Happy path | Request + confirm email change |
 | AUTH-21 | 1F | Email taken | Request email change to taken email -> CONFLICT |
@@ -1780,7 +1678,7 @@ Every branch in the workflow trees above maps to a BDD test case. Below is the c
 | A7 | Invoice number uniqueness is per-business | uniqueIndex on (businessId, invoiceNumber) | Cross-business collision impossible |
 | A8 | Overdue is computed, never stored | List query uses SQL expression | Dashboard and reports must use same computation |
 | A9 | All money strings have exactly 2 decimal places | money.ts fromPaise() | Display and comparison depend on this format |
-| A10 | Login rate limiting is in-memory (not shared across instances) | auth.ts Map | Multi-instance deployment allows 5 * N attempts |
+| A10 | The strict per-IP budget for credential endpoints is in-memory (not shared across instances) | server.ts / rate-limit-tier.ts | Multi-instance deployment allows 20 * N calls/min per IP |
 
 ---
 

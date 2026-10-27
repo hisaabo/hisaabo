@@ -1,5 +1,11 @@
 name: Deploy Web
 
+# Production goes live only from a release tag: release.yml calls this
+# workflow for a v* tag, and a manual run redeploys any tag (rollback).
+# Pushes to main deploy a preview to the `preview` branch alias
+# (preview.hisaabo-web.pages.dev), and only when the repository variable
+# PREVIEW_API_URL points at a staging API, so unreleased web code never runs
+# against the production API.
 on:
   push:
     branches: [main]
@@ -9,24 +15,52 @@ on:
       - "packages/api/src/index.ts" # AppRouter type export
       - "packages/api/src/router.ts"
       - "packages/api/src/routers/**"
+  workflow_call:
+    inputs:
+      ref:
+        description: Release tag to deploy to production
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Release tag to deploy to production (e.g. v0.9.1)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-web
+  group: deploy-web-${{ inputs.ref && 'production' || 'preview' }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build & Deploy to Cloudflare Pages
+    name: Build & Deploy to Cloudflare Pages (${{ inputs.ref && 'production' || 'preview' }})
+    if: inputs.ref || vars.PREVIEW_API_URL
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Add required reviewers to the `production` environment in the repo
+    # settings to hold the deploy until the API image of the same tag is live.
+    environment: ${{ inputs.ref && 'production' || 'preview' }}
     permissions:
       contents: read
       deployments: write
     steps:
+      - name: Check the ref is a release tag
+        if: inputs.ref
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          if ! [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Production deploys take a release tag (vX.Y.Z), got '$REF'"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref && format('refs/tags/{0}', inputs.ref) || github.sha }}
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
@@ -41,17 +75,20 @@ jobs:
       - name: Build web app
         run: pnpm --filter @hisaabo/web build
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_API_URL: ${{ inputs.ref && secrets.VITE_API_URL || vars.PREVIEW_API_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           # Public values (repository variables, not secrets) for the generated
           # .well-known app-link files; placeholders are emitted until they are set.
           VITE_ANDROID_APP_CERT_SHA256: ${{ vars.VITE_ANDROID_APP_CERT_SHA256 }}
           VITE_APPLE_TEAM_ID: ${{ vars.VITE_APPLE_TEAM_ID }}
 
+      # --branch picks the Pages environment: the project's production branch
+      # (CF_PAGES_PRODUCTION_BRANCH, default main) is production, anything
+      # else is a preview alias.
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/web/dist --project-name=hisaabo-web
+          command: pages deploy apps/web/dist --project-name=hisaabo-web --branch=${{ inputs.ref && (vars.CF_PAGES_PRODUCTION_BRANCH || 'main') || 'preview' }}
           packageManager: npm

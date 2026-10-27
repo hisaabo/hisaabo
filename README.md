@@ -446,10 +446,11 @@ The first account created on a fresh self-hosted server becomes the owner; after
 
 ### 2. Try the API immediately
 
+Sign in to the web app (magic link), create an API key in Settings > API Keys, then:
+
 ```bash
-curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
-  -H "Content-Type: application/json" \
-  -d '{"json":{"email":"you@yourshop.in","name":"Your Name","password":"strongpass123","confirmPassword":"strongpass123"}}'
+curl https://api.hisaabo.in/api/trpc/business.list \
+  -H "Authorization: Bearer hisaabo_key_..."
 ```
 
 ### 3. Connect AI to your Hisaabo instance
@@ -535,7 +536,7 @@ pnpm --filter @hisaabo/api admin -- --json    # raw numbers
 pnpm --filter @hisaabo/api admin -- --demo    # synthetic data, no database
 ```
 
-Screens: `1` Overview, `2` Tenants, `3` Ops Health (e-invoicing, recurring runs, bank and GSTR-2B reconciliation, e-way bills, store orders and shipments, plus a cross-tenant feed of recent failures), `4` Infra (Postgres health per database and migration drift: every database compared against the migrations shipped in this build, flagged as in sync, behind, ahead or untracked). An alerts strip under the header flags what needs attention on every screen. Keys: `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
+Screens: `1` Overview, `2` Tenants, `3` Ops Health (e-invoicing, recurring runs, bank and GSTR-2B reconciliation, e-way bills, store orders and shipments, plus a cross-tenant feed of recent failures), `4` Infra (Postgres health per database and migration drift: every database compared against the migrations shipped in this build, flagged as in sync, behind, ahead or untracked), `5` Queues (the background-job queue: per-queue queued / active / retrying / failed counts, jobs done in the last 15 minutes and the oldest wait, paused queues, live workers by heartbeat, and the newest failed jobs with masked errors; it shows "job queue not installed" on deployments without the queue schema, and is read-only — retry failed jobs with the `ops queue` CLI). An alerts strip under the header flags what needs attention on every screen. Keys: `↑`/`↓` select a tenant, `r` refresh, `p` toggle PII masking, `q` quit. See `--help` for all flags.
 
 PII is masked by default: tenants appear as `Tenant 3f9a2c`, emails as `pr•••@sh••••.in`, and database hosts are hidden, so screenshots and `--json` output are safe to share. Pass `--reveal` (or press `p`) to see real values.
 

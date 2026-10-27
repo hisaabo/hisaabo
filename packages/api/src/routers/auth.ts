@@ -3,16 +3,14 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { createHash, randomBytes } from "node:crypto";
-import * as argon2 from "argon2";
 import { controlDb, users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, accessTokens, apiKeys, nativeAuthRequests, provisionTenantDatabase, cleanupTenantDatabase, type TenantDbConfig } from "@hisaabo/db";
-import { loginSchema, registerSchema, magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema, nativeStartSchema, nativeExchangeSchema } from "@hisaabo/shared";
+import { magicLinkRequestSchema, magicLinkVerifySchema, completeProfileSchema, nativeStartSchema, nativeExchangeSchema } from "@hisaabo/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { emailService } from "../lib/email.js";
 import { getSessionIdFromRequest } from "../context.js";
 import { cacheBus, type CacheEvent } from "../lib/cache/bus.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
-import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
@@ -33,33 +31,10 @@ const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const BEARER_SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days sliding window
 const BEARER_MAX_SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30-day absolute cap
 
-// Per-email rate limiting for login attempts
-const LOGIN_MAX_ATTEMPTS = 5;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const failedLoginAttempts = new Map<string, { count: number; firstAttempt: number }>();
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of failedLoginAttempts) {
-    if (now - entry.firstAttempt > LOGIN_WINDOW_MS) failedLoginAttempts.delete(key);
-  }
-}, 5 * 60_000).unref();
-
 function generateSlug(name: string): string {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   const suffix = nanoid(6);
   return `${base}-${suffix}`;
-}
-
-let dummyHashPromise: Promise<string> | null = null;
-function getDummyHash(): Promise<string> {
-  dummyHashPromise ??= argon2.hash(randomBytes(16).toString("hex"), {
-    type: argon2.argon2id,
-    memoryCost: 65536,
-    timeCost: 3,
-    parallelism: 4,
-  });
-  return dummyHashPromise;
 }
 
 /** Non-reversible public identifier for a session (the raw id is a bearer credential). */
@@ -99,7 +74,8 @@ type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
 // the transaction settled (commit or rollback — a rollback invalidates
 // harmlessly). Emitting inside the tx would let a concurrent read re-cache the
 // pre-commit state. `session{userId}` also covers sessions evicted by
-// enforceSessionLimit(…, tx) and `user` the emailVerified flip.
+// enforceSessionLimit(…, tx) or revoked on first verification, and `user` the
+// emailVerified flip plus the API keys revoked with it.
 interface SignInTouched { userId?: string; tenantId?: string }
 
 async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise<T> {
@@ -303,213 +279,6 @@ async function withProvisionedTenantCleanup<T>(
 }
 
 export const authRouter = router({
-  // ── Password registration (keeps working for self-hosted) ────
-  register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
-    // Require Turnstile when secret key is configured (production).
-    // Self-hosted / dev without the key can skip verification.
-    const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
-    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
-    }
-    if (input.turnstileToken) {
-      const ip = getClientIpFromRequest(ctx.req);
-      const valid = await verifyTurnstile(input.turnstileToken, ip);
-      if (!valid) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Verification failed. Please refresh and try again." });
-      }
-    }
-
-    const emailLower = normalizeEmail(input.email);
-    const existing = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, emailLower)).limit(1);
-    if (existing.length > 0) {
-      throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
-    }
-
-    const passwordHash = await argon2.hash(input.password, {
-      type: argon2.argon2id,
-      memoryCost: 65536,
-      timeCost: 3,
-      parallelism: 4,
-    });
-
-    // ── Pre-tx peek: decide whether we need to provision a tenant DB ──
-    // For brand-new registrations, we provision the physical DB OUTSIDE the
-    // control-DB transaction (CREATE DATABASE is non-transactional). The
-    // invitation peek is a dirty read — confirmed inside the tx below. If the
-    // peek is wrong (invitation accepted mid-flight), withProvisionedTenantCleanup
-    // drops the unused DB on its way out.
-    const [pendingInvitePeek] = await controlDb.select({ id: invitations.id })
-      .from(invitations)
-      .where(and(
-        emailEq(invitations.email, emailLower),
-        isNull(invitations.acceptedAt),
-        gt(invitations.expiresAt, new Date()),
-      ))
-      .limit(1);
-
-    const needsAutoTenant = process.env.MULTI_TENANT === "true" && !pendingInvitePeek;
-    const provisioned: ProvisionedTenant | null = needsAutoTenant
-      ? await provisionNewTenantForUser(input.name || emailLower.split("@")[0])
-      : null;
-
-    // Insert user, assign tenant, and create session in one outer transaction.
-    // On any failure (including COMMIT failure), withProvisionedTenantCleanup
-    // drops the orphan physical tenant DB.
-    const touched: SignInTouched = {};
-    const { user, sessionToken } = await withProvisionedTenantCleanup(
-      provisioned,
-      async (markUsed) =>
-        settleSignIn(touched, controlDb.transaction(async (tx) => {
-          await enforceSelfHostedSignup(tx, emailLower);
-
-          const [user] = await tx.insert(users).values({
-            email: emailLower,
-            name: input.name,
-            passwordHash,
-          }).returning({ id: users.id, email: users.email, name: users.name });
-          touched.userId = user.id;
-
-          // Re-check invitation inside the tx (actual state, not the peek)
-          const [pendingInvite] = await tx.select({ id: invitations.id })
-            .from(invitations)
-            .where(and(
-              emailEq(invitations.email, emailLower),
-              isNull(invitations.acceptedAt),
-              gt(invitations.expiresAt, new Date()),
-            ))
-            .limit(1);
-
-          if (pendingInvite) {
-            // Invitation exists — do NOT auto-create a tenant. If we
-            // pre-provisioned one based on the peek, it will be cleaned up
-            // because we never call markUsed().
-          } else if (process.env.MULTI_TENANT === "true") {
-            if (!provisioned) {
-              // Peek said invitation pending but tx says no — this is a rare
-              // race where the invitation expired between peek and tx. Rather
-              // than provision inside the tx (impossible) and risk a deeper
-              // orphan, throw a retryable conflict.
-              throw new TRPCError({
-                code: "CONFLICT",
-                message: "Sign-up state changed — please try again.",
-              });
-            }
-            touched.tenantId = await writeNewTenantRows(tx, user.id, provisioned);
-            markUsed();
-          } else {
-            touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
-          }
-
-          const sessionId = nanoid(64);
-          const memberships = await tx
-            .select({ tenantId: tenantMembers.tenantId })
-            .from(tenantMembers)
-            .where(eq(tenantMembers.userId, user.id));
-          const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
-
-          await enforceSessionLimit(user.id, tx);
-
-          const regNow = Date.now();
-          const regExpiresAt = new Date(regNow + (registerAuthMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
-          const regMaxExpiresAt = registerAuthMethod === "bearer" ? new Date(regNow + BEARER_MAX_SESSION_DURATION_MS) : null;
-
-          await tx.insert(sessions).values({
-            id: sessionId,
-            userId: user.id,
-            tenantId: resolvedTenantId,
-            expiresAt: regExpiresAt,
-            maxExpiresAt: regMaxExpiresAt,
-            authMethod: registerAuthMethod,
-            ipAddress: getClientIpFromRequest(ctx.req),
-            userAgent: ctx.req.headers.get("user-agent") || null,
-          });
-
-          return { user, sessionToken: sessionId };
-        })),
-    );
-
-    // Set-Cookie only after the tx has committed. If COMMIT fails, the error
-    // bubbles out of withProvisionedTenantCleanup without ever reaching here,
-    // so the client never gets a cookie for a rolled-back session.
-    if (registerAuthMethod === "cookie") {
-      setSessionCookie(ctx.resHeaders, sessionToken);
-    }
-
-    return {
-      user: { id: user.id, email: user.email, name: user.name },
-      sessionToken: registerAuthMethod === "bearer" ? sessionToken : undefined,
-    };
-  }),
-
-  // ── Password login ───────────────────────────────────────────
-  login: publicProcedure.input(loginSchema).mutation(async ({ input, ctx }) => {
-    // Per-email rate limiting: block after too many failed attempts
-    const emailKey = normalizeEmail(input.email);
-    const loginIp = getClientIpFromRequest(ctx.req);
-    const attempts = failedLoginAttempts.get(emailKey);
-    if (attempts && attempts.count >= LOGIN_MAX_ATTEMPTS && Date.now() - attempts.firstAttempt < LOGIN_WINDOW_MS) {
-      logSecurityEvent("login_lockout", { ip: loginIp, reason: "email_threshold" });
-      throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many failed login attempts. Please try again later." });
-    }
-
-    const [user] = await controlDb
-      .select({ id: users.id, email: users.email, name: users.name, passwordHash: users.passwordHash })
-      .from(users)
-      .where(emailEq(users.email, emailKey))
-      .limit(1);
-
-    // Burn the same argon2 work for unknown / passwordless accounts so response
-    // time doesn't reveal whether the email is registered.
-    if (!user?.passwordHash) {
-      await argon2.verify(await getDummyHash(), input.password).catch(() => false);
-    }
-
-    if (!user) {
-      const prev = failedLoginAttempts.get(emailKey);
-      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
-      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
-      logSecurityEvent("login_fail", { ip: loginIp, reason: "no_user" });
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
-    }
-
-    if (!user.passwordHash) {
-      const prev = failedLoginAttempts.get(emailKey);
-      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
-      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
-      logSecurityEvent("login_fail", { ip: loginIp, reason: "no_password" });
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
-    }
-
-    const valid = await argon2.verify(user.passwordHash, input.password);
-    if (!valid) {
-      const prev = failedLoginAttempts.get(emailKey);
-      if (prev && Date.now() - prev.firstAttempt < LOGIN_WINDOW_MS) { prev.count++; }
-      else { failedLoginAttempts.set(emailKey, { count: 1, firstAttempt: Date.now() }); }
-      logSecurityEvent("login_fail", { ip: loginIp, reason: "bad_password" });
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
-    }
-
-    // Successful login — clear failed attempts
-    failedLoginAttempts.delete(emailKey);
-
-    const memberships = await controlDb
-      .select({ tenantId: tenantMembers.tenantId })
-      .from(tenantMembers)
-      .where(eq(tenantMembers.userId, user.id));
-
-    if (memberships.length === 0) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "Account has no organization membership" });
-    }
-
-    const bearer = isBearerClient(ctx.req);
-    const sessionToken = await createSessionForUser(user.id, ctx, bearer ? "bearer" : "cookie");
-
-    return {
-      user: { id: user.id, email: user.email, name: user.name },
-      sessionToken: bearer ? sessionToken : undefined,
-    };
-  }),
-
   // ── Magic link: request ──────────────────────────────────────
   sendMagicLink: publicProcedure.input(magicLinkRequestSchema).mutation(async ({ input, ctx }) => {
     // Turnstile is required whenever a secret key is configured; no client
@@ -584,7 +353,7 @@ export const authRouter = router({
   // ── Magic link: verify ───────────────────────────────────────
   verifyMagicLink: publicProcedure.input(magicLinkVerifySchema).mutation(async ({ input, ctx }) => {
     // Determine authMethod once, before the transaction, using the same
-    // x-hisaabo-client signal as login/register.
+    // x-hisaabo-client signal as the native exchange.
     const magicLinkAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
     const tokenH = hashToken(input.token);
 
@@ -670,7 +439,7 @@ export const authRouter = router({
 
           // Find or create user
           let [user] = await tx
-            .select({ id: users.id, email: users.email, name: users.name })
+            .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified })
             .from(users)
             .where(emailEq(users.email, emailLocal))
             .limit(1);
@@ -681,7 +450,7 @@ export const authRouter = router({
             const [newUser] = await tx.insert(users).values({
               email: emailLocal,
               emailVerified: true,
-            }).returning({ id: users.id, email: users.email, name: users.name });
+            }).returning({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified });
             user = newUser;
 
             // Re-check invitation using tx state (not the peek)
@@ -713,10 +482,15 @@ export const authRouter = router({
             } else {
               touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
             }
-          } else {
-            // Existing user path — mark email verified
+          } else if (!user.emailVerified) {
+            // First proof of mailbox ownership for an account created before
+            // the email was verified (legacy password sign-up). Whatever was
+            // issued before this point was not issued to the mailbox owner:
+            // revoke it all and clear any legacy password before signing in.
+            await tx.delete(sessions).where(eq(sessions.userId, user.id));
+            await tx.delete(apiKeys).where(eq(apiKeys.userId, user.id));
             await tx.update(users)
-              .set({ emailVerified: true, updatedAt: new Date() })
+              .set({ emailVerified: true, passwordHash: null, updatedAt: new Date() })
               .where(eq(users.id, user.id));
           }
 

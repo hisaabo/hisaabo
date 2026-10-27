@@ -22,8 +22,6 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import {
-  loginSchema,
-  registerSchema,
   magicLinkRequestSchema,
   createBusinessSchema,
   createPartySchema,
@@ -167,68 +165,6 @@ describe("SECURITY — Zod validators reject malformed inputs before they reach 
    * Indian business context used in test data.
    */
 
-  describe("loginSchema", () => {
-    it("accepts valid Indian business email and password", () => {
-      const result = loginSchema.safeParse({
-        email: "ramesh.kumar@vyapar.co.in",
-        password: "Ramesh@1234",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("rejects invalid email format", () => {
-      const result = loginSchema.safeParse({ email: "not-an-email", password: "ValidPass1" });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects password shorter than 8 characters", () => {
-      const result = loginSchema.safeParse({ email: "a@b.com", password: "short" });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects password longer than 128 characters", () => {
-      const result = loginSchema.safeParse({ email: "a@b.com", password: "a".repeat(129) });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects email longer than 255 characters", () => {
-      const result = loginSchema.safeParse({ email: "a".repeat(250) + "@b.com", password: "ValidPass1" });
-      expect(result.success).toBe(false);
-    });
-  });
-
-  describe("registerSchema", () => {
-    it("accepts valid registration data for an Indian user", () => {
-      const result = registerSchema.safeParse({
-        email: "priya.sharma@gmail.com",
-        name: "Priya Sharma",
-        password: "Priya@Kirana2024",
-        confirmPassword: "Priya@Kirana2024",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("rejects when passwords do not match", () => {
-      const result = registerSchema.safeParse({
-        email: "test@example.com",
-        name: "Test User",
-        password: "Password123",
-        confirmPassword: "WrongPassword",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects name shorter than 2 characters", () => {
-      const result = registerSchema.safeParse({
-        email: "x@example.com",
-        name: "X",
-        password: "ValidPass1",
-        confirmPassword: "ValidPass1",
-      });
-      expect(result.success).toBe(false);
-    });
-  });
-
   describe("magicLinkRequestSchema", () => {
     it("accepts valid email for magic link", () => {
       const result = magicLinkRequestSchema.safeParse({ email: "kiran@hisaabo.in" });
@@ -237,6 +173,11 @@ describe("SECURITY — Zod validators reject malformed inputs before they reach 
 
     it("rejects invalid email format for magic link", () => {
       const result = magicLinkRequestSchema.safeParse({ email: "not-valid" });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects email longer than 255 characters", () => {
+      const result = magicLinkRequestSchema.safeParse({ email: "a".repeat(250) + "@b.com" });
       expect(result.success).toBe(false);
     });
   });

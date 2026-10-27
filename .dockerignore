@@ -7,8 +7,11 @@ node_modules/
 .git/
 .gitignore
 
-# Frontend apps (not needed in API image)
-apps/
+# Frontend apps (not needed in API image) — except the /ops operator
+# dashboard, which the API serves (docs/architecture/queue.md §9).
+apps/*
+!apps/ops
+apps/ops/dist
 
 # Build artifacts (rebuilt inside container)
 dist/

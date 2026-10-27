@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { validateInvoiceTotals, calcInvoiceTotals } from "../calc.js";
 import { checkInvoiceStatusTransition } from "../invoice-status.js";
 import { checkInvoiceDeleteAllowed, INVOICE_DELETE_WINDOW_MS } from "../permissions.js";
-import { createInvoiceSchema, createBusinessSchema, loginSchema, registerSchema } from "../validators.js";
+import { createInvoiceSchema, createBusinessSchema, magicLinkRequestSchema } from "../validators.js";
 
 const line = { quantity: "1", unitPrice: "1000.00", taxPercent: "18", discountPercent: "0" };
 
@@ -138,10 +138,8 @@ describe("checkInvoiceDeleteAllowed (shared by invoice and document routers)", (
 
 describe("input normalisation", () => {
   it("lowercases and trims auth emails", () => {
-    expect(loginSchema.parse({ email: "  User@Example.COM ", password: "secure123" }).email).toBe("user@example.com");
-    expect(registerSchema.parse({
-      email: "A@B.com", name: "Rahul", password: "secure123", confirmPassword: "secure123",
-    }).email).toBe("a@b.com");
+    expect(magicLinkRequestSchema.parse({ email: "  User@Example.COM " }).email).toBe("user@example.com");
+    expect(magicLinkRequestSchema.parse({ email: "A@B.com" }).email).toBe("a@b.com");
   });
 
   const biz = { name: "Shop", pan: "ABCDE1234F", phone: "9999999999", address: "Street" };

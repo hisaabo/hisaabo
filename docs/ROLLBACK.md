@@ -2,8 +2,10 @@
 
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
-**Last updated**: 2026-04-14
-**Applies to**: migrations 0000 through 0009
+**Last updated**: 2026-10-27
+**Applies to**: self-hosted migrations 0000 through 0020 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0006) migration sets; the equivalents for 0014-0020 are listed in section 3.
+
+Downgrading the application from the next release to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
 
 ---
 
@@ -11,6 +13,17 @@ Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle 
 
 | Migration | Name | Risk | Data Loss | Recommended Strategy |
 |-----------|------|------|-----------|---------------------|
+| 0020 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
+| 0019 | Null all password hashes | **Irreversible** | Every stored password hash | Backup restore only |
+| 0018 | Cache invalidation NOTIFY triggers | Low | None | Leave in place, or manual reverse SQL |
+| 0017 | Global store slug registry | Low | Registry rows (rebuilt by the backfill) | Leave in place |
+| 0016 | Index swap on `items` / `bank_*` | Low | None | Leave in place |
+| 0015 | Native sign-in, item images, store phone OTP | Low | Item images, pending native sign-ins, OTPs | Leave in place |
+| 0014 | Sessions `auth_method`, access tokens | Low | Access tokens | Leave in place |
+| 0013 | Business default round-off / terms | Low | Those two settings | Manual reverse SQL |
+| 0012 | Business POS flag | Low | POS setting | Manual reverse SQL |
+| 0011 | Business logo columns | Low | Uploaded logos | Manual reverse SQL |
+| 0010 | `system_config` table | Low | System settings | Manual reverse SQL |
 | 0009 | ENUM: `adjusted` status | Low | None (if no rows use the value) | Manual reverse SQL |
 | 0008 | Soft-delete columns on items | Low | Soft-deleted items become visible | Manual reverse SQL |
 | 0007 | Split invoice_items description | Medium | None (reversible data transform) | Manual reverse SQL |
@@ -839,6 +852,91 @@ ORDER BY created_at DESC
 LIMIT 3;
 -- The 0009 entry should be gone
 ```
+
+---
+
+### Migrations 0010-0013: Small Additive Changes (v0.9.0 and earlier)
+
+All four only add a table or columns, so reverting them is a matter of dropping what they added. Only do this when downgrading below the release that introduced them.
+
+```sql
+BEGIN;
+-- 0013
+ALTER TABLE businesses DROP COLUMN IF EXISTS default_terms_and_conditions;
+ALTER TABLE businesses DROP COLUMN IF EXISTS default_round_off;
+-- 0012
+ALTER TABLE businesses DROP COLUMN IF EXISTS pos_enabled;
+-- 0011
+ALTER TABLE businesses DROP COLUMN IF EXISTS logo_updated_at;
+ALTER TABLE businesses DROP COLUMN IF EXISTS logo_height;
+ALTER TABLE businesses DROP COLUMN IF EXISTS logo_width;
+ALTER TABLE businesses DROP COLUMN IF EXISTS logo_mime_type;
+ALTER TABLE businesses DROP COLUMN IF EXISTS logo_data;
+-- 0010
+DROP TABLE IF EXISTS system_config;
+COMMIT;
+```
+
+Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
+
+---
+
+### Migrations 0014-0020: Released after v0.9.0
+
+| Self-hosted | Control DB | Tenant DB | Change |
+|---|---|---|---|
+| 0014 | (already in v0.9.0) | - | `session_auth_method` type, `sessions.auth_method`, `access_tokens` |
+| 0015 | 0004 (`native_auth_requests`) | 0004 (`item_images`), 0005 (`store_phone_otps`, store OTP flag) | `native_auth_requests`, `item_images`, `store_phone_otps`, `businesses.store_require_phone_otp` |
+| 0016 | - | 0006 | Rebuilds `bsl_import_idx` and `bank_txn_date_idx`, adds `items_active_updated_idx` |
+| 0017 | 0005 | - | `store_slugs` registry |
+| 0018 | 0006 | - | `hisaabo_cache_notify()` and its triggers |
+| 0019 | 0007 | - | `UPDATE users SET password_hash = NULL` |
+| 0020 | 0008 | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
+
+The migration step also installs the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`.
+
+Everything here except 0019 is additive: no existing column is dropped, retyped or made `NOT NULL` without a default. Older code ignores the new objects, so the recommended "rollback" is to leave them in place and only change the application image.
+
+#### Downgrading to v0.9.0
+
+Rehearsed on self-hosted and multi-tenant copies: the v0.9.0 migration step is a no-op on an upgraded database, and v0.9.0 reads and writes it normally.
+
+1. Stop `api` and `worker` (v0.9.0 has no `worker` command).
+2. Restore your v0.9.0 `docker-compose.prod.yml`, `nginx/nginx.conf` and `.env.prod`.
+3. **ONCE only:** the new image switched PostgreSQL to `scram-sha-256`, and the v0.9.0 image connects without a password. Copy `/storage/pgdata/pg_hba.conf.bak.<timestamp>` back to `/storage/pgdata/pg_hba.conf` before starting v0.9.0.
+4. Start the v0.9.0 image.
+
+What does not come back:
+
+- **Password hashes (0019).** They were overwritten with `NULL`. Users can still sign in with a magic link. Getting passwords back requires restoring the pre-upgrade backup (Strategy 1), which also discards everything written since the upgrade.
+- **Store slug losers (multi-tenant).** Ignored by v0.9.0, which resolves slugs per tenant again.
+
+#### Removing the new objects (optional)
+
+Only needed if you want a v0.9.0 schema byte-for-byte. The script below is for a self-hosted database; on a multi-tenant deployment run, in each database, only the statements for objects that the control or tenant migrations in the table above created there. Then remove the matching migration rows from `drizzle.__drizzle_migrations` in each database.
+
+```sql
+BEGIN;
+-- 0020 / control 0008
+DROP TABLE IF EXISTS queue_controls, ops_audit_log, ops_sessions, ops_operators;
+DROP TYPE IF EXISTS ops_role;
+-- 0018 / control 0006
+DROP FUNCTION IF EXISTS hisaabo_cache_notify() CASCADE;  -- also drops its triggers
+-- 0017 / control 0005
+DROP TABLE IF EXISTS store_slugs;
+-- 0015 / control 0004, tenant 0004-0005
+ALTER TABLE businesses DROP COLUMN IF EXISTS store_require_phone_otp;
+DROP TABLE IF EXISTS store_phone_otps, item_images, native_auth_requests;
+-- 0014 (self-hosted only; the control DB already had these in v0.9.0)
+DROP TABLE IF EXISTS access_tokens;
+ALTER TABLE sessions DROP COLUMN IF EXISTS auth_method;
+DROP TYPE IF EXISTS session_auth_method;
+COMMIT;
+-- job queue (not a Drizzle migration; stop all workers first)
+DROP SCHEMA IF EXISTS pgboss CASCADE;
+```
+
+0016 only swaps indexes and is safe to keep. 0019 cannot be reversed with SQL.
 
 ---
 

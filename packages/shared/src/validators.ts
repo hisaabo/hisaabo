@@ -19,22 +19,6 @@ export const searchSchema = z.object({
 
 // ── Auth ───────────────────────────────────────────────────────
 
-export const loginSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(255),
-  password: z.string().min(8).max(128),
-});
-
-export const registerSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(255),
-  name: z.string().min(2).max(100),
-  password: z.string().min(8).max(128),
-  confirmPassword: z.string(),
-  turnstileToken: z.string().optional(),
-}).refine((d) => d.password === d.confirmPassword, {
-  message: "Passwords don't match",
-  path: ["confirmPassword"],
-});
-
 export const magicLinkRequestSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(255),
   turnstileToken: z.string().optional(),

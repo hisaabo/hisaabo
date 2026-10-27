@@ -15,7 +15,7 @@ const FAQ_ITEMS: FAQItem[] = [
   // --- Universal ---
   {
     question: "How does authentication work?",
-    answer: "Hisaabo uses session-based auth. Call `auth.login` or `auth.register` to get a session. Web clients receive an HttpOnly `session_id` cookie (30-day expiry, SameSite=Lax) that's sent automatically. Mobile and server clients use the returned `sessionToken` as a Bearer token in the `Authorization` header. No JWTs — sessions are stored server-side and revokable instantly.",
+    answer: "Hisaabo uses session-based auth with no passwords. People sign in with a magic link (`auth.sendMagicLink` / `auth.verifyMagicLink`) on the web, or through the system browser with PKCE on desktop, mobile and the CLI. Web clients receive an HttpOnly `session_id` cookie (30-day expiry, SameSite=Lax) that's sent automatically; native clients get a `sessionToken` to send as a Bearer token. Scripts, servers and AI agents should use an API key (Settings > API Keys) as the Bearer token. No JWTs — sessions are stored server-side and revokable instantly.",
     relatedGroups: ["auth"],
     personas: ["developer", "agent-builder"],
   },

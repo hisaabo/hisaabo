@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb, check, bigint, bigserial, integer } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   name: text("name"),
-  passwordHash: text("password_hash"),
+  passwordHash: text("password_hash"), // Deprecated: always NULL since password sign-in was removed; dropped in a later release.
   emailVerified: boolean("email_verified").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -249,6 +249,79 @@ export const storeSlugs = pgTable("store_slugs", {
 }, (t) => [
   uniqueIndex("store_slugs_live_business_idx").on(t.tenantId, t.businessId).where(sql`${t.releasedAt} IS NULL`),
   check("store_slugs_slug_format", sql`${t.slug} ~ '^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$'`),
+]);
+
+// ── Background jobs: queue controls + operator dashboard ──────
+//
+// The job queue itself lives in the `pgboss` schema, owned and migrated by
+// pg-boss (see migrate.ts). These tables are ours. See
+// docs/architecture/queue.md §7.2 and §8.
+
+/** Per-queue pause switch (Horizon pause/continue). Workers poll it. */
+export const queueControls = pgTable("queue_controls", {
+  queue: text("queue").primaryKey(),
+  paused: boolean("paused").notNull().default(false),
+  pausedAt: timestamp("paused_at", { withTimezone: true }),
+  pausedBy: text("paused_by"),
+});
+
+export const opsRoleEnum = pgEnum("ops_role", ["admin", "viewer"]);
+
+/**
+ * Platform operators allowed into /ops. Rows are created, enrolled and removed
+ * ONLY by the shell `ops` CLI (shell access is the root of trust); no API
+ * endpoint writes them.
+ */
+export const opsOperators = pgTable("ops_operators", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(), // normalised (lower-case, trimmed)
+  role: opsRoleEnum("role").notNull(),
+  totpSecret: text("totp_secret"), // encryptField() ciphertext, null until enrolled
+  totpEnrolledAt: timestamp("totp_enrolled_at", { withTimezone: true }),
+  totpLastStep: bigint("totp_last_step", { mode: "number" }), // replay guard
+  recoveryCodeHashes: jsonb("recovery_code_hashes").$type<string[]>().notNull().default([]),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  createdBy: text("created_by").notNull(),
+}, (t) => [
+  uniqueIndex("ops_operators_email_idx").on(t.email),
+]);
+
+export const opsSessions = pgTable("ops_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tokenHash: text("token_hash").notNull(),
+  operatorId: uuid("operator_id").notNull().references(() => opsOperators.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // The Hisaabo session this ops session was derived from; revoked with it.
+  sessionId: text("session_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  stepUpAt: timestamp("step_up_at", { withTimezone: true }),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+}, (t) => [
+  uniqueIndex("ops_sessions_token_hash_idx").on(t.tokenHash),
+  index("ops_sessions_operator_idx").on(t.operatorId),
+]);
+
+/** Append-only by convention: application code only ever INSERTs here. */
+export const opsAuditLog = pgTable("ops_audit_log", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  operatorId: uuid("operator_id"), // null for CLI actions
+  actor: text("actor").notNull(), // operator email or "cli:<os user>"
+  action: text("action").notNull(),
+  queue: text("queue"),
+  jobIds: jsonb("job_ids").$type<string[]>(),
+  details: jsonb("details").$type<Record<string, unknown>>(),
+  ip: text("ip"),
+  result: text("result").notNull(),
+}, (t) => [
+  index("ops_audit_log_at_idx").on(t.at),
 ]);
 
 // ── Relations ──────────────────────────────────────────────────

@@ -24,6 +24,8 @@ This folder contains **internal architecture documents, audit reports, and desig
 
 ### Deployment
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Production deployment guide (Docker, ONCE, Cloudflare Pages)
+- [`UPGRADING.md`](UPGRADING.md) — Version-to-version upgrade steps (read before pulling a new image)
+- [`ROLLBACK.md`](ROLLBACK.md) — Migration rollback and downgrade procedures
 
 ## Feature Reference
 

@@ -42,7 +42,10 @@ async function invite(to: string, tenantId: string) {
   });
 }
 
-const reg = (to: string) => ({ email: to, name: "Some One", password: "SecurePass1!", confirmPassword: "SecurePass1!" });
+/** Sign up / sign in through the only remaining path: a verified magic link. */
+async function signUp(to: string, client?: string) {
+  return caller(client).auth.verifyMagicLink({ token: await magicToken(to) });
+}
 
 const savedEnv = { open: process.env.ALLOW_OPEN_SIGNUP, mt: process.env.MULTI_TENANT };
 beforeEach(async () => {
@@ -61,69 +64,17 @@ afterAll(async () => {
 
 const CLOSED = { code: "FORBIDDEN", message: "Sign-up on this server is by invitation only" };
 
-describe("self-hosted invite-only signup (register)", () => {
+describe("self-hosted invite-only signup (magic link)", () => {
   it("first user becomes owner of the default tenant", async () => {
     const e = email("first");
-    await caller().auth.register(reg(e));
+    await signUp(e);
     const [m] = await db.select().from(tenantMembers).innerJoin(users, eq(users.id, tenantMembers.userId)).where(eq(users.email, e));
     expect(m!.tenant_members.role).toBe("owner");
   });
 
-  it("second uninvited user is rejected and not created", async () => {
-    await caller().auth.register(reg(email("owner")));
+  it("uninvited new email is rejected, not created, and the token is not burned", async () => {
+    await signUp(email("owner"));
     const e = email("stranger");
-    await expect(caller().auth.register(reg(e))).rejects.toMatchObject(CLOSED);
-    expect(await db.select().from(users).where(eq(users.email, e))).toHaveLength(0);
-  });
-
-  it("an invited user is allowed (no auto-membership; accepts via invitation)", async () => {
-    await caller().auth.register(reg(email("owner")));
-    const [t] = await db.select().from(tenants);
-    const e = email("invited");
-    await invite(e, t!.id);
-    await expect(caller().auth.register(reg(e))).resolves.toBeDefined();
-  });
-
-  it("an expired or accepted invitation does not count", async () => {
-    await caller().auth.register(reg(email("owner")));
-    const [t] = await db.select().from(tenants);
-    const e = email("expired");
-    await db.insert(invitations).values({ tenantId: t!.id, email: e, role: "seller", token: sha(randomUUID()), expiresAt: new Date(Date.now() - 1000) });
-    await expect(caller().auth.register(reg(e))).rejects.toMatchObject(CLOSED);
-  });
-
-  it("ALLOW_OPEN_SIGNUP=true allows uninvited users (as members)", async () => {
-    await caller().auth.register(reg(email("owner")));
-    process.env.ALLOW_OPEN_SIGNUP = "true";
-    const e = email("open");
-    await caller().auth.register(reg(e));
-    const [m] = await db.select().from(tenantMembers).innerJoin(users, eq(users.id, tenantMembers.userId)).where(eq(users.email, e));
-    expect(m!.tenant_members.role).toBe("member");
-  });
-
-  it("concurrent first signups produce exactly one owner and reject the rest", async () => {
-    const results = await Promise.allSettled([
-      caller().auth.register(reg(email("race1"))),
-      caller().auth.register(reg(email("race2"))),
-      caller().auth.register(reg(email("race3"))),
-    ]);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const owners = await db.select().from(tenantMembers).where(eq(tenantMembers.role, "owner"));
-    expect(owners).toHaveLength(1);
-  });
-});
-
-describe("self-hosted invite-only signup (magic link)", () => {
-  it("first user via magic link becomes owner", async () => {
-    const e = email("mlfirst");
-    await caller().auth.verifyMagicLink({ token: await magicToken(e) });
-    const [m] = await db.select().from(tenantMembers).innerJoin(users, eq(users.id, tenantMembers.userId)).where(eq(users.email, e));
-    expect(m!.tenant_members.role).toBe("owner");
-  });
-
-  it("uninvited new email is rejected and the token is not burned", async () => {
-    await caller().auth.register(reg(email("owner")));
-    const e = email("mlstranger");
     const raw = await magicToken(e);
     await expect(caller().auth.verifyMagicLink({ token: raw })).rejects.toMatchObject(CLOSED);
     const [row] = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.tokenHash, sha(raw)));
@@ -131,20 +82,42 @@ describe("self-hosted invite-only signup (magic link)", () => {
     expect(await db.select().from(users).where(eq(users.email, e))).toHaveLength(0);
   });
 
-  it("invited new email is allowed; existing users can still sign in", async () => {
+  it("invited new email is allowed (no auto-membership); existing users can still sign in", async () => {
     const ownerEmail = email("owner");
-    await caller().auth.register(reg(ownerEmail));
+    await signUp(ownerEmail);
     const [t] = await db.select().from(tenants);
-    const e = email("mlinvited");
+    const e = email("invited");
     await invite(e, t!.id);
-    await expect(caller().auth.verifyMagicLink({ token: await magicToken(e) })).resolves.toMatchObject({ isNewUser: true });
-    await expect(caller().auth.verifyMagicLink({ token: await magicToken(ownerEmail) })).resolves.toMatchObject({ isNewUser: false });
+    await expect(signUp(e)).resolves.toMatchObject({ isNewUser: true });
+    await expect(signUp(ownerEmail)).resolves.toMatchObject({ isNewUser: false });
   });
 
-  it("ALLOW_OPEN_SIGNUP=true lets uninvited new emails in", async () => {
-    await caller().auth.register(reg(email("owner")));
+  it("an expired or accepted invitation does not count", async () => {
+    await signUp(email("owner"));
+    const [t] = await db.select().from(tenants);
+    const e = email("expired");
+    await db.insert(invitations).values({ tenantId: t!.id, email: e, role: "seller", token: sha(randomUUID()), expiresAt: new Date(Date.now() - 1000) });
+    await expect(signUp(e)).rejects.toMatchObject(CLOSED);
+  });
+
+  it("ALLOW_OPEN_SIGNUP=true lets uninvited new emails in (as members)", async () => {
+    await signUp(email("owner"));
     process.env.ALLOW_OPEN_SIGNUP = "true";
-    await expect(caller().auth.verifyMagicLink({ token: await magicToken(email("mlopen")) })).resolves.toMatchObject({ isNewUser: true });
+    const e = email("open");
+    await expect(signUp(e)).resolves.toMatchObject({ isNewUser: true });
+    const [m] = await db.select().from(tenantMembers).innerJoin(users, eq(users.id, tenantMembers.userId)).where(eq(users.email, e));
+    expect(m!.tenant_members.role).toBe("member");
+  });
+
+  it("concurrent first signups produce exactly one owner and reject the rest", async () => {
+    const results = await Promise.allSettled([
+      signUp(email("race1")),
+      signUp(email("race2")),
+      signUp(email("race3")),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const owners = await db.select().from(tenantMembers).where(eq(tenantMembers.role, "owner"));
+    expect(owners).toHaveLength(1);
   });
 });
 
@@ -153,7 +126,7 @@ describe("sendMagicLink on a closed server", () => {
   afterAll(() => sendSpy.mockRestore());
 
   it("is silent for unknown uninvited emails but still reports success, and stores no token", async () => {
-    await caller().auth.register(reg(email("owner")));
+    await signUp(email("owner"));
     sendSpy.mockClear();
     const e = email("unknown");
     await expect(caller().auth.sendMagicLink({ email: e, source: "web" })).resolves.toEqual({ success: true });
@@ -168,7 +141,7 @@ describe("sendMagicLink on a closed server", () => {
     await caller().auth.sendMagicLink({ email: email("firstml"), source: "web" });
     expect(sendSpy).toHaveBeenCalledTimes(1);
 
-    await caller().auth.register(reg(ownerEmail));
+    await signUp(ownerEmail);
     const [t] = await db.select().from(tenants);
 
     sendSpy.mockClear();
@@ -222,30 +195,19 @@ describe("tenant.create (self-hosted join-default branch)", () => {
 });
 
 describe("sessionToken only for bearer clients", () => {
-  it("register / login / verifyMagicLink return it for desktop, mobile and cli, never for web", async () => {
+  it("verifyMagicLink returns it for desktop, mobile and cli, never for web", async () => {
     process.env.ALLOW_OPEN_SIGNUP = "true";
     for (const client of ["desktop", "mobile", "cli"]) {
-      const e = email(`reg-${client}`);
-      const r = await caller(client).auth.register(reg(e));
-      expect(typeof r.sessionToken).toBe("string");
-      const l = await caller(client).auth.login({ email: e, password: "SecurePass1!" });
-      expect(typeof l.sessionToken).toBe("string");
-      const v = await caller(client).auth.verifyMagicLink({ token: await magicToken(e) });
+      const v = await signUp(email(`ml-${client}`), client);
       expect(typeof v.sessionToken).toBe("string");
     }
 
     for (const client of [undefined, "web", "unknown"]) {
-      const e = email("webreg");
       const ctx = createTestContext(client ? { headers: { "x-hisaabo-client": client } } : {});
-      const c = factory(ctx);
-      const r = await c.auth.register(reg(e));
-      expect(r.sessionToken).toBeUndefined();
-      expect(ctx.resHeaders.get("Set-Cookie")).toMatch(/^session_id=/);
-      const l = await c.auth.login({ email: e, password: "SecurePass1!" });
-      expect(l.sessionToken).toBeUndefined();
-      const v = await c.auth.verifyMagicLink({ token: await magicToken(e) });
+      const v = await factory(ctx).auth.verifyMagicLink({ token: await magicToken(email("mlweb")) });
       expect(v.sessionToken).toBeUndefined();
-      expect(JSON.stringify(r)).not.toContain("sessionToken\":\"");
+      expect(ctx.resHeaders.get("Set-Cookie")).toMatch(/^session_id=/);
+      expect(JSON.stringify(v)).not.toContain("sessionToken\":\"");
     }
   });
 });

@@ -17,6 +17,7 @@ import {
 } from "../lib/store-order-validation.js";
 import { verifyShippingWebhook, parseWebhookTime } from "../lib/shipping-webhook.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
+import { exceedsArrayLimits, MAX_ARRAY_ITEMS, MAX_TOTAL_ARRAY_ITEMS } from "../lib/json-limits.js";
 
 const SESSION = "A".repeat(64);
 
@@ -45,8 +46,10 @@ describe("rate-limit credential shape", () => {
 
 describe("strict auth procedures", () => {
   it("detects auth procedures including inside batches", () => {
-    expect(countStrictProcedures("/api/trpc/auth.login")).toBe(1);
-    expect(countStrictProcedures("/api/trpc/auth.me,auth.login,auth.login")).toBe(2);
+    expect(countStrictProcedures("/api/trpc/auth.sendMagicLink")).toBe(1);
+    expect(countStrictProcedures("/api/trpc/auth.me,auth.sendMagicLink,auth.verifyMagicLink")).toBe(2);
+    // The removed password procedures are no longer credential endpoints.
+    expect(countStrictProcedures("/api/trpc/auth.login,auth.register")).toBe(0);
     expect(countStrictProcedures("/api/trpc/invoice.list")).toBe(0);
     expect(trpcProcedures("/api/trpc/a.b,c.d")).toEqual(["a.b", "c.d"]);
   });
@@ -145,5 +148,33 @@ describe("trusted client IP", () => {
     expect(getTrustedClientIp(h)).toBeNull();
     process.env.TRUST_CLOUDFLARE = "true";
     expect(getTrustedClientIp(h)).toBe("1.2.3.4");
+  });
+});
+
+describe("JSON array limits (zod 3 memory exhaustion guard)", () => {
+  it("allows realistic inputs, including a full 5,000-row import", () => {
+    const rows = Array.from({ length: 5000 }, (_, i) => ({ name: `Item ${i}`, lineItems: [{ qty: 1 }, { qty: 2 }] }));
+    expect(exceedsArrayLimits({ 0: { json: { rows } } })).toBe(false);
+    expect(exceedsArrayLimits({ ids: Array(500).fill("x") })).toBe(false);
+    expect(exceedsArrayLimits("plain")).toBe(false);
+    expect(exceedsArrayLimits(null)).toBe(false);
+  });
+
+  it("rejects one oversized array, at any depth", () => {
+    expect(exceedsArrayLimits({ ids: Array(MAX_ARRAY_ITEMS + 1).fill(1) })).toBe(true);
+    expect(exceedsArrayLimits({ a: [{ b: { c: Array(MAX_ARRAY_ITEMS + 1).fill(0) } }] })).toBe(true);
+    expect(exceedsArrayLimits({ ids: Array(MAX_ARRAY_ITEMS).fill(1) })).toBe(false);
+  });
+
+  it("rejects many arrays that are each under the per-array cap", () => {
+    const rows = Array.from({ length: 30 }, () => ({ items: Array(MAX_ARRAY_ITEMS).fill(0) }));
+    expect(exceedsArrayLimits({ rows })).toBe(true);
+    expect(exceedsArrayLimits({ rows }, MAX_ARRAY_ITEMS, MAX_TOTAL_ARRAY_ITEMS * 10)).toBe(false);
+  });
+
+  it("walks deep nesting without overflowing the stack", () => {
+    let deep: unknown = [];
+    for (let i = 0; i < 100_000; i++) deep = [deep];
+    expect(exceedsArrayLimits(deep)).toBe(false);
   });
 });

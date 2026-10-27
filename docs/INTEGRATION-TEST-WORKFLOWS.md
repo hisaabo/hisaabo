@@ -56,7 +56,7 @@ FIXTURE: Test Infrastructure
   - Control schema applied (users, tenants, sessions, tenant_members, invitations, magic_link_tokens, api_keys)
   - Tenant schema applied (businesses, parties, items, invoices, etc.)
   - tRPC caller factory with injectable context (user, tenantId, businessId, req, resHeaders)
-  - Helper: createTestUser(email, password, name) -> { userId, sessionId }
+  - Helper: createTestUser(email, name) -> { userId, sessionId }
   - Helper: createTestTenant(name, ownerUserId) -> { tenantId }
   - Helper: createTestBusiness(tenantId, userId, overrides?) -> { businessId, db }
   - Helper: createTestParty(businessId, db, overrides?) -> { partyId }
@@ -74,104 +74,16 @@ FIXTURE: Test Infrastructure
 ### A1. auth.test.ts
 
 **File**: `packages/api/src/routers/auth.ts`
-**Middleware chain**: publicProcedure (register, login, sendMagicLink, verifyMagicLink, confirmEmailChange), protectedProcedure (logout, logoutAll, completeProfile, updateName, requestEmailChange)
+**Middleware chain**: publicProcedure (sendMagicLink, verifyMagicLink, nativeStart, nativeExchange, confirmEmailChange), protectedProcedure (logout, logoutAll, completeProfile, updateName, requestEmailChange)
 
-#### Workflow: Password Registration
-
-```
-describe("auth.register")
-
-PRE-CONDITIONS: Empty users table
-
-STEP 1: Register with valid credentials
-  INPUT: { email: "test@example.com", name: "Test User", password: "securepass1", confirmPassword: "securepass1" }
-  ASSERT:
-    - Returns { user: { id, email, name }, sessionToken }
-    - user.email === "test@example.com"
-    - user.name === "Test User"
-    - sessionToken is a string of length 64
-    - Set-Cookie header contains session_id
-    - Database: users table has row with email "test@example.com"
-    - Database: users.passwordHash is NOT the plaintext password (argon2id hash)
-    - Database: sessions table has row with userId matching user.id
-    - Database: session.expiresAt is ~30 days from now
-    - Database: tenant_members has row linking user to a tenant (auto-created)
-    - IF MULTI_TENANT=true: tenants table has auto-created tenant "{name}'s Organization"
-    - IF MULTI_TENANT=false: user joined "default" tenant
-
-STEP 2: Register with duplicate email
-  INPUT: { email: "test@example.com", name: "Other", password: "securepass1", confirmPassword: "securepass1" }
-  ASSERT:
-    - Throws TRPCError with code "CONFLICT"
-    - Message: "Email already registered"
-    - Database: still only 1 user with this email
-
-STEP 3: Register with mismatched passwords
-  INPUT: { email: "new@example.com", name: "New", password: "password1", confirmPassword: "password2" }
-  ASSERT:
-    - Throws Zod validation error
-    - Error path includes "confirmPassword"
-    - Message: "Passwords don't match"
-
-STEP 4: Register with short password
-  INPUT: { email: "new@example.com", name: "New", password: "short", confirmPassword: "short" }
-  ASSERT:
-    - Throws Zod validation error on password (min 8)
-
-STEP 5: Register with invalid email
-  INPUT: { email: "not-an-email", name: "New", password: "securepass1", confirmPassword: "securepass1" }
-  ASSERT:
-    - Throws Zod validation error on email
-
-STEP 6: Register with empty name
-  INPUT: { email: "new@example.com", name: "", password: "securepass1", confirmPassword: "securepass1" }
-  ASSERT:
-    - Throws Zod validation error on name (min 2)
-
-STEP 7: Register with Turnstile token (when configured)
-  INPUT: { ..., turnstileToken: "invalid-token" }
-  ASSERT:
-    - IF TURNSTILE_SECRET_KEY is set: Throws FORBIDDEN "Verification failed"
-    - IF not set: Turnstile is skipped, registration proceeds
-```
-
-#### Workflow: Password Login
+#### Workflow: Password Sign-in (removed)
 
 ```
-describe("auth.login")
+describe("password sign-in is not exposed")
 
-PRE-CONDITIONS: User "test@example.com" exists with password "securepass1"
-
-STEP 1: Login with correct credentials
-  INPUT: { email: "test@example.com", password: "securepass1" }
+STEP 1: Call auth.register or auth.login
   ASSERT:
-    - Returns { user: { id, email, name }, sessionToken }
-    - Set-Cookie header contains session_id
-    - Database: new session created
-
-STEP 2: Login with wrong password
-  INPUT: { email: "test@example.com", password: "wrongpassword" }
-  ASSERT:
-    - Throws UNAUTHORIZED "Invalid email or password"
-    - No new session created
-
-STEP 3: Login with non-existent email
-  INPUT: { email: "nobody@example.com", password: "anything" }
-  ASSERT:
-    - Throws UNAUTHORIZED "Invalid email or password"
-    - Error message is identical to wrong-password case (no enumeration)
-
-STEP 4: Login for magic-link-only user (no passwordHash)
-  PRE-CONDITIONS: User exists via magic link (passwordHash is null)
-  INPUT: { email: "magiconly@example.com", password: "anything" }
-  ASSERT:
-    - Throws UNAUTHORIZED "Invalid email or password"
-
-STEP 5: Login for user with no tenant membership
-  PRE-CONDITIONS: User exists, tenant_members empty for this user
-  INPUT: { email: "orphan@example.com", password: "securepass1" }
-  ASSERT:
-    - Throws FORBIDDEN "Account has no organization membership"
+    - Throws NOT_FOUND (the procedures no longer exist)
 ```
 
 #### Workflow: Magic Link
@@ -227,7 +139,20 @@ STEP 7: Verify tampered token
   ASSERT:
     - Throws BAD_REQUEST
 
-STEP 8: Rate limiting - 6th request within 15 minutes
+STEP 8: First verification of an unverified account
+  PRE-CONDITIONS: User exists with emailVerified=false, a password_hash, a session and an API key
+  INPUT: { token: "<raw-token-for-that-email>" }
+  ASSERT:
+    - Database: the earlier session and API key are deleted
+    - Database: users.password_hash is NULL, users.emailVerified = true
+    - The new session authenticates; the old one does not
+
+STEP 9: Later sign-in of a verified account
+  PRE-CONDITIONS: Verified user with an existing session and API key
+  ASSERT:
+    - Existing session and API key are kept
+
+STEP 10: Rate limiting - 6th request within 15 minutes
   PRE-CONDITIONS: 5 tokens already created for this email in last 15 min
   INPUT: { email: "ratelimited@example.com" }
   ASSERT:
@@ -2497,17 +2422,10 @@ describe("Zod Schema Validation — Every Input Schema")
 
 FOR EACH schema, test invalid inputs:
 
-=== registerSchema ===
+=== magicLinkRequestSchema ===
   - email: "not-email" -> error
-  - password: "short" -> error (min 8)
-  - password: 129 chars -> error (max 128)
-  - name: "A" -> error (min 2)
-  - name: 101 chars -> error (max 100)
-  - confirmPassword mismatch -> "Passwords don't match"
-
-=== loginSchema ===
-  - email: "" -> error
-  - password: "short" -> error (min 8)
+  - email: 256+ chars -> error (max 255)
+  - email: "  User@Example.COM " -> "user@example.com" (trimmed, lowercased)
 
 === createBusinessSchema ===
   - name: "" -> error (min 1)

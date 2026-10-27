@@ -42,8 +42,6 @@ export function hasPlausibleCredential(headers: {
 
 /** Procedures that accept or probe credentials; limited per IP, never tiered. */
 export const STRICT_PROCEDURES = new Set([
-  "auth.login",
-  "auth.register",
   "auth.sendMagicLink",
   "auth.verifyMagicLink",
   "auth.nativeStart",

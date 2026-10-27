@@ -22,17 +22,17 @@ describe("logSecurityEvent — fail2ban log contract", () => {
   it("emits at warn level with sec:true sentinel and the event/ip fields fail2ban greps for", () => {
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
 
-    logSecurityEvent("login_fail", { ip: "203.0.113.42", reason: "bad_password" });
+    logSecurityEvent("csrf_fail", { ip: "203.0.113.42", reason: "missing_header" });
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const [obj, msg] = warnSpy.mock.calls[0];
     expect(obj).toEqual({
       sec: true,
-      event: "login_fail",
+      event: "csrf_fail",
       ip: "203.0.113.42",
-      reason: "bad_password",
+      reason: "missing_header",
     });
-    expect(msg).toBe("sec login_fail");
+    expect(msg).toBe("sec csrf_fail");
   });
 
   it("inserts ip=\"unknown\" when the caller passes null — keeps the fail2ban regex non-optional on the ip field", () => {
@@ -85,8 +85,7 @@ describe("logSecurityEvent — fail2ban log contract", () => {
       "rate_limit_order",
       "csrf_fail",
       "origin_block",
-      "login_fail",
-      "login_lockout",
+      "ops_auth_fail",
     ];
 
     for (const ev of events) {
@@ -107,7 +106,7 @@ describe("logSecurityEvent — fail2ban log contract", () => {
     // greps for inside the journald MESSAGE field.
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
 
-    logSecurityEvent("login_fail", { ip: "203.0.113.42", path: "/api/trpc/auth.login", reason: "bad_password" });
+    logSecurityEvent("csrf_fail", { ip: "203.0.113.42", path: "/api/trpc/auth.sendMagicLink", reason: "missing_header" });
 
     const [obj] = warnSpy.mock.calls[0];
     const serialised = JSON.stringify(obj);
@@ -117,7 +116,7 @@ describe("logSecurityEvent — fail2ban log contract", () => {
     // extracted correctly. If this regex stops matching, the operator's fail2ban
     // jail will silently stop banning offenders.
     const FAILREGEX =
-      /"sec":true,"event":"(?:login_fail|login_lockout|csrf_fail|origin_block|rate_limit|rate_limit_pdf|rate_limit_store|rate_limit_store_post|rate_limit_order)","ip":"((?:\d{1,3}\.){3}\d{1,3})"/;
+      /"sec":true,"event":"(?:csrf_fail|origin_block|ops_auth_fail|rate_limit|rate_limit_pdf|rate_limit_store|rate_limit_store_post|rate_limit_order)","ip":"((?:\d{1,3}\.){3}\d{1,3})"/;
 
     const match = serialised.match(FAILREGEX);
     expect(match).not.toBeNull();
