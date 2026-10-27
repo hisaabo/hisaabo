@@ -7,8 +7,10 @@
   "types": "./src/index.ts",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
     "build": "tsup",
     "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -27,6 +29,7 @@
     "hono": "^4.13.13",
     "nanoid": "^5.0.0",
     "pdfkit": "^0.20.2",
+    "pg-boss": "12.37.1",
     "pino": "^10.4.0",
     "postgres": "^3.4.9",
     "qrcode": "^1.5.4",

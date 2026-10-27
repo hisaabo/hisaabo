@@ -1,7 +1,9 @@
 # Background jobs: queue, workers and the operator dashboard
 
-Status: **Phase 1 (foundations) in progress.** Phase 2 moves existing
-in-request and in-process work onto the queue, one PR per process.
+Status: **Phase 1 (foundations) in progress.** Steps 1–3 (queue core, worker,
+deployment wiring) are implemented; steps 4–6 (operator auth, `/ops`, TUI)
+follow. Phase 2 moves existing in-request and in-process work onto the queue,
+one PR per process.
 
 ## 1. Why
 
@@ -58,10 +60,12 @@ in production.
 ```
 
 - **Schema install.** The pg-boss schema is installed and upgraded by the
-  existing migration step (`packages/db/src/migrate.ts`). That step runs
+  existing migration step (`packages/db/src/migrate.ts` →
+  `installQueueSchema` in `packages/db/src/queue-schema.ts`). That step runs
   before the API starts, under the existing migrations advisory lock. API and
   worker start pg-boss with `migrate: false`, so neither process ever
-  changes the schema at runtime.
+  changes the schema at runtime. pg-boss is therefore a dependency of both
+  `@hisaabo/db` (migrations) and `@hisaabo/api`.
 - **Maintenance.** pg-boss maintenance (expiry, retention, monitoring, cron)
   runs only in worker processes (`supervise: true`, `schedule: true`). The
   API's pg-boss instance has both off and only sends.
@@ -79,10 +83,10 @@ in production.
 | `$timeout` | `timeoutSeconds` (pg-boss `expireInSeconds`), an `AbortSignal` in the handler, and a hard thread kill for CPU jobs |
 | Long jobs | `heartbeatSeconds`; the job is failed when the heartbeat stops |
 | `ShouldBeUnique`, `uniqueFor`, `uniqueId` | `unique: { key: (p) => string, forSeconds }`; maps to `singletonKey` and `singletonSeconds` |
-| `WithoutOverlapping`, `RateLimited` middleware | `tenantConcurrency` (pg-boss `groupConcurrency`, group = tenant, enforced across all workers) and `policy: "singleton" \| "stately"` |
+| `WithoutOverlapping`, `RateLimited` middleware | `tenantConcurrency` (see §5.2 rule 7) and `policy: "singleton" \| "stately"` |
 | `ShouldBeEncrypted` | `encrypt: ["field", …]`: the listed payload fields are AES-256-GCM encrypted with `ENCRYPTION_KEY` (existing `encryptField`) |
-| `failed()` method | `onFailed(payload, error, ctx)` runs once when retries are exhausted |
-| `failed_jobs` table | pg-boss `failed` state, retained `QUEUE_FAILED_RETENTION_DAYS` (default 14) |
+| `failed()` method | `onFailed(payload, error, ctx)` runs once when retries are exhausted (or on a `PermanentError`) |
+| `failed_jobs` table | The job's dead-letter queue `<name>.dead`: pg-boss copies a job there when it fails for good. No worker consumes it; its jobs are kept `QUEUE_FAILED_RETENTION_DAYS` (default 14) and re-queued with pg-boss `redrive()`. (pg-boss has one retention for finished jobs, so failed jobs cannot outlive completed ones in the original queue.) |
 | `queue:failed`, `queue:retry`, `queue:forget`, `queue:flush`, `queue:clear` | `ops queue failed`, `ops queue retry`, `ops queue forget`, `ops queue flush`, `ops queue clear`, plus dashboard actions (admin + step-up) |
 | Scheduler (`$schedule->job(...)->cron(...)`) | `defineSchedule({ name, cron, job, payload })`; maps to pg-boss `schedule()`, which runs once per tick across all workers |
 | Horizon supervisors / processes | Worker pools (`queue/pools.ts`); `QUEUE_POOLS` chooses which pools a process runs |
@@ -163,12 +167,27 @@ Every job's pg-boss `data` is an envelope, not the raw payload:
    `runInThread(modulePath, input, { timeoutMs, resourceLimits })`, which runs
    it in a `worker_threads` Worker and terminates it on timeout. This is the
    only safe way to bound synchronous code such as regex evaluation.
-7. **Per-tenant fairness.** Default `tenantConcurrency: 2` per queue (pg-boss
-   global group concurrency). Heavy queues use 1. One tenant can never occupy
-   every worker slot.
+7. **Per-tenant fairness.** Default `tenantConcurrency: 2` per queue. Heavy
+   queues use 1.
+   - `tenantConcurrency: 1` is **strict**: the queue uses pg-boss's
+     `singleton` policy with `singletonKey` = tenant id, which a unique index
+     enforces across all workers (`defineJob` sets `tenantKeyed`). Not
+     available together with `unique` (both need the singleton key).
+   - Higher caps use pg-boss `groupConcurrency` (group = tenant). It is
+     **approximate**: each worker's fetch is one statement under READ
+     COMMITTED, so workers polling at the same instant can each claim a job
+     for the same tenant. The overshoot is bounded by the number of workers
+     polling that queue at once, which is enough to keep one tenant from
+     occupying every slot.
 8. **Errors.**
    - The error class decides retry: `RetryableError` vs `PermanentError`;
-     unknown errors are retried.
+     unknown errors are retried. Workers use pg-boss `perJobResults`: a
+     `PermanentError`, an invalid envelope or payload, or a failed tenant
+     re-validation settles the job as `deadletter` (no retries); other errors
+     settle as `failed` and pg-boss retries them.
+   - `runInThread` timeouts throw `ThreadTimeoutError`, a `PermanentError`:
+     CPU blow-ups are deterministic, so retrying would only burn the same
+     time again.
    - Error messages are stored but run through the same masking as logs
      (emails, phone numbers, GSTINs).
    - Stack traces go to worker logs only, never to the dashboard.
@@ -184,20 +203,27 @@ interface JobContext {
   logger: Logger;                 // pino child: jobId, queue, tenant handle
   signal: AbortSignal;
   heartbeat(): Promise<void>;     // for heartbeatSeconds jobs
-  progress(pct: number, note?: string): Promise<void>;  // shown in dashboard
+  progress(pct: number, note?: string): Promise<void>;  // logged; shown in the dashboard from Phase 3
 }
 ```
 
 ## 6. Queues and worker pools
 
 - One pg-boss queue per job name.
-- Queues are created or updated idempotently from the registry:
-  - by the migration step;
-  - again at worker start (`createQueue` / `updateQueue`), so code and
-    database options cannot drift.
-- Pools group queues for a worker process (`queue/pools.ts`):
+- Queues (and their `<name>.dead` dead-letter queues) are created or updated
+  idempotently from the registry (`queue/registry.ts`):
+  - at worker start (`createQueue` / `updateQueue`), so code and database
+    options cannot drift;
+  - lazily, once per process, by `dispatch()` when the queue does not exist
+    yet.
 
-| Pool | Queues | Per-process concurrency | Notes |
+  The migration step installs only the pgboss schema: `@hisaabo/db` cannot
+  import the API's job registry. A queue's policy cannot be changed in place;
+  a mismatch is logged and the stored policy kept.
+- Pools group queues for a worker process (`queue/config.ts`). The
+  concurrency applies to each queue in the pool (pg-boss `localConcurrency`):
+
+| Pool | Queues | Per-queue concurrency per process | Notes |
 |---|---|---|---|
 | `default` | short I/O jobs (emails, e-invoice submit, notifications) | 8 | |
 | `heavy` | imports, exports, statement processing, report builds | 2 | CPU parts via `runInThread`; `tenantConcurrency: 1` |
@@ -207,19 +233,23 @@ interface JobContext {
   - `QUEUE_POOLS=default,heavy,system` (the default) runs all pools, so heavy
     workers can be scaled out separately.
   - `QUEUE_CONCURRENCY_<POOL>` overrides a pool's concurrency.
-- Polling: `pollingIntervalSeconds: 2` by default. LISTEN/NOTIFY wake-up is
-  enabled when the database URL is direct (not PgBouncer transaction
-  pooling), with polling kept as a fallback.
+- Polling: every `QUEUE_POLLING_INTERVAL_SECONDS` (default 2, minimum 0.5).
+  pg-boss's LISTEN/NOTIFY wake-up is not enabled in Phase 1; it needs a
+  direct, non-PgBouncer connection and can be added per queue later.
 - Retention:
 
 | Data | Setting | Default |
 |---|---|---|
-| Completed jobs | `QUEUE_COMPLETED_RETENTION_HOURS` | 24 |
-| Failed jobs | `QUEUE_FAILED_RETENTION_DAYS` | 14 |
+| Completed (and failed originals) | `QUEUE_COMPLETED_RETENTION_HOURS` → pg-boss `deleteAfterSeconds` | 24 |
+| Failed jobs (dead-letter copies) and jobs still waiting | `QUEUE_FAILED_RETENTION_DAYS` → `retentionSeconds` | 14 |
 | Stats snapshots | `queueStatRetentionDays` | 14 |
 
 - **Pause.** A worker reads `queue_controls` every 10 s and calls
   `offWork` / `work` for paused and resumed queues. In-flight jobs finish.
+- **Implementation.** `queue/runtime.ts` (`startWorkerRuntime`) is the worker;
+  `src/worker.ts` adds env validation (`validateEnv({ role: "worker" })` skips
+  API-only vars such as `CORS_ORIGINS`), start-up retry with backoff, the
+  heartbeat file and signal handling.
 - **Shutdown.** On SIGTERM:
   - stop fetching;
   - abort `ctx.signal` after a grace period (`QUEUE_SHUTDOWN_GRACE_SECONDS`,
@@ -240,7 +270,7 @@ interface JobContext {
 | Tenant A's job acts on tenant B's data | Envelope tenant is set by server code from `ctx.tenantId`; worker re-resolves tenant and business (rule 4). No API accepts a job id or queue name from tenants in Phase 1. |
 | Forged or tampered job rows | Only someone with database write access can forge one, and that is already full compromise. Still, the worker never trusts the envelope beyond ids and re-checks them. |
 | Secrets or PII at rest in job rows | Ids only (rule 3); `encrypt` fields use AES-256-GCM; failed-job errors are masked; retention limits apply. |
-| Job flooding by one tenant (queue DoS) | Per-tenant group concurrency, `unique` de-duplication, dispatch-side per-tenant quotas (max queued jobs per tenant per queue, default 50, rejected with TOO_MANY_REQUESTS), and API rate limits. |
+| Job flooding by one tenant (queue DoS) | Per-tenant concurrency (§5.2 rule 7), `unique` de-duplication, dispatch-side per-tenant quotas (max queued jobs per tenant per queue, default 50, rejected with TOO_MANY_REQUESTS), and API rate limits. |
 | Poison jobs | Capped retries with backoff, then `failed`; `PermanentError` skips retries. |
 | Runaway CPU (e.g. ReDoS) | `runInThread` with timeout and `resourceLimits`; plus RE2 for user regexes (Phase 2). |
 | Lost work on restart or deploy | Durable rows; expired active jobs are retried. |
@@ -427,6 +457,9 @@ It stays strictly read-only; actions belong to `ops`.
 | `QUEUE_COMPLETED_RETENTION_HOURS` | 24 | |
 | `QUEUE_FAILED_RETENTION_DAYS` | 14 | |
 | `QUEUE_SHUTDOWN_GRACE_SECONDS` | 25 | |
+| `QUEUE_POLLING_INTERVAL_SECONDS` | 2 | How often idle workers poll for jobs |
+| `QUEUE_HEARTBEAT_FILE` | `/tmp/worker-heartbeat` | Worker liveness file for the healthcheck |
+| `QUEUE_PING_SCHEDULE` | `false` | Schedule the hourly `system.ping` job |
 | `QUEUE_DASHBOARD_ENABLED` | `false` | Enables `/ops` |
 | `OPS_IP_ALLOWLIST` | (unset) | CIDRs allowed to reach `/ops` |
 | `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | 15 / 8 / 5 | |

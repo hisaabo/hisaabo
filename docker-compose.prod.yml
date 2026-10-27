@@ -33,7 +33,7 @@
 #   TRUST_PROXY_HOPS=0 if you publish the API port directly (no proxy).
 #
 # Hardening:
-#   api runs as the unprivileged `node` user with a read-only root filesystem,
+#   api and worker run as the unprivileged `node` user with a read-only root filesystem,
 #   all capabilities dropped, and only /tmp (tmpfs) and /storage (volume) writable.
 
 services:
@@ -73,6 +73,45 @@ services:
       driver: journald
       options:
         tag: "hisaabo-api"
+
+  # Background job worker (docs/architecture/queue.md). Same image as `api`,
+  # no ports. Waits for the API's migration step to install the job queue
+  # schema. Scale heavy work with QUEUE_POOLS / QUEUE_CONCURRENCY_<POOL> or by
+  # running more worker containers.
+  worker:
+    image: ${HISAABO_API_IMAGE:-ghcr.io/hisaabo/hisaabo-api:latest}
+    restart: unless-stopped
+    command: worker
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hisaabo}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}@postgres:5432/${POSTGRES_DB:-hisaabo}
+      NODE_ENV: production
+      UV_THREADPOOL_SIZE: "8"
+      STORAGE_LOCAL_DIR: /storage/objects
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - api_storage:/storage
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The image's HEALTHCHECK probes the API port; the worker proves liveness
+    # by touching /tmp/worker-heartbeat every 10 s.
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-heartbeat').mtimeMs < 60000 ? 0 : 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: journald
+      options:
+        tag: "hisaabo-worker"
 
   postgres:
     image: postgres:16-alpine

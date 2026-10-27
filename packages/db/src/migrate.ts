@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { backfillStoreSlugRegistry, formatBackfillReport } from "./backfill-store-slugs.js";
+import { installQueueSchema } from "./queue-schema.js";
 
 // ── Path resolution ──────────────────────────────────────────
 //
@@ -245,7 +246,11 @@ async function runMigrations(
   databaseUrl: string,
   migrationsFolder: string,
   label: string,
-  opts?: { migrationsTable?: string },
+  opts?: {
+    migrationsTable?: string;
+    /** Extra step run after the drizzle migrations, still under the advisory lock. */
+    afterMigrate?: () => Promise<void>;
+  },
 ): Promise<MigrationResult> {
   const start = Date.now();
   const client = postgres(databaseUrl, {
@@ -279,6 +284,7 @@ async function runMigrations(
           ...(opts?.migrationsTable ? { migrationsTable: opts.migrationsTable } : {}),
         });
       }
+      await opts?.afterMigrate?.();
     } finally {
       await client.unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`);
     }
@@ -296,6 +302,13 @@ async function runMigrations(
   }
 }
 
+// The job queue (pg-boss) lives in the control DB — the single DB when
+// self-hosted, never a tenant DB.
+async function installQueue(databaseUrl: string, label: string): Promise<void> {
+  const version = await installQueueSchema(databaseUrl);
+  log("info", `${label}: job queue schema ready`, { schema: "pgboss", version });
+}
+
 // ── Self-hosted mode ─────────────────────────────────────────
 
 async function migrateSelfHosted(): Promise<boolean> {
@@ -311,7 +324,9 @@ async function migrateSelfHosted(): Promise<boolean> {
   }
 
   log("info", "Self-hosted mode: running unified migrations", { target: "DATABASE_URL" });
-  const result = await runMigrations(databaseUrl, MIGRATIONS_UNIFIED, "unified");
+  const result = await runMigrations(databaseUrl, MIGRATIONS_UNIFIED, "unified", {
+    afterMigrate: () => installQueue(databaseUrl, "unified"),
+  });
   return result.success;
 }
 
@@ -333,6 +348,7 @@ async function migrateMultiTenant(): Promise<boolean> {
   log("info", "Multi-tenant mode: running control DB migrations", { target: "CONTROL_DATABASE_URL" });
   const controlResult = await runMigrations(controlUrl, MIGRATIONS_CONTROL, "control", {
     migrationsTable: "__drizzle_control_migrations",
+    afterMigrate: () => installQueue(controlUrl, "control"),
   });
   if (!controlResult.success) {
     log("error", "Control DB migration failed — cannot proceed to tenant migrations");

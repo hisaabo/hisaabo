@@ -33,7 +33,7 @@ RUN pnpm --filter @hisaabo/db exec esbuild src/migrate-cli.ts \
       --bundle --platform=node --format=esm \
       --target=node22 \
       --outfile=dist/migrate.mjs \
-      --external:postgres --external:drizzle-orm --external:dotenv
+      --external:postgres --external:drizzle-orm --external:dotenv --external:pg-boss
 
 # ── Stage 2: Production runtime ────────────────────────────────
 FROM node:22-alpine AS runtime

@@ -91,6 +91,14 @@
 | `SMS_WEBHOOK_SECRET` | With `SMS_PROVIDER=webhook` | HMAC-SHA256 key; each request carries `X-Hisaabo-Signature` (hex of the body HMAC) | |
 | `SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP` | No | `true` rejects carrier webhooks that lack a valid timestamp (optional by default) | `false` |
 | `BACKUP_ENCRYPTION_KEY` | With offsite backup | Passphrase for backup encryption; offsite upload is refused without it | |
+| `QUEUE_DATABASE_URL` | No | Database holding the job queue (`pgboss` schema). Defaults to `CONTROL_DATABASE_URL`, then `DATABASE_URL`; only set it to point at the same database through a different (e.g. direct) URL | `postgresql://...` |
+| `QUEUE_POOLS` | No | Worker only. Comma-separated pools this worker runs: `default`, `heavy`, `system` (default: all) | `heavy` |
+| `QUEUE_CONCURRENCY_DEFAULT` / `_HEAVY` / `_SYSTEM` | No | Worker only. Jobs worked at once per queue in that pool, per worker process (defaults 8 / 2 / 2) | `4` |
+| `QUEUE_COMPLETED_RETENTION_HOURS` | No | How long completed jobs are kept (default 24) | `24` |
+| `QUEUE_FAILED_RETENTION_DAYS` | No | How long failed (dead-lettered) jobs are kept for retry (default 14) | `14` |
+| `QUEUE_SHUTDOWN_GRACE_SECONDS` | No | Worker only. Time in-flight jobs get to finish on SIGTERM before they are aborted (default 25) | `25` |
+| `QUEUE_POLLING_INTERVAL_SECONDS` | No | Worker only. Idle poll interval in seconds (default 2, minimum 0.5) | `2` |
+| `QUEUE_PING_SCHEDULE` | No | Worker only. `true` schedules the hourly `system.ping` diagnostic job | `false` |
 
 ### GitHub Actions Secrets
 
@@ -145,11 +153,21 @@ curl http://localhost:3000/health
 ### Updating
 
 ```bash
-docker compose -f docker-compose.prod.yml pull api
-docker compose -f docker-compose.prod.yml up -d api
+docker compose -f docker-compose.prod.yml pull api worker
+docker compose -f docker-compose.prod.yml up -d api worker
 ```
 
-The entrypoint script runs pending migrations automatically before starting the server.
+The entrypoint script runs pending migrations automatically before starting the server (the `api` container only).
+
+### Background job worker
+
+Long-running and scheduled work runs in a separate `worker` container built from the same image (`command: worker`); see [the queue design](architecture/queue.md). Jobs live in Postgres (the `pgboss` schema, installed by the API's migration step), so the worker needs no extra services.
+
+- The worker never runs migrations. It starts after the API is healthy and, if the queue schema is not there yet, retries with backoff until it is.
+- It writes `/tmp/worker-heartbeat` every 10 seconds; the compose healthcheck fails when that file is older than 60 seconds.
+- On `SIGTERM` it stops taking jobs and gives running ones `QUEUE_SHUTDOWN_GRACE_SECONDS` to finish. Jobs that still don't finish are retried by another worker once they time out.
+- Scale out by running more worker containers (`docker compose up -d --scale worker=2`), or dedicate containers to a pool with `QUEUE_POOLS=heavy`.
+- Check it is consuming jobs: `docker compose -f docker-compose.prod.yml logs worker` shows `queue worker started`; set `QUEUE_PING_SCHEDULE=true` to get an hourly `pong` line.
 
 ### Admin dashboard
 
@@ -240,7 +258,7 @@ Desktop, mobile and the CLI do not show a password or magic-link form. They open
 
 ## ONCE all-in-one image
 
-`Dockerfile.once` bundles PostgreSQL 16 and the API under s6-overlay. Persistent state lives in `/storage` (`pgdata`, `run`, `backups`, `wal_archive`, `secrets`).
+`Dockerfile.once` bundles PostgreSQL 16, the API and the background job worker under s6-overlay (the worker is its own s6 service and waits for the API's migrations). Persistent state lives in `/storage` (`pgdata`, `run`, `backups`, `wal_archive`, `secrets`).
 
 - **Database password:** PostgreSQL uses `scram-sha-256` for the local socket, `127.0.0.1` and `::1`; `trust` is never used. A random password is generated on first boot and kept at `/storage/secrets/pg_app_password` (mode `0600`). The API, migrations and the `/hooks/pre-backup` and `/hooks/post-restore` hooks read it automatically, so no configuration is needed.
 - **Upgrading an existing install:** on the first boot of the new image the password is created and applied and `pg_hba.conf` is rewritten; the previous file is kept as `/storage/pgdata/pg_hba.conf.bak.<timestamp>`. Later boots change nothing.
