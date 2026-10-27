@@ -60,7 +60,6 @@ COPY packages/db/drizzle-tenant/ packages/db/drizzle-tenant/
 COPY packages/shared/package.json packages/shared/
 
 # Install production deps only — keeps the image lean (no tsup, vitest, etc.)
-# argon2 needs a rebuild on alpine (native addon).
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 

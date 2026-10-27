@@ -589,11 +589,11 @@ describe("CSRF middleware — onReject callback (fail2ban integration)", () => {
         onReject,
       }),
     );
-    app.all("/api/trpc/auth.login", (c) => c.json({ ok: true }));
+    app.all("/api/trpc/auth.sendMagicLink", (c) => c.json({ ok: true }));
     app.all("/store/foo/order", (c) => c.json({ ok: true }));
 
     // Cookie POST without X-Requested-With would otherwise trip csrf_fail.
-    await app.request("/api/trpc/auth.login", {
+    await app.request("/api/trpc/auth.sendMagicLink", {
       method: "POST",
       headers: { "cookie": "session_id=real-browser-session" },
       body: "{}",

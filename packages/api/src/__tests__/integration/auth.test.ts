@@ -3,10 +3,11 @@
  *
  * These tests exercise the full tRPC middleware chain against a real PostgreSQL
  * test database. They cover:
- *   - auth.register: user creation, session issuance, Argon2id hashing, validation
- *   - auth.login: credential verification, no-enumeration invariant
+ *   - password sign-in removed: auth.register / auth.login are not routable
  *   - auth.me: authenticated and unauthenticated responses
  *   - auth.logout: session invalidation
+ *   - auth.verifyMagicLink: sign-up, single use, and revocation of credentials
+ *     issued before an account's email was first verified
  *
  * Lifecycle:
  *   beforeAll  — nothing (each describe block sets up its own fixtures)
@@ -19,10 +20,9 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi, type MockInstance } from "vitest";
-import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations } from "@hisaabo/db";
+import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, apiKeys } from "@hisaabo/db";
 import { isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
@@ -34,6 +34,7 @@ import {
 import { getControlDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
 import { createTestContext } from "../helpers/test-context.js";
 import { createCallerFactory } from "../../trpc.js";
+import { createContext } from "../../context.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
 
@@ -87,262 +88,22 @@ afterAll(async () => {
   await closeTestDb();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// auth.register
-// ─────────────────────────────────────────────────────────────────────────────
-
 // Session ids are never exposed by the API; clients refer to a session by sha256(id).
 const hashSessionId = (id: string) => createHash("sha256").update(id).digest("hex");
 
-describe("auth.register", () => {
-  const db = getControlDb();
-
-  it("registers a new user with email and password — creates user, session, and default tenant membership", async () => {
-    const caller = unauthCaller("mobile");
-
-    const result = await caller.auth.register({
-      email: "ramesh.new@vyapar.in",
-      name: "Ramesh Kumar",
-      password: "SecurePass1!",
-      confirmPassword: "SecurePass1!",
-    });
-
-    // Returned shape is correct
-    expect(result.user.email).toBe("ramesh.new@vyapar.in");
-    expect(result.user.name).toBe("Ramesh Kumar");
-    expect(result.user.id).toBeTruthy();
-    expect(typeof result.sessionToken).toBe("string");
-    expect(result.sessionToken!.length).toBeGreaterThan(30);
-
-    // User row persisted in control DB
-    const [dbUser] = await db.select().from(users).where(eq(users.email, "ramesh.new@vyapar.in")).limit(1);
-    expect(dbUser).toBeDefined();
-    expect(dbUser!.email).toBe("ramesh.new@vyapar.in");
-
-    // Password is NOT stored in plaintext — the hash must start with $argon2id$
-    expect(dbUser!.passwordHash).not.toBe("SecurePass1!");
-    expect(dbUser!.passwordHash).toMatch(/^\$argon2id\$/);
-
-    // Session row created in control DB
-    const [dbSession] = await db.select().from(sessions).where(eq(sessions.userId, dbUser!.id)).limit(1);
-    expect(dbSession).toBeDefined();
-    // Session expires ~30 days from now: check it's at least 29 days in the future
-    const msUntilExpiry = dbSession!.expiresAt.getTime() - Date.now();
-    // Bearer clients (mobile here) get the 7-day sliding window
-    expect(msUntilExpiry).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
-  });
-
-  it("rejects duplicate email registration — returns CONFLICT without creating a second user", async () => {
-    const caller = unauthCaller();
-
-    // First registration
-    await caller.auth.register({
-      email: "duplicate@vyapar.in",
-      name: "First User",
-      password: "SecurePass1!",
-      confirmPassword: "SecurePass1!",
-    });
-
-    // Second registration with same email
-    await expect(
-      caller.auth.register({
-        email: "duplicate@vyapar.in",
-        name: "Second User",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      })
-    ).rejects.toMatchObject({
-      code: "CONFLICT",
-      message: "Email already registered",
-    });
-
-    // Still only one user with this email
-    const rows = await db.select().from(users).where(eq(users.email, "duplicate@vyapar.in"));
-    expect(rows).toHaveLength(1);
-  });
-
-  it("rejects mismatched confirmPassword — Zod validation error on confirmPassword field", async () => {
-    const caller = unauthCaller();
-
-    await expect(
-      caller.auth.register({
-        email: "mismatch@vyapar.in",
-        name: "Someone",
-        password: "SecurePass1!",
-        confirmPassword: "DifferentPass1!",
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      // tRPC wraps Zod errors as BAD_REQUEST
-      return err instanceof TRPCError && err.code === "BAD_REQUEST";
-    });
-  });
-
-  it("rejects password shorter than 8 characters — Zod min(8) validation on password field", async () => {
-    const caller = unauthCaller();
-
-    await expect(
-      caller.auth.register({
-        email: "shortpw@vyapar.in",
-        name: "Someone",
-        password: "abc",
-        confirmPassword: "abc",
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      return err instanceof TRPCError && err.code === "BAD_REQUEST";
-    });
-  });
-
-  it("rejects invalid email format — Zod email() validation", async () => {
-    const caller = unauthCaller();
-
-    await expect(
-      caller.auth.register({
-        email: "not-an-email",
-        name: "Someone",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      return err instanceof TRPCError && err.code === "BAD_REQUEST";
-    });
-  });
-
-  it("rejects name shorter than 2 characters — Zod min(2) validation on name field", async () => {
-    const caller = unauthCaller();
-
-    await expect(
-      caller.auth.register({
-        email: "shortname@vyapar.in",
-        name: "A",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      return err instanceof TRPCError && err.code === "BAD_REQUEST";
-    });
-  });
-
-  it("stores password as Argon2id hash — plaintext is never persisted in the users table", async () => {
-    const caller = unauthCaller();
-    const email = "argon2check@vyapar.in";
-
-    await caller.auth.register({
-      email,
-      name: "Hash Checker",
-      password: "PlainTextPassword1!",
-      confirmPassword: "PlainTextPassword1!",
-    });
-
-    const [dbUser] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    expect(dbUser).toBeDefined();
-
-    // Must start with Argon2id identifier
-    expect(dbUser!.passwordHash).toMatch(/^\$argon2id\$/);
-    // Must NOT contain the plaintext
-    expect(dbUser!.passwordHash).not.toContain("PlainTextPassword1!");
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
-// auth.login
+// Password sign-in removed
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("auth.login", () => {
-  // Pre-condition: user already exists in DB (via fixtures, no roundtrip through register)
-  let loginUserId: string;
+describe("password sign-in is not exposed", () => {
+  it("auth.register and auth.login are not procedures on the router", async () => {
+    expect(Object.keys(appRouter._def.procedures)).not.toContain("auth.register");
+    expect(Object.keys(appRouter._def.procedures)).not.toContain("auth.login");
 
-  beforeAll(async () => {
-    // Create a user with a real Argon2id hash of "Test@1234!" using the auth.register
-    // flow so we have a known password we can verify against.
-    const caller = unauthCaller();
-    const result = await caller.auth.register({
-      email: "login.test@vyapar.in",
-      name: "Login Tester",
-      password: "Test@1234!",
-      confirmPassword: "Test@1234!",
-    });
-    loginUserId = result.user.id;
-  });
-
-  it("succeeds with correct email and password — returns user object and session token", async () => {
-    const caller = unauthCaller("desktop");
-    const result = await caller.auth.login({
-      email: "login.test@vyapar.in",
-      password: "Test@1234!",
-    });
-
-    expect(result.user.email).toBe("login.test@vyapar.in");
-    expect(result.user.id).toBe(loginUserId);
-    expect(typeof result.sessionToken).toBe("string");
-    expect(result.sessionToken!.length).toBeGreaterThan(30);
-
-    // A new session row should now exist
-    const db = getControlDb();
-    const [session] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, result.sessionToken!))
-      .limit(1);
-    expect(session).toBeDefined();
-    expect(session!.userId).toBe(loginUserId);
-  });
-
-  it("login with wrong password returns UNAUTHORIZED — does not leak whether email exists", async () => {
-    const caller = unauthCaller();
-    await expect(
-      caller.auth.login({
-        email: "login.test@vyapar.in",
-        password: "WrongPassword!",
-      })
-    ).rejects.toMatchObject({
-      code: "UNAUTHORIZED",
-      message: "Invalid email or password",
-    });
-  });
-
-  it("login with non-existent email returns the same UNAUTHORIZED error — no user enumeration", async () => {
-    const caller = unauthCaller();
-
-    let wrongPasswordError: TRPCError | undefined;
-    let noUserError: TRPCError | undefined;
-
-    try {
-      await caller.auth.login({ email: "login.test@vyapar.in", password: "WrongPw1!" });
-    } catch (err) {
-      if (err instanceof TRPCError) wrongPasswordError = err;
-    }
-
-    try {
-      await caller.auth.login({ email: "nobody.exists@vyapar.in", password: "Anything1!" });
-    } catch (err) {
-      if (err instanceof TRPCError) noUserError = err;
-    }
-
-    // Both cases must produce identical code and message — no enumeration possible
-    expect(wrongPasswordError).toBeDefined();
-    expect(noUserError).toBeDefined();
-    expect(wrongPasswordError!.code).toBe(noUserError!.code);
-    expect(wrongPasswordError!.message).toBe(noUserError!.message);
-  });
-
-  it("login for a user with no passwordHash (magic-link-only account) returns UNAUTHORIZED", async () => {
-    // Insert a user without a password hash to simulate a magic-link-only account
-    const _db = getControlDb();
-    const tenant = await createTenant({ name: "MagicOnly Org" });
-    const magicUser = await createUser({
-      email: "magiconly@vyapar.in",
-      passwordHash: null as unknown as string,
-      emailVerified: true,
-    });
-    await addMember(tenant.id, magicUser.id, "owner");
-
-    const caller = unauthCaller();
-    await expect(
-      caller.auth.login({ email: "magiconly@vyapar.in", password: "Anything1!" })
-    ).rejects.toMatchObject({
-      code: "UNAUTHORIZED",
-      message: "Invalid email or password",
-    });
+    const auth = unauthCaller().auth as unknown as Record<string, (input: unknown) => Promise<unknown>>;
+    const credentials = { email: "nopassword@vyapar.in", password: "SecurePass1!", confirmPassword: "SecurePass1!", name: "No Password" };
+    await expect(auth.register!(credentials)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(auth.login!(credentials)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 
@@ -511,19 +272,6 @@ describe("auth.sendMagicLink — Turnstile is never skipped by a client header",
     expect(sendSpy).not.toHaveBeenCalled();
     delete process.env.TURNSTILE_SECRET_KEY;
   });
-
-  it("register requires a Turnstile token when configured, even for the desktop client", async () => {
-    process.env.TURNSTILE_SECRET_KEY = "test-secret";
-    await expect(
-      unauthCaller("desktop").auth.register({
-        email: "turnstile-register@vyapar.in",
-        name: "No Token",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
-    delete process.env.TURNSTILE_SECRET_KEY;
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,12 +318,7 @@ describe("auth.verifyMagicLink", () => {
     const caller = unauthCaller();
     const email = "magic-link-existing@vyapar.in";
 
-    await caller.auth.register({
-      email,
-      name: "Existing User",
-      password: "SecurePass1!",
-      confirmPassword: "SecurePass1!",
-    });
+    await createUser({ email, name: "Existing User" });
 
     const rawToken = "test-magic-existing-" + Date.now();
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
@@ -588,6 +331,73 @@ describe("auth.verifyMagicLink", () => {
     const result = await caller.auth.verifyMagicLink({ token: rawToken });
     expect(result.user.email).toBe(email);
     expect(result.isNewUser).toBe(false);
+  });
+
+  // ── Accounts created before their email was proven ─────────────────────
+  //
+  // A legacy password sign-up could create an account (with a session and API
+  // keys) for an email the creator did not own. The first magic link to that
+  // mailbox must not inherit any of it.
+  it("revokes pre-verification sessions and API keys and clears the password on first verification", async () => {
+    const email = "legacy-unverified@vyapar.in";
+    const legacy = await createUser({ email, emailVerified: false, passwordHash: "$argon2id$v=19$legacy" });
+    const tenant = await createTenant();
+    await addMember(tenant.id, legacy.id, "owner");
+    const oldSession = await createSession(legacy.id, tenant.id);
+    await db.insert(apiKeys).values({
+      userId: legacy.id, tenantId: tenant.id, keyHash: "legacy-key-hash", keyPrefix: "hisaabo_key_legacy", name: "legacy",
+    });
+
+    const rawToken = "test-magic-legacy-" + Date.now();
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    const result = await unauthCaller("desktop").auth.verifyMagicLink({ token: rawToken });
+    expect(result.isNewUser).toBe(false);
+
+    const remaining = await db.select().from(sessions).where(eq(sessions.userId, legacy.id));
+    expect(remaining.map((r) => r.id)).toEqual([result.sessionToken]);
+    expect(remaining.map((r) => r.id)).not.toContain(oldSession.id);
+    expect(await db.select().from(apiKeys).where(eq(apiKeys.userId, legacy.id))).toHaveLength(0);
+
+    const [dbUser] = await db.select().from(users).where(eq(users.id, legacy.id));
+    expect(dbUser!.emailVerified).toBe(true);
+    expect(dbUser!.passwordHash).toBeNull();
+
+    // The new session authenticates through the real context; the old one does not.
+    const bearer = (token: string) => createContext({
+      req: new Request("http://localhost:3000/api/trpc/auth.me", { headers: { authorization: `Bearer ${token}` } }),
+      resHeaders: new Headers(),
+      info: {} as never,
+    });
+    expect((await bearer(result.sessionToken!)).user?.id).toBe(legacy.id);
+    expect((await bearer(oldSession.id)).user).toBeNull();
+  });
+
+  it("keeps a verified user's existing sessions and API keys on a later magic-link sign-in", async () => {
+    const email = "verified-keeps@vyapar.in";
+    const user = await createUser({ email });
+    const tenant = await createTenant();
+    await addMember(tenant.id, user.id, "owner");
+    const existing = await createSession(user.id, tenant.id);
+    await db.insert(apiKeys).values({
+      userId: user.id, tenantId: tenant.id, keyHash: "verified-key-hash", keyPrefix: "hisaabo_key_verified", name: "cli",
+    });
+
+    const rawToken = "test-magic-verified-" + Date.now();
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    await unauthCaller("desktop").auth.verifyMagicLink({ token: rawToken });
+
+    const remaining = await db.select().from(sessions).where(eq(sessions.userId, user.id));
+    expect(remaining.map((r) => r.id)).toContain(existing.id);
+    expect(remaining).toHaveLength(2);
+    expect(await db.select().from(apiKeys).where(eq(apiKeys.userId, user.id))).toHaveLength(1);
   });
 
   it("rejects expired magic link token", async () => {

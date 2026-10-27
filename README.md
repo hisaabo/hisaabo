@@ -446,10 +446,11 @@ The first account created on a fresh self-hosted server becomes the owner; after
 
 ### 2. Try the API immediately
 
+Sign in to the web app (magic link), create an API key in Settings > API Keys, then:
+
 ```bash
-curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
-  -H "Content-Type: application/json" \
-  -d '{"json":{"email":"you@yourshop.in","name":"Your Name","password":"strongpass123","confirmPassword":"strongpass123"}}'
+curl https://api.hisaabo.in/api/trpc/business.list \
+  -H "Authorization: Bearer hisaabo_key_..."
 ```
 
 ### 3. Connect AI to your Hisaabo instance

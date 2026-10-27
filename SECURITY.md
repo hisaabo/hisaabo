@@ -26,14 +26,15 @@ We will acknowledge receipt within 48 hours and aim to provide a fix or mitigati
 This section describes what the code does today. Where a protection depends on how you deploy Hisaabo, it says so.
 
 ### Authentication
-- **Magic link (passwordless)** is the only user-facing web sign-in — tokens are SHA-256 hashed before storage, single-use, 15-minute expiry. No client shows a password form. The legacy `auth.login` / `auth.register` API procedures (Argon2id hashes) remain for tests and scripted seeding only; nothing user-facing calls them.
+- **Magic link (passwordless)** and native PKCE sign-in (below) are the only ways to sign in. Magic-link tokens are SHA-256 hashed before storage, single-use, 15-minute expiry. There is no password sign-in: the legacy `auth.login` / `auth.register` procedures were removed from the API and stored password hashes were cleared. Programmatic access uses API keys.
+- **First verification revokes earlier credentials:** when a magic link signs into an account whose email was never verified (for example one created by the old password sign-up), every session, access token and API key issued to it before that point is revoked and any legacy password is cleared before the new session is created. Whoever created the account without owning the mailbox keeps nothing.
 - **Native sign-in (desktop, mobile, CLI)** uses the system browser, not an embedded form (RFC 8252) with PKCE (S256): the app registers a request with `auth.nativeStart`, the user signs in and consents on `${APP_URL}/auth/native`, and the app exchanges a one-time code (2-minute lifetime, single use, stored only as a hash) plus its PKCE verifier through `auth.nativeExchange`. Desktop and CLI receive the code on a one-shot `http://127.0.0.1:<port>/callback` loopback listener; mobile receives it on a verified HTTPS app link (`/auth/native/callback`). Only a cookie web session can authorize a request. Every exchange failure returns the same generic error.
 - **App-link verification** requires the web build to publish `/.well-known/assetlinks.json` and `/.well-known/apple-app-site-association`. They are generated at build time from `VITE_ANDROID_APP_CERT_SHA256` (comma-separated signing-cert SHA-256 fingerprints) and `VITE_APPLE_TEAM_ID`; set both for your own mobile build or the OS will not hand the link to the app.
 - **Turnstile on every sign-in:** whenever `TURNSTILE_SECRET_KEY` is set (required in production), sign-in requests must carry a valid Turnstile token. There is no client-header bypass: `X-Hisaabo-Client` only selects bearer-token behaviour and never skips Turnstile.
 - **Web sessions:** HttpOnly, `SameSite=Lax` cookie, 30-day expiry with server-controlled invalidation. The `Secure` flag is set when `APP_URL` starts with `https`. Web responses never include the session token.
 - **Mobile / desktop / CLI sessions:** Bearer session tokens with a 7-day sliding window and a 30-day absolute cap. `sessionToken` appears in a response body only for bearer clients (`X-Hisaabo-Client` of `desktop`, `mobile` or `cli`). Short-lived (15-minute) access tokens can be issued for Bearer sessions; web cookie sessions never receive them.
 - **Invite-only self-hosted signup:** on a self-hosted server (`MULTI_TENANT=false`) the first user becomes owner; after that, new accounts require a pending invitation for the email. `ALLOW_OPEN_SIGNUP=true` restores open signup. An uninvited address still gets a generic "sent" response from the magic-link request but no email. Multi-tenant (cloud) mode is unchanged.
-- Per-email limits: 5 magic-link requests per 15 minutes; 5 failed legacy password logins per 15 minutes
+- Per-email limits: 5 magic-link requests per 15 minutes
 - **Phone OTP is not a sign-in factor.** The only phone OTP is the optional, per-store check on public store orders (see Online Store).
 
 ### Authorization
@@ -62,7 +63,7 @@ Set these to match your topology: one proxy → `1`; two chained proxies → `2`
 In-memory, per client IP, per API process (not shared across replicas), plus coarse limits in the bundled nginx config:
 
 - **tRPC (`/api/trpc/*`):** 300 req/min same-origin with a plausibly-shaped credential; 60 same-origin without; 120 external with a credential; 10 external without. A cheap credential-shape check decides the tier, so forged tokens do not earn the higher tier.
-- **Credential endpoints** (`auth.login`, `auth.register`, `auth.sendMagicLink`, `auth.verifyMagicLink`, `auth.nativeStart`, `auth.nativeExchange`, `auth.confirmEmailChange`, `tenant.peekInvitation`): an additional 20 procedure calls/min per IP regardless of headers; each procedure in a tRPC batch counts. Batches are capped at 25 calls.
+- **Credential endpoints** (`auth.sendMagicLink`, `auth.verifyMagicLink`, `auth.nativeStart`, `auth.nativeExchange`, `auth.confirmEmailChange`, `tenant.peekInvitation`): an additional 20 procedure calls/min per IP regardless of headers; each procedure in a tRPC batch counts. Batches are capped at 25 calls.
 - **PDF endpoints:** 30/min per IP
 - **Public store:** 20/min per IP per endpoint for order, identify, logo, images, OG image, meta and page shell; 120/min per IP for the catalog; 5 orders/min per phone number
 - Request bodies: 10 MB for tRPC, 256 KB for `/store/*`, 1 MB for `/webhooks/*`

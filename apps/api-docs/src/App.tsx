@@ -23,6 +23,7 @@ const trpc = createTRPCClient<AppRouter>({
       transformer: superjson,
       headers() {
         return {
+          authorization: \`Bearer \${process.env.HISAABO_API_KEY}\`,
           "x-business-id": localStorage.getItem("businessId") ?? "",
         };
       },
@@ -30,11 +31,8 @@ const trpc = createTRPCClient<AppRouter>({
   ],
 });
 
-// 1. Login
-const { sessionToken } = await trpc.auth.login.mutate({
-  email: "rahul@sharmatraders.in",
-  password: "your-password",
-});
+// 1. Authenticate: create an API key in Settings > API Keys and send it as
+//    the Bearer token in headers() above. There is no password sign-in.
 
 // 2. List your businesses
 const { data: businesses } = await trpc.business.list.query();
@@ -326,9 +324,9 @@ function OverviewPage() {
                   </span>
                 </div>
                 <p className="text-[13px] leading-relaxed mb-3" style={{ color: "var(--text-secondary)" }}>
-                  Pass the <InlineCode>sessionToken</InlineCode> returned by{" "}
-                  <InlineCode>auth.login</InlineCode> or an API key from{" "}
-                  <InlineCode>apiKey.create</InlineCode> as a Bearer token.
+                  Pass an API key from <InlineCode>apiKey.create</InlineCode> (Settings &gt; API Keys), or
+                  the <InlineCode>sessionToken</InlineCode> a native client receives from{" "}
+                  <InlineCode>auth.nativeExchange</InlineCode>, as a Bearer token.
                 </p>
                 <CodeBlock>Authorization: Bearer sess_EXAMPLE_REPLACE_ME</CodeBlock>
               </div>

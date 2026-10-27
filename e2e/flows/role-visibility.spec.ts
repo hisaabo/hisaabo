@@ -12,7 +12,7 @@
  * because the free plan limits to 3 team members total.
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
-import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
+import { signInWithMagicLink, sessionStorageState } from "../helpers/seed";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
@@ -64,7 +64,6 @@ async function createRoleUser(
   const api = new ApiHelper(ownerPage, API_URL);
   const ts = Date.now();
   const email = `e2e-${role}-${ts}@test.hisaabo.in`;
-  const password = "Test@1234!";
   const name = `E2E ${role} User`;
 
   // Clean up any stale pending invitations to stay within plan limits
@@ -82,10 +81,10 @@ async function createRoleUser(
   const invite = { token: invited.inviteUrl?.split("/invite/")[1] };
   if (!invite.token) throw new Error("tenant.inviteMember did not return an inviteUrl");
 
-  // Step 2: Register the invited user via the API (no password UI) and
-  // load the resulting session cookie into a fresh browser context.
-  const { sessionToken } = await registerUser(API_URL, { email, password, name });
-  await markEmailVerified(email); // invite acceptance requires a verified email
+  // Step 2: Sign the invited user in via a seeded magic link (which also
+  // verifies the email, as invite acceptance requires) and load the
+  // resulting session cookie into a fresh browser context.
+  const { sessionToken } = await signInWithMagicLink(API_URL, { email, name });
   const context = await browser.newContext({ storageState: sessionStorageState(sessionToken) });
   const page = await context.newPage();
 

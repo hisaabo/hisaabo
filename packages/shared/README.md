@@ -31,8 +31,7 @@ Every entity has a create schema and (where applicable) an update schema. Input 
 
 ```typescript
 import {
-  loginSchema,
-  registerSchema,
+  magicLinkRequestSchema,
   createInvoiceSchema,
   createPartySchema,
   createItemSchema,

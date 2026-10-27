@@ -2,12 +2,15 @@
  * seed.ts — E2E test data seeding via tRPC API calls.
  *
  * Instead of directly touching the database (like integration tests do),
- * E2E seeds go through the actual API to create realistic test data.
+ * E2E seeds go through the actual API to create realistic test data. The one
+ * exception is the magic-link token for sign-in, which would otherwise need
+ * an inbox.
  * This ensures the full middleware chain (auth, business isolation, etc.)
  * is exercised during seeding.
  */
 import fs from "fs";
 import path from "path";
+import { createHash, randomBytes } from "crypto";
 import postgres from "postgres";
 
 // ── Shared API interface ─────────────────────────────────────────
@@ -376,62 +379,66 @@ export async function sendInvite(
 }
 
 /**
- * Register a new user via the auth.register tRPC endpoint (the e2e stand-in
- * for the magic-link sign-in, which needs an inbox). On a fresh self-hosted DB
- * the first user is allowed; later users need a pending invitation (or
- * ALLOW_OPEN_SIGNUP=true). Returns the session token set via cookie header.
+ * Sign a user in through the magic-link flow without an inbox: insert a
+ * magic_link_tokens row (sha256 of a random token, as the API stores it)
+ * directly into the control DB, then redeem it via auth.verifyMagicLink. On a
+ * fresh self-hosted DB the first user is allowed; later users need a pending
+ * invitation (or ALLOW_OPEN_SIGNUP=true). Magic-link users start nameless, so
+ * the name is set with auth.completeProfile. Returns the session token set via
+ * the cookie header. Uses DATABASE_URL (same DB as the API).
  */
-export async function registerUser(
+export async function signInWithMagicLink(
   baseUrl: string,
-  data: { email: string; password: string; name: string },
+  data: { email: string; name: string },
 ): Promise<{ sessionToken: string }> {
-  const res = await fetch(`${baseUrl}/api/trpc/auth.register`, {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is required to seed an e2e magic link");
+  const token = randomBytes(32).toString("base64url");
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`
+      insert into magic_link_tokens (email, token_hash, expires_at)
+      values (${data.email.toLowerCase()}, ${createHash("sha256").update(token).digest("hex")}, now() + interval '15 minutes')`;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+
+  const res = await fetch(`${baseUrl}/api/trpc/auth.verifyMagicLink`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Requested-With": "hisaabo",
     },
-    body: JSON.stringify({
-      json: {
-        email: data.email,
-        password: data.password,
-        confirmPassword: data.password,
-        name: data.name,
-      },
-    }),
+    body: JSON.stringify({ json: { token } }),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`auth.register failed (${res.status}): ${text}`);
+    throw new Error(`auth.verifyMagicLink failed (${res.status}): ${text}`);
   }
   // Extract session cookie from Set-Cookie header
   const setCookies = res.headers.getSetCookie?.() ?? [];
   const sessionCookie = setCookies.find((c) => c.startsWith("session_id="));
   const sessionToken = sessionCookie?.split("=")[1]?.split(";")[0] ?? "";
-  if (!sessionToken) throw new Error("auth.register did not set a session_id cookie");
+  if (!sessionToken) throw new Error("auth.verifyMagicLink did not set a session_id cookie");
+
+  const profile = await fetch(`${baseUrl}/api/trpc/auth.completeProfile`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "hisaabo",
+      Cookie: `session_id=${sessionToken}`,
+    },
+    body: JSON.stringify({ json: { name: data.name } }),
+  });
+  if (!profile.ok) {
+    throw new Error(`auth.completeProfile failed (${profile.status}): ${await profile.text()}`);
+  }
   return { sessionToken };
 }
 
 /**
- * Mark a user's email as verified directly in the control DB. Invitation
- * acceptance requires a verified email (normally proven by signing in with a
- * magic link, which needs an inbox), so e2e users registered through
- * auth.register are verified here. Uses DATABASE_URL (same DB as the API).
- */
-export async function markEmailVerified(email: string): Promise<void> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is required to mark an e2e user's email as verified");
-  const sql = postgres(url, { max: 1 });
-  try {
-    await sql`update users set email_verified = true where lower(email) = ${email.toLowerCase()}`;
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
-
-/**
  * Playwright storageState (cookies only) for a session token returned by
- * registerUser. The web app is served from localhost, and cookies are not
+ * signInWithMagicLink. The web app is served from localhost, and cookies are not
  * port-scoped, so one cookie covers both the web origin and the API.
  */
 export function sessionStorageState(sessionToken: string) {

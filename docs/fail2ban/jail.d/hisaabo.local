@@ -36,18 +36,6 @@ banaction = iptables-multiport
 # the API computes the client IP correctly: see TRUST_PROXY_HOPS / TRUST_CLOUDFLARE
 # in .env.prod.example and docs/fail2ban/README.md.
 
-# ── Brute-force auth jail ────────────────────────────────────────
-# Catches password-stuffing against /api/trpc/auth.login.
-# Threshold: 8 login_fail events in 5 minutes → ban for 1 hour.
-[hisaabo-api-login]
-enabled  = true
-filter   = hisaabo-api
-journalmatch = CONTAINER_TAG=hisaabo-api + MESSAGE=+"event":"login_fail"
-maxretry = 8
-findtime = 300
-bantime  = 3600
-port     = http,https
-
 # ── Abusive traffic jail ─────────────────────────────────────────
 # Catches IPs that repeatedly trip rate limits, CSRF, or origin blocks.
 # Threshold: 30 events in 2 minutes → ban for 6 hours.
@@ -61,9 +49,9 @@ maxretry = 30
 findtime = 120
 bantime  = 21600
 port     = http,https
-# This jail matches ALL event types from the filter (including login_fail),
-# but a single bad login can't trip 30 in 2 minutes, so legitimate users
-# are unaffected. Adjust if you raise per-email lockout thresholds.
+# This jail matches ALL event types from the filter, including the strict
+# per-IP budget on credential endpoints (magic link, native sign-in), so it
+# also covers sign-in abuse. There is no password sign-in to brute-force.
 
 # ── Recidive (repeat offender escalation) ────────────────────────
 # fail2ban ships a `recidive` jail out of the box that bans IPs banned

@@ -1,14 +1,14 @@
 /**
  * global-setup.ts — Authenticate once, persist session for all tests.
  *
- * Registers a test user via the auth.register API (no password UI exists),
+ * Signs a test user in via a seeded magic link (no inbox needed),
  * creates a business via tRPC API, then saves the browser storage state
  * (session cookie) so all test projects reuse the session without logging in.
  */
 import { test as setup, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
-import { registerUser, sessionStorageState, type GlobalSeed } from "./helpers/seed";
+import { signInWithMagicLink, sessionStorageState, type GlobalSeed } from "./helpers/seed";
 
 const AUTH_FILE = path.join(__dirname, ".auth", "user.json");
 const SEED_FILE = path.join(__dirname, ".auth", "seed.json");
@@ -19,17 +19,15 @@ setup("authenticate", async ({ page, request }) => {
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
   const email = `e2e-${Date.now()}@test.hisaabo.in`;
-  const password = "Test@1234!";
   const name = "E2E Test User";
   const apiUrl = process.env.API_URL ?? "http://localhost:3000";
 
   // ── Step 1: Create the user + session via the API ─────────────
-  // The UI has no password sign-in any more and magic links need an inbox, so
-  // we register through auth.register (still supported server-side) and reuse
-  // its session. The first user on a FRESH self-hosted DB becomes the owner
-  // without an invitation, so run against an empty database (as CI does); a
-  // reused DB needs a reset first.
-  const { sessionToken } = await registerUser(apiUrl, { email, password, name });
+  // Sign-in is magic link only and magic links need an inbox, so the token is
+  // seeded in the DB and redeemed through auth.verifyMagicLink. The first user
+  // on a FRESH self-hosted DB becomes the owner without an invitation, so run
+  // against an empty database (as CI does); a reused DB needs a reset first.
+  const { sessionToken } = await signInWithMagicLink(apiUrl, { email, name });
   await page.context().addCookies(sessionStorageState(sessionToken).cookies);
   const cookieHeader = `session_id=${sessionToken}`;
 

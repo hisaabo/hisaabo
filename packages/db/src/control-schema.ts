@@ -40,7 +40,7 @@ export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   name: text("name"),
-  passwordHash: text("password_hash"),
+  passwordHash: text("password_hash"), // Deprecated: always NULL since password sign-in was removed; dropped in a later release.
   emailVerified: boolean("email_verified").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

@@ -15,8 +15,7 @@
 import { describe, it, expect } from "vitest";
 import {
   // Auth
-  loginSchema,
-  registerSchema,
+  magicLinkRequestSchema,
   // Business
   createBusinessSchema,
   uploadBusinessLogoSchema,
@@ -36,78 +35,30 @@ import {
 } from "../validators.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// loginSchema
+// magicLinkRequestSchema
 // ─────────────────────────────────────────────────────────────────────────────
-describe("loginSchema — validates email + password login credentials", () => {
-  it("accepts a valid email and password", () => {
-    const result = loginSchema.safeParse({ email: "user@example.com", password: "secure123" });
+describe("magicLinkRequestSchema — validates the passwordless sign-in request", () => {
+  it("accepts a valid email and defaults the source to web", () => {
+    const result = magicLinkRequestSchema.safeParse({ email: "user@example.com" });
     expect(result.success).toBe(true);
+    expect(result.data?.source).toBe("web");
   });
 
-  it("rejects an invalid email address format", () => {
-    const result = loginSchema.safeParse({ email: "not-an-email", password: "secure123" });
+  it("rejects an invalid email", () => {
+    const result = magicLinkRequestSchema.safeParse({ email: "not-an-email" });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0].path).toContain("email");
   });
 
-  it("rejects a password shorter than 8 characters", () => {
-    // Minimum length prevents the most common weak passwords.
-    const result = loginSchema.safeParse({ email: "user@example.com", password: "short" });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0].path).toContain("password");
-  });
-
-  it("rejects a password longer than 128 characters", () => {
-    const result = loginSchema.safeParse({
-      email: "user@example.com",
-      password: "a".repeat(129),
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0].path).toContain("password");
-  });
-
   it("rejects an email longer than 255 characters", () => {
-    const longEmail = "a".repeat(250) + "@b.com";
-    const result = loginSchema.safeParse({ email: longEmail, password: "secure123" });
+    const result = magicLinkRequestSchema.safeParse({ email: "a".repeat(250) + "@b.com" });
     expect(result.success).toBe(false);
   });
-});
 
-// ─────────────────────────────────────────────────────────────────────────────
-// registerSchema
-// ─────────────────────────────────────────────────────────────────────────────
-describe("registerSchema — validates new user registration input", () => {
-  const validInput = {
-    email: "rahul@example.in",
-    name: "Rahul Sharma",
-    password: "mypassword123",
-    confirmPassword: "mypassword123",
-  };
-
-  it("accepts valid registration data with matching passwords", () => {
-    expect(registerSchema.safeParse(validInput).success).toBe(true);
-  });
-
-  it("rejects when password and confirmPassword do not match", () => {
-    const result = registerSchema.safeParse({
-      ...validInput,
-      confirmPassword: "differentpassword",
-    });
-    expect(result.success).toBe(false);
-    // The refine error should point to the confirmPassword field
-    expect(result.error?.issues[0].path).toContain("confirmPassword");
-  });
-
-  it("rejects a name shorter than 2 characters", () => {
-    // Single-character names are almost certainly data entry errors.
-    const result = registerSchema.safeParse({ ...validInput, name: "R" });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0].path).toContain("name");
-  });
-
-  it("rejects a name longer than 100 characters", () => {
-    const result = registerSchema.safeParse({ ...validInput, name: "A".repeat(101) });
-    expect(result.success).toBe(false);
+  it("strips a password field (password sign-in was removed)", () => {
+    const result = magicLinkRequestSchema.safeParse({ email: "user@example.com", password: "secure123" });
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("password");
   });
 });
 

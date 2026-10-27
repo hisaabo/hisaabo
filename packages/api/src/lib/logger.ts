@@ -28,9 +28,7 @@ export type SecurityEvent =
   | "rate_limit_store_post"
   | "rate_limit_order"
   | "csrf_fail"
-  | "origin_block"
-  | "login_fail"
-  | "login_lockout";
+  | "origin_block";
 
 export function logSecurityEvent(
   event: SecurityEvent,

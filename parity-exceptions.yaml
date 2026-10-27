@@ -419,7 +419,7 @@ exceptions:
 
       # --- Auth ---
       # MCP runs as a pre-authenticated server-side agent. It does not
-      # manage user sessions, login flows, or account registration.
+      # manage user sessions, sign-in flows, or account sign-up.
       # [security] Native-auth consent endpoints are the browser hand-off that mints
       # a one-time code for a cookie web session; an agent must never drive them.
       - auth.nativeAuthorize
@@ -427,11 +427,9 @@ exceptions:
       # Signup/config copy is a UI concern; agents have no signup screen.
       - system.config
       - auth.completeProfile
-      - auth.login
       - auth.logout
       - auth.logoutAll
       - auth.me
-      - auth.register
       - auth.requestEmailChange
       - auth.sendMagicLink
       - auth.updateName

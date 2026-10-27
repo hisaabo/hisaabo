@@ -45,8 +45,10 @@ describe("rate-limit credential shape", () => {
 
 describe("strict auth procedures", () => {
   it("detects auth procedures including inside batches", () => {
-    expect(countStrictProcedures("/api/trpc/auth.login")).toBe(1);
-    expect(countStrictProcedures("/api/trpc/auth.me,auth.login,auth.login")).toBe(2);
+    expect(countStrictProcedures("/api/trpc/auth.sendMagicLink")).toBe(1);
+    expect(countStrictProcedures("/api/trpc/auth.me,auth.sendMagicLink,auth.verifyMagicLink")).toBe(2);
+    // The removed password procedures are no longer credential endpoints.
+    expect(countStrictProcedures("/api/trpc/auth.login,auth.register")).toBe(0);
     expect(countStrictProcedures("/api/trpc/invoice.list")).toBe(0);
     expect(trpcProcedures("/api/trpc/a.b,c.d")).toEqual(["a.b", "c.d"]);
   });

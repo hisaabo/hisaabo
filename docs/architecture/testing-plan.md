@@ -231,9 +231,8 @@ Test the schemas that gate every API call. Invalid inputs that reach the server 
 - `itemMode="alt_units"` with `variantAttributes` non-empty fails
 - Both fields empty is valid regardless of mode
 
-**`registerSchema`:**
-- Mismatched `password`/`confirmPassword` fails with error on `confirmPassword` path
-- Password shorter than 8 chars fails
+**`magicLinkRequestSchema`:**
+- Email is trimmed and lowercased; invalid or over-255-char emails fail
 
 ---
 
@@ -487,17 +486,18 @@ Scenario: Payment cannot allocate to invoice from different business
 ### `integration/auth.test.ts`
 
 ```
-Scenario: Register creates user, session, default tenant membership
-  When: auth.register called with valid email/password
-  Then: User exists in DB, session exists, tenant_members has owner row
+Scenario: Password sign-in is not exposed
+  When: auth.register or auth.login is called
+  Then: Throws NOT_FOUND (the procedures no longer exist)
 
-Scenario: Login with correct password returns session
-  When: auth.login with correct credentials
-  Then: Session ID returned, session exists in DB with 30-day expiry
+Scenario: First magic-link sign-in creates user, session, default tenant membership
+  When: auth.verifyMagicLink is called with a valid token for a new email
+  Then: User exists in DB (emailVerified=true), session exists, tenant_members has owner row
 
-Scenario: Login with wrong password throws UNAUTHORIZED
-  When: auth.login with wrong password
-  Then: Throws UNAUTHORIZED (not exposing which field is wrong)
+Scenario: First verification of an unverified account revokes earlier credentials
+  Given: An unverified user with a password hash, a session and an API key
+  When: auth.verifyMagicLink is called for that email
+  Then: The old session and API key are gone, password_hash is NULL, the new session works
 
 Scenario: Magic link token is hashed in storage
   When: auth.requestMagicLink called

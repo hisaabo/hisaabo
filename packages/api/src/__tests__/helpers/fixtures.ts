@@ -60,10 +60,9 @@ export type TestShipment = typeof shipments.$inferSelect;
 // ── Control plane factories ────────────────────────────────────────────────────
 
 /**
- * Creates a user row in the control schema and returns the full row.
- *
- * The password_hash is a bcrypt hash of "Test@1234!" for tests that need to
- * verify the auth flow, but most tests should use session factories instead.
+ * Creates a verified, passwordless user row in the control schema and returns
+ * the full row. Sign-in is magic link / native PKCE only; use the session
+ * factories below to authenticate.
  */
 export async function createUser(
   overrides: Partial<InferInserted<typeof users>> = {},
@@ -77,7 +76,6 @@ export async function createUser(
       id,
       email: `user.${id.slice(0, 8)}@example.in`,
       name: "Test User",
-      passwordHash: "$argon2id$v=19$m=65536,t=3,p=4$placeholder_test_hash",
       emailVerified: true,
       ...overrides,
     })
