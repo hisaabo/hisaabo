@@ -29,6 +29,7 @@ export {
   encryptField,
   decryptField,
   reEncryptField,
+  hasEncryptionKey,
   isEncrypted,
   getKeyVersion,
   encryptDbPassword,

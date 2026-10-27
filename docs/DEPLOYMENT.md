@@ -99,6 +99,9 @@
 | `QUEUE_SHUTDOWN_GRACE_SECONDS` | No | Worker only. Time in-flight jobs get to finish on SIGTERM before they are aborted (default 25) | `25` |
 | `QUEUE_POLLING_INTERVAL_SECONDS` | No | Worker only. Idle poll interval in seconds (default 2, minimum 0.5) | `2` |
 | `QUEUE_PING_SCHEDULE` | No | Worker only. `true` schedules the hourly `system.ping` diagnostic job | `false` |
+| `QUEUE_DASHBOARD_ENABLED` | No | `true` serves the operator dashboard at `/ops` (off by default; every `/ops` path is a plain 404 otherwise). Requires `ENCRYPTION_KEY` | `false` |
+| `OPS_IP_ALLOWLIST` | No (recommended with `/ops`) | Comma-separated CIDRs (IPv4/IPv6) allowed to reach `/ops`; others get a plain 404. Uses the same client-IP rules as rate limiting (`TRUST_PROXY_HOPS`) | `203.0.113.0/24` |
+| `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | No | `/ops` session idle timeout, absolute lifetime, and how long a TOTP step-up covers destructive actions (defaults 15 / 8 / 5) | `15` |
 
 ### GitHub Actions Secrets
 
@@ -168,6 +171,31 @@ Long-running and scheduled work runs in a separate `worker` container built from
 - On `SIGTERM` it stops taking jobs and gives running ones `QUEUE_SHUTDOWN_GRACE_SECONDS` to finish. Jobs that still don't finish are retried by another worker once they time out.
 - Scale out by running more worker containers (`docker compose up -d --scale worker=2`), or dedicate containers to a pool with `QUEUE_POOLS=heavy`.
 - Check it is consuming jobs: `docker compose -f docker-compose.prod.yml logs worker` shows `queue worker started`; set `QUEUE_PING_SCHEDULE=true` to get an hourly `pong` line.
+
+### Operator dashboard (`/ops`)
+
+A Horizon-style dashboard for the job queue (throughput, queues, pending/active/completed/failed jobs, workers, schedules, audit log) is served by the API at `/ops`. It is **off** unless `QUEUE_DASHBOARD_ENABLED=true`; the full threat model is in [the queue design](architecture/queue.md) §7.2.
+
+Getting in takes three things, all required: a normal Hisaabo sign-in (magic link) in the same browser, an operator record for that email, and a code from an authenticator app (TOTP). Operators can only be created and enrolled from the server shell — there is no web or API path — so access to the shell is the root of trust:
+
+```bash
+# 1. Make sure ENCRYPTION_KEY is set (TOTP secrets are encrypted with it), then enable the dashboard
+#    in .env.prod: QUEUE_DASHBOARD_ENABLED=true and, strongly recommended, OPS_IP_ALLOWLIST=<your VPN/office CIDRs>
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api
+
+# 2. Add an operator (admin can act; viewer is read-only)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/ops.js operator add you@example.com --role admin
+
+# 3. Enroll their authenticator. The secret, otpauth:// URI and 10 recovery codes are printed ONCE:
+#    add the secret to an authenticator app and store the recovery codes offline.
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api node packages/api/dist/bin/ops.js operator enroll you@example.com
+```
+
+Then sign in to the web app as that email and open `https://<API_PUBLIC_URL host>/ops/`. Destructive actions (retry, delete, pause/resume) and revealing a job's payload ask for a fresh code. Every sign-in attempt, step-up and action is written to the audit log (Audit page, or the `ops_audit_log` table).
+
+Other operator commands: `ops operator list`, `ops operator remove <email>`, `ops operator revoke-sessions <email>`, and re-running `enroll` to replace a lost authenticator (signs them out everywhere). Queue commands mirror Laravel's: `ops queue list | failed | retry <id…> | retry --queue q --all-failed | forget <id…> | flush | clear <queue> | pause <queue> | resume <queue>` (`ops help` for details). In the ONCE image run the same tool with `docker exec -it <container> su-exec node node /app/packages/api/dist/bin/ops.js …`.
+
+The bundled `nginx/nginx.conf` proxies `/ops/` with its own small rate limit and shows how to add an `allow`/`deny` list there as well.
 
 ### Admin dashboard
 

@@ -15,7 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "maintenance": "tsx src/bin/maintenance.ts",
-    "admin": "tsx src/bin/admin.ts"
+    "admin": "tsx src/bin/admin.ts",
+    "ops": "tsx src/bin/ops.ts",
+    "build:ops": "pnpm --filter @hisaabo/ops build && rm -rf dist/ops-public && cp -r ../../apps/ops/dist dist/ops-public"
   },
   "dependencies": {
     "@casl/ability": "^6.8.1",

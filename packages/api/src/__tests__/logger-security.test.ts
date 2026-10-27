@@ -85,6 +85,7 @@ describe("logSecurityEvent — fail2ban log contract", () => {
       "rate_limit_order",
       "csrf_fail",
       "origin_block",
+      "ops_auth_fail",
     ];
 
     for (const ev of events) {
@@ -115,7 +116,7 @@ describe("logSecurityEvent — fail2ban log contract", () => {
     // extracted correctly. If this regex stops matching, the operator's fail2ban
     // jail will silently stop banning offenders.
     const FAILREGEX =
-      /"sec":true,"event":"(?:csrf_fail|origin_block|rate_limit|rate_limit_pdf|rate_limit_store|rate_limit_store_post|rate_limit_order)","ip":"((?:\d{1,3}\.){3}\d{1,3})"/;
+      /"sec":true,"event":"(?:csrf_fail|origin_block|ops_auth_fail|rate_limit|rate_limit_pdf|rate_limit_store|rate_limit_store_post|rate_limit_order)","ip":"((?:\d{1,3}\.){3}\d{1,3})"/;
 
     const match = serialised.match(FAILREGEX);
     expect(match).not.toBeNull();

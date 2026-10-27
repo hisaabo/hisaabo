@@ -129,6 +129,17 @@ The web app can expose tools to a browser's built-in AI agent through WebMCP. Th
 - Both clients refuse plain `http://` to non-loopback hosts unless explicitly overridden, and the CLI strips terminal control characters from server-supplied text before printing.
 - Revoke a leaked key immediately from Settings → API Keys (or `apiKey.revoke`).
 
+### Operator Dashboard (`/ops`)
+The job-queue dashboard is the most privileged web surface, so it is guarded in depth (full model: `docs/architecture/queue.md` §7.2):
+- **Off by default.** Unless `QUEUE_DASHBOARD_ENABLED=true`, every `/ops` path returns the API's normal 404. With `OPS_IP_ALLOWLIST` set, clients outside those CIDRs get the same 404.
+- **Three factors, all required:** a Hisaabo **cookie** session from magic-link sign-in (Bearer sessions, access tokens and API keys are refused), an active row in `ops_operators` for that verified email, and a **TOTP** code (RFC 6238) or a single-use recovery code. Operators are created, re-roled and enrolled **only from the server shell** with the `ops` CLI, so a hijacked mailbox cannot enroll itself.
+- **Separate, short-lived session:** a random token (stored as SHA-256) in an `HttpOnly`, `SameSite=Strict`, `Path=/ops` cookie (`Secure` over https), idle timeout 15 min, absolute 8 h. It is bound to the Hisaabo session it came from and revoked when that session ends, the operator is removed, disabled, re-enrolled or re-roled.
+- **Step-up:** retry, delete, pause/resume and payload reveal need a TOTP re-entry within the last 5 minutes and the `admin` role (`viewer` is read-only).
+- **TOTP hardening:** secrets encrypted with `ENCRYPTION_KEY`, ±1 step window, each time step usable once (replay guard), 5 failures lock the operator for 15 minutes, recovery codes hashed and single-use.
+- **Request hardening:** every POST needs `X-Requested-With: hisaabo` and an `Origin` equal to the API's own origin; no CORS headers are sent for `/ops`; per-IP limits (60/min API, 10/min sign-in/step-up); `Cache-Control: no-store`; the app is served with `script-src 'self'`, `style-src 'self'`, `frame-ancestors 'none'` and no third-party hosts.
+- **Data minimisation:** tenant and business ids appear only as hashed handles, job payloads are hidden until an audited reveal, fields a job marks `encrypt` are never decrypted, and errors are masked; stack traces never leave the worker logs.
+- **Audit:** every sign-in attempt, step-up, action and reveal — and every `ops` CLI write (`cli:<os user>`) — is appended to `ops_audit_log`. Failed second-factor attempts also emit the `ops_auth_fail` security event, which the bundled fail2ban filter matches.
+
 ### Backups
 `scripts/backup.sh` (the `backup` sidecar in `docker-compose.prod.yml`) writes a base backup plus per-database SQL dumps:
 

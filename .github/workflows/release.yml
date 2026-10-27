@@ -63,6 +63,7 @@ jobs:
               - 'packages/api/**'
               - 'packages/db/**'
               - 'packages/shared/**'
+              - 'apps/ops/**'
               - 'Dockerfile'
               - 'Dockerfile.once'
               - 'docker-entrypoint.sh'
