@@ -136,6 +136,19 @@ export function maskStats(stats: PlatformStats): PlatformStats {
         message: maskFreeText(scrub(f.message, pairs) ?? f.message),
       };
     }),
+    queues: {
+      ...stats.queues,
+      error: stats.queues.error ? maskFreeText(scrub(stats.queues.error, pairs) ?? stats.queues.error) : null,
+      // Container hostnames identify infrastructure, not people, but are kept
+      // out of shareable snapshots all the same.
+      workers: stats.queues.workers.map((w) => ({ ...w, host: maskWord(w.host, 3) })),
+      recentFailures: stats.queues.recentFailures.map((f) => ({
+        ...f,
+        tenantId: f.tenantId ? tenantHandle(f.tenantId) : null,
+        tenantName: f.tenantId ? `Tenant ${tenantHandle(f.tenantId)}` : null,
+        error: maskFreeText(scrub(f.error, pairs) ?? f.error),
+      })),
+    },
     errors: stats.errors.map((e) => scrub(e, pairs) ?? e),
   };
 }

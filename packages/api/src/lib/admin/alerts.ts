@@ -16,6 +16,11 @@ export interface Alert {
   view: View;
 }
 
+/** Jobs dead-lettered in the last 15 minutes that count as a failure spike. */
+export const FAILURE_SPIKE = 5;
+/** A ready job waiting longer than this means the backlog is growing. */
+export const BACKLOG_SECONDS = 5 * 60;
+
 function plural(n: number, one: string, many = one + "s"): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -60,6 +65,19 @@ export function deriveAlerts(st: PlatformStats): Alert[] {
   if (bloated > 0) yellow(`${plural(bloated, "db")} with > 20% dead tuples`, "infra");
   const deadlocked = st.dbs.reduce((a, d) => a + (d.infra?.deadlocks ?? 0), 0);
   if (deadlocked > 0) yellow(`${plural(deadlocked, "deadlock")} since stats reset`, "infra");
+
+  // Background-job queue.
+  const q = st.queues;
+  if (q.installed && q.error) yellow("job queue unreadable", "queues");
+  if (q.installed && !q.error) {
+    const waiting = q.totals.queued + q.totals.retry;
+    if (waiting > 0 && q.liveWorkers === 0) red(`no live queue workers · ${plural(waiting, "job")} waiting`, "queues");
+    if (q.totals.dead15m >= FAILURE_SPIKE) red(`${plural(q.totals.dead15m, "job")} failed · 15m`, "queues");
+    else if (q.totals.failed > 0) yellow(`${plural(q.totals.failed, "failed job")} awaiting retry`, "queues");
+    if (q.totals.oldestWaitSeconds !== null && q.totals.oldestWaitSeconds > BACKLOG_SECONDS) {
+      yellow(`queue backlog · oldest waiting ${Math.round(q.totals.oldestWaitSeconds / 60)}m`, "queues");
+    }
+  }
 
   // Reds first, then yellows, preserving insertion order within each.
   return [...out.filter((a) => a.level === "red"), ...out.filter((a) => a.level === "yellow")];

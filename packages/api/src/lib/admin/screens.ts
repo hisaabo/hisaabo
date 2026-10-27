@@ -12,10 +12,11 @@ import {
   PLAN_STYLE, STATUS_STYLE, type Style,
 } from "./tui.js";
 import type { PlatformStats, TenantWithMetrics, TenantMetrics, PlatformFailure, DbReport } from "./stats.js";
+import type { QueueRow, QueueWorker, QueueFailure } from "./queues.js";
 import type { MigrationStatus } from "./migrations.js";
 import { deriveAlerts, type Alert } from "./alerts.js";
 
-export type View = "overview" | "tenants" | "ops" | "infra";
+export type View = "overview" | "tenants" | "ops" | "infra" | "queues";
 
 export interface ViewState {
   view: View;
@@ -74,6 +75,7 @@ function footer(s: ViewState, cols: number): string {
       key("2", "Tenants"),
       key("3", "Ops"),
       key("4", "Infra"),
+      key("5", "Queues"),
       key("r", "Refresh"),
       ...(s.view === "tenants" ? [key("↑↓", "Select")] : []),
       key("p", s.masked ? "Reveal PII" : "Mask PII"),
@@ -774,6 +776,146 @@ function infraBody(s: ViewState, st: PlatformStats, cols: number, rows?: number)
   return vstack(bands, cols, 0);
 }
 
+// ── Queues ──────────────────────────────────────────────────────
+
+function waitCell(seconds: number | null): string {
+  if (seconds === null) return c.faint("—");
+  const text = seconds < 60 ? `${seconds}s` : fmtUptime(seconds);
+  return (seconds > 300 ? c.warn : c.muted)(text);
+}
+
+function countCell(n: number, style: Style = c.white): string {
+  return n > 0 ? style(fmtInt(n)) : c.faint("0");
+}
+
+function queueKpis(st: PlatformStats, cols: number): string[] {
+  const t = st.queues.totals;
+  const q = st.queues;
+  const tiles: { label: string; value: string; sub: string; accent: Style }[] = [
+    { label: "Queued", value: fmtInt(t.queued), sub: t.retry ? c.warn(`${fmtInt(t.retry)} retrying`) : c.muted("none retrying"), accent: c.info },
+    { label: "Active", value: fmtInt(t.active), sub: c.muted(`oldest wait ${t.oldestWaitSeconds === null ? "—" : t.oldestWaitSeconds < 60 ? `${t.oldestWaitSeconds}s` : fmtUptime(t.oldestWaitSeconds)}`), accent: c.brand },
+    { label: "Done · 15m", value: fmtInt(t.done15m), sub: c.muted(`${fmtInt(q.queues.length)} queues`), accent: c.ok },
+    { label: "Failed", value: fmtInt(t.failed), sub: t.dead15m ? c.bad(`${fmtInt(t.dead15m)} in 15m`) : c.muted("none in 15m"), accent: t.failed ? c.bad : c.ok },
+    { label: "Workers", value: fmtInt(q.liveWorkers), sub: q.liveWorkers ? c.ok("live") : c.bad("none live"), accent: q.liveWorkers ? c.teal : c.bad },
+  ];
+  const perRow = cols >= 5 * 19 - 1 ? 5 : 2;
+  const out: string[] = [];
+  for (let i = 0; i < tiles.length; i += perRow) {
+    const chunk = tiles.slice(i, i + perRow);
+    const widths = splitWidth(cols, perRow, 1);
+    out.push(...hstack(chunk.map((tile, j) => kpiTile({ ...tile, width: widths[j], subStyle: (x) => x })), 1));
+  }
+  return out;
+}
+
+function queuesTablePanel(st: PlatformStats, w: number, h: number, natural: boolean): string[] {
+  const queues = [...st.queues.queues].sort((a, b) =>
+    (b.failed - a.failed) || ((b.queued + b.retry) - (a.queued + a.retry)) || a.name.localeCompare(b.name));
+  const maxRows = natural ? Math.min(queues.length, 30) : Math.max(1, h - 4);
+  const rows = queues.slice(0, maxRows);
+  const columns = [
+    { key: "name", label: "Queue", flex: true, render: (q: QueueRow) => c.white(q.name) },
+    { key: "queued", label: "Queued", align: "right" as const, render: (q: QueueRow) => countCell(q.queued, c.info) },
+    { key: "active", label: "Active", align: "right" as const, render: (q: QueueRow) => countCell(q.active, c.brand) },
+    { key: "retry", label: "Retry", align: "right" as const, render: (q: QueueRow) => countCell(q.retry, c.warn) },
+    { key: "failed", label: "Failed", align: "right" as const, render: (q: QueueRow) => countCell(q.failed, c.bad) },
+    { key: "done", label: "Done 15m", align: "right" as const, render: (q: QueueRow) => countCell(q.done15m, c.ok) },
+    { key: "wait", label: "Oldest wait", align: "right" as const, render: (q: QueueRow) => waitCell(q.oldestWaitSeconds) },
+    { key: "state", label: "State", render: (q: QueueRow) => (q.paused ? c.warn("paused") : c.ok("running")) },
+  ];
+  const lines = table({ columns, rows, width: w - 4, emptyText: "no queues yet — they appear when a worker starts" });
+  return box({
+    title: "Queues",
+    hint: `${rows.length} of ${queues.length} · failures first`,
+    width: w,
+    height: natural ? Math.max(rows.length, 1) + 4 : h,
+    lines,
+  });
+}
+
+function workersPanel(st: PlatformStats, w: number, h: number): string[] {
+  // Live and running instances first; recently stopped ones stay visible below.
+  const workers = [...st.queues.workers]
+    .sort((a, b) => Number(a.stopped) - Number(b.stopped) || Number(b.live) - Number(a.live))
+    .slice(0, Math.max(1, h - 4));
+  const columns = [
+    { key: "name", label: "Instance", flex: true, render: (x: QueueWorker) => (x.name.startsWith("worker") ? c.white : c.muted)(x.name) },
+    { key: "host", label: "Host", render: (x: QueueWorker) => c.muted(truncate(`${x.host}:${x.pid}`, 22)) },
+    { key: "beat", label: "Heartbeat", align: "right" as const, render: (x: QueueWorker) => {
+      if (x.stopped) return c.faint("stopped");
+      if (x.heartbeatAgeSeconds === null) return c.faint("—");
+      return (x.live || !x.name.startsWith("worker") ? c.ok : c.bad)(`${x.heartbeatAgeSeconds}s ago`);
+    } },
+  ];
+  return box({
+    title: "Workers",
+    hint: `${st.queues.liveWorkers} live`,
+    width: w,
+    height: h,
+    lines: table({ columns, rows: workers, width: w - 4, emptyText: "no instances registered" }),
+    titleStyle: (t: string) => c.bold(st.queues.liveWorkers ? c.white(t) : c.bad(t)),
+  });
+}
+
+function queueFailuresPanel(st: PlatformStats, w: number, h: number, now: Date, natural: boolean): string[] {
+  const all = st.queues.recentFailures;
+  const rows = all.slice(0, natural ? Math.min(all.length, 10) : Math.max(1, h - 4));
+  const columns = [
+    { key: "at", label: "When", align: "right" as const, render: (f: QueueFailure) => c.muted(fmtRelative(f.failedAt, now)) },
+    { key: "queue", label: "Queue", render: (f: QueueFailure) => c.white(truncate(f.queue, 26)) },
+    { key: "tenant", label: "Tenant", render: (f: QueueFailure) => (f.tenantName ? c.muted(truncate(f.tenantName, 18)) : c.faint("system")) },
+    { key: "tries", label: "Tries", align: "right" as const, render: (f: QueueFailure) => c.muted(fmtInt(f.attempts + 1)) },
+    { key: "error", label: "Error", flex: true, render: (f: QueueFailure) => (f.type === "PermanentError" ? c.bad : c.warn)(f.error || f.type) },
+  ];
+  return box({
+    title: "Recent failures",
+    hint: all.length ? `${rows.length} newest · retry with \`ops queue retry\`` : "",
+    width: w,
+    height: natural ? Math.max(rows.length, 1) + 4 : h,
+    lines: table({ columns, rows, width: w - 4, emptyText: "no failed jobs — nice" }),
+    titleStyle: (t: string) => c.bold(all.length ? c.bad(t) : c.white(t)),
+  });
+}
+
+function queuesBody(s: ViewState, st: PlatformStats, cols: number, rows?: number): string[] {
+  const q = st.queues;
+  if (!q.installed || q.error) {
+    const msg = !q.installed
+      ? [c.warn("job queue not installed"), "", c.muted("the pgboss schema is missing from the control database —"), c.muted("run the migrations from this release (the API container does on start)")]
+      : [c.bad("⚠ could not read the job queue"), "", c.muted(truncate(q.error ?? "", cols - 8))];
+    const h = rows === undefined ? msg.length + 2 : Math.max(msg.length + 2, rows - 2);
+    return box({ title: "Queues", width: cols, height: h, lines: msg.map((l) => pad(l, cols - 4, "center")) });
+  }
+
+  const bands: string[][] = [queueKpis(st, cols)];
+  const twoCol = cols >= 110;
+  const sideH = Math.max(6, Math.min(12, Math.max(q.workers.length, q.recentFailures.length, 1) + 4));
+  const lower = (h: number): string[][] => {
+    if (twoCol) {
+      const lw = Math.floor(cols * 0.36);
+      return [hstack([workersPanel(st, lw, h), queueFailuresPanel(st, cols - lw - 1, h, s.now, false)], 1)];
+    }
+    return [workersPanel(st, cols, h), queueFailuresPanel(st, cols, h, s.now, false)];
+  };
+
+  if (rows === undefined) {
+    bands.push(queuesTablePanel(st, cols, 0, true), ...lower(sideH));
+    return vstack(bands, cols, 0);
+  }
+  const used = bands.reduce((a, b) => a + b.length, 0);
+  const left = rows - 3 - used; // header + alerts + footer
+  // The queue table takes what it needs; spare rows go to workers/failures.
+  const tableNeed = Math.max(5, q.queues.length + 4);
+  const perLower = twoCol ? 1 : 2;
+  let lowerH = left >= 16 ? sideH : 0;
+  if (lowerH && left - tableNeed > lowerH * perLower) lowerH = Math.floor((left - tableNeed) / perLower);
+  const lowerTotal = lowerH * perLower;
+  const tableH = left - lowerTotal;
+  if (tableH >= 5) bands.push(queuesTablePanel(st, cols, tableH, false));
+  if (lowerH) bands.push(...lower(lowerH));
+  return vstack(bands, cols, 0);
+}
+
 // ── Entry ───────────────────────────────────────────────────────
 
 export function renderFrame(s: ViewState, colsIn: number, rows?: number): string[] {
@@ -796,6 +938,7 @@ export function renderFrame(s: ViewState, colsIn: number, rows?: number): string
     s.view === "tenants" ? tenantsBody(s, s.stats, cols, innerRows)
     : s.view === "ops" ? opsBody(s, s.stats, cols, innerRows)
     : s.view === "infra" ? infraBody(s, s.stats, cols, innerRows)
+    : s.view === "queues" ? queuesBody(s, s.stats, cols, innerRows)
     : overviewBody(s, s.stats, cols, innerRows);
   return finish(head, [strip, ...body], foot, cols, rows);
 }

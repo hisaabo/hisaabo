@@ -3,7 +3,8 @@
  *
  * A full-screen terminal dashboard with platform-wide statistics: tenants,
  * users, businesses, invoices, amount managed, collections, receivables,
- * a 12-month sales chart, plan/status breakdowns and a per-tenant table.
+ * a 12-month sales chart, plan/status breakdowns, a per-tenant table and the
+ * background-job queue (counts, workers, recent failures).
  *
  * WHERE IT RUNS
  *   Inside the API container (direct DB connection via DATABASE_URL):
@@ -76,7 +77,8 @@ OPTIONS
   --migrations-dir <dir>           Folder holding drizzle/, drizzle-control/, drizzle-tenant/ for drift
                                    detection (default: next to this build, then ./packages/db;
                                    HISAABO_MIGRATIONS_DIR is honoured too)
-  --view <overview|tenants|ops|infra>  Initial view (default: overview)
+  --view <overview|tenants|ops|infra|queues>
+                                   Initial view (default: overview)
   --reveal                         Show real tenant names, slugs, emails and hosts. By default all
                                    PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
                                    and --json output are safe to share.
@@ -88,7 +90,8 @@ OPTIONS
   -h, --help                       Show this help
 
 KEYS (interactive)
-  1 2 3 4     Overview / Tenants / Ops / Infra r        refresh now
+  1 2 3 4 5   Overview / Tenants / Ops / Infra / Queues
+  r           refresh now
   p           toggle PII masking
   ↑ ↓ j k     move selection (Tenants view)    g / G    jump to first / last
   q, Esc      quit                              Ctrl-C   quit
@@ -119,7 +122,7 @@ function parseArgs(argv: string[]): Args {
       case "--reveal": case "--show-pii": a.reveal = true; break;
       case "--view": {
         const v = next(i++, arg);
-        a.view = v === "tenants" || v === "ops" || v === "infra" ? v : "overview";
+        a.view = v === "tenants" || v === "ops" || v === "infra" || v === "queues" ? v : "overview";
         break;
       }
       case "--database-url": a.databaseUrl = next(i++, arg); break;
@@ -280,9 +283,10 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "2": state.view = "tenants"; break;
         case "3": state.view = "ops"; break;
         case "4": state.view = "infra"; break;
+        case "5": state.view = "queues"; break;
         case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
         case "\t": {
-          const order: View[] = ["overview", "tenants", "ops", "infra"];
+          const order: View[] = ["overview", "tenants", "ops", "infra", "queues"];
           state.view = order[(order.indexOf(state.view) + 1) % order.length];
           break;
         }
