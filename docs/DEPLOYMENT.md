@@ -175,12 +175,17 @@ curl http://localhost:3000/health
 
 ### Updating
 
+Read [UPGRADING.md](UPGRADING.md) first. Some releases need env, compose or client changes; upgrading from v0.9.0 does.
+
 ```bash
-docker compose -f docker-compose.prod.yml pull api worker
-docker compose -f docker-compose.prod.yml up -d api worker
+# 1. Back up every database (copy the files off the host)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec backup backup.sh
+# 2. Pull and restart
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api worker
 ```
 
-The entrypoint script runs pending migrations automatically before starting the server (the `api` container only).
+The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
 
 ### Background job worker
 
