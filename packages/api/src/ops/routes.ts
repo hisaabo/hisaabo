@@ -15,7 +15,7 @@
  *   - X-Requested-With + same Origin on every POST; no CORS; no-store; per-IP
  *     rate limits; an audit row for every sign-in attempt, step-up and action.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context, Hono, Next } from "hono";
@@ -194,8 +194,20 @@ function staticFile(dir: string, rel: string): { body: Buffer; type: string } | 
   const full = path.resolve(dir, rel);
   if (!full.startsWith(path.resolve(dir) + path.sep)) return null;
   const type = CONTENT_TYPES[path.extname(full)];
-  if (!type || !existsSync(full) || !statSync(full).isFile()) return null;
-  return { body: readFileSync(full), type };
+  if (!type) return null;
+  // Stat and read through one descriptor (no check-then-read race); never
+  // follow a symlink out of the build output.
+  let fd: number;
+  try {
+    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  try {
+    return fstatSync(fd).isFile() ? { body: readFileSync(fd), type } : null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // ── Registration ─────────────────────────────────────────────

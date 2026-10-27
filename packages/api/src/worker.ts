@@ -8,7 +8,8 @@
  * pgboss schema, then starts. Writes /tmp/worker-heartbeat every 10 s for the
  * container healthcheck.
  */
-import { writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { logger } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { workerPools } from "./queue/config.js";
@@ -34,11 +35,23 @@ async function startWithRetry(): Promise<WorkerRuntime> {
   }
 }
 
+// Owner-only and never through a symlink: the default path is in a temp
+// directory, which outside a container may be shared with other users.
+async function writeHeartbeat(): Promise<void> {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+  const file = await open(HEARTBEAT_FILE, flags, 0o600);
+  try {
+    await file.writeFile(String(Date.now()));
+  } finally {
+    await file.close();
+  }
+}
+
 async function main(): Promise<void> {
   validateEnv({ role: "worker" });
   const runtime = await startWithRetry();
 
-  const beat = () => writeFile(HEARTBEAT_FILE, String(Date.now())).catch((err) => logger.warn({ err }, "heartbeat write failed"));
+  const beat = () => writeHeartbeat().catch((err) => logger.warn({ err }, "heartbeat write failed"));
   await beat();
   const heartbeat = setInterval(beat, HEARTBEAT_MS);
 
