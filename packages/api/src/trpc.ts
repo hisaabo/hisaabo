@@ -1,5 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
+import { z } from "zod";
 import type { Context } from "./context.js";
 import { getTenantDb, type TenantDatabase } from "@hisaabo/db";
 import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.js";
@@ -18,6 +19,17 @@ interface TenantCtx extends Context {
   db: TenantDatabase;
 }
 
+/**
+ * Input-validation failures as "path: message" lines. A ZodError's own
+ * message is its issue list as JSON, whose shape changes between zod
+ * versions; clients show this text to users as-is.
+ */
+export function formatZodIssues(error: z.ZodError): string {
+  return error.issues
+    .map((i) => (i.path.length > 0 ? `${i.path.join(".")}: ${i.message}` : i.message))
+    .join("\n");
+}
+
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
@@ -25,7 +37,11 @@ const t = initTRPC.context<Context>().create({
     const isInternal = error.code === "INTERNAL_SERVER_ERROR";
     return {
       ...shape,
-      message: isInternal ? "Something went wrong. Please try again." : shape.message,
+      message: isInternal
+        ? "Something went wrong. Please try again."
+        : error.cause instanceof z.ZodError
+          ? formatZodIssues(error.cause)
+          : shape.message,
       data: {
         ...shape.data,
         zodError: error.cause instanceof Error ? undefined : null,

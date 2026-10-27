@@ -138,7 +138,7 @@ for org in orgs:
         description: "Array of pending invitations with organization name and assigned role.",
         example: [
           {
-            id: "01957a2b-9999-aaaa-bbbb-ccccddddeeee",
+            id: "01957a2b-9999-7aaa-bbbb-ccccddddeeee",
             tenantName: "Gupta Trading Co.",
             role: "seller",
           },
@@ -188,9 +188,9 @@ invites = resp.json()["result"]["data"]["json"]`,
         curl: `curl -X POST https://api.hisaabo.in/api/trpc/tenant.acceptById \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
-  -d '{"json":{"invitationId":"01957a2b-9999-aaaa-bbbb-ccccddddeeee"}}'`,
+  -d '{"json":{"invitationId":"01957a2b-9999-7aaa-bbbb-ccccddddeeee"}}'`,
         javascript: `const result = await trpc.tenant.acceptById.mutate({
-  invitationId: "01957a2b-9999-aaaa-bbbb-ccccddddeeee",
+  invitationId: "01957a2b-9999-7aaa-bbbb-ccccddddeeee",
 });
 console.log("Joined:", result.tenantName);
 // Session is now pointed at this organization`,
@@ -199,7 +199,7 @@ console.log("Joined:", result.tenantName);
 resp = httpx.post(
     "https://api.hisaabo.in/api/trpc/tenant.acceptById",
     headers={"Authorization": f"Bearer {session_token}"},
-    json={"json": {"invitationId": "01957a2b-9999-aaaa-bbbb-ccccddddeeee"}},
+    json={"json": {"invitationId": "01957a2b-9999-7aaa-bbbb-ccccddddeeee"}},
 )
 data = resp.json()["result"]["data"]["json"]`,
       },

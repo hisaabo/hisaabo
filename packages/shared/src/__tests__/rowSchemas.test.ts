@@ -20,8 +20,8 @@ import { businessRowSchema } from "../selfExport/rowSchemas.js";
 // logo fields so the rest of the schema doesn't obscure the assertion.
 function withLogoFields(extra: Record<string, unknown>): unknown {
   return {
-    id: "11111111-1111-1111-1111-111111111111",
-    createdByUserId: "22222222-2222-2222-2222-222222222222",
+    id: "11111111-1111-4111-8111-111111111111",
+    createdByUserId: "22222222-2222-4222-8222-222222222222",
     name: "Sharma Traders",
     legalName: null,
     gstRegistrationType: "unregistered",
