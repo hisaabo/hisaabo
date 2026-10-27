@@ -24,6 +24,10 @@ regexes = [
   '''^abc123def456ghi789jkl012mno345pq$''',
   # Test fixture in packages/api/src/__tests__/security-auth.test.ts.
   '''^hisaabo_key_vyapar_sharma_testkey_12345$''',
+  # Test fixture in the (since removed) packages/api/src/__tests__/integration/notifications.test.ts, still in git history.
+  '''^fcm-bad-keys-0001$''',
+  # Placeholder key in the README API-key example.
+  '''^hisaabo_key_\.\.\.$''',
 ]
 
 # 2. The one schema comment showing the key-prefix display format.
