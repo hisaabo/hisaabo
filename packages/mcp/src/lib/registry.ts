@@ -27,7 +27,7 @@ export interface ToolServer {
     name: string,
     description: string,
     shape: Args,
-    handler: (input: z.objectOutputType<Args, z.ZodTypeAny>) => Promise<CallToolResult>,
+    handler: (input: z.output<z.ZodObject<Args>>) => Promise<CallToolResult>,
   ): void;
 }
 
@@ -105,7 +105,7 @@ export function createToolRegistry(
           };
         }
         const { confirm: _confirm, ...rest } = input;
-        const result = await handler(rest as z.objectOutputType<typeof shape, z.ZodTypeAny>);
+        const result = await handler(rest as z.output<z.ZodObject<typeof shape>>);
         if (result.isError) return result;
         return {
           ...result,

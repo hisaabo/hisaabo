@@ -13,6 +13,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
+import * as validators from "../validators.js";
 import {
   // Auth
   loginSchema,
@@ -910,5 +912,33 @@ describe("createInvoiceSchema — source origin-channel enum attributes sales to
   it("rejects uppercase or otherwise miscased source values — enum matching is strict to avoid 'POS' / 'Pos' / 'pos' coexisting", () => {
     const result = createInvoiceSchema.safeParse({ ...baseValid, source: "POS" });
     expect(result.success).toBe(false);
+  });
+});
+
+// zod 4 applies a field's `.default()` even under `.partial()`. Update
+// schemas must not, or an update that omits a field resets it.
+describe("update schemas do not fill in create-time defaults", () => {
+  const updateSchemas = Object.entries(validators).filter(
+    ([name, schema]) => name.startsWith("update") && schema instanceof z.ZodType,
+  ) as [string, z.ZodType][];
+
+  it("finds the update schemas", () => {
+    expect(updateSchemas.map(([name]) => name)).toEqual(
+      expect.arrayContaining(["updateBusinessSchema", "updateItemSchema", "updateBankAccountSchema"]),
+    );
+  });
+
+  it.each(updateSchemas)("%s leaves omitted fields out", (_name, schema) => {
+    const result = schema.safeParse({});
+    if (result.success) expect(result.data).toEqual({});
+  });
+
+  it("partialWithoutDefaults keeps validation, drops defaults", () => {
+    const s = validators.partialWithoutDefaults(
+      z.object({ a: z.string().min(2).default("xx"), b: z.number().default(1).optional() }),
+    );
+    expect(s.parse({})).toEqual({});
+    expect(s.parse({ a: "yy" })).toEqual({ a: "yy" });
+    expect(s.safeParse({ a: "y" }).success).toBe(false);
   });
 });

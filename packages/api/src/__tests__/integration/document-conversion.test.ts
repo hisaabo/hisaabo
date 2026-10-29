@@ -348,7 +348,7 @@ describe("DOC-06: Convert from non-existent source", () => {
 
     await expect(
       caller.document.convert({
-        sourceDocumentId: "00000000-0000-0000-0000-000000000099",
+        sourceDocumentId: "00000000-0000-4000-8000-000000000099",
         targetDocumentType: "invoice",
       })
     ).rejects.toMatchObject({

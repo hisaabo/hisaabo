@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { items, itemVariants, invoiceItems, invoices, parties, stockAdjustments } from "@hisaabo/db";
-import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, money } from "@hisaabo/shared";
+import { createItemSchema, updateItemSchema, paginationSchema, itemTypes, itemModes, itemVariantSchema, partialWithoutDefaults, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -1140,7 +1140,7 @@ export const itemRouter = router({
   updateVariant: memberProcedure
     .input(z.object({
       variantId: z.string().uuid(),
-      data: itemVariantSchema.partial(),
+      data: partialWithoutDefaults(itemVariantSchema),
     }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Item");

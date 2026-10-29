@@ -1,4 +1,5 @@
 import { z } from "zod";
+import "../zod-messages.js";
 
 export const manifestSchema = z.object({
   format: z.literal("hisaabo-export"),

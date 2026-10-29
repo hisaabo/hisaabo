@@ -1015,7 +1015,7 @@ export const authRouter = router({
 
   // ── List sessions (active or expired) ───────────────────────
   listSessions: protectedProcedure
-    .input(z.object({ expired: z.boolean().default(false) }).default({}))
+    .input(z.object({ expired: z.boolean().default(false) }).prefault({}))
     .query(async ({ input, ctx }) => {
       const currentSessionId = getSessionIdFromContext(ctx);
       const now = new Date();
