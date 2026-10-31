@@ -14,6 +14,7 @@ import {
   businesses,
   journalEntries,
   journalEntryLines,
+  paymentAllocations,
 } from "@hisaabo/db";
 import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
@@ -1093,6 +1094,11 @@ export const reportsRouter = router({
             date: payments.paymentDate,
             amount: payments.amount,
             mode: payments.mode,
+            tdsAmount: sql<string>`COALESCE((
+              SELECT SUM(${paymentAllocations.tdsAmount})
+              FROM ${paymentAllocations}
+              WHERE ${paymentAllocations.paymentId} = ${payments.id}
+            ), '0')`,
           })
           .from(payments)
           .where(and(...paymentConditions))
@@ -1110,16 +1116,22 @@ export const reportsRouter = router({
           status: inv.status as string | null,
           documentId: inv.id,
         })),
-        ...partyPayments.map((pmt) => ({
-          date: pmt.date,
-          type: "payment" as const,
-          number: pmt.paymentNumber ?? "",
-          description: `Payment (${pmt.mode})`,
-          debit: party.type === "supplier" ? pmt.amount : "0",
-          credit: party.type === "supplier" ? "0" : pmt.amount,
-          status: null as string | null,
-          documentId: pmt.id,
-        })),
+        ...partyPayments.map((pmt) => {
+          const totalSettled = money.add(pmt.amount, pmt.tdsAmount || "0");
+          const hasTds = money.compare(pmt.tdsAmount || "0", "0") > 0;
+          return {
+            date: pmt.date,
+            type: "payment" as const,
+            number: pmt.paymentNumber ?? "",
+            description: hasTds
+              ? `Payment (${pmt.mode}) (incl. TDS ₹${pmt.tdsAmount})`
+              : `Payment (${pmt.mode})`,
+            debit: party.type === "supplier" ? totalSettled : "0",
+            credit: party.type === "supplier" ? "0" : totalSettled,
+            status: null as string | null,
+            documentId: pmt.id,
+          };
+        }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       let runningBalance = party.openingBalance;
@@ -1150,7 +1162,7 @@ export const reportsRouter = router({
           totalDebit,
           totalCredit,
           closingBalance,
-          isDebit: parseFloat(closingBalance) >= 0,
+          isDebit: money.compare(closingBalance, "0") >= 0,
         },
       };
     }),

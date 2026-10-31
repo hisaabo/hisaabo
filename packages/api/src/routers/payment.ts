@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
+import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions, tdsSectionConfigs } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -9,6 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
+import { seedTdsSections } from "../lib/tds-seed.js";
 
 const ASSIGN_CHUNK_SIZE = 500;
 
@@ -21,9 +22,30 @@ function chunk<T>(items: T[], size: number): T[][] {
 type PaymentTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 
 // Allocations must fit inside the payment itself.
-function assertAllocationsFitPayment(allocations: Array<{ amount: string }>, paymentAmount: string) {
-  if (money.compare(money.sum(allocations.map((a) => a.amount)), paymentAmount) > 0) {
+type TdsAllocation = { amount: string; tdsAmount?: string; tdsSectionCode?: string | null; tdsRate?: string | null };
+
+export function assertAllocationsFitPayment(allocations: TdsAllocation[], paymentAmount: string) {
+  const gross = money.sum(allocations.map((a) => a.amount));
+  const tds = money.sum(allocations.map((a) => a.tdsAmount || "0"));
+  if (money.compare(gross, paymentAmount) > 0 && money.compare(tds, "0") === 0) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Allocations exceed the payment amount" });
+  }
+  if (money.compare(tds, "0") > 0 && money.compare(gross, money.add(paymentAmount, tds)) !== 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Gross allocations must equal net payment plus TDS" });
+  }
+  for (const alloc of allocations) {
+    const amount = alloc.tdsAmount || "0";
+    if (money.compare(amount, alloc.amount) > 0) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "TDS amount cannot exceed gross allocation" });
+    }
+    const hasSection = Boolean(alloc.tdsSectionCode);
+    const hasRate = alloc.tdsRate !== undefined && alloc.tdsRate !== null && alloc.tdsRate !== "";
+    if (money.compare(amount, "0") > 0 && (!hasSection || !hasRate || money.compare(alloc.tdsRate || "0", "0") <= 0)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "TDS amount requires section code and rate" });
+    }
+    if (money.compare(amount, "0") === 0 && (hasSection || hasRate)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "TDS section and rate require a positive TDS amount" });
+    }
   }
 }
 
@@ -44,7 +66,8 @@ async function assertAllocationAllowed(
   tx: PaymentTx,
   businessId: string,
   partyId: string,
-  alloc: { invoiceId: string; amount: string },
+  alloc: TdsAllocation & { invoiceId: string },
+  paymentDate: Date = new Date(),
 ) {
   const [inv] = await tx.select({
     totalAmount: invoices.totalAmount,
@@ -52,6 +75,7 @@ async function assertAllocationAllowed(
     partyId: invoices.partyId,
     status: invoices.status,
     documentType: invoices.documentType,
+    type: invoices.type,
     deletedAt: invoices.deletedAt,
   }).from(invoices)
     .where(and(eq(invoices.id, alloc.invoiceId), eq(invoices.businessId, businessId)))
@@ -61,6 +85,41 @@ async function assertAllocationAllowed(
   if (!inv) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
   if (inv.deletedAt || inv.status === "cancelled" || inv.documentType !== "invoice") {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Payments cannot be applied to this invoice" });
+  }
+  if (money.compare(alloc.tdsAmount || "0", "0") > 0) {
+    if (inv.type !== "sale") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "TDS is supported only for sales invoices" });
+    }
+    let [section] = await tx.select({ id: tdsSectionConfigs.id })
+      .from(tdsSectionConfigs)
+      .where(and(
+        eq(tdsSectionConfigs.businessId, businessId),
+        eq(tdsSectionConfigs.sectionCode, (alloc.tdsSectionCode || "").toUpperCase()),
+        eq(tdsSectionConfigs.status, "active"),
+        sql`${tdsSectionConfigs.effectiveFrom} <= ${paymentDate.toISOString()}::timestamptz`,
+        sql`(${tdsSectionConfigs.effectiveTo} IS NULL OR ${tdsSectionConfigs.effectiveTo} >= ${paymentDate.toISOString()}::timestamptz)`,
+      ))
+      .limit(1);
+    if (!section) {
+      const [anyConfig] = await tx.select({ id: tdsSectionConfigs.id })
+        .from(tdsSectionConfigs)
+        .where(eq(tdsSectionConfigs.businessId, businessId))
+        .limit(1);
+      if (!anyConfig) {
+        await seedTdsSections(tx, businessId);
+        [section] = await tx.select({ id: tdsSectionConfigs.id })
+          .from(tdsSectionConfigs)
+          .where(and(
+            eq(tdsSectionConfigs.businessId, businessId),
+            eq(tdsSectionConfigs.sectionCode, (alloc.tdsSectionCode || "").toUpperCase()),
+            eq(tdsSectionConfigs.status, "active"),
+            sql`${tdsSectionConfigs.effectiveFrom} <= ${paymentDate.toISOString()}::timestamptz`,
+            sql`(${tdsSectionConfigs.effectiveTo} IS NULL OR ${tdsSectionConfigs.effectiveTo} >= ${paymentDate.toISOString()}::timestamptz)`,
+          ))
+          .limit(1);
+      }
+    }
+    if (!section) throw new TRPCError({ code: "BAD_REQUEST", message: "TDS section is not active" });
   }
   if (inv.partyId !== partyId) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice belongs to a different party than the payment" });
@@ -265,12 +324,15 @@ export const paymentRouter = router({
     requireCan(ctx.ability, "create", "Payment");
     const payment = await ctx.db.transaction(async (tx) => {
       // Security: validate that partyId belongs to the current business.
-      const [partyCheck] = await tx.select({ id: parties.id })
+      const [partyCheck] = await tx.select({ id: parties.id, type: parties.type })
         .from(parties)
         .where(and(eq(parties.id, input.partyId), eq(parties.businessId, ctx.businessId)))
         .limit(1);
       if (!partyCheck) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Party not found in this business" });
+      }
+      if (input.allocations?.some((alloc) => money.compare(alloc.tdsAmount || "0", "0") > 0) && partyCheck.type !== "customer") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "TDS is supported only for customer receipts" });
       }
 
       if (input.bankAccountId) {
@@ -323,11 +385,11 @@ export const paymentRouter = router({
       const effectiveAllocations = input.allocations?.length
         ? input.allocations
         : input.invoiceId
-          ? [{ invoiceId: input.invoiceId, amount: input.amount }]
+          ? [{ invoiceId: input.invoiceId, amount: input.amount, tdsAmount: "0" }]
           : [];
 
       for (const alloc of effectiveAllocations) {
-        await assertAllocationAllowed(tx, ctx.businessId, input.partyId, alloc);
+        await assertAllocationAllowed(tx, ctx.businessId, input.partyId, alloc, input.paymentDate ? new Date(input.paymentDate) : new Date());
 
         // Single SQL: update amountPaid and status atomically
         await tx.execute(sql`
@@ -350,6 +412,9 @@ export const paymentRouter = router({
             paymentId: payment.id,
             invoiceId: alloc.invoiceId,
             amount: alloc.amount,
+            tdsAmount: alloc.tdsAmount || "0",
+            tdsSectionCode: alloc.tdsSectionCode || null,
+            tdsRate: alloc.tdsRate || null,
           }))
         );
       }
@@ -469,6 +534,9 @@ export const paymentRouter = router({
         .select({
           invoiceId: paymentAllocations.invoiceId,
           allocAmount: paymentAllocations.amount,
+          tdsAmount: paymentAllocations.tdsAmount,
+          tdsSectionCode: paymentAllocations.tdsSectionCode,
+          tdsRate: paymentAllocations.tdsRate,
           invoiceNumber: invoices.invoiceNumber,
           invoiceDate: invoices.invoiceDate,
           totalAmount: invoices.totalAmount,
@@ -488,6 +556,9 @@ export const paymentRouter = router({
         amountPaid: a.amountPaid,
         status: a.status,
         amount: a.allocAmount,
+        tdsAmount: a.tdsAmount,
+        tdsSectionCode: a.tdsSectionCode,
+        tdsRate: a.tdsRate,
       }));
 
       if (linkedInvoices.length === 0 && payment.invoiceId) {
@@ -508,6 +579,9 @@ export const paymentRouter = router({
             amountPaid: inv.amountPaid,
             status: inv.status,
             amount: payment.amount,
+            tdsAmount: "0",
+            tdsSectionCode: null,
+            tdsRate: null,
           }];
         }
       }
@@ -529,10 +603,20 @@ export const paymentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Payment not found" });
       }
 
+      if (input.allocations?.some((alloc) => money.compare(alloc.tdsAmount || "0", "0") > 0)) {
+        const [party] = await tx.select({ type: parties.type })
+          .from(parties)
+          .where(and(eq(parties.id, existing.partyId), eq(parties.businessId, ctx.businessId)))
+          .limit(1);
+        if (!party || party.type !== "customer") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "TDS is supported only for customer receipts" });
+        }
+      }
+
       if (input.bankAccountId) {
         await assertBankAccountUsable(tx, ctx.ability, ctx.businessId, input.bankAccountId);
       }
-      if (input.allocations?.length) {
+      if (input.allocations !== undefined) {
         assertAllocationsFitPayment(input.allocations, input.amount ?? existing.amount);
       }
 
@@ -540,7 +624,22 @@ export const paymentRouter = router({
       const existingAllocations = await tx.select({
         invoiceId: paymentAllocations.invoiceId,
         amount: paymentAllocations.amount,
+        tdsAmount: paymentAllocations.tdsAmount,
+        tdsSectionCode: paymentAllocations.tdsSectionCode,
+        tdsRate: paymentAllocations.tdsRate,
       }).from(paymentAllocations).where(eq(paymentAllocations.paymentId, existing.id));
+
+      const hasExistingTds = existingAllocations.some((a) => money.compare(a.tdsAmount || "0", "0") > 0);
+      const isMultiAllocation = existingAllocations.length > 1;
+
+      if (!input.allocations && input.amount !== undefined && money.compare(input.amount, existing.amount) !== 0) {
+        if (hasExistingTds || isMultiAllocation) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Allocations are required when changing the payment amount",
+          });
+        }
+      }
 
       if (existingAllocations.length > 0) {
         for (const alloc of existingAllocations) {
@@ -616,11 +715,13 @@ export const paymentRouter = router({
       const newBankAccountId = input.bankAccountId === null ? null : (input.bankAccountId ?? existing.bankAccountId);
       const newDate = input.paymentDate ? new Date(input.paymentDate) : existing.paymentDate;
 
-      const primaryInvoiceId = input.allocations?.length
-        ? input.allocations[0].invoiceId
-        : existing.invoiceId;
+      const primaryInvoiceId = input.allocations !== undefined
+        ? input.allocations[0]?.invoiceId ?? null
+        : existingAllocations.length === 1 && !hasExistingTds
+          ? existingAllocations[0].invoiceId
+          : existing.invoiceId;
 
-      if (input.allocations?.length) {
+      if (input.allocations !== undefined && input.allocations.length > 0) {
         await assertInvoicesExist(tx, ctx.businessId, input.allocations.map((a) => a.invoiceId));
       }
 
@@ -639,14 +740,18 @@ export const paymentRouter = router({
         .returning();
 
       // 5. Apply new allocations
-      const newAllocations = input.allocations?.length
+      const newAllocations = input.allocations !== undefined
         ? input.allocations
-        : primaryInvoiceId
-          ? [{ invoiceId: primaryInvoiceId, amount: newAmount }]
-          : [];
+        : existingAllocations.length === 1 && !hasExistingTds
+          ? [{ invoiceId: existingAllocations[0].invoiceId, amount: newAmount, tdsAmount: "0" }]
+          : existingAllocations.length > 0
+            ? existingAllocations
+            : primaryInvoiceId
+            ? [{ invoiceId: primaryInvoiceId, amount: newAmount, tdsAmount: "0" }]
+            : [];
 
       for (const alloc of newAllocations) {
-        await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc);
+        await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc, newDate);
 
         // Single SQL: update amountPaid and status atomically
         await tx.execute(sql`
@@ -669,6 +774,9 @@ export const paymentRouter = router({
             paymentId: existing.id,
             invoiceId: alloc.invoiceId,
             amount: alloc.amount,
+            tdsAmount: alloc.tdsAmount || "0",
+            tdsSectionCode: alloc.tdsSectionCode || null,
+            tdsRate: alloc.tdsRate || null,
           }))
         );
       }

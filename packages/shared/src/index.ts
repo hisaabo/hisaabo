@@ -33,3 +33,11 @@ export type {
   ModifiableRecord,
 } from "./permissions.js";
 export { csvCell, csvRow, stripControlChars } from "./sanitize.js";
+export {
+  TDS_TAX_CODE_SOURCE,
+  TDS_TAX_CODES,
+  classifyTdsTaxCode,
+  getTdsTaxCode,
+  normalizeTdsTaxCode,
+} from "./tax-codes.js";
+export type { TdsHistoricalValidity, TdsTaxCode, TdsTaxCodeStatus } from "./tax-codes.js";

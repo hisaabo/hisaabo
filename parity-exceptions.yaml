@@ -299,6 +299,11 @@ exceptions:
       - hsn.validate
       - hsn.validateForTurnover
 
+      # --- TDS Section Configurations ---
+      # TDS section configuration listing feeds the web payment UI dropdown; mobile
+      # records simplified payments without TDS allocation.
+      - tdsSection.list
+
   cli:
     not-applicable:
       # --- Item history paging ---
@@ -399,6 +404,11 @@ exceptions:
       - itemImage.reorder
       - itemImage.setPrimary
       - itemImage.delete
+
+      # --- TDS Section Configurations ---
+      # TDS section configuration listing feeds the web payment UI dropdown; the CLI
+      # accepts statutory section codes directly without an interactive section picker.
+      - tdsSection.list
 
   mcp:
     not-applicable:
@@ -537,3 +547,8 @@ exceptions:
       - itemImage.reorder
       - itemImage.setPrimary
       - itemImage.delete
+
+      # --- TDS Section Configurations ---
+      # TDS section configuration listing feeds the web payment UI dropdown; MCP
+      # agents specify statutory section codes directly on payment allocations.
+      - tdsSection.list

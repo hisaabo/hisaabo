@@ -12,6 +12,7 @@ const DEFAULT_ACCOUNTS: SeedAccount[] = [
   { code: "1000", name: "Cash in Hand", accountType: "asset" },
   { code: "1010", name: "Bank Accounts", accountType: "asset" },
   { code: "1100", name: "Accounts Receivable", accountType: "asset" },
+  { code: "1600", name: "TDS Receivable", accountType: "asset" },
   { code: "1200", name: "Inventory", accountType: "asset" },
   { code: "1300", name: "Advances to Suppliers", accountType: "asset" },
   { code: "1400", name: "Prepaid Expenses", accountType: "asset" },

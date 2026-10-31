@@ -25,6 +25,7 @@ export function QuickPartyCreate({
 }: QuickPartyCreateProps) {
   const [name, setName] = useState(initialName);
   const [phone, setPhone] = useState("");
+  const [tan, setTan] = useState("");
   const [partyType, setPartyType] = useState<PartyType>(defaultType);
 
   // Sync state when the dialog opens with new props
@@ -32,6 +33,7 @@ export function QuickPartyCreate({
     if (open) {
       setName(initialName);
       setPhone("");
+      setTan("");
       setPartyType(defaultType);
     }
   }, [open, initialName, defaultType]);
@@ -53,6 +55,7 @@ export function QuickPartyCreate({
   function resetAndClose() {
     setName("");
     setPhone("");
+    setTan("");
     onClose();
   }
 
@@ -64,6 +67,7 @@ export function QuickPartyCreate({
       type: partyType,
       name: name.trim(),
       phone: phone.trim(),
+      tan: tan.trim() ? tan.trim().toUpperCase() : undefined,
     });
   }
 
@@ -97,6 +101,19 @@ export function QuickPartyCreate({
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Phone number"
           type="tel"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+        />
+
+        <InputField
+          label="TAN (Optional)"
+          value={tan}
+          onChange={(e) => setTan(e.target.value.toUpperCase())}
+          placeholder="AAAA00000A"
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();

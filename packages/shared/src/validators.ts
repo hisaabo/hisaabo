@@ -1,6 +1,7 @@
 import { z } from "zod";
 import "./zod-messages.js";
 import { validateInvoiceTotals } from "./calc.js";
+import { money } from "./money.js";
 
 // ── Common ─────────────────────────────────────────────────────
 
@@ -158,6 +159,15 @@ export type BankTransactionType = (typeof bankTransactionTypes)[number];
 export const partyTypes = ["customer", "supplier"] as const;
 export type PartyType = (typeof partyTypes)[number];
 
+const tanSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const normalized = value.trim().toUpperCase();
+    return normalized === "" ? null : normalized;
+  },
+  z.string().regex(/^[A-Z]{4}[0-9]{5}[A-Z]$/, "Invalid TAN").nullable().optional(),
+);
+
 export const createPartySchema = z.object({
   type: z.enum(partyTypes),
   name: z.string().min(1).max(200),
@@ -165,6 +175,7 @@ export const createPartySchema = z.object({
   email: z.string().trim().toLowerCase().email().optional().or(z.literal("")),
   gstin: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).optional().or(z.literal("")),
   pan: z.string().optional().or(z.literal("")),
+  tan: tanSchema,
   billingAddress: z.string().max(500).optional(),
   shippingAddress: z.string().max(500).optional(),
   city: z.string().max(100).optional(),
@@ -373,13 +384,49 @@ export const paymentModes = ["cash", "bank", "upi", "cheque", "other", "credit_c
 
 export const paymentAllocationSchema = z.object({
   invoiceId: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") > 0, { message: "Amount must be greater than zero" }),
+  tdsAmount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0").refine((v) => money.compare(v, "0") >= 0, { message: "TDS amount cannot be negative" }),
+  tdsSectionCode: z.string().trim().min(1).max(20).optional(),
+  tdsRate: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") >= 0 && money.compare(v, "100") <= 0, { message: "TDS rate must be between 0 and 100" }).optional(),
+}).superRefine((value, ctx) => {
+  const hasPositiveTds = money.compare(value.tdsAmount, "0") > 0;
+  if (hasPositiveTds) {
+    if (!value.tdsSectionCode || value.tdsSectionCode.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tdsSectionCode"],
+        message: "TDS section code is required when TDS amount is positive",
+      });
+    }
+    if (!value.tdsRate || money.compare(value.tdsRate, "0") <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tdsRate"],
+        message: "TDS rate must be greater than zero when TDS amount is positive",
+      });
+    }
+    if (money.compare(value.tdsAmount, value.amount) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tdsAmount"],
+        message: "TDS amount cannot exceed gross allocation",
+      });
+    }
+  } else {
+    if (value.tdsSectionCode || (value.tdsRate && money.compare(value.tdsRate, "0") > 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tdsSectionCode"],
+        message: "TDS section and rate require a positive TDS amount",
+      });
+    }
+  }
 });
 
 export const createPaymentSchema = z.object({
   invoiceId: z.string().uuid().optional(),
   partyId: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") > 0, { message: "Amount must be greater than zero" }),
   discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0"),
   mode: z.enum(paymentModes),
   referenceNumber: z.string().max(100).optional(),
@@ -390,9 +437,23 @@ export const createPaymentSchema = z.object({
   allocations: z.array(paymentAllocationSchema).optional(),
 });
 
+const tdsSectionConfigFields = {
+  sectionCode: z.string().trim().min(1).max(20).transform((value) => value.toUpperCase()),
+  sectionLabel: z.string().trim().min(1).max(200),
+  effectiveFrom: z.string().datetime(),
+  effectiveTo: z.string().datetime().optional().nullable(),
+  status: z.enum(["active", "inactive"]).default("active"),
+  version: z.number().int().positive().default(1),
+};
+
+export const createTdsSectionConfigSchema = z.object(tdsSectionConfigFields).refine(
+  (value) => !value.effectiveTo || value.effectiveTo >= value.effectiveFrom,
+  { message: "effectiveTo must be on or after effectiveFrom", path: ["effectiveTo"] },
+);
+
 export const updatePaymentSchema = z.object({
   id: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => parseFloat(v) > 0, { message: "Amount must be greater than zero" }).optional(),
+  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") > 0, { message: "Amount must be greater than zero" }).optional(),
   discount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).optional(),
   mode: z.enum(paymentModes).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),

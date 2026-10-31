@@ -115,6 +115,7 @@ export const partyRouter = router({
           email: parties.email,
           gstin: parties.gstin,
           pan: parties.pan,
+          tan: parties.tan,
           openingBalance: parties.openingBalance,
           billingAddress: parties.billingAddress,
           shippingAddress: parties.shippingAddress,

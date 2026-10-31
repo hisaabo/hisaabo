@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "main",
+    "origin",
+    "tds-tax-code-registry-latest"
+  ],
+  "parent": {
+    "main": null,
+    "origin": "main",
+    "tds-tax-code-registry-latest": "main"
+  },
+  "order": [
+    "main",
+    "origin",
+    "tds-tax-code-registry-latest"
+  ]
+}

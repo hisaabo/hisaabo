@@ -25,10 +25,11 @@
  *   Debit Note / Purchase Return → Dr 2000 Payable / Cr 5010 Purchase Returns + Cr Input GST
  */
 
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import {
   invoices,
   payments,
+  paymentAllocations,
   expenses,
   parties,
   businesses,
@@ -37,6 +38,7 @@ import {
   journalEntryLines,
 } from "@hisaabo/db";
 import { buildBusinessDateFilter } from "./business-date.js";
+import { money } from "@hisaabo/shared";
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -446,6 +448,7 @@ export async function deriveLedger(
     amount: string;
     mode: string;
     partyType: string;
+    tdsAmount: string;
   }> = await db
     .select({
       id: payments.id,
@@ -454,6 +457,11 @@ export async function deriveLedger(
       amount: payments.amount,
       mode: payments.mode,
       partyType: parties.type,
+      tdsAmount: sql<string>`COALESCE((
+        SELECT SUM(${paymentAllocations.tdsAmount})
+        FROM ${paymentAllocations}
+        WHERE ${paymentAllocations.paymentId} = ${payments.id}
+      ), '0')`,
     })
     .from(payments)
     .innerJoin(parties, eq(parties.id, payments.partyId))
@@ -477,9 +485,15 @@ export async function deriveLedger(
     const pmtNum = pmt.paymentNumber ?? pmt.id.slice(0, 8);
 
     if (pmt.partyType === "customer") {
-      // Payment received: Dr Cash/Bank / Cr Receivable
+      // Payment received: Dr Cash/Bank + TDS receivable / Cr Receivable
       lines.push(debitLine(cashOrBank, amount));
-      lines.push(creditLine(receivable, amount));
+      const hasTds = money.compare(pmt.tdsAmount, "0") > 0;
+      if (hasTds) {
+        lines.push(debitLine(getAccount(coa, "1600"), pmt.tdsAmount));
+      }
+      lines.push(creditLine(receivable, hasTds
+        ? money.add(amount, pmt.tdsAmount)
+        : amount));
 
       entries.push({
         date: pmt.paymentDate,
