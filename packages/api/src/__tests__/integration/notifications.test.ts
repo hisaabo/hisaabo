@@ -250,6 +250,25 @@ describe("store orders from the public storefront", () => {
 
 // ── Preferences ─────────────────────────────────────────────────────────────
 
+describe("dispatcher claiming", () => {
+  it("picks up an event the instant it is emitted (due-ness is judged on the database clock)", async () => {
+    // Regression: the claim used to compare available_at (stamped by Postgres
+    // with microsecond precision) against a millisecond-truncated JS timestamp,
+    // so an event emitted less than a millisecond earlier was "not yet due".
+    // payment.made is inbox-only for owners, so this stays clear of push quotas.
+    for (let i = 0; i < 15; i++) {
+      await emitNotificationEvent(db, {
+        tenantId: world.tenant1.id, businessId: world.business1.id, type: "payment.made",
+        payload: { paymentId: `00000000-0000-4000-8000-${String(200 + i).padStart(12, "0")}`, paymentNumber: `PAY-C${i}`, amount: "100", partyName: "Shree Traders" },
+        actorKind: "system", dedupeKey: `payment.made:claim-timing-${i}`,
+      });
+      const stats = await dispatchPending(db, provider);
+      expect(stats.processed).toBe(1);
+    }
+    expect((await inboxOf(world.ramesh.id)).filter((r) => r.eventType === "payment.made")).toHaveLength(15);
+  });
+});
+
 describe("preferences", () => {
   afterEach(async () => {
     for (const businessId of [null, world.business1.id]) {

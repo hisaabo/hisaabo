@@ -75,23 +75,30 @@ const emptyStats = (): DispatchStats => ({ processed: 0, inboxRows: 0, pushes: 0
 
 // ── Claiming ────────────────────────────────────────────────────────────────
 
-async function claimBatch(db: TenantDatabase, now: Date): Promise<OutboxRow[]> {
+/**
+ * Claim up to BATCH_SIZE due rows. Every time comparison here runs on the
+ * database clock (`now()`), the same clock that stamped `available_at` on
+ * insert: comparing it with a JS timestamp truncated to milliseconds could
+ * leave a row inserted less than a millisecond earlier "not yet due", so a
+ * fresh event would sit until the next tick (or, in tests that dispatch
+ * straight after emitting, never be seen at all).
+ */
+async function claimBatch(db: TenantDatabase): Promise<OutboxRow[]> {
   // Recover rows whose dispatcher died mid-flight.
   await db
     .update(notificationOutbox)
     .set({ status: "pending" })
     .where(and(
       eq(notificationOutbox.status, "processing"),
-      lt(notificationOutbox.availableAt, new Date(now.getTime() - STALE_PROCESSING_MS)),
+      sql`${notificationOutbox.availableAt} < now() - make_interval(secs => ${STALE_PROCESSING_MS / 1000})`,
     ));
 
-  const at = now.toISOString();
   const rows = await db.execute(sql`
     UPDATE notification_outbox
-    SET status = 'processing', attempts = attempts + 1, available_at = ${at}::timestamptz
+    SET status = 'processing', attempts = attempts + 1, available_at = now()
     WHERE id IN (
       SELECT id FROM notification_outbox
-      WHERE status = 'pending' AND available_at <= ${at}::timestamptz
+      WHERE status = 'pending' AND available_at <= now()
       ORDER BY created_at
       LIMIT ${BATCH_SIZE}
       FOR UPDATE SKIP LOCKED
@@ -419,7 +426,7 @@ export async function dispatchPending(
 ): Promise<DispatchStats> {
   const stats = emptyStats();
   for (let i = 0; i < maxBatches; i++) {
-    const rows = await claimBatch(db, new Date());
+    const rows = await claimBatch(db);
     if (rows.length === 0) break;
     for (const row of rows) {
       try {
@@ -432,7 +439,7 @@ export async function dispatchPending(
         await db.update(notificationOutbox)
           .set({
             status: giveUp ? "failed" : "pending",
-            availableAt: new Date(Date.now() + backoffMs),
+            availableAt: sql`now() + make_interval(secs => ${backoffMs / 1000})`,
             lastError: err instanceof Error ? err.message.slice(0, 500) : String(err).slice(0, 500),
           })
           .where(eq(notificationOutbox.id, row.id));
