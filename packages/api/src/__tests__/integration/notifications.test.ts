@@ -438,6 +438,37 @@ describe("inbox procedures", () => {
     expect((await owner().notification.list({})).items).toHaveLength(0);
   });
 
+  it("paginates entries created in the same instant without skipping or repeating any", async () => {
+    // Same timestamp on purpose: a (createdAt) cursor alone would drop rows at the page boundary.
+    const at = new Date();
+    for (let i = 0; i < 5; i++) {
+      await db.insert(notificationInbox).values({
+        tenantId: world.tenant1.id, businessId: world.business1.id, recipientUserId: world.ramesh.id,
+        channel: "general", eventType: "general.announcement", title: `Tie ${i}`, body: "b",
+        target: { kind: "inbox" }, createdAt: at,
+      });
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let cursorId: string | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await owner().notification.list({ limit: 2, cursor, cursorId });
+      seen.push(...page.items.map((i) => i.title).filter((t) => t.startsWith("Tie ")));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+      cursorId = page.nextCursorId ?? undefined;
+    }
+    expect([...seen].sort()).toEqual(["Tie 0", "Tie 1", "Tie 2", "Tie 3", "Tie 4"]);
+  });
+
+  it("still accepts a cursor without cursorId (older clients paginate by timestamp)", async () => {
+    const first = await owner().notification.list({ limit: 1 });
+    const older = await owner().notification.list({ limit: 10, cursor: new Date(Date.now() + 60_000).toISOString() });
+    expect(first.items).toHaveLength(1);
+    expect(older.items.map((i) => i.id)).toContain(first.items[0].id);
+  });
+
   it("other tenants and other users cannot see or touch the entries", async () => {
     const [entry] = await inboxOf(world.ramesh.id);
     expect((await otherTenantOwner().notification.list({})).items).toHaveLength(0);

@@ -113,8 +113,11 @@ export const notificationRouter = router({
   list: viewerProcedure
     .input(z.object({
       limit: z.number().int().min(1).max(100).default(30),
-      // Keyset pagination: pass the previous page's nextCursor
+      // Keyset pagination: pass the previous page's nextCursor and nextCursorId.
+      // cursorId is optional so existing clients that only send `cursor` keep
+      // working (they paginate by timestamp alone, as before).
       cursor: z.string().datetime().optional(),
+      cursorId: z.string().uuid().optional(),
       unreadOnly: z.boolean().default(false),
       channel: channelSchema.optional(),
     }).prefault({}))
@@ -131,6 +134,9 @@ export const notificationRouter = router({
           locked: notificationInbox.locked,
           readAt: notificationInbox.readAt,
           createdAt: notificationInbox.createdAt,
+          // Full microsecond precision for the cursor: a JS Date only holds
+          // milliseconds, and truncating would skip rows created in the same ms.
+          cursorAt: sql<string>`to_char(${notificationInbox.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         })
         .from(notificationInbox)
         .where(and(
@@ -138,15 +144,21 @@ export const notificationRouter = router({
           isNull(notificationInbox.archivedAt),
           input.unreadOnly ? isNull(notificationInbox.readAt) : undefined,
           input.channel ? eq(notificationInbox.channel, input.channel) : undefined,
-          input.cursor ? lt(notificationInbox.createdAt, new Date(input.cursor)) : undefined,
+          input.cursor && input.cursorId
+            ? sql`(${notificationInbox.createdAt}, ${notificationInbox.id}) < (${input.cursor}::timestamptz, ${input.cursorId}::uuid)`
+            : input.cursor
+              ? sql`${notificationInbox.createdAt} < ${input.cursor}::timestamptz`
+              : undefined,
         ))
-        .orderBy(desc(notificationInbox.createdAt))
+        .orderBy(desc(notificationInbox.createdAt), desc(notificationInbox.id))
         .limit(input.limit + 1);
       const hasMore = rows.length > input.limit;
-      const items = hasMore ? rows.slice(0, input.limit) : rows;
+      const page = hasMore ? rows.slice(0, input.limit) : rows;
+      const last = page[page.length - 1];
       return {
-        items,
-        nextCursor: hasMore ? items[items.length - 1].createdAt.toISOString() : null,
+        items: page.map(({ cursorAt: _cursorAt, ...item }) => item),
+        nextCursor: hasMore ? last.cursorAt : null,
+        nextCursorId: hasMore ? last.id : null,
       };
     }),
 

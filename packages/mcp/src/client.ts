@@ -550,7 +550,7 @@ export class HisaaboClient {
   get notification() {
     const c = this;
     return {
-      list(input: { limit?: number; cursor?: string; unreadOnly?: boolean; channel?: NotificationChannel }) {
+      list(input: { limit?: number; cursor?: string; cursorId?: string; unreadOnly?: boolean; channel?: NotificationChannel }) {
         return c.query("notification.list", input);
       },
       unreadCounts() {
