@@ -8,8 +8,8 @@ import {
   updateInvoiceStatus,
 } from "../helpers/seed";
 
-const REGISTRY_CODE = "1001";
-const REGISTRY_LABEL = "Payment to government employees other than union government employees";
+const REGISTRY_CODE = "1024";
+const REGISTRY_LABEL = "Contract payment - contractor is other than individual or HUF";
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
 async function watchBrowserHealth(page: Page) {
