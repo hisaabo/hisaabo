@@ -11,12 +11,14 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi, type MockInstance } from "vitest";
 import { createECDH, randomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   getTenantDb,
+  invoices,
   notificationInbox,
   notificationOutbox,
   notificationPreferences,
+  payments,
   pushDevices,
   sessions,
   userNotificationSettings,
@@ -38,7 +40,7 @@ import {
   type TestSession,
 } from "../helpers/fixtures.js";
 import { emailService } from "../../lib/email.js";
-import { dispatchPending, emitNotificationEvent } from "../../lib/notifications/index.js";
+import { dispatchPending, emitNotificationEvent, emitNotificationEventSafe } from "../../lib/notifications/index.js";
 import { decryptOnDevice } from "../../lib/notifications/push-crypto.js";
 import type { PushDevice, PushMessage, PushProvider, PushResult } from "../../lib/notifications/push-provider.js";
 import { sweepCollections } from "../../lib/notifications/collections-sweep.js";
@@ -266,6 +268,60 @@ describe("dispatcher claiming", () => {
       expect(stats.processed).toBe(1);
     }
     expect((await inboxOf(world.ramesh.id)).filter((r) => r.eventType === "payment.made")).toHaveLength(15);
+  });
+});
+
+describe("hot-path isolation", () => {
+  const dropOutboxFault = async () => {
+    await db.execute(sql.raw("DROP TRIGGER IF EXISTS test_outbox_fault ON notification_outbox"));
+    await db.execute(sql.raw("DROP FUNCTION IF EXISTS test_outbox_fault()"));
+  };
+  // Make every insert into the outbox fail, like a bad payload, a constraint
+  // violation or a table missing on a half-migrated database would.
+  const breakOutbox = async () => {
+    await db.execute(sql.raw(
+      "CREATE OR REPLACE FUNCTION test_outbox_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'outbox unavailable (test)'; END $$",
+    ));
+    await db.execute(sql.raw(
+      "CREATE TRIGGER test_outbox_fault BEFORE INSERT ON notification_outbox FOR EACH ROW EXECUTE FUNCTION test_outbox_fault()",
+    ));
+  };
+  afterEach(dropOutboxFault);
+
+  it("a payment still commits when the notification cannot be written", async () => {
+    const invoice = await sentInvoice(world.ramesh.id);
+    await breakOutbox();
+
+    const payment = await seller().payment.create({
+      partyId: world.party1.id, amount: "10000", mode: "upi",
+      allocations: [{ invoiceId: invoice.id, amount: "10000" }],
+    });
+
+    // The business write is intact: the payment exists and settled the invoice…
+    const [stored] = await db.select().from(payments).where(eq(payments.id, payment.id));
+    expect(stored).toBeDefined();
+    const [settled] = await db.select().from(invoices).where(eq(invoices.id, invoice.id));
+    expect(settled.status).toBe("paid");
+    // …and only the notification was lost.
+    expect(await db.select().from(notificationOutbox)).toHaveLength(0);
+
+    // Once the outbox works again the next payment notifies normally.
+    await dropOutboxFault();
+    const next = await sentInvoice(world.ramesh.id);
+    await seller().payment.create({ partyId: world.party1.id, amount: "100", mode: "cash", invoiceId: next.id });
+    expect(await db.select().from(notificationOutbox)).toHaveLength(1);
+  });
+
+  it("a rolled-back outer transaction still drops the event (transactional outbox is preserved)", async () => {
+    await expect(db.transaction(async (tx) => {
+      await emitNotificationEventSafe(tx, {
+        tenantId: world.tenant1.id, businessId: world.business1.id, type: "store.order_placed",
+        payload: { orderId: "00000000-0000-4000-8000-000000000301", orderNumber: "ORD-RB", customerName: "Asha", totalAmount: "100", itemCount: 1 },
+        actorKind: "system", dedupeKey: "store.order_placed:rollback-test",
+      });
+      throw new Error("order failed after the emit");
+    })).rejects.toThrow(/order failed/);
+    expect(await db.select().from(notificationOutbox)).toHaveLength(0);
   });
 });
 

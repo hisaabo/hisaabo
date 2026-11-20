@@ -1,4 +1,4 @@
-export { emitNotificationEvent, emitNotificationEventSafe, emitTenantEvent, userDisplayName, resolveBusinessTenantId } from "./emit.js";
+export { emitNotificationEvent, emitNotificationEventSafe, withNotificationSavepoint, emitTenantEvent, userDisplayName, resolveBusinessTenantId } from "./emit.js";
 export type { EmitInput, ActorKind, TenantDbOrTx } from "./emit.js";
 export { dispatchPending, pruneNotifications, targetPath } from "./dispatcher.js";
 

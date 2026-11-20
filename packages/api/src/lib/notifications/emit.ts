@@ -5,7 +5,14 @@
  * back, the notification never existed. The dispatcher picks the outbox row up
  * within a few seconds (docs/architecture/notifications.md §6).
  *
- *   await emitNotificationEvent(tx, {
+ * Inside a hot path (payment, store order) use emitNotificationEventSafe or
+ * withNotificationSavepoint instead: they run the emit in a SAVEPOINT, so an
+ * outbox failure (bad payload, constraint, table missing on a half-migrated
+ * database) is logged and rolled back to the savepoint while the business
+ * write still commits. A rollback of the OUTER transaction still drops the
+ * event, so the transactional-outbox guarantee is unchanged.
+ *
+ *   await emitNotificationEventSafe(tx, {
  *     tenantId: ctx.tenantId,
  *     businessId: ctx.businessId,
  *     type: "payment.received",
@@ -112,19 +119,43 @@ export async function emitNotificationEvent<T extends EventType>(
 }
 
 /**
- * Emit without letting a notification problem break the caller. For call sites
- * outside a domain transaction (e.g. after an external API call failed), where
- * losing a notification is preferable to failing the request.
+ * Run `fn` inside a SAVEPOINT of `db` (a real transaction when `db` is a plain
+ * connection). If `fn` throws, only the savepoint is rolled back and the error
+ * is logged at warn level, so the caller's transaction stays usable and keeps
+ * its writes. Returns whether `fn` completed.
+ *
+ * Without the savepoint a failed statement would abort the whole Postgres
+ * transaction ("current transaction is aborted, commands ignored until end of
+ * transaction block"), taking the payment or store order down with it.
+ */
+export async function withNotificationSavepoint(
+  db: TenantDbOrTx,
+  label: string,
+  fn: (sp: Tx) => Promise<void>,
+): Promise<boolean> {
+  try {
+    await db.transaction(async (sp) => {
+      await fn(sp);
+    });
+    return true;
+  } catch (err) {
+    logger.warn({ err, type: label }, "[notifications] failed to emit event — continuing without it");
+    return false;
+  }
+}
+
+/**
+ * Emit without letting a notification problem break the caller. Safe to call
+ * with the business transaction (the emit runs in a savepoint) or with a plain
+ * connection: losing a notification is preferable to failing the request.
  */
 export async function emitNotificationEventSafe<T extends EventType>(
   db: TenantDbOrTx,
   input: EmitInput<T>,
 ): Promise<void> {
-  try {
-    await emitNotificationEvent(db, input);
-  } catch (err) {
-    logger.warn({ err, type: input.type }, "[notifications] failed to emit event");
-  }
+  await withNotificationSavepoint(db, input.type, async (sp) => {
+    await emitNotificationEvent(sp, input);
+  });
 }
 
 /**
@@ -144,8 +175,16 @@ export async function emitTenantEvent<T extends EventType>(
   }
 }
 
-/** Display name for a user in notification copy. */
+/**
+ * Display name for a user in notification copy. Never throws: call sites build
+ * event payloads with it, outside the emit helpers' error handling.
+ */
 export async function userDisplayName(userId: string): Promise<string> {
-  const [u] = await controlDb.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
-  return u?.name || u?.email || "A team member";
+  try {
+    const [u] = await controlDb.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+    return u?.name || u?.email || "A team member";
+  } catch (err) {
+    logger.warn({ err, userId }, "[notifications] could not look up a user name");
+    return "A team member";
+  }
 }

@@ -9,7 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
-import { emitNotificationEvent } from "../lib/notifications/index.js";
+import { emitNotificationEvent, withNotificationSavepoint } from "../lib/notifications/index.js";
 
 const ASSIGN_CHUNK_SIZE = 500;
 
@@ -404,7 +404,8 @@ export const paymentRouter = router({
         }
       }
 
-      await emitPaymentNotification(tx, {
+      // In a savepoint: a notification failure must never roll back the payment.
+      await withNotificationSavepoint(tx, "payment", (sp) => emitPaymentNotification(sp, {
         tenantId: ctx.tenantId,
         businessId: ctx.businessId,
         actorUserId: ctx.user!.id,
@@ -413,7 +414,7 @@ export const paymentRouter = router({
         partyName: partyCheck.name,
         partyType: partyCheck.type,
         invoiceIds: effectiveAllocations.map((a) => a.invoiceId),
-      });
+      }));
 
       // ── Gateway charge + settlement ─────────────────────────────────
       if (input.bankAccountId) {
@@ -1081,6 +1082,7 @@ export const paymentRouter = router({
  * Raise `payment.received` (money in) or `payment.made` (money out) inside the
  * payment's transaction. "Mine" for a received payment is the seller who
  * created the invoice it settles, so sellers hear about their own sales.
+ * Callers run this inside withNotificationSavepoint (it may throw).
  */
 async function emitPaymentNotification(
   tx: Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0],

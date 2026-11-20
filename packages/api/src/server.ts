@@ -25,7 +25,7 @@ import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
-import { startNotificationWorkers, stopNotificationWorkers, emitNotificationEvent } from "./lib/notifications/index.js";
+import { startNotificationWorkers, stopNotificationWorkers, emitNotificationEventSafe } from "./lib/notifications/index.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
@@ -2088,7 +2088,8 @@ app.post("/store/:slug/order", async (c) => {
         source: "online_store",
       }).returning();
 
-      await emitNotificationEvent(tx, {
+      // Savepoint: a notification failure must never lose the customer's order.
+      await emitNotificationEventSafe(tx, {
         tenantId: resolved.tenantId,
         businessId: resolved.businessId,
         type: "store.order_placed",
