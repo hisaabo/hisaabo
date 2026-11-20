@@ -711,6 +711,17 @@ export class HisaaboClient {
     };
   }
 
+  // ── TDS sections ──────────────────────────────────────────────
+
+  get tdsSection() {
+    const c = this;
+    return {
+      list(input?: InputOf<"tdsSection.list">) {
+        return c.query("tdsSection.list", input);
+      },
+    };
+  }
+
   // ── Target ────────────────────────────────────────────────────
 
   get target() {
@@ -1398,6 +1409,8 @@ export type StoreOrderListInput = InputOf<"store.listOrders">;
 
 
 export type TargetRow = OutputOf<"target.list">[number];
+
+export type TdsSectionRow = OutputOf<"tdsSection.list">[number];
 
 
 export type TargetListInput = InputOf<"target.list">;

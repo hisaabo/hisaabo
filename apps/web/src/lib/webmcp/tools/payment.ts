@@ -64,8 +64,8 @@ const allocationSchema = objectSchema(
     },
     tdsRate: {
       type: "string",
-      pattern: "^\\d+(\\.\\d{1,4})?$",
-      description: "TDS percentage rate for this deduction, such as '1.0' or '10.0'.",
+      pattern: "^\\d{1,3}(\\.\\d{1,2})?$",
+      description: "TDS percentage rate for this deduction, up to 2 decimals, such as '1' or '10.50'. Stored as metadata; tdsAmount is the amount actually withheld.",
     },
   },
   ["invoiceId", "amount"],

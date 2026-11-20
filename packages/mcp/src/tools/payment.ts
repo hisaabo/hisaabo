@@ -10,6 +10,7 @@
  *   payment_unpaid_invoices   — list unpaid invoices for a party
  *   payment_untracked         — list payments not linked to a bank account
  *   payment_default_account   — get the recommended bank account for recording a payment
+ *   tds_section_list          — list the TDS sections available for customer receipts
  */
 
 import { z } from "zod";
@@ -32,6 +33,7 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
       "If the payment is for a specific invoice, set invoice_id — the invoice status will update automatically to 'paid' or 'partial'.",
       "If the payment is not tied to a specific invoice (advance payment or bulk payment), omit invoice_id — it applies to the party's account balance.",
       "To split a payment across multiple invoices, use the allocations array instead of invoice_id.",
+      "Customer receipts only: if the customer withheld TDS, 'amount' is the NET cash received, each allocation's 'amount' is the GROSS settled (gross = net cash + TDS), and tds_amount, tds_section_code (see tds_section_list) and tds_rate are set on the allocation.",
       "Example: customer paid invoice INV-001 by UPI: { party_id: '<uuid>', amount: '5000.00', mode: 'upi', invoice_id: '<uuid>' }",
     ].join(" "),
     {
@@ -61,9 +63,9 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         tds_amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
           .describe("TDS amount deducted for this invoice."),
         tds_section_code: z.string().max(20).optional()
-          .describe("Active TDS registry code (e.g. '1023', '1027'); confirm availability with tds_section.list."),
-        tds_rate: z.string().regex(/^\d+(\.\d{1,4})?$/).optional()
-          .describe("TDS percentage rate (e.g. '1.0' or '10.0')."),
+          .describe("Active TDS registry code (e.g. '1023', '1027'); confirm availability with tds_section_list."),
+        tds_rate: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).optional()
+          .describe("TDS percentage rate, up to 2 decimals (e.g. '1' or '10.50'). Stored as metadata; the TDS amount is what you record."),
       })).optional()
         .describe("Allocate a single payment across multiple invoices. Use instead of invoice_id when splitting a payment."),
     },
@@ -90,6 +92,29 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         content: [{
           type: "text" as const,
           text: JSON.stringify(payment, null, 2),
+        }],
+      };
+    })
+  );
+
+  server.tool(
+    "tds_section_list",
+    [
+      "List the TDS sections a customer receipt may use for payment_create / payment_update allocations (tds_section_code).",
+      "Read-only. Each section has a code (e.g. '1027'), label, effective date and status; only active sections are returned unless include_inactive is true.",
+      "A business with no stored sections yet shows the statutory registry defaults.",
+      "Labels are reference data, not tax advice: the applicable rate and eligibility for a transaction are not determined here.",
+    ].join(" "),
+    {
+      include_inactive: z.boolean().default(false)
+        .describe("Also return sections that have been deactivated."),
+    },
+    wrapTool(async (input) => {
+      const sections = await client.tdsSection.list({ includeInactive: input.include_inactive });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(sections, null, 2),
         }],
       };
     })
@@ -149,11 +174,11 @@ export function registerPaymentTools(server: ToolServer, client: HisaaboClient) 
         tds_amount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional()
           .describe("TDS amount deducted for this invoice."),
         tds_section_code: z.string().max(20).optional()
-          .describe("Active TDS registry code (e.g. '1023', '1027'); confirm availability with tds_section.list."),
-        tds_rate: z.string().regex(/^\d+(\.\d{1,4})?$/).optional()
-          .describe("TDS percentage rate (e.g. '1.0' or '10.0')."),
+          .describe("Active TDS registry code (e.g. '1023', '1027'); confirm availability with tds_section_list."),
+        tds_rate: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).optional()
+          .describe("TDS percentage rate, up to 2 decimals (e.g. '1' or '10.50'). Stored as metadata; the TDS amount is what you record."),
       })).optional()
-        .describe("Updated invoice allocations. Replaces all existing allocations."),
+        .describe("Updated invoice allocations. Replaces all existing allocations; pass an empty array to clear them all, or omit to keep them. Required when changing the amount of a payment that is split across invoices or carries TDS."),
     },
     wrapTool(async (input) => {
       const payment = await client.payment.update({

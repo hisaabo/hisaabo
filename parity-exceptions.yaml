@@ -405,11 +405,6 @@ exceptions:
       - itemImage.setPrimary
       - itemImage.delete
 
-      # --- TDS Section Configurations ---
-      # TDS section configuration listing feeds the web payment UI dropdown; the CLI
-      # accepts statutory section codes directly without an interactive section picker.
-      - tdsSection.list
-
   mcp:
     not-applicable:
       # --- Item history paging ---
@@ -547,8 +542,3 @@ exceptions:
       - itemImage.reorder
       - itemImage.setPrimary
       - itemImage.delete
-
-      # --- TDS Section Configurations ---
-      # TDS section configuration listing feeds the web payment UI dropdown; MCP
-      # agents specify statutory section codes directly on payment allocations.
-      - tdsSection.list
