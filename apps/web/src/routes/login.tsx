@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { TurnstileModal } from "@/components/ui/TurnstileModal";
@@ -31,7 +31,7 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-type AuthMode = "magic-link" | "magic-link-sent";
+type AuthMode = "magic-link" | "magic-link-sent" | "password-login";
 
 /* ─── Pure-CSS animation keyframes injected once ─────────────────────────── */
 const KEYFRAMES = `
@@ -517,8 +517,11 @@ function Field({
 function LoginPage() {
   const [mode, setMode] = useState<AuthMode>("magic-link");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [cooldown, setCooldown] = useState(0);
+  const navigate = useNavigate();
+  const utils = trpc.useUtils();
   const cooldownRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const { data: systemConfig } = trpc.system.config.useQuery();
   const signupOpen = systemConfig?.signupOpen;
@@ -551,6 +554,16 @@ function LoginPage() {
     setShowTurnstile(true);
   }
 
+  // Password sign-in (kept for accounts that have a password, e.g. servers whose
+  // email delivery is not working). The server sets the HttpOnly session cookie.
+  const loginMutation = trpc.auth.login.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      navigate({ to: "/" });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const magicLinkMutation = trpc.auth.sendMagicLink.useMutation({
     onSuccess: () => {
       setMode("magic-link-sent");
@@ -579,7 +592,13 @@ function LoginPage() {
   }, [cooldown > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isPending =
-    magicLinkMutation.isPending;
+    loginMutation.isPending || magicLinkMutation.isPending;
+
+  function handlePasswordLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    loginMutation.mutate({ email, password });
+  }
 
   function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
@@ -681,6 +700,81 @@ function LoginPage() {
                 </form>
 
                 <SignupHint signupOpen={signupOpen} />
+
+                <div className="mt-5 text-center">
+                  <button
+                    type="button"
+                    onClick={() => switchMode("password-login")}
+                    className="text-sm text-text-tertiary hover:text-text-primary underline underline-offset-2 transition-colors"
+                  >
+                    Sign in with password instead
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Mode: password-login ────────────────────────────── */}
+            {!desktop && mode === "password-login" && (
+              <div style={{ animation: "form-enter 0.35s ease-out" }}>
+                <div className="mb-8">
+                  <h1
+                    className="text-2xl font-bold text-text-primary mb-2"
+                    style={{ letterSpacing: "-0.03em" }}
+                  >
+                    Welcome back
+                  </h1>
+                  <p className="text-sm text-text-tertiary">
+                    Sign in with your email and password.
+                  </p>
+                </div>
+
+                {error && <ErrorBanner message={error} />}
+
+                <form onSubmit={handlePasswordLogin} className="space-y-4">
+                  <Field label="Email address">
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      autoFocus
+                      className="input"
+                      placeholder="you@yourcompany.com"
+                    />
+                  </Field>
+
+                  <Field label="Password">
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      className="input"
+                      placeholder="Your password"
+                    />
+                  </Field>
+
+                  <PrimaryButton type="submit" disabled={isPending} fullWidth>
+                    {isPending ? (
+                      <>
+                        Signing in
+                        <LoadingDots />
+                      </>
+                    ) : (
+                      "Sign in"
+                    )}
+                  </PrimaryButton>
+                </form>
+
+                <div className="mt-5 text-center">
+                  <button
+                    type="button"
+                    onClick={() => switchMode("magic-link")}
+                    className="text-sm text-text-tertiary hover:text-text-primary underline underline-offset-2 transition-colors"
+                  >
+                    Use magic link instead
+                  </button>
+                </div>
               </div>
             )}
 

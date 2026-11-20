@@ -66,6 +66,8 @@ exceptions:
       - auth.nativeRequestInfo
       # Mobile signs in through the browser hand-off, not an in-app magic-link form.
       - auth.sendMagicLink
+      # Deprecated password sign-in, web only for 0.10; removed in 0.11.0.
+      - auth.login
 
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
@@ -328,6 +330,8 @@ exceptions:
       - auth.requestEmailChange
       - auth.sendMagicLink
       - auth.verifyMagicLink
+      # Deprecated password sign-in, web only for 0.10; removed in 0.11.0.
+      - auth.login
 
       # --- Tenant ---
       # Invite acceptance and org management are browser/mobile flows.

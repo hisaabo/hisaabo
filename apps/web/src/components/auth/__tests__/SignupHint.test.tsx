@@ -25,12 +25,18 @@ describe("SignupHint", () => {
 describe("login page source", () => {
   const src = readFileSync(path.resolve(__dirname, "../../../routes/login.tsx"), "utf-8");
 
-  it("has no password or register UI and never calls password auth", () => {
-    expect(src).not.toMatch(/type="password"/);
-    expect(src).not.toMatch(/auth\.login\b/);
+  it("has no register UI", () => {
     expect(src).not.toMatch(/auth\.register\b/);
-    expect(src).not.toMatch(/Use password/i);
     expect(src).not.toMatch(/Create account/i);
+  });
+
+  // Password sign-in is kept on the web (not desktop) so existing accounts and
+  // servers without working email can still sign in; the API still supports
+  // auth.login. It is offered as a secondary link under the magic-link form.
+  it("offers password sign-in only as a secondary option, never on desktop", () => {
+    expect(src).toMatch(/auth\.login\b/);
+    expect(src).toMatch(/Sign in with password instead/);
+    expect(src).toMatch(/!desktop && mode === "password-login"/);
   });
 
   it("does not skip Turnstile on desktop", () => {
