@@ -181,7 +181,9 @@ resp = httpx.post(
 data = resp.json()["result"]["data"]["json"]`,
       },
       gotchas: [
-        "Returns BAD_REQUEST if the token is invalid, expired (>15 min), or already used.",
+        "Returns UNAUTHORIZED without a session, and FORBIDDEN if the token belongs to a different account (it is not consumed).",
+        "Returns BAD_REQUEST if the token is invalid, expired (>15 min), already used, not an email-change token, or a sign-in link.",
+        "Returns CONFLICT if another account registered the address in the meantime.",
         "Token verification is atomic — concurrent requests with the same token will see one succeed and one fail.",
         "Check `needsProfile` in the response. If true, the user has no display name yet — prompt them to set one via `auth.completeProfile`.",
       ],
@@ -351,7 +353,7 @@ httpx.post(
       method: "mutation",
       path: "auth.requestEmailChange",
       title: "Request Email Change",
-      description: "Initiate an email address change. Sends a verification link to the new email. The change is not applied until the link is clicked (see `auth.confirmEmailChange`). Returns CONFLICT if the new email is already registered.",
+      description: "Initiate an email address change. Sends a \"Confirm your new Hisaabo email address\" message to the new email with a link to `/auth/confirm-email-change`. The change is not applied until the requesting account, signed in, confirms it (see `auth.confirmEmailChange`). Returns CONFLICT if the new email is already registered and TOO_MANY_REQUESTS after 3 requests per hour.",
       auth: "protected",
       input: [
         { name: "newEmail", type: "string", required: true, description: "New email address (max 255 chars)" },
@@ -379,6 +381,8 @@ httpx.post(
       },
       gotchas: [
         "Returns CONFLICT (409) if the new email is already registered to another account.",
+        "Returns TOO_MANY_REQUESTS (429) after 3 email-change requests within an hour.",
+        "A new request supersedes the previous unused one.",
         "The verification link expires in 15 minutes and can only be used once.",
         "The requesting user's ID is bound server-side to the token \u2014 clients cannot substitute a different userId.",
       ],
@@ -389,8 +393,8 @@ httpx.post(
       method: "mutation",
       path: "auth.confirmEmailChange",
       title: "Confirm Email Change",
-      description: "Exchange the email-change verification token to apply the new email. The token contains the bound userId server-side \u2014 no userId is accepted from client input, preventing account takeover. This is a public endpoint because the user may verify from a different device.",
-      auth: "public",
+      description: "Exchange the email-change verification token to apply the new email. Requires the session of the account that requested the change: the token contains the bound userId server-side and must match the signed-in user (a different account gets FORBIDDEN and the token is not consumed). No userId is accepted from client input, preventing account takeover.",
+      auth: "protected",
       input: [
         { name: "token", type: "string", required: true, description: "Token from the email verification link" },
       ],
@@ -401,6 +405,7 @@ httpx.post(
       codeExamples: {
         curl: `curl -X POST https://api.hisaabo.in/api/trpc/auth.confirmEmailChange \\
   -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \\
   -d '{"json":{"token":"<token-from-verification-link>"}}'`,
         javascript: `const url = new URL(window.location.href);
 const token = url.searchParams.get("token");
@@ -411,6 +416,7 @@ console.log("Email changed to:", result.newEmail);`,
 
 resp = httpx.post(
     "https://api.hisaabo.in/api/trpc/auth.confirmEmailChange",
+    headers={"Authorization": f"Bearer {session_token}"},
     json={"json": {"token": token_from_email}},
 )
 data = resp.json()["result"]["data"]["json"]

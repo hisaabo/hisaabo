@@ -1,4 +1,4 @@
-import { eq, and, gt, lte, isNull, desc } from "drizzle-orm";
+import { eq, ne, and, gt, lte, isNull, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
@@ -12,7 +12,7 @@ import { getSessionIdFromRequest } from "../context.js";
 import { cacheBus, type CacheEvent } from "../lib/cache/bus.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
-import { logSecurityEvent } from "../lib/logger.js";
+import { logSecurityEvent, logger } from "../lib/logger.js";
 import { warnPasswordSignInDeprecated } from "../lib/deprecations.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { buildInfo } from "../lib/build-info.js";
@@ -30,6 +30,10 @@ import {
   verifyPkceS256,
   buildNativeRedirectUrl,
 } from "../lib/native-auth.js";
+
+// Email-change requests per account per hour (superseded ones still count).
+const EMAIL_CHANGE_MAX_PER_WINDOW = 3;
+const EMAIL_CHANGE_WINDOW_MS = 60 * 60 * 1000;
 
 // Cap on emailed links per address per 24h for Turnstile-exempt v0.9.x clients.
 const LEGACY_EXEMPT_MAX_LINKS_PER_DAY = 10;
@@ -711,9 +715,12 @@ export const authRouter = router({
         apiKeys: number;
         pendingEmailChanges: number;
         nativeRequests: number;
+        pendingInvitations: number;
+        otherMembers: number;
         hadPassword: boolean;
       } | null;
-    } = { counts: null };
+      orgs: Array<{ orgName: string; members: Array<{ email: string; role: string }> }>;
+    } = { counts: null, orgs: [] };
     const { user, sessionToken, isNewUser, email } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
@@ -811,6 +818,32 @@ export const authRouter = router({
             const revokedNativeRequests = await tx.delete(nativeAuthRequests)
               .where(eq(nativeAuthRequests.userId, user.id))
               .returning({ id: nativeAuthRequests.id });
+            // Invitations this account issued before the proof were not issued by the
+            // mailbox owner either: a pending one is a ready-made way into the
+            // organisation for whoever holds its link.
+            const revokedInvitations = await tx.delete(invitations)
+              .where(and(eq(invitations.invitedBy, user.id), isNull(invitations.acceptedAt)))
+              .returning({ id: invitations.id });
+            // People who already have access to an organisation this account owns were
+            // added before the proof. They are NOT removed automatically (they may be
+            // legitimate); the owner is told who they are after the sign-in.
+            const owned = await tx
+              .select({ tenantId: tenantMembers.tenantId })
+              .from(tenantMembers)
+              .where(and(eq(tenantMembers.userId, user.id), inArray(tenantMembers.role, ["owner", "superadmin"])));
+            const others = owned.length === 0 ? [] : await tx
+              .select({ tenantId: tenantMembers.tenantId, tenantName: tenants.name, email: users.email, role: tenantMembers.role })
+              .from(tenantMembers)
+              .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+              .innerJoin(users, eq(users.id, tenantMembers.userId))
+              .where(and(inArray(tenantMembers.tenantId, owned.map((o) => o.tenantId)), ne(tenantMembers.userId, user.id)));
+            const byOrg = new Map<string, { orgName: string; members: Array<{ email: string; role: string }> }>();
+            for (const m of others) {
+              const org = byOrg.get(m.tenantId) ?? { orgName: m.tenantName, members: [] };
+              org.members.push({ email: m.email, role: m.role });
+              byOrg.set(m.tenantId, org);
+            }
+            claim.orgs = [...byOrg.values()];
             await tx.update(users)
               .set({ emailVerified: true, passwordHash: null, updatedAt: new Date() })
               .where(eq(users.id, user.id));
@@ -820,6 +853,8 @@ export const authRouter = router({
               apiKeys: revokedKeys.length,
               pendingEmailChanges: revokedEmailChanges.length,
               nativeRequests: revokedNativeRequests.length,
+              pendingInvitations: revokedInvitations.length,
+              otherMembers: others.length,
               hadPassword: user.passwordHash !== null,
             };
           } else {
@@ -876,6 +911,13 @@ export const authRouter = router({
         reason: "first_magic_link_verification",
         extra: { userId: user.id, ...claim.counts },
       });
+      // Tell the owner who already had access. Best effort: a mail failure (or no
+      // email service) must never fail the sign-in that just succeeded.
+      if (claim.counts.otherMembers > 0) {
+        void emailService.sendSecurityNotice(user.email, claim.orgs).catch((err) => {
+          logger.warn({ err }, "Failed to send security notice after first email verification");
+        });
+      }
     }
 
     return {
@@ -1027,10 +1069,18 @@ export const authRouter = router({
     }),
 
   // ── Request email change ─────────────────────────────────────
+  // The confirmation goes to the NEW address, but it only takes effect for THIS
+  // account, while it is signed in (see confirmEmailChange): the mailbox owner
+  // alone cannot be tricked into hijacking an account by clicking a link.
   requestEmailChange: protectedProcedure
     .input(z.object({ newEmail: z.string().email().max(255) }))
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
       const email = normalizeEmail(input.newEmail);
+
+      const [me] = await controlDb.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!me) throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
+      const currentEmail = normalizeEmail(me.email);
 
       // Check if new email is already taken
       const [existing] = await controlDb.select({ id: users.id })
@@ -1038,6 +1088,28 @@ export const authRouter = router({
       if (existing) {
         throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
       }
+
+      // Email-change tokens are the user-bound rows whose email is not the account's
+      // own email (operator login-link tokens carry the account's own email, and
+      // are neither counted nor touched). The rows are kept when superseded, so
+      // they keep counting against the hourly limit; `ip_address` is not used to
+      // tell them apart because a client can influence it.
+      const emailChangeTokens = and(
+        eq(magicLinkTokens.userId, userId),
+        sql`lower(${magicLinkTokens.email}) <> ${currentEmail}`,
+      );
+      const recent = await controlDb
+        .select({ id: magicLinkTokens.id })
+        .from(magicLinkTokens)
+        .where(and(emailChangeTokens, gt(magicLinkTokens.createdAt, new Date(Date.now() - EMAIL_CHANGE_WINDOW_MS))));
+      if (recent.length >= EMAIL_CHANGE_MAX_PER_WINDOW) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many email change requests. Please try again later." });
+      }
+
+      // A new request supersedes every earlier unused one.
+      await controlDb.update(magicLinkTokens)
+        .set({ usedAt: new Date() })
+        .where(and(emailChangeTokens, isNull(magicLinkTokens.usedAt)));
 
       // Generate a token for email change verification
       const rawToken = crypto.randomUUID() + "-" + nanoid(32);
@@ -1047,58 +1119,111 @@ export const authRouter = router({
         email: email, // Store the NEW email
         tokenHash,
         // Store the requesting user's ID so confirmEmailChange doesn't trust client-supplied userId
-        userId: ctx.user!.id,
+        userId,
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         ipAddress: getClientIpFromRequest(ctx.req),
       });
 
-      // Send verification to new email — no userId in URL; it is bound to the token server-side
-      const baseUrl = process.env.APP_URL || "http://localhost:5173";
-      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}`;
+      // Deliberately NOT under /auth/verify (installed apps intercept that path) and
+      // NOT a sign-in email: it names the requesting account and says what it does.
+      const baseUrl = (process.env.APP_URL || "http://localhost:5173").replace(/\/+$/, "");
+      const confirmUrl = `${baseUrl}/auth/confirm-email-change?token=${encodeURIComponent(rawToken)}`;
 
-      await emailService.sendMagicLink(email, verifyUrl, false);
+      await emailService.sendEmailChangeConfirmation(email, confirmUrl, currentEmail);
 
       return { success: true };
     }),
 
   // ── Confirm email change ─────────────────────────────────────
-  // userId is intentionally NOT accepted from client input — it is read from the
-  // server-side token record to prevent account takeover via token substitution.
-  confirmEmailChange: publicProcedure
+  // Requires the SESSION of the account that requested the change: possession of
+  // the emailed token alone is not enough. Otherwise anyone could request a change
+  // to a victim's address from an account they control, and the victim opening
+  // the mail would hand that account the victim's email (and a later sign-in by
+  // email link would land in the attacker's account). userId is read from the
+  // token record, never from client input.
+  confirmEmailChange: protectedProcedure
     .input(z.object({ token: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
       const tokenH = hashToken(input.token);
+      const invalid = () => new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
+      let changed: { oldEmail: string; newEmail: string; oldWasVerified: boolean } | null = null;
 
-      // Atomic: find + mark-used
-      const [tokenRow] = await controlDb.update(magicLinkTokens)
-        .set({ usedAt: new Date() })
-        .where(and(
-          eq(magicLinkTokens.tokenHash, tokenH),
-          gt(magicLinkTokens.expiresAt, new Date()),
-          isNull(magicLinkTokens.usedAt),
-        ))
-        .returning();
+      // The email is embedded in every cached session / access token / API key of
+      // the user: invalidate by user once the transaction settled.
+      const newEmail = await cacheBus.afterWrite([{ kind: "user", userId }], () =>
+        controlDb.transaction(async (tx) => {
+          const now = new Date();
+          const live = and(
+            eq(magicLinkTokens.tokenHash, tokenH),
+            gt(magicLinkTokens.expiresAt, now),
+            isNull(magicLinkTokens.usedAt),
+          );
 
-      if (!tokenRow) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
-      }
+          // Read first, write nothing: a plain magic-link token (no bound user) must
+          // not be burnable here, and another account's token must stay usable by it.
+          const [peek] = await tx.select().from(magicLinkTokens).where(live).limit(1);
+          if (!peek || !peek.userId) throw invalid();
+          if (peek.userId !== userId) {
+            logSecurityEvent("email_change_wrong_account", {
+              ip: getClientIpFromRequest(ctx.req),
+              path: "/api/trpc/auth.confirmEmailChange",
+              reason: "token_bound_to_other_account",
+            });
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "This link confirms an email change for a different Hisaabo account. Sign in to that account, then open the link again.",
+            });
+          }
 
-      // Require that this token was issued for an email-change request (has a bound userId)
-      if (!tokenRow.userId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
-      }
+          const [me] = await tx
+            .select({ email: users.email, emailVerified: users.emailVerified })
+            .from(users)
+            .where(eq(users.id, userId))
+            .for("update")
+            .limit(1);
+          if (!me) throw invalid();
+          // An operator login-link token carries the account's own email: not an email change.
+          if (normalizeEmail(peek.email) === normalizeEmail(me.email)) throw invalid();
 
-      // Update the user's email using the userId stored in the token — never from client input
-      // The email is embedded in every cached session / access token / API key
-      // of the user: invalidate by user once the write settled.
-      const changedUserId = tokenRow.userId;
-      await cacheBus.afterWrite([{ kind: "user", userId: changedUserId }], () =>
-        controlDb.update(users)
-          .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
-          .where(eq(users.id, changedUserId)),
+          // Claim atomically (single use, concurrent confirms serialise on the row).
+          const [claimed] = await tx.update(magicLinkTokens)
+            .set({ usedAt: now })
+            .where(live)
+            .returning();
+          if (!claimed) throw invalid();
+
+          // Someone may have registered the address since it was requested. Throwing
+          // rolls the claim back, so the token is not burned.
+          const [taken] = await tx.select({ id: users.id })
+            .from(users)
+            .where(and(emailEq(users.email, claimed.email), ne(users.id, userId)))
+            .limit(1);
+          if (taken) throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
+
+          await tx.update(users)
+            .set({ email: claimed.email, emailVerified: true, updatedAt: now })
+            .where(eq(users.id, userId));
+
+          // Any other unused user-bound token (older change requests, operator links
+          // for the old address) must not outlive the change.
+          await tx.delete(magicLinkTokens).where(and(eq(magicLinkTokens.userId, userId), isNull(magicLinkTokens.usedAt)));
+
+          changed = { oldEmail: me.email, newEmail: claimed.email, oldWasVerified: me.emailVerified };
+          return claimed.email;
+        }),
       );
 
-      return { success: true, newEmail: tokenRow.email };
+      // Tell the OLD address, but only if it had been proven to be the owner's. Best
+      // effort: a mail failure must never undo or fail the change.
+      const done = changed as { oldEmail: string; newEmail: string; oldWasVerified: boolean } | null;
+      if (done?.oldWasVerified) {
+        void emailService.sendEmailChangedNotice(done.oldEmail, done.newEmail).catch((err) => {
+          logger.warn({ err }, "Failed to send email-changed notice");
+        });
+      }
+
+      return { success: true, newEmail };
     }),
 
   // ── Logout ───────────────────────────────────────────────────

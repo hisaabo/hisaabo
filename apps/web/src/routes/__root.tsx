@@ -443,7 +443,7 @@ function RootLayout() {
   }, [businesses, currentBusinessId]);
 
   // Single consolidated redirect — priority order matters
-  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/verify-email-change", "/invite", "/auth/native"];
+  const publicPaths = ["/login", "/auth/verify", "/auth/complete-profile", "/auth/confirm-email-change", "/invite", "/auth/native"];
   useEffect(() => {
     if (sessionLoading || sessionFetching) return;
 
@@ -556,7 +556,7 @@ function RootLayout() {
   if (!session.tenantId) {
     // Auth flow pages (complete-profile, invite) handle tenant resolution
     // themselves — let them render even with zero memberships.
-    const authFlowPaths = ["/auth/complete-profile", "/invite", "/auth/native"];
+    const authFlowPaths = ["/auth/complete-profile", "/invite", "/auth/native", "/auth/confirm-email-change"];
     const isAuthFlow = authFlowPaths.some((p) => pathname.startsWith(p));
     if (isAuthFlow) return <Outlet />;
 

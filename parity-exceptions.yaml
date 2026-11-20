@@ -68,6 +68,9 @@ exceptions:
       - auth.sendMagicLink
       # Deprecated password sign-in, web only for 0.10; removed in 0.11.0.
       - auth.login
+      # Email-change confirmation is a browser page (the emailed link opens the web
+      # app, where the requesting account confirms while signed in).
+      - auth.confirmEmailChange
 
       # --- Backup & Restore ---
       # Tenant-level backup/restore is a web + CLI workflow; not available on mobile.
@@ -337,6 +340,8 @@ exceptions:
       - auth.verifyMagicLink
       # Deprecated password sign-in, web only for 0.10; removed in 0.11.0.
       - auth.login
+      # Email-change confirmation is a browser page (signed-in web session only).
+      - auth.confirmEmailChange
 
       # --- Tenant ---
       # Invite acceptance and org management are browser/mobile flows.
@@ -344,6 +349,9 @@ exceptions:
       - tenant.acceptInvitation
       - tenant.acceptById
       - tenant.canCreateOrg
+      # Cloud-only UI gate (hides invite / role controls for an unverified email);
+      # CLI and MCP just call the mutation and surface the server's message.
+      - tenant.canInviteMembers
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
@@ -436,6 +444,8 @@ exceptions:
       # Signup/config copy is a UI concern; agents have no signup screen.
       - system.config
       - auth.completeProfile
+      # Email-change confirmation is a browser page (signed-in web session only).
+      - auth.confirmEmailChange
       - auth.login
       - auth.logout
       - auth.logoutAll
@@ -452,6 +462,9 @@ exceptions:
       - tenant.acceptInvitation
       - tenant.acceptById
       - tenant.canCreateOrg
+      # Cloud-only UI gate (hides invite / role controls for an unverified email);
+      # CLI and MCP just call the mutation and surface the server's message.
+      - tenant.canInviteMembers
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation

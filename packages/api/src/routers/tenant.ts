@@ -34,26 +34,54 @@ async function autoSelectTenantInSession(req: Request, tenantId: string): Promis
   return tenant?.name ?? "Organization";
 }
 
-async function assertEmailVerified(userId: string): Promise<void> {
+async function assertEmailVerified(
+  userId: string,
+  message = "Verify your email address (sign in with an email link) before accepting an invitation",
+): Promise<void> {
   const [row] = await controlDb.select({ emailVerified: users.emailVerified })
     .from(users).where(eq(users.id, userId)).limit(1);
   if (!row?.emailVerified) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Verify your email address (sign in with an email link) before accepting an invitation",
-    });
+    throw new TRPCError({ code: "FORBIDDEN", message });
   }
+}
+
+const TEAM_CHANGE_UNVERIFIED_MESSAGE =
+  "Verify your email address before inviting or changing team members: sign out and sign in with an email link. " +
+  "After that, your password and API keys stop working and you sign in by email link.";
+
+/**
+ * Cloud (multi-tenant) only: an account whose email was never proven (a password
+ * sign-up) may not grow or reshape a team. That is what stops a pre-registered
+ * account from seeding an organisation with its own people before the real
+ * mailbox owner arrives. Self-hosted installs are unaffected: invitations there
+ * are the operator's own people and email may not even be configured.
+ * removeMember and revokeInvitation stay allowed (they only reduce access).
+ */
+async function assertVerifiedForTeamChange(userId: string): Promise<void> {
+  if (process.env.MULTI_TENANT !== "true") return;
+  await assertEmailVerified(userId, TEAM_CHANGE_UNVERIFIED_MESSAGE);
 }
 
 type InvitationRow = typeof invitations.$inferSelect;
 
 // Claims the invitation (acceptedAt IS NULL guard) and creates the membership
 // in one transaction so a single invitation can only ever grant access once.
-async function claimInvitationAndAddMember(invitation: InvitationRow, userId: string): Promise<void> {
+//
+// `verifyEmail` (self-hosted token path only, see acceptInvitation) marks the
+// account's email verified in the same transaction, so it only sticks if the
+// invitation is really claimed.
+async function claimInvitationAndAddMember(
+  invitation: InvitationRow,
+  userId: string,
+  opts: { verifyEmail?: boolean } = {},
+): Promise<void> {
   // `membership` is emitted after the transaction settled (a new member can
   // change the authz result of anything cached for the tenant).
-  await cacheBus.afterWrite([{ kind: "membership", tenantId: invitation.tenantId, userId }], () =>
+  await cacheBus.afterWrite([{ kind: "membership", tenantId: invitation.tenantId, userId }, { kind: "user", userId }], () =>
     controlDb.transaction(async (tx) => {
+    if (opts.verifyEmail) {
+      await tx.update(users).set({ emailVerified: true, updatedAt: new Date() }).where(eq(users.id, userId));
+    }
     const claimed = await tx.update(invitations)
       .set({ acceptedAt: new Date() })
       .where(and(eq(invitations.id, invitation.id), isNull(invitations.acceptedAt)))
@@ -235,6 +263,17 @@ export const tenantRouter = router({
     return limits.maxOwnedOrgs === Infinity || ownedOrgs.length < limits.maxOwnedOrgs;
   }),
 
+  // Whether the caller may invite members / change roles right now. The UI hides
+  // those controls (instead of letting them fail) when this says no.
+  canInviteMembers: tenantProcedure.query(async ({ ctx }) => {
+    if (process.env.MULTI_TENANT !== "true") return { allowed: true, reason: null as "email_unverified" | null };
+    const [row] = await controlDb.select({ emailVerified: users.emailVerified })
+      .from(users).where(eq(users.id, ctx.user.id)).limit(1);
+    return row?.emailVerified
+      ? { allowed: true, reason: null as "email_unverified" | null }
+      : { allowed: false, reason: "email_unverified" as "email_unverified" | null };
+  }),
+
   // List user's tenant memberships
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await controlDb.select({
@@ -392,6 +431,7 @@ export const tenantRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can invite members");
+      await assertVerifiedForTeamChange(ctx.user.id);
 
       const inviteEmail = normalizeEmail(input.email);
 
@@ -529,7 +569,16 @@ export const tenantRouter = router({
       if (!currentUser || normalizeEmail(currentUser.email) !== normalizeEmail(invitation.email)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "This invitation was sent to a different email address" });
       }
-      await assertEmailVerified(ctx.user.id);
+      // Cloud: the account's email must already have been proven by an email-link
+      // sign-in. Self-hosted: v0.9.0 had no such check and an install without
+      // working email can never produce that proof, so the invitation token itself
+      // (addressed to this email, held by the signed-in user) is accepted as proof
+      // and the email is marked verified together with the membership. No
+      // credential wipe is needed: the session and the token are the same person's.
+      // Not applied in the cloud because the inviter also receives the link
+      // (returnLink), so holding the token proves nothing about the mailbox there.
+      const selfHosted = process.env.MULTI_TENANT !== "true";
+      if (!selfHosted) await assertEmailVerified(ctx.user.id);
 
       // If already accepted, treat as idempotent — the user may be clicking
       // an old link or retrying after a partial failure. Check membership and
@@ -568,7 +617,7 @@ export const tenantRouter = router({
       // Create membership and mark invitation accepted atomically so a crash
       // between the two writes cannot leave the user as a member with a
       // re-usable invitation link.
-      await claimInvitationAndAddMember(invitation, ctx.user.id);
+      await claimInvitationAndAddMember(invitation, ctx.user.id, { verifyEmail: selfHosted });
 
       const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
       return { tenantId: invitation.tenantId, tenantName };
@@ -664,6 +713,7 @@ export const tenantRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can change roles");
+      await assertVerifiedForTeamChange(ctx.user.id);
 
       // Prevent changing a superadmin/owner's role
       const [targetMembership] = await controlDb.select({ role: tenantMembers.role })

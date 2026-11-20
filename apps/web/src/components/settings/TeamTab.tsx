@@ -13,6 +13,10 @@ const roleOptions = [
   { value: "accountant", label: formatRole("accountant") },
 ];
 
+const EMAIL_UNVERIFIED_TEAM_MESSAGE =
+  "Verify your email address before inviting or changing team members: sign out and sign in with an email link. " +
+  "After that, your password and API keys stop working and you sign in by email link.";
+
 function TeamSection() {
   const { data: session } = trpc.auth.me.useQuery();
   const { data: members, isLoading } = trpc.tenant.members.useQuery(undefined, {
@@ -51,6 +55,14 @@ function TeamSection() {
   const { data: me } = trpc.auth.me.useQuery();
   const callerMember = members?.find((m) => m.userEmail === me?.user?.email);
   const canManage = callerMember?.role === "owner" || callerMember?.role === "superadmin" || callerMember?.role === "admin";
+  // Cloud only: an account whose email was never verified may not invite members
+  // or change roles. Hide those controls instead of letting them fail (removing a
+  // member or revoking an invitation stays available).
+  const { data: invitePermission } = trpc.tenant.canInviteMembers.useQuery(undefined, {
+    enabled: !!session?.tenantId,
+  });
+  const inviteBlocked = canManage && invitePermission?.allowed === false;
+  const canInvite = canManage && !inviteBlocked;
 
   if (!session?.tenantId) return null;
 
@@ -64,12 +76,18 @@ function TeamSection() {
               Manage who has access to this organization
             </p>
           </div>
-          {canManage && (
+          {canInvite && (
             <button className="btn-primary btn-sm" onClick={() => setShowInvite(true)}>
               + Invite
             </button>
           )}
         </div>
+
+        {inviteBlocked && (
+          <div role="status" className="px-6 py-3 text-sm bg-amber-50 text-amber-800 border-b border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800">
+            {EMAIL_UNVERIFIED_TEAM_MESSAGE}
+          </div>
+        )}
 
         {pendingInvitations && pendingInvitations.length > 0 && (
           <div className="border-b border-border-light">
@@ -164,15 +182,17 @@ function TeamSection() {
                     <td className="text-right">
                       {m.role !== "owner" && m.role !== "superadmin" && m.userEmail !== me?.user?.email && (
                         <div className="flex items-center justify-end gap-2">
-                          <div className="w-28">
-                            <Listbox
-                              value={m.role}
-                              onChange={(role) =>
-                                updateRole.mutate({ userId: m.userId, role: role as "admin" | "seller_manager" | "seller" | "accountant" })
-                              }
-                              options={roleOptions}
-                            />
-                          </div>
+                          {canInvite && (
+                            <div className="w-28">
+                              <Listbox
+                                value={m.role}
+                                onChange={(role) =>
+                                  updateRole.mutate({ userId: m.userId, role: role as "admin" | "seller_manager" | "seller" | "accountant" })
+                                }
+                                options={roleOptions}
+                              />
+                            </div>
+                          )}
                           <button
                             onClick={() => removeMember.mutate({ userId: m.userId })}
                             disabled={removeMember.isPending}

@@ -502,26 +502,34 @@ describe("SECURITY — magic link token security properties", () => {
   it("email-change token must have userId bound server-side (prevents account takeover)", () => {
     /**
      * INVARIANT: requestEmailChange stores ctx.user.id in the token row.
-     * confirmEmailChange reads userId FROM the token — never from the URL/body.
+     * confirmEmailChange reads userId FROM the token — never from the URL/body —
+     * and is a protected procedure: the signed-in user must be that bound user.
      * If userId were accepted from client input, an attacker with a stolen token
      * could redirect the email change to an arbitrary account.
      *
      * This mirrors the same test in security.test.ts but adds the numeric
      * assertion that a token without userId is rejected.
      */
-    function simulateConfirm(tokenRow: { userId: string | null; email: string }): string {
+    function simulateConfirm(tokenRow: { userId: string | null; email: string }, sessionUserId: string): string {
       if (!tokenRow.userId) {
         throw new Error("Invalid or expired link");
+      }
+      if (tokenRow.userId !== sessionUserId) {
+        throw new Error("different Hisaabo account");
       }
       return tokenRow.userId;
     }
 
-    // Valid email-change token has userId
-    expect(simulateConfirm({ userId: "user-ramesh-001", email: "new@example.com" }))
+    // Valid email-change token has userId and the requester is signed in
+    expect(simulateConfirm({ userId: "user-ramesh-001", email: "new@example.com" }, "user-ramesh-001"))
       .toBe("user-ramesh-001");
 
     // Regular magic link token (no userId) cannot be used for email change
-    expect(() => simulateConfirm({ userId: null, email: "attacker@evil.com" }))
+    expect(() => simulateConfirm({ userId: null, email: "attacker@evil.com" }, "user-ramesh-001"))
       .toThrow("Invalid or expired link");
+
+    // Another account's session cannot confirm it
+    expect(() => simulateConfirm({ userId: "user-ramesh-001", email: "v@example.com" }, "someone-else"))
+      .toThrow("different Hisaabo account");
   });
 });
