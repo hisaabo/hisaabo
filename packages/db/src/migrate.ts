@@ -304,9 +304,28 @@ async function runMigrations(
 
 // The job queue (pg-boss) lives in the control DB — the single DB when
 // self-hosted, never a tenant DB.
+//
+// NON-FATAL in this release: no product feature depends on the queue yet, so a
+// database role that cannot CREATE SCHEMA (managed Postgres, restricted roles)
+// or a connection pooler that rejects pg-boss's session-level features must not
+// stop the API from starting. The failure is logged loudly; the worker keeps
+// retrying until the schema exists and the API's queue-backed surfaces (the
+// /ops dashboard, `ops queue …`, the admin Queues view) report "not installed".
 async function installQueue(databaseUrl: string, label: string): Promise<void> {
-  const version = await installQueueSchema(databaseUrl);
-  log("info", `${label}: job queue schema ready`, { schema: "pgboss", version });
+  try {
+    const version = await installQueueSchema(databaseUrl);
+    log("info", `${label}: job queue schema ready`, { schema: "pgboss", version });
+  } catch (err) {
+    log("warn", `${label}: job queue schema NOT installed — continuing without the background job queue`, {
+      schema: "pgboss",
+      error: err instanceof Error ? err.message : String(err),
+      remediation:
+        "Grant the migration role CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>) " +
+        "and point DATABASE_URL / CONTROL_DATABASE_URL at a direct (non-pooled, session-mode) connection, " +
+        "then re-run migrations (restart the api container, or: node packages/db/dist/migrate.mjs). " +
+        "The worker retries until the schema exists. See docs/UPGRADING.md.",
+    });
+  }
 }
 
 // ── Self-hosted mode ─────────────────────────────────────────

@@ -40,6 +40,7 @@ import {
   type OpsSession,
 } from "./sessions.js";
 import { writeOpsAudit, listOpsAudit } from "./audit.js";
+import { QueueUnavailableError } from "../queue/errors.js";
 import {
   JOB_TABS,
   MAX_BULK_IDS,
@@ -131,12 +132,32 @@ function apiOrigin(c: Context): string {
   return new URL(c.req.url).origin;
 }
 
-function json(c: Context, body: unknown, status: 200 | 400 | 401 | 403 | 404 | 429 | 500 = 200) {
+function json(c: Context, body: unknown, status: 200 | 400 | 401 | 403 | 404 | 429 | 500 | 503 = 200) {
   return c.json(body as object, status);
 }
 
 function fail(c: Context, f: Fail) {
   return json(c, { error: f.error, message: f.message }, f.status);
+}
+
+/**
+ * Run a queue-backed handler. A missing `pgboss` schema (the migration step
+ * could not install it) or an unreachable queue database becomes a 503 the
+ * dashboard can show, not a 500.
+ */
+async function withQueue(c: Context, run: () => Promise<Response>): Promise<Response> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof QueueUnavailableError) {
+      logger.warn({ err }, "ops: job queue unavailable");
+      return json(c, {
+        error: "queue_unavailable",
+        message: "The job queue is not installed or unreachable. Check the migration logs for 'job queue schema NOT installed'.",
+      }, 503);
+    }
+    throw err;
+  }
 }
 
 // ── Rate limiting (in-memory, per IP and bucket) ─────────────
@@ -460,7 +481,7 @@ export function registerOpsRoutes(app: Hono, deps: OpsRouteDeps): void {
   const read = (handler: (c: Context, auth: OpsAuth) => Promise<Response>) => async (c: Context) => {
     const auth = await requireOps(c);
     if (!auth.ok) return fail(c, auth);
-    return handler(c, auth);
+    return withQueue(c, () => handler(c, auth));
   };
 
   app.get("/ops/api/overview", read(async (c) => json(c, await overview())));
@@ -531,10 +552,12 @@ export function registerOpsRoutes(app: Hono, deps: OpsRouteDeps): void {
     const auth = await requireAction(c, "job_reveal", p?.queue ?? null);
     if (!auth.ok) return fail(c, auth);
     if (!p) return json(c, { error: "not_found", message: "Job not found" }, 404);
-    const payload = await revealPayload(p.queue, p.id);
-    if (!payload) return json(c, { error: "not_found", message: "Job not found" }, 404);
-    await audit(c, auth, "job_reveal", { queue: p.queue, jobIds: [p.id] });
-    return json(c, { payload });
+    return withQueue(c, async () => {
+      const payload = await revealPayload(p.queue, p.id);
+      if (!payload) return json(c, { error: "not_found", message: "Job not found" }, 404);
+      await audit(c, auth, "job_reveal", { queue: p.queue, jobIds: [p.id] });
+      return json(c, { payload });
+    });
   });
 
   const bulkSchema = z.object({
@@ -552,9 +575,11 @@ export function registerOpsRoutes(app: Hono, deps: OpsRouteDeps): void {
       const body = await readBody(c, bulkSchema);
       if (!body || !resolveQueue(body.queue)) return json(c, { error: "bad_request", message: "Invalid request" }, 400);
       const ids = [...new Set(body.ids)];
-      const count = await run(body.queue, ids);
-      await audit(c, auth, action, { queue: body.queue, jobIds: ids, details: { count } });
-      return json(c, { ok: true, count });
+      return withQueue(c, async () => {
+        const count = await run(body.queue, ids);
+        await audit(c, auth, action, { queue: body.queue, jobIds: ids, details: { count } });
+        return json(c, { ok: true, count });
+      });
     });
   }
 

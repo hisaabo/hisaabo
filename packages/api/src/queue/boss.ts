@@ -13,6 +13,7 @@ import { QUEUE_SCHEMA } from "@hisaabo/db";
 import { logger } from "../lib/logger.js";
 import { queueDatabaseUrl, retentionConfig, type RetentionConfig } from "./config.js";
 import type { AnyJobDefinition } from "./define.js";
+import { QueueUnavailableError } from "./errors.js";
 
 export function createBoss(options: Partial<ConstructorOptions> = {}): PgBoss {
   const boss = new PgBoss({
@@ -86,11 +87,22 @@ function withoutPolicy(opts: QueueOptions): QueueOptions {
 let sender: Promise<PgBoss> | null = null;
 const ensured = new Map<PgBoss, Set<string>>();
 
-/** Send-only pg-boss for the API process, started on first use. */
+/**
+ * Send-only pg-boss for the API process, started on first use. Rejects with
+ * QueueUnavailableError (and is retried on the next call) while the pgboss
+ * schema is absent; nothing in the API calls this at boot.
+ */
 export function getSenderBoss(): Promise<PgBoss> {
   sender ??= (async () => {
     const boss = createBoss({ instanceName: "api", application_name: "hisaabo-api-queue" });
-    await boss.start();
+    try {
+      // migrate: false, so this throws "pg-boss is not installed" until the
+      // migration step has created the schema.
+      await boss.start();
+    } catch (err) {
+      await boss.stop({ graceful: false, close: true }).catch(() => {});
+      throw new QueueUnavailableError(err);
+    }
     return boss;
   })().catch((err) => {
     sender = null;

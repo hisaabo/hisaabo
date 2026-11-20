@@ -3,6 +3,10 @@
  *
  * Pass `tx` to enqueue inside a Drizzle transaction: the job then exists only
  * if the transaction commits (pg-boss Drizzle adapter).
+ *
+ * Rejects with QueueUnavailableError when the pgboss schema is not installed
+ * (the migration step logs "job queue schema NOT installed" and continues).
+ * Nothing is silently dropped: the caller decides whether to degrade or fail.
  */
 import { sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";

@@ -324,6 +324,9 @@ export async function main(argv: string[]): Promise<number> {
       return 2;
     }
     console.error(color.red((err as Error).message));
+    if (/pg-boss is not installed/i.test((err as Error).message)) {
+      console.error(color.yellow("The job queue schema (pgboss) is missing. Check the migration logs for 'job queue schema NOT installed', fix the cause (CREATE on the database, direct connection), then restart the api container to re-run migrations."));
+    }
     return 1;
   } finally {
     if (started) await started.stop({ graceful: false, close: true }).catch(() => {});

@@ -28,7 +28,10 @@ async function startWithRetry(): Promise<WorkerRuntime> {
     } catch (err) {
       // Usually the pgboss schema is not installed yet (the API container runs
       // migrations) or the DB is still starting.
-      logger.warn({ err, retryInMs: delayMs }, "worker could not start yet; retrying");
+      // Usually: the pgboss schema is not installed yet (api container still
+      // migrating, or its install step failed: look for "job queue schema NOT
+      // installed" in the api/migration logs). Retries forever; never crashes.
+      logger.warn({ err, retryInMs: delayMs }, "worker could not start yet (is the pgboss schema installed?); retrying");
       await new Promise((r) => setTimeout(r, delayMs));
       delayMs = Math.min(delayMs * 2, 30_000);
     }
