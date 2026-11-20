@@ -8,6 +8,7 @@ import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
 
 
 export const partyRouter = router({
@@ -436,6 +437,7 @@ export const partyRouter = router({
           date: payments.paymentDate,
           amount: payments.amount,
           mode: payments.mode,
+          tdsAmount: paymentTdsSql(),
         }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate).limit(input.limit),
       ]);
 
@@ -462,20 +464,26 @@ export const partyRouter = router({
             description: label,
             debit,
             credit,
+            tdsAmount: "0.00",
             status: inv.status,
             documentId: inv.id,
           };
         }),
-        ...partyPayments.map(pmt => ({
-          date: pmt.date,
-          type: "payment" as const,
-          number: pmt.paymentNumber || "",
-          description: `Payment (${pmt.mode})`,
-          debit: party.type === "supplier" ? pmt.amount : "0",
-          credit: party.type === "supplier" ? "0" : pmt.amount,
-          status: null as string | null,
-          documentId: pmt.id,
-        })),
+        // A receipt settles cash + TDS withheld; `tdsAmount` exposes the TDS part.
+        ...partyPayments.map(pmt => {
+          const leg = paymentLedgerLeg(party.type, pmt);
+          return {
+            date: pmt.date,
+            type: "payment" as const,
+            number: pmt.paymentNumber || "",
+            description: leg.description,
+            debit: leg.debit,
+            credit: leg.credit,
+            tdsAmount: leg.tds,
+            status: null as string | null,
+            documentId: pmt.id,
+          };
+        }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       // Compute running balance and summary using the money module
@@ -558,6 +566,7 @@ export const partyRouter = router({
           date: payments.paymentDate,
           amount: payments.amount,
           mode: payments.mode,
+          tdsAmount: paymentTdsSql(),
         }).from(payments).where(and(...paymentConditions)).orderBy(payments.paymentDate).limit(input.limit),
       ]);
 
@@ -576,13 +585,16 @@ export const partyRouter = router({
           const credit = debit === "0" ? inv.totalAmount : "0";
           return { date: inv.date, number: inv.invoiceNumber, description: label, debit, credit };
         }),
-        ...partyPayments.map(pmt => ({
-          date: pmt.date,
-          number: pmt.paymentNumber || "",
-          description: `Payment (${pmt.mode})`,
-          debit: party.type === "supplier" ? pmt.amount : "0",
-          credit: party.type === "supplier" ? "0" : pmt.amount,
-        })),
+        ...partyPayments.map(pmt => {
+          const leg = paymentLedgerLeg(party.type, pmt);
+          return {
+            date: pmt.date,
+            number: pmt.paymentNumber || "",
+            description: leg.description,
+            debit: leg.debit,
+            credit: leg.credit,
+          };
+        }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       function fmtDate(d: Date): string {
@@ -677,6 +689,7 @@ export const partyRouter = router({
           mode: payments.mode,
           partyName: parties.name,
           partyType: parties.type,
+          tdsAmount: paymentTdsSql(),
         }).from(payments)
           .innerJoin(parties, eq(parties.id, payments.partyId))
           .where(and(...paymentConditions))
@@ -731,6 +744,21 @@ export const partyRouter = router({
           amount: pmt.amount,
           sortKey: new Date(pmt.paymentDate).getTime(),
         });
+        // TDS the customer withheld is a second leg of the same receipt voucher:
+        // Dr TDS Receivable / Cr party. Without it the party ledger in Tally would
+        // keep the withheld tax as outstanding (cash alone does not clear the invoice).
+        const settlement = paymentSettlement(pmt.amount, pmt.tdsAmount);
+        if (isSalePayment && settlement.hasTds) {
+          vouchers.push({
+            date: formatTallyDate(new Date(pmt.paymentDate)),
+            vchType: "Receipt",
+            vchNo: pmt.paymentNumber || "",
+            debitLedger: "TDS Receivable",
+            creditLedger: pmt.partyName,
+            amount: settlement.tds,
+            sortKey: new Date(pmt.paymentDate).getTime(),
+          });
+        }
       }
 
       for (const exp of allExpenses) {
@@ -914,14 +942,15 @@ export const partyRouter = router({
 
           UNION ALL
 
-          -- Payments received from customer: credit
+          -- Payments received from customer: credit the SETTLED amount
+          -- (net cash + TDS withheld), otherwise TDS stays "outstanding".
           SELECT
             payment_date AS entry_date,
             'payment'::text AS entry_type,
             coalesce(payment_number, id::text) AS document_number,
             id AS document_id,
             0::numeric AS debit,
-            amount::numeric AS credit,
+            ${paymentSettledSql()} AS credit,
             NULL AS status
           FROM payments
           WHERE party_id = ${input.partyId}

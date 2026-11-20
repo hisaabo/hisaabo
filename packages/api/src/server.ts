@@ -7,7 +7,7 @@ import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, lt, inArray, isNull, sql } from "drizzle-orm";
 import { escapeLike } from "./lib/escape-like.js";
-import { buildBusinessDateFilter } from "./lib/business-date.js";
+import { buildPartyLedgerStatement } from "./lib/party-ledger.js";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -20,8 +20,8 @@ import { getActiveMembership, getBusinessAccess, authzDenialError } from "./lib/
 import { startCacheListener, setDegraded, isDegraded, type CacheListener } from "./lib/cache/index.js";
 import type { InvoicePDFData } from "./lib/invoice-pdf.js";
 import { generateLedgerPDF } from "./lib/ledger-pdf.js";
-import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, payments, assertMigrationsPresent } from "@hisaabo/db";
-import { calcLineItem, calcInvoiceTotals, money } from "@hisaabo/shared";
+import { controlDb, getTenantDb, invoices, invoiceItems, items, itemVariants, itemImages, parties, businesses, sessions, tenants, magicLinkTokens, bankAccounts, storeOrders, assertMigrationsPresent } from "@hisaabo/db";
+import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
 import { verifyTurnstile } from "./lib/turnstile.js";
 import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
@@ -794,67 +794,12 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
   const fromDate = fromParam ? new Date(fromParam) : null;
   const toDate = toParam ? new Date(toParam) : null;
 
-  // Build conditions for invoices and payments
-  const invoiceConditions = [
-    eq(invoices.partyId, partyId),
-    eq(invoices.businessId, businessId),
-    eq(invoices.documentType, "invoice"),
-  ] as Parameters<typeof and>[0][];
-  const paymentConditions = [
-    eq(payments.partyId, partyId),
-    eq(payments.businessId, businessId),
-  ] as Parameters<typeof and>[0][];
-
-  invoiceConditions.push(...buildBusinessDateFilter(invoices, { from: fromDate, to: toDate }));
-  paymentConditions.push(...buildBusinessDateFilter(payments, { from: fromDate, to: toDate }));
-
-  const [partyInvoices, partyPayments] = await Promise.all([
-    db.select({
-      id: invoices.id,
-      invoiceNumber: invoices.invoiceNumber,
-      date: invoices.invoiceDate,
-      type: invoices.type,
-      totalAmount: invoices.totalAmount,
-      status: invoices.status,
-    }).from(invoices).where(and(...invoiceConditions as [any, ...any[]])).orderBy(invoices.invoiceDate),
-    db.select({
-      id: payments.id,
-      paymentNumber: payments.paymentNumber,
-      date: payments.paymentDate,
-      amount: payments.amount,
-      mode: payments.mode,
-    }).from(payments).where(and(...paymentConditions as [any, ...any[]])).orderBy(payments.paymentDate),
-  ]);
-
-  // Build ledger entries (same logic as ledgerReport tRPC procedure)
-  const entries = [
-    ...partyInvoices.map(inv => ({
-      date: inv.date as Date,
-      type: "invoice" as const,
-      number: inv.invoiceNumber,
-      description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
-      debit: inv.type === "sale" ? inv.totalAmount : "0",
-      credit: inv.type === "sale" ? "0" : inv.totalAmount,
-    })),
-    ...partyPayments.map(pmt => ({
-      date: pmt.date as Date,
-      type: "payment" as const,
-      number: pmt.paymentNumber || "",
-      description: `Payment (${pmt.mode})`,
-      debit: party.type === "supplier" ? pmt.amount : "0",
-      credit: party.type === "supplier" ? "0" : pmt.amount,
-    })),
-  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  let runningBalance = party.openingBalance;
-  const entriesWithBalance = entries.map(e => {
-    runningBalance = money.add(money.sub(runningBalance, e.credit), e.debit);
-    return { ...e, runningBalance };
-  });
-
-  const totalDebit = money.sum(entries.map(e => e.debit));
-  const totalCredit = money.sum(entries.map(e => e.credit));
-  const closingBalance = money.add(money.sub(party.openingBalance, totalCredit), totalDebit);
+  // Running-balance statement: payments reduce the balance by what they settled
+  // (cash + TDS), so the closing balance and the UPI QR below exclude withheld TDS.
+  const { entries: entriesWithBalance, summary: ledgerSummary } = await buildPartyLedgerStatement(
+    db, businessId, party, { from: fromDate, to: toDate },
+  );
+  const { totalDebit, totalCredit, closingBalance } = ledgerSummary;
 
   // Generate UPI QR for ledger if closing balance is receivable
   let ledgerUpiQrDataUrl: string | undefined;
