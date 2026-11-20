@@ -14,7 +14,11 @@
  *   Dev checkout:
  *     pnpm --filter @hisaabo/api admin
  *
- * Run with --help for all flags. Read-only: it never writes to the database.
+ * Run with --help for all flags. The dashboard is read-only: it never writes to
+ * the database. The one write path is the explicit break-glass subcommand
+ *   node packages/api/dist/bin/admin.js login-link <email>
+ * (see lib/admin/login-link.ts), which prints a one-time sign-in URL for an
+ * existing user when email delivery is not working.
  */
 
 import { readFileSync } from "node:fs";
@@ -58,6 +62,7 @@ hisaabo admin — live platform dashboard for Hisaabo operators
 
 USAGE
   node packages/api/dist/bin/admin.js [options]
+  node packages/api/dist/bin/admin.js login-link <email> [options]   (break-glass sign-in; see login-link --help)
 
 OPTIONS
   --via <auto|direct|docker|demo>  How to reach Postgres (default: auto)
@@ -312,6 +317,13 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
 // ── Main ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  // Subcommand: break-glass sign-in link. Handled before the dashboard's flag
+  // parsing; loaded lazily so the read-only dashboard never touches the DB pool.
+  if (process.argv[2] === "login-link") {
+    const { runLoginLink } = await import("../lib/admin/login-link.js");
+    process.exit(await runLoginLink(process.argv.slice(3)));
+  }
+
   let a: Args;
   try {
     a = parseArgs(process.argv.slice(2));

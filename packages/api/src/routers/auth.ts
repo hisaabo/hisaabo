@@ -15,6 +15,7 @@ import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { isBearerClient } from "../lib/bearer-client.js";
+import { MAGIC_LINK_TTL_MS, generateMagicLinkToken, buildMagicLinkUrl } from "../lib/magic-link.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
 import {
@@ -542,27 +543,21 @@ export const authRouter = router({
       return { success: true };
     }
 
-    const rawToken = crypto.randomUUID() + "-" + nanoid(32);
-    const tokenH = hashToken(rawToken);
+    const { rawToken, tokenHash: tokenH } = generateMagicLinkToken();
 
     await controlDb.insert(magicLinkTokens).values({
       email,
       tokenHash: tokenH,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS),
       ipAddress: getClientIpFromRequest(ctx.req),
     });
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
-    const tokenParam = `token=${encodeURIComponent(rawToken)}`;
 
     // The email CTA is always the HTTPS link: email clients refuse to render
     // custom URL schemes. `source` is still threaded through for older native
     // clients whose /auth/verify page hands off to the app.
-    const sourceSuffix =
-      input.source === "desktop" || input.source === "mobile"
-        ? `&source=${input.source}`
-        : "";
-    const webUrl = `${baseUrl}/auth/verify?${tokenParam}${sourceSuffix}`;
+    const webUrl = buildMagicLinkUrl(baseUrl, rawToken, input.source);
 
     await emailService.sendMagicLink(email, webUrl, !existingUser);
 

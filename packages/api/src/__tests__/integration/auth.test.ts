@@ -36,6 +36,7 @@ import { createTestContext } from "../helpers/test-context.js";
 import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
+import { createLoginLink, type LoginLinkStore } from "../../lib/admin/login-link.js";
 
 // ── Caller factory ────────────────────────────────────────────────────────────
 
@@ -772,5 +773,137 @@ describe("auth.revokeSession", () => {
       code: "NOT_FOUND",
       message: "Session not found",
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Break-glass: `admin login-link <email>` issues a token the normal
+// verifyMagicLink consumes (single use, expiring, existing users only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("admin login-link tokens redeem through auth.verifyMagicLink", () => {
+  const db = getControlDb();
+
+  const store: LoginLinkStore = {
+    async findUserByEmail(email) {
+      const [row] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, email)).limit(1);
+      return row ?? null;
+    },
+    async insertToken(row) {
+      await db.insert(magicLinkTokens).values(row);
+    },
+  };
+  const tokenOf = (url: string) => new URL(url).searchParams.get("token")!;
+
+  it("signs the user in once, then rejects reuse", async () => {
+    const user = await createUser({ email: "breakglass@example.in", name: "Break Glass" });
+    const link = await createLoginLink(store, { email: user.email, ttlMinutes: 15, baseUrl: "https://app.example.in" });
+
+    const first = await unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) });
+    expect(first.user.id).toBe(user.id);
+    expect(first.isNewUser).toBe(false);
+
+    await expect(unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("rejects an expired link and marks the row as operator-issued", async () => {
+    const user = await createUser({ email: "breakglass-expired@example.in", name: "Expired" });
+    const link = await createLoginLink(store, {
+      email: user.email,
+      ttlMinutes: 1,
+      baseUrl: "https://app.example.in",
+      now: new Date(Date.now() - 10 * 60 * 1000),
+    });
+
+    const [row] = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, user.email)).limit(1);
+    expect(row.ipAddress).toBe("admin-cli");
+    await expect(unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("does not create accounts for unknown emails", async () => {
+    await expect(
+      createLoginLink(store, { email: "nobody-here@example.in", ttlMinutes: 15, baseUrl: "https://app.example.in" }),
+    ).rejects.toThrow(/no user/);
+    const rows = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, "nobody-here@example.in"));
+    expect(rows).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPRECATED v0.9.0 native-client compatibility (remove in 0.11.0)
+//
+// The v0.9.0 mobile app never sends X-Hisaabo-Client; it sends only
+// `X-Requested-With: hisaabo` and reads `data.sessionToken`. Browsers always
+// carry Origin / Sec-Fetch-* and must never receive the token in the body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth sign-in — v0.9.0 legacy native client compat", () => {
+  const db = getControlDb();
+
+  function callerWithHeaders(headers: Record<string, string>) {
+    return _callerFactory(createTestContext({ headers }));
+  }
+
+  async function seedMagicToken(email: string) {
+    const rawToken = "legacy-compat-" + nanoid(24);
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    return rawToken;
+  }
+
+  it("verifyMagicLink returns sessionToken (bearer session) for the v0.9.0 mobile signature", async () => {
+    const rawToken = await seedMagicToken("legacy-mobile@vyapar.in");
+    const result = await callerWithHeaders({ "x-requested-with": "hisaabo" }).auth.verifyMagicLink({ token: rawToken });
+
+    expect(typeof result.sessionToken).toBe("string");
+    const [row] = await db.select().from(sessions).where(eq(sessions.id, result.sessionToken!)).limit(1);
+    expect(row?.authMethod).toBe("bearer");
+  });
+
+  it("verifyMagicLink does NOT return sessionToken for a browser (Origin + Sec-Fetch-* present)", async () => {
+    const rawToken = await seedMagicToken("legacy-browser@vyapar.in");
+    const ctx = createTestContext({
+      headers: {
+        "x-requested-with": "hisaabo",
+        origin: "https://app.example.com",
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+      },
+    });
+    const result = await _callerFactory(ctx).auth.verifyMagicLink({ token: rawToken });
+
+    expect(result.sessionToken).toBeUndefined();
+    // Cookie session: Set-Cookie is written instead.
+    expect(ctx.resHeaders.get("set-cookie")).toContain("session_id=");
+  });
+
+  it("verifyMagicLink returns sessionToken for the current X-Hisaabo-Client header", async () => {
+    const rawToken = await seedMagicToken("legacy-newhdr@vyapar.in");
+    const result = await callerWithHeaders({ "x-hisaabo-client": "mobile" }).auth.verifyMagicLink({ token: rawToken });
+    expect(typeof result.sessionToken).toBe("string");
+  });
+
+  it("password login returns sessionToken for the v0.9.0 mobile signature but not for a browser", async () => {
+    await unauthCaller().auth.register({
+      email: "legacy-login@vyapar.in",
+      name: "Legacy Login",
+      password: "Test@1234!",
+      confirmPassword: "Test@1234!",
+    });
+
+    const legacy = await callerWithHeaders({ "x-requested-with": "hisaabo" }).auth.login({
+      email: "legacy-login@vyapar.in",
+      password: "Test@1234!",
+    });
+    expect(typeof legacy.sessionToken).toBe("string");
+
+    const browser = await callerWithHeaders({
+      "x-requested-with": "hisaabo",
+      origin: "https://app.example.com",
+    }).auth.login({ email: "legacy-login@vyapar.in", password: "Test@1234!" });
+    expect(browser.sessionToken).toBeUndefined();
   });
 });
