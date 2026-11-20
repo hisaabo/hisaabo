@@ -37,6 +37,7 @@ import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
 import { buildInfo } from "../../lib/build-info.js";
+import { logger } from "../../lib/logger.js";
 import { createLoginLink, type LoginLinkStore } from "../../lib/admin/login-link.js";
 import { createContext } from "../../context.js";
 
@@ -577,6 +578,33 @@ describe("auth.sendMagicLink — Turnstile enforcement and the DEPRECATED v0.9.x
     }
     await expect(send(legacyMobile, email, "mobile")).resolves.toEqual({ success: true });
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("the exempt path does not wait for the mail provider (no timing oracle), and a failing provider never surfaces", async () => {
+    const email = "legacy-exempt-timing@vyapar.in";
+    await createUser({ email, name: "Timing" });
+    // A provider that never answers: the known-address response still comes back.
+    sendSpy.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const raced = await Promise.race([
+      send(legacyMobile, email, "mobile").then(() => "returned"),
+      new Promise<string>((r) => setTimeout(() => r("blocked"), 2000)),
+    ]);
+    expect(raced).toBe("returned");
+    expect(sendSpy).toHaveBeenCalledOnce();
+
+    // A provider that fails: logged, not thrown.
+    sendSpy.mockClear();
+    const other = "legacy-exempt-timing2@vyapar.in";
+    await createUser({ email: other, name: "Timing 2" });
+    sendSpy.mockRejectedValueOnce(new Error("provider down"));
+    await expect(send(legacyMobile, other, "mobile")).resolves.toEqual({ success: true });
+  });
+
+  it("outside the exempt branch the send is still awaited (the fire-and-forget is limited to exempt callers)", async () => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    await createUser({ email: "legacy-awaited@vyapar.in", name: "Awaited" });
+    sendSpy.mockRejectedValueOnce(new Error("provider down"));
+    await expect(send({}, "legacy-awaited@vyapar.in")).rejects.toThrow("provider down");
   });
 
   it("Tauri desktop shape + existing user: mail is sent and the link ends &source=desktop", async () => {
@@ -1188,7 +1216,14 @@ describe("auth.verifyMagicLink — first verification of an unverified account",
     return raw;
   }
 
-  async function register(email: string) {
+  /**
+   * Self-hosted `register` makes the FIRST account of a server the default tenant's
+   * owner and everyone after a legacy "member". The fixture pins the role so a test
+   * does not depend on being first: the default is a stranger's pre-registration
+   * (legacy "member"); pass a role to model an established member, or null for an
+   * account with no membership (registered against a pending invitation).
+   */
+  async function register(email: string, role: "member" | "owner" | "admin" | "seller" | null = "member") {
     // Bearer client: the registrant receives the raw session token.
     const res = await unauthCaller("mobile").auth.register({
       email,
@@ -1197,7 +1232,10 @@ describe("auth.verifyMagicLink — first verification of an unverified account",
       confirmPassword: PASSWORD,
     });
     const [member] = await db.select().from(tenantMembers).where(eq(tenantMembers.userId, res.user.id)).limit(1);
-    return { userId: res.user.id, sessionToken: res.sessionToken!, tenantId: member!.tenantId };
+    const tenantId = member!.tenantId;
+    if (role === null) await db.delete(tenantMembers).where(eq(tenantMembers.userId, res.user.id));
+    else await db.update(tenantMembers).set({ role }).where(eq(tenantMembers.userId, res.user.id));
+    return { userId: res.user.id, sessionToken: res.sessionToken!, tenantId };
   }
 
   it("kills the attacker's sessions, API keys and password; the victim's new session works", async () => {
@@ -1323,6 +1361,109 @@ describe("auth.verifyMagicLink — first verification of an unverified account",
     const second = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
     expect((await resolveBearer(first.sessionToken!)).user?.id).toBe(first.user.id);
     expect((await resolveBearer(second.sessionToken!)).user?.id).toBe(first.user.id);
+  });
+
+  describe("self-hosted compatibility: established members are not wiped (cloud unchanged)", () => {
+    const SAVED_MT = process.env.MULTI_TENANT;
+    let noticeSpy: MockInstance<typeof emailService.sendSecurityNotice>;
+    let warnSpy: MockInstance<typeof logger.warn>;
+    beforeAll(() => {
+      noticeSpy = vi.spyOn(emailService, "sendSecurityNotice").mockResolvedValue(undefined);
+      warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    });
+    beforeEach(() => {
+      noticeSpy.mockClear();
+      warnSpy.mockClear();
+    });
+    afterEach(() => {
+      if (SAVED_MT === undefined) delete process.env.MULTI_TENANT;
+      else process.env.MULTI_TENANT = SAVED_MT;
+    });
+    afterAll(() => {
+      noticeSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    const claimEvent = () =>
+      warnSpy.mock.calls.map((c) => c[0] as Record<string, unknown>).find((o) => o && o.event === "unverified_account_claimed");
+
+    /** A password account with a second session, an API key and a pending invitation it issued. */
+    async function fixture(email: string, role: "owner" | "admin" | "seller" | "member" | null) {
+      const reg = await register(email, role);
+      const second = await createSession(reg.userId, reg.tenantId);
+      const key = await seedApiKey(reg.userId, reg.tenantId);
+      const [inv] = await db.insert(invitations).values({
+        tenantId: reg.tenantId,
+        email: `invitee.${nanoid(6).toLowerCase()}@vyapar.in`,
+        role: "seller",
+        token: createHash("sha256").update("inv-" + nanoid(16)).digest("hex"),
+        invitedBy: reg.userId,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      }).returning();
+      return { ...reg, second, key, invitationId: inv!.id };
+    }
+
+    async function expectNothingWiped(email: string, f: Awaited<ReturnType<typeof fixture>>) {
+      const res = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+      expect(res.user.id).toBe(f.userId);
+
+      expect((await resolveBearer(f.sessionToken)).user?.id).toBe(f.userId);
+      expect((await resolveBearer(f.second.id)).user?.id).toBe(f.userId);
+      expect((await resolveBearer(f.key)).user?.id).toBe(f.userId);
+      expect(await db.select().from(invitations).where(eq(invitations.id, f.invitationId))).toHaveLength(1);
+      await expect(unauthCaller().auth.login({ email, password: PASSWORD })).resolves.toMatchObject({ user: { id: f.userId } });
+      const [row] = await db.select().from(users).where(eq(users.id, f.userId));
+      expect(row!.emailVerified).toBe(true);
+      expect(row!.passwordHash).not.toBeNull();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(noticeSpy).not.toHaveBeenCalled();
+      expect(claimEvent()).toBeUndefined();
+    }
+
+    async function expectWiped(email: string, f: Awaited<ReturnType<typeof fixture>>) {
+      await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+      expect((await resolveBearer(f.sessionToken)).user).toBeNull();
+      expect((await resolveBearer(f.second.id)).user).toBeNull();
+      expect((await resolveBearer(f.key)).user).toBeNull();
+      expect(await db.select().from(invitations).where(eq(invitations.id, f.invitationId))).toHaveLength(0);
+      await expect(unauthCaller().auth.login({ email, password: PASSWORD })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      expect(claimEvent()).toMatchObject({ pendingInvitations: 1 });
+    }
+
+    it("a self-hosted owner who registered with a password keeps everything on the first magic-link sign-in", async () => {
+      delete process.env.MULTI_TENANT;
+      const email = "sh-owner-keep@vyapar.in";
+      await expectNothingWiped(email, await fixture(email, "owner"));
+    });
+
+    it("so does a self-hosted account with an invited role (seller) and an admin", async () => {
+      delete process.env.MULTI_TENANT;
+      const seller = "sh-seller-keep@vyapar.in";
+      await expectNothingWiped(seller, await fixture(seller, "seller"));
+      warnSpy.mockClear();
+      const admin = "sh-admin-keep@vyapar.in";
+      await expectNothingWiped(admin, await fixture(admin, "admin"));
+    });
+
+    it("a self-hosted account with no membership (registered against a pending invitation) is wiped", async () => {
+      delete process.env.MULTI_TENANT;
+      const email = "sh-nomember-wipe@vyapar.in";
+      await expectWiped(email, await fixture(email, null));
+    });
+
+    it("a self-hosted account with only the legacy member role is wiped", async () => {
+      delete process.env.MULTI_TENANT;
+      const email = "sh-member-wipe@vyapar.in";
+      await expectWiped(email, await fixture(email, "member"));
+    });
+
+    it("the same owner fixture on the cloud (MULTI_TENANT=true) is wiped exactly as before", async () => {
+      delete process.env.MULTI_TENANT;
+      const email = "cloud-owner-wipe@vyapar.in";
+      const f = await fixture(email, "owner"); // registered while self-hosted (cloud register would provision a database)
+      process.env.MULTI_TENANT = "true";
+      await expectWiped(email, f);
+    });
   });
 
   it("password login that was in flight when the wipe committed cannot mint a session", async () => {

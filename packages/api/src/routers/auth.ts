@@ -38,6 +38,15 @@ const EMAIL_CHANGE_WINDOW_MS = 60 * 60 * 1000;
 // Cap on emailed links per address per 24h for Turnstile-exempt v0.9.x clients.
 const LEGACY_EXEMPT_MAX_LINKS_PER_DAY = 10;
 
+// Self-hosted only (see verifyMagicLink): membership roles that prove an account is
+// an established member of the server rather than a stranger's password sign-up.
+// On a self-hosted server these roles only come from trusted paths: the first owner,
+// accepting an invitation (token path, or in-app after email verification), or an
+// admin's role change. The legacy "member" role is deliberately excluded: it is what
+// `tenant.create` hands to anyone with a pending invitation and what the default
+// tenant hands to later registrants, so it proves nothing.
+const SELF_HOSTED_ESTABLISHED_ROLES = ["owner", "superadmin", "admin", "seller_manager", "seller", "accountant"] as const;
+
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 
@@ -580,7 +589,8 @@ export const authRouter = router({
     // Legacy (Turnstile-exempt) callers can only trigger mail to people who already
     // have, or are invited to have, an account, and only a bounded number per
     // address per day. Same response either way, so nothing is revealed.
-    if (exempt && process.env.TURNSTILE_SECRET_KEY) {
+    const legacyExemptGated = exempt && !!process.env.TURNSTILE_SECRET_KEY;
+    if (legacyExemptGated) {
       if (!existingUser && !(await hasPendingInvitation(controlDb, email))) {
         return { success: true };
       }
@@ -641,7 +651,18 @@ export const authRouter = router({
     // (legacyHandoffSource is null — no suffix — when the compat switch is off).
     const webUrl = buildMagicLinkUrl(baseUrl, rawToken, legacyHandoffSource(ctx.req, input.source) ?? undefined);
 
-    await emailService.sendMagicLink(email, webUrl, !existingUser);
+    if (legacyExemptGated) {
+      // Turnstile-exempt callers are answered before the mail provider has
+      // replied: otherwise the response time separates "known address" (a send
+      // happened) from "unknown / over the daily cap" (returned early), an
+      // enumeration oracle for a caller that carries no Turnstile token. A send
+      // failure is logged, never surfaced.
+      void emailService.sendMagicLink(email, webUrl, !existingUser).catch((err) => {
+        logger.warn({ err }, "Failed to send magic link to a Turnstile-exempt (legacy) client");
+      });
+    } else {
+      await emailService.sendMagicLink(email, webUrl, !existingUser);
+    }
 
     return { success: true }; // Always success — no email enumeration
   }),
@@ -758,6 +779,21 @@ export const authRouter = router({
             .for("update")
             .limit(1);
 
+          // Self-hosted compatibility (never queried on the cloud): in v0.9.0 every
+          // password account was "never verified", the owner included. An account
+          // that already holds an established membership is a member of this server,
+          // not a stranger's pre-registration, so its first email-link sign-in must
+          // not wipe it.
+          let establishedSelfHosted = false;
+          if (user && !user.emailVerified && process.env.MULTI_TENANT !== "true") {
+            const [established] = await tx
+              .select({ id: tenantMembers.id })
+              .from(tenantMembers)
+              .where(and(eq(tenantMembers.userId, user.id), inArray(tenantMembers.role, SELF_HOSTED_ESTABLISHED_ROLES)))
+              .limit(1);
+            establishedSelfHosted = !!established;
+          }
+
           if (!user) {
             await enforceSelfHostedSignup(tx, emailLocal);
             isNew = true;
@@ -802,7 +838,7 @@ export const authRouter = router({
             // sendMagicLink never binds a user and requestEmailChange refuses an
             // address that already has an account. It proves nothing about the
             // mailbox, so it neither marks the email verified nor revokes anything.
-          } else if (!user.emailVerified) {
+          } else if (!user.emailVerified && !establishedSelfHosted) {
             // First proof of mailbox ownership for an account that existed before
             // the email was verified (password sign-up: anyone could register an
             // address they do not own). Every credential issued before this point
@@ -810,6 +846,15 @@ export const authRouter = router({
             // API keys, the password, and anything that could mint a new credential
             // later (a pending email change, an authorised native sign-in code).
             // Deleting sessions cascades to their access tokens.
+            //
+            // Which accounts: on the cloud, every unverified account. On a
+            // self-hosted server only accounts WITHOUT an established membership
+            // (SELF_HOSTED_ESTABLISHED_ROLES: no membership at all, e.g. registered
+            // against a pending invitation, or only the legacy "member" role). Role is
+            // the trust anchor there because it can only be obtained through trusted
+            // paths, so an owner/admin/invited-role member who registered with a
+            // password under v0.9.0 is simply marked verified (next branch) and keeps
+            // their password, sessions, API keys and invitations.
             const revokedSessions = await tx.delete(sessions).where(eq(sessions.userId, user.id)).returning({ id: sessions.id });
             const revokedKeys = await tx.delete(apiKeys).where(eq(apiKeys.userId, user.id)).returning({ id: apiKeys.id });
             const revokedEmailChanges = await tx.delete(magicLinkTokens)
@@ -858,8 +903,10 @@ export const authRouter = router({
               hadPassword: user.passwordHash !== null,
             };
           } else {
-            // Existing, already-verified user: a normal sign-in leaves every
-            // credential (password, other sessions, API keys) untouched.
+            // Existing, already-verified user (or an established self-hosted member
+            // signing in for the first time): a normal sign-in leaves every
+            // credential (password, other sessions, API keys, invitations) untouched
+            // and only records that the email is now verified.
             await tx.update(users)
               .set({ emailVerified: true, updatedAt: new Date() })
               .where(eq(users.id, user.id));

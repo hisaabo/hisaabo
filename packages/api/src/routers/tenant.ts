@@ -219,8 +219,21 @@ export const tenantRouter = router({
         const memberCount = await tx.select({ id: tenantMembers.id })
           .from(tenantMembers).where(eq(tenantMembers.tenantId, defaultTenant.id));
 
-        if (memberCount.length > 0 && !isOpenSignupEnabled() && !(await hasPendingInvitation(tx, normalizeEmail(ctx.user.email)))) {
-          throw new TRPCError({ code: "FORBIDDEN", message: SIGNUP_CLOSED_MESSAGE });
+        if (memberCount.length > 0 && !isOpenSignupEnabled()) {
+          if (!(await hasPendingInvitation(tx, normalizeEmail(ctx.user.email)))) {
+            throw new TRPCError({ code: "FORBIDDEN", message: SIGNUP_CLOSED_MESSAGE });
+          }
+          // A pending invitation only counts for a verified email. Otherwise anyone
+          // who could register an invited address (a password sign-up proves
+          // nothing about the mailbox) would walk into the default tenant here
+          // without ever holding the invitation token. An invitee on an install
+          // without email uses the invitation link (acceptInvitation with the token,
+          // which counts as the proof on a self-hosted server).
+          const [verified] = await tx.select({ emailVerified: users.emailVerified })
+            .from(users).where(eq(users.id, ctx.user.id)).limit(1);
+          if (!verified?.emailVerified) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Open your invitation link to join" });
+          }
         }
 
         touchedTenantId = defaultTenant.id;
