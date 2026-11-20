@@ -36,7 +36,7 @@ const CURRENT_TDS_CODES: readonly TdsCodeDefinition[] = [
   ["1006", "Commission or brokerage - others", "194H"],
   ["1008", "Rent on machinery - specified person", "194I(a)"],
   ["1009", "Rent other than machinery - specified person", "194I(b)"],
-  ["1011", "Payment on any consideration (not in kind) under agreement referred to in section 67(14)", "194-IA"],
+  ["1011", "Payment on any consideration (not in kind) under agreement referred to in section 67(14)", "194-IC"],
   ["1012", "Payment of compensation on acquisition of certain immovable property", "194LA"],
   ["1013", "Income in respect of units of a specified mutual fund or units from administrator of specified undertaking or specified company", "194K"],
   ["1014", "Interest from units of a business trust to a resident unit holder", "194LBA"],
