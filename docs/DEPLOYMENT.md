@@ -192,6 +192,7 @@ The entrypoint script runs pending migrations automatically before starting the 
 Long-running and scheduled work runs in a separate `worker` container built from the same image (`command: worker`); see [the queue design](architecture/queue.md). Jobs live in Postgres (the `pgboss` schema, installed by the API's migration step), so the worker needs no extra services.
 
 - The worker never runs migrations. It starts after the API is healthy and, if the queue schema is not there yet, retries with backoff until it is.
+- The queue schema install is best-effort in this release. If the migration role cannot create the `pgboss` schema, the API logs `job queue schema NOT installed` with the remediation (grant `CREATE` on the database, use a direct non-pooled connection, restart the `api` container) and starts normally; nothing depends on the queue yet.
 - It writes `/tmp/worker-heartbeat` every 10 seconds; the compose healthcheck fails when that file is older than 60 seconds.
 - On `SIGTERM` it stops taking jobs and gives running ones `QUEUE_SHUTDOWN_GRACE_SECONDS` to finish. Jobs that still don't finish are retried by another worker once they time out.
 - Scale out by running more worker containers (`docker compose up -d --scale worker=2`), or dedicate containers to a pool with `QUEUE_POOLS=heavy`.
@@ -201,7 +202,7 @@ Long-running and scheduled work runs in a separate `worker` container built from
 
 A Horizon-style dashboard for the job queue (throughput, queues, pending/active/completed/failed jobs, workers, schedules, audit log) is served by the API at `/ops`. It is **off** unless `QUEUE_DASHBOARD_ENABLED=true`; the full threat model is in [the queue design](architecture/queue.md) §7.2.
 
-Getting in takes three things, all required: a normal Hisaabo sign-in (magic link) in the same browser, an operator record for that email, and a code from an authenticator app (TOTP). Operators can only be created and enrolled from the server shell — there is no web or API path — so access to the shell is the root of trust:
+Getting in takes three things, all required: a normal Hisaabo sign-in in the same browser (a browser cookie session; API keys and bearer tokens are refused), an operator record for that email, and a code from an authenticator app (TOTP). Operators can only be created and enrolled from the server shell — there is no web or API path — so access to the shell is the root of trust:
 
 ```bash
 # 1. Make sure ENCRYPTION_KEY is set (TOTP secrets are encrypted with it), then enable the dashboard

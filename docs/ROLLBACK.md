@@ -3,7 +3,7 @@
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
 **Last updated**: 2026-10-27
-**Applies to**: self-hosted migrations 0000 through 0020 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0006) migration sets; the equivalents for 0014-0020 are listed in section 3.
+**Applies to**: self-hosted migrations 0000 through 0019 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0007) and tenant (`drizzle-tenant`, 0000-0006) migration sets; the equivalents for 0014-0019 are listed in section 3.
 
 Downgrading the application from the next release to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
 
@@ -13,8 +13,7 @@ Downgrading the application from the next release to v0.9.0 needs no reverse SQL
 
 | Migration | Name | Risk | Data Loss | Recommended Strategy |
 |-----------|------|------|-----------|---------------------|
-| 0020 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
-| 0019 | Null all password hashes | **Irreversible** | Every stored password hash | Backup restore only |
+| 0019 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
 | 0018 | Cache invalidation NOTIFY triggers | Low | None | Leave in place, or manual reverse SQL |
 | 0017 | Global store slug registry | Low | Registry rows (rebuilt by the backfill) | Leave in place |
 | 0016 | Index swap on `items` / `bank_*` | Low | None | Leave in place |
@@ -881,7 +880,7 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 
 ---
 
-### Migrations 0014-0020: Released after v0.9.0
+### Migrations 0014-0019: Released after v0.9.0
 
 | Self-hosted | Control DB | Tenant DB | Change |
 |---|---|---|---|
@@ -890,12 +889,11 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 | 0016 | - | 0006 | Rebuilds `bsl_import_idx` and `bank_txn_date_idx`, adds `items_active_updated_idx` |
 | 0017 | 0005 | - | `store_slugs` registry |
 | 0018 | 0006 | - | `hisaabo_cache_notify()` and its triggers |
-| 0019 | 0007 | - | `UPDATE users SET password_hash = NULL` |
-| 0020 | 0008 | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
+| 0019 | 0007 | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
 
-The migration step also installs the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`.
+The migration step also tries to install the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`. If the install fails (for example the role lacks `CREATE` on the database) the step logs `job queue schema NOT installed` and continues; nothing in this release depends on the queue yet.
 
-Everything here except 0019 is additive: no existing column is dropped, retyped or made `NOT NULL` without a default. Older code ignores the new objects, so the recommended "rollback" is to leave them in place and only change the application image.
+Everything here is additive: no existing column is dropped, retyped or made `NOT NULL` without a default. Older code ignores the new objects, so the recommended "rollback" is to leave them in place and only change the application image.
 
 #### Downgrading to v0.9.0
 
@@ -908,7 +906,6 @@ Rehearsed on self-hosted and multi-tenant copies: the v0.9.0 migration step is a
 
 What does not come back:
 
-- **Password hashes (0019).** They were overwritten with `NULL`. Users can still sign in with a magic link. Getting passwords back requires restoring the pre-upgrade backup (Strategy 1), which also discards everything written since the upgrade.
 - **Store slug losers (multi-tenant).** Ignored by v0.9.0, which resolves slugs per tenant again.
 
 #### Removing the new objects (optional)
@@ -917,7 +914,7 @@ Only needed if you want a v0.9.0 schema byte-for-byte. The script below is for a
 
 ```sql
 BEGIN;
--- 0020 / control 0008
+-- 0019 / control 0007
 DROP TABLE IF EXISTS queue_controls, ops_audit_log, ops_sessions, ops_operators;
 DROP TYPE IF EXISTS ops_role;
 -- 0018 / control 0006
@@ -936,7 +933,7 @@ COMMIT;
 DROP SCHEMA IF EXISTS pgboss CASCADE;
 ```
 
-0016 only swaps indexes and is safe to keep. 0019 cannot be reversed with SQL.
+0016 only swaps indexes and is safe to keep.
 
 ---
 

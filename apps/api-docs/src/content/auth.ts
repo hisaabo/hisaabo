@@ -52,6 +52,7 @@ data = resp.json()["result"]["data"]["json"]
 session_token = data["sessionToken"]`,
       },
       gotchas: [
+        "Deprecated: password sign-in will be removed in 0.11.0. Use magic link (`auth.sendMagicLink` / `auth.verifyMagicLink`) or, for apps, `auth.nativeStart` / `auth.nativeExchange`. Each call logs a deprecation warning on the server.",
         "Returns CONFLICT (409) if the email is already registered.",
         "Password is hashed with Argon2id (memoryCost=65536, timeCost=3, parallelism=4) — never stored in plaintext.",
         "The `sessionToken` in the response is for mobile clients. Web clients should use the `session_id` HttpOnly cookie set automatically.",
@@ -95,6 +96,7 @@ data = resp.json()["result"]["data"]["json"]
 session_token = data["sessionToken"]`,
       },
       gotchas: [
+        "Deprecated: password sign-in will be removed in 0.11.0. Use magic link (`auth.sendMagicLink` / `auth.verifyMagicLink`) or, for apps, `auth.nativeStart` / `auth.nativeExchange`. Each call logs a deprecation warning on the server.",
         "Returns a generic 'Invalid email or password' for both wrong email and wrong password — this prevents email enumeration attacks.",
         "Returns FORBIDDEN (403) if the account exists but has no organization membership.",
         "The `sessionToken` in the response body is for mobile clients. Web clients should use the HttpOnly cookie set automatically.",

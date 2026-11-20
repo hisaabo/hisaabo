@@ -66,6 +66,16 @@ in production.
   worker start pg-boss with `migrate: false`, so neither process ever
   changes the schema at runtime. pg-boss is therefore a dependency of both
   `@hisaabo/db` (migrations) and `@hisaabo/api`.
+  **Best-effort in 0.10:** no product feature depends on the queue yet, so a
+  failed install (the role lacks `CREATE` on the database, a pooler in
+  between) is logged as a WARN, `job queue schema NOT installed`, with the
+  remediation, and the migration step still succeeds. The API never starts
+  pg-boss at boot; its send-only instance starts on first use and rejects with
+  `QueueUnavailableError` while the schema is absent (`dispatch()` surfaces it
+  rather than dropping the job; `/ops/api` answers 503 `queue_unavailable`;
+  `ops queue …` prints the remediation). The worker retries with backoff until
+  the schema exists. A later release can make the install fatal again once
+  jobs carry real work.
 - **Maintenance.** pg-boss maintenance (expiry, retention, monitoring, cron)
   runs only in worker processes (`supervise: true`, `schedule: true`). The
   API's pg-boss instance has both off and only sends.
@@ -287,7 +297,7 @@ The design assumes the operator dashboard is the most valuable target.
    existing trusted-proxy logic. Strongly recommended for production; the
    startup log warns when it is unset.
 3. **Three gates, all required:**
-   1. A normal Hisaabo **cookie** session (magic-link sign-in) on the API
+   1. A normal Hisaabo **cookie** session (browser sign-in) on the API
       origin. Bearer, API-key and access-token sessions are rejected.
    2. The session user's email is an **active row in `ops_operators`** with
       TOTP enrolled.
