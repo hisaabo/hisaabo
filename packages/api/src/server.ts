@@ -198,7 +198,8 @@ app.use("/api/trpc/*", async (c: Context, next: Next) => {
   await next();
 });
 
-// Oversized arrays exhaust memory in zod 3 validation (see lib/json-limits.ts).
+// Oversized arrays exhausted memory in zod < 4.6.6 validation; kept as defence
+// in depth now that zod >= 4.6.6 is in use (see lib/json-limits.ts).
 // Only bodies big enough to hold such an array are parsed here; malformed JSON
 // is left for tRPC to reject as usual.
 app.use("/api/trpc/*", async (c: Context, next: Next) => {

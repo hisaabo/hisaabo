@@ -1,12 +1,13 @@
 /**
  * Array-size guard for JSON request bodies.
  *
- * zod 3 validates every element of an array and keeps one issue object per
- * failing element, even when the schema has `.max()`: a 10 MB body of invalid
- * items exhausts the heap (GHSA-mrhx-c7xc-m3w5, fixed only in zod >= 4.6.6).
- * Until the API moves to zod 4, tRPC bodies are rejected before parsing when
- * any array, or all arrays together, exceed limits no real input comes near
- * (the largest legitimate input is a 5,000-row import).
+ * zod < 4.6.6 validates every element of an array and keeps one issue object
+ * per failing element, even when the schema has `.max()`: a 10 MB body of
+ * invalid items exhausts the heap (GHSA-mrhx-c7xc-m3w5). The repo now runs
+ * zod >= 4.6.6, which fixes that; this guard stays as defence in depth (and
+ * bounds work for every other consumer of the body): tRPC bodies are rejected
+ * before parsing when any array, or all arrays together, exceed limits no real
+ * input comes near (the largest legitimate input is a 5,000-row import).
  */
 
 export const MAX_ARRAY_ITEMS = 10_000;

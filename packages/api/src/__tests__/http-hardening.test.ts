@@ -149,7 +149,7 @@ describe("trusted client IP", () => {
   });
 });
 
-describe("JSON array limits (zod 3 memory exhaustion guard)", () => {
+describe("JSON array limits (memory exhaustion guard, defence in depth under zod >= 4.6.6)", () => {
   it("allows realistic inputs, including a full 5,000-row import", () => {
     const rows = Array.from({ length: 5000 }, (_, i) => ({ name: `Item ${i}`, lineItems: [{ qty: 1 }, { qty: 2 }] }));
     expect(exceedsArrayLimits({ 0: { json: { rows } } })).toBe(false);
