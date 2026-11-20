@@ -10,6 +10,20 @@ export const Route = createFileRoute("/auth/verify")({
   component: VerifyPage,
 });
 
+// Shape of an emailed magic-link token (UUID + "-" + 32 URL-safe chars = 69 chars;
+// the API accepts up to 128). Anything else is never put into a custom-scheme URL.
+const MAGIC_TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/;
+
+/**
+ * DEPRECATED v0.9.x app handoff (remove in 0.11.0, see LEGACY_V09_CLIENT_COMPAT in
+ * the API). Installed v0.9.x mobile/desktop apps request the link with
+ * `source=mobile|desktop` and expect this page to open the app with the token
+ * instead of signing the browser in. Anything else is not a handoff.
+ */
+function readHandoff(source: string | null): "mobile" | "desktop" | null {
+  return source === "mobile" || source === "desktop" ? source : null;
+}
+
 function VerifyPage() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
@@ -19,6 +33,11 @@ function VerifyPage() {
   // available after history.replaceState has cleared window.location.search.
   const [token] = useState(() =>
     new URLSearchParams(window.location.search).get("token")
+  );
+  // Captured at mount together with the token: the effect below strips the query
+  // string from the URL.
+  const [handoff, setHandoff] = useState(() =>
+    readHandoff(new URLSearchParams(window.location.search).get("source"))
   );
   const { data: existingSession, isLoading: sessionLoading } = trpc.auth.me.useQuery();
   // A magic-link token must never silently replace an existing session
@@ -58,14 +77,24 @@ function VerifyPage() {
     window.history.replaceState({}, "", "/auth/verify");
   }, []);
 
+  // A handoff link with a token that cannot be one of ours is rejected before it
+  // can reach the hisaabo:// URL.
+  const handoffTokenInvalid = handoff !== null && token !== null && !MAGIC_TOKEN_RE.test(token);
+
   useEffect(() => {
     if (sessionLoading || calledRef.current) return;
-    calledRef.current = true;
 
     if (!token) {
+      calledRef.current = true;
       setError("No token found in URL.");
       return;
     }
+
+    // Handoff: the token is consumed by the app, not here. Nothing is verified and
+    // no session check runs until the user chooses "Sign in here in the browser".
+    if (handoff) return;
+
+    calledRef.current = true;
 
     if (existingSession?.user) {
       setNeedsConfirm(true);
@@ -73,7 +102,18 @@ function VerifyPage() {
     }
 
     verifyMutation.mutate({ token });
-  }, [sessionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionLoading, handoff]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function openApp() {
+    if (!token) return;
+    window.location.href = `hisaabo://verify?token=${encodeURIComponent(token)}`;
+  }
+
+  // Leaves the handoff; the effect then runs the normal path (including the
+  // "already signed in" confirmation) once the session query has settled.
+  function verifyInBrowser() {
+    setHandoff(null);
+  }
 
   function confirmSwitch() {
     if (!token) return;
@@ -91,7 +131,7 @@ function VerifyPage() {
           </span>
         </div>
 
-        {error ? (
+        {error || handoffTokenInvalid ? (
           <>
             <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-red-100 dark:bg-red-950 flex items-center justify-center">
               <svg className="w-6 h-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -101,12 +141,32 @@ function VerifyPage() {
             <h1 className="text-lg font-semibold text-text-primary mb-2">
               Link expired or invalid
             </h1>
-            <p className="text-sm text-text-tertiary mb-6">{error}</p>
+            <p className="text-sm text-text-tertiary mb-6">
+              {error ?? "This sign-in link is not valid. Please request a new one."}
+            </p>
             <button
               onClick={() => navigate({ to: "/login" })}
               className="btn-primary w-full py-2.5"
             >
               Back to sign in
+            </button>
+          </>
+        ) : handoff && token ? (
+          <>
+            <h1 className="text-lg font-semibold text-text-primary mb-2">
+              {handoff === "desktop" ? "Continue in the Hisaabo desktop app" : "Continue in the Hisaabo app"}
+            </h1>
+            <p className="text-sm text-text-tertiary mb-6">
+              Open the app to finish signing in. This link works once and expires soon.
+            </p>
+            <button onClick={openApp} className="btn-primary w-full py-2.5 mb-3">
+              Open Hisaabo
+            </button>
+            <button
+              onClick={verifyInBrowser}
+              className="text-sm text-text-tertiary hover:text-text-primary underline underline-offset-2"
+            >
+              Sign in here in the browser instead
             </button>
           </>
         ) : needsConfirm ? (

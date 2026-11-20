@@ -31,6 +31,7 @@ import { startNotificationWorkers, stopNotificationWorkers, emitNotificationEven
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { buildInfo, shortCommit } from "./lib/build-info.js";
 import { validateEnv } from "./lib/env.js";
+import { getApiPublicUrl } from "./lib/public-url.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
 import { createSmsService, isSmsConfigured } from "./lib/sms.js";
@@ -631,7 +632,7 @@ app.get("/api/invoices/:id/pdf", async (c) => {
       const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
       upiQrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 200, margin: 1 });
       // Clickable link uses HTTPS redirect (PDF viewers won't open upi:// directly)
-      const apiBase = getApiPublicBase(c);
+      const apiBase = getApiPublicBase(c, { authenticatedUncached: true });
       upiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(biz.name)}&am=${balance.toFixed(2)}&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
     }
   }
@@ -854,7 +855,7 @@ app.get("/api/parties/:id/ledger.pdf", async (c) => {
     if (ledgerUpiId) {
       const ledgerUpiDeepLink = `upi://pay?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
       ledgerUpiQrDataUrl = await QRCode.toDataURL(ledgerUpiDeepLink, { width: 200, margin: 1 });
-      const apiBase = getApiPublicBase(c);
+      const apiBase = getApiPublicBase(c, { authenticatedUncached: true });
       ledgerUpiPayUrl = `${apiBase}/pay/upi?pa=${encodeURIComponent(ledgerUpiId)}&pn=${encodeURIComponent(biz.name)}&am=${parseFloat(closingBalance).toFixed(2)}&tn=${encodeURIComponent(`Outstanding - ${party.name}`)}`;
     }
   }
@@ -978,22 +979,23 @@ app.get("/store/:slug/items/:itemId/images/:imageId", async (c) => {
 // Public base URLs used for share metadata. API base feeds the og:image URL;
 // store base feeds the canonical storefront URL. Both default to the cloud
 // hosts and fall back to the request origin for self-host.
-let warnedApiPublicUrl = false;
-function getApiPublicBase(c: Context): string {
-  const env = process.env.API_PUBLIC_URL;
-  if (env && /^https?:\/\//i.test(env)) return env.replace(/\/$/, "");
-  if (process.env.NODE_ENV === "production") {
-    // The Host header is attacker-controlled; never build public URLs from it
-    // in production.
-    if (!warnedApiPublicUrl) {
-      warnedApiPublicUrl = true;
-      logger.warn("API_PUBLIC_URL is not set; public share/PDF links fall back to localhost. Set it to the API's public https URL.");
-    }
-    return `http://localhost:${process.env.PORT || "3000"}`;
+//
+// Resolution lives in lib/public-url.ts (API_PUBLIC_URL, then fallbacks for
+// installs upgraded from v0.9.0 that never set it). `authenticatedUncached`
+// marks routes whose response goes only to the authenticated requester and is
+// never shared-cached (invoice/ledger PDFs): those may use the request origin,
+// exactly as v0.9.0 did for the /pay/upi link. Public store routes must not —
+// the Host header is attacker-controlled and their output can be cached.
+function getApiPublicBase(c: Context, opts: { authenticatedUncached?: boolean } = {}): string {
+  if (process.env.NODE_ENV !== "production") {
+    const proto = c.req.header("x-forwarded-proto") ?? "https";
+    const host = c.req.header("host") ?? "localhost:3000";
+    return getApiPublicUrl({ requestOrigin: `${proto}://${host}`, trustRequestOrigin: true });
   }
-  const proto = c.req.header("x-forwarded-proto") ?? "https";
-  const host = c.req.header("host") ?? "localhost:3000";
-  return `${proto}://${host}`;
+  return getApiPublicUrl({
+    requestOrigin: opts.authenticatedUncached ? new URL(c.req.url).origin : undefined,
+    trustRequestOrigin: opts.authenticatedUncached === true,
+  });
 }
 function getStorePublicBase(c: Context): string {
   const env = process.env.STORE_PUBLIC_URL;

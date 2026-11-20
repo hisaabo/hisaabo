@@ -31,11 +31,19 @@ export type SecurityEvent =
   | "origin_block"
   | "login_fail"
   | "login_lockout"
-  | "ops_auth_fail";
+  | "ops_auth_fail"
+  | "turnstile_legacy_exempt"
+  | "unverified_account_claimed";
 
 export function logSecurityEvent(
   event: SecurityEvent,
-  fields: { ip: string | null | undefined; path?: string; reason?: string },
+  fields: {
+    ip: string | null | undefined;
+    path?: string;
+    reason?: string;
+    /** Extra non-PII scalars (ids, counts). Appended after the stable fields. */
+    extra?: Record<string, string | number | boolean>;
+  },
 ): void {
   logger.warn(
     {
@@ -44,6 +52,7 @@ export function logSecurityEvent(
       ip: fields.ip || "unknown",
       ...(fields.path !== undefined && { path: fields.path }),
       ...(fields.reason !== undefined && { reason: fields.reason }),
+      ...fields.extra,
     },
     `sec ${event}`,
   );

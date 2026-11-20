@@ -493,7 +493,10 @@ ENV HISAABO_VERSION=${VERSION}
 ENV HISAABO_COMMIT=${GIT_SHA}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
-# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, API_PUBLIC_URL (required), RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
+# Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, API_PUBLIC_URL (optional but recommended:
+# this image is API-only and the web app is hosted separately, so the APP_URL fallback used for
+# share-preview metadata points at the web host — set it to this container's public URL; PDF payment
+# links use the request origin regardless), RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY
 
 EXPOSE 80
 

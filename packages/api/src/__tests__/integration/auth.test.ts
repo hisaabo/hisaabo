@@ -18,11 +18,11 @@
  * header so the session-ID extraction path in auth.ts is exercised.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi, type MockInstance } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, type MockInstance } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations } from "@hisaabo/db";
+import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, apiKeys, nativeAuthRequests } from "@hisaabo/db";
 import { isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
@@ -37,6 +37,8 @@ import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
 import { buildInfo } from "../../lib/build-info.js";
+import { createLoginLink, type LoginLinkStore } from "../../lib/admin/login-link.js";
+import { createContext } from "../../context.js";
 
 // ── Caller factory ────────────────────────────────────────────────────────────
 
@@ -493,40 +495,161 @@ describe("auth.sendMagicLink — email URL shape", () => {
   });
 });
 
-describe("auth.sendMagicLink — Turnstile is never skipped by a client header", () => {
+describe("auth.sendMagicLink — Turnstile enforcement and the DEPRECATED v0.9.x exemption", () => {
+  const db = getControlDb();
   let sendSpy: MockInstance<typeof emailService.sendMagicLink>;
+  const SAVED_COMPAT = process.env.LEGACY_V09_CLIENT_COMPAT;
+
+  // Header shapes. v0.9.0 mobile: X-Requested-With only (no Origin / Sec-Fetch-*).
+  // v0.9.0 desktop (Tauri webview): X-Hisaabo-Client: desktop + a Tauri Origin.
+  const legacyMobile = { "x-requested-with": "hisaabo" };
+  const tauriDesktop = { "x-hisaabo-client": "desktop", origin: "http://tauri.localhost", "x-requested-with": "hisaabo" };
+
+  const callerWith = (headers: Record<string, string>) => _callerFactory(createTestContext({ headers }));
+  const send = (headers: Record<string, string>, email: string, source: "web" | "desktop" | "mobile" = "web") =>
+    callerWith(headers).auth.sendMagicLink({ email, source });
+
   beforeAll(() => {
     sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
   });
 
+  beforeEach(() => {
+    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+    delete process.env.LEGACY_V09_CLIENT_COMPAT;
+    sendSpy.mockClear();
+  });
+
+  afterEach(() => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    if (SAVED_COMPAT === undefined) delete process.env.LEGACY_V09_CLIENT_COMPAT;
+    else process.env.LEGACY_V09_CLIENT_COMPAT = SAVED_COMPAT;
+  });
+
   afterAll(() => {
     sendSpy.mockRestore();
-    delete process.env.TURNSTILE_SECRET_KEY;
   });
 
-  it("requires a Turnstile token when TURNSTILE_SECRET_KEY is set, even for X-Hisaabo-Client: desktop", async () => {
-    process.env.TURNSTILE_SECRET_KEY = "test-secret";
-    sendSpy.mockClear();
-    for (const client of [undefined, "desktop", "mobile", "cli"] as const) {
-      await expect(
-        unauthCaller(client).auth.sendMagicLink({ email: "turnstile-required@vyapar.in", source: "web" }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+  const rejected = { code: "BAD_REQUEST", message: "Turnstile verification required" };
+
+  it("legacy mobile shape + existing user: mail is sent and the link ends &source=mobile", async () => {
+    await createUser({ email: "legacy-exempt-existing@vyapar.in", name: "Existing" });
+    await expect(send(legacyMobile, "legacy-exempt-existing@vyapar.in", "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/\/auth\/verify\?token=[^&]+&source=mobile$/);
+  });
+
+  it("legacy mobile shape + unknown email: success, but no mail and no token row", async () => {
+    await expect(send(legacyMobile, "legacy-exempt-unknown@vyapar.in", "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).not.toHaveBeenCalled();
+    const rows = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, "legacy-exempt-unknown@vyapar.in"));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("legacy mobile shape + invited email: mail is sent", async () => {
+    const email = "legacy-exempt-invited@vyapar.in";
+    const [tenant] = await db.insert(tenants).values({ name: "Legacy Invite Org", slug: "legacy-invite-" + nanoid(6) }).returning({ id: tenants.id });
+    const inviter = await createUser({ email: "legacy-inviter@vyapar.in", name: "Inviter" });
+    await addMember(tenant!.id, inviter.id, "owner");
+    await db.insert(invitations).values({
+      tenantId: tenant!.id,
+      email,
+      role: "member",
+      token: "invite-" + nanoid(32),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      invitedBy: inviter.id,
+    });
+
+    await expect(send(legacyMobile, email, "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+  });
+
+  it("legacy shape: the 11th link for one address within 24h is silently not sent", async () => {
+    const email = "legacy-exempt-daily@vyapar.in";
+    await createUser({ email, name: "Daily" });
+    // Seed 10 recent tokens spread over the day so the 5-per-15-minutes limit is not what stops it.
+    for (let i = 0; i < 10; i++) {
+      await db.insert(magicLinkTokens).values({
+        email,
+        tokenHash: createHash("sha256").update(`daily-${i}-${nanoid(8)}`).digest("hex"),
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        createdAt: new Date(Date.now() - (i + 1) * 60 * 60 * 1000),
+      });
+    }
+    await expect(send(legacyMobile, email, "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("Tauri desktop shape + existing user: mail is sent and the link ends &source=desktop", async () => {
+    await createUser({ email: "legacy-tauri@vyapar.in", name: "Tauri" });
+    // The v0.9.0 desktop webview does not always send `source`; it is inferred from the Tauri shape.
+    await expect(send(tauriDesktop, "legacy-tauri@vyapar.in", "web")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/\/auth\/verify\?token=[^&]+&source=desktop$/);
+  });
+
+  it("X-Hisaabo-Client: mobile | cli alone is rejected", async () => {
+    for (const client of ["mobile", "cli"]) {
+      await expect(send({ "x-hisaabo-client": client }, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
     }
     expect(sendSpy).not.toHaveBeenCalled();
-    delete process.env.TURNSTILE_SECRET_KEY;
   });
 
-  it("register requires a Turnstile token when configured, even for the desktop client", async () => {
-    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+  it("X-Hisaabo-Client: desktop without a Tauri Origin is rejected (also with a web Origin)", async () => {
+    await expect(send({ "x-hisaabo-client": "desktop" }, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
     await expect(
-      unauthCaller("desktop").auth.register({
-        email: "turnstile-register@vyapar.in",
-        name: "No Token",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+      send({ "x-hisaabo-client": "desktop", origin: "https://app.example.com" }, "turnstile-required@vyapar.in"),
+    ).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("legacy headers plus an Origin (a browser) are rejected; so is a plain request", async () => {
+    await expect(
+      send({ ...legacyMobile, origin: "https://app.example.com" }, "turnstile-required@vyapar.in"),
+    ).rejects.toMatchObject(rejected);
+    await expect(send({}, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("LEGACY_V09_CLIENT_COMPAT=false rejects every legacy shape and adds no source suffix", async () => {
+    process.env.LEGACY_V09_CLIENT_COMPAT = "false";
+    await createUser({ email: "legacy-killswitch@vyapar.in", name: "Kill" });
+    await expect(send(legacyMobile, "legacy-killswitch@vyapar.in", "mobile")).rejects.toMatchObject(rejected);
+    await expect(send(tauriDesktop, "legacy-killswitch@vyapar.in", "desktop")).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Without a secret (no Turnstile needed) the handoff suffix is still off.
     delete process.env.TURNSTILE_SECRET_KEY;
+    await send(legacyMobile, "legacy-killswitch@vyapar.in", "mobile");
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).not.toContain("source=");
+  });
+
+  it("without TURNSTILE_SECRET_KEY nothing is gated and legacy callers get the normal behaviour", async () => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    await createUser({ email: "legacy-nosecret@vyapar.in", name: "No Secret" });
+    await send(legacyMobile, "legacy-nosecret@vyapar.in", "mobile");
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/&source=mobile$/);
+  });
+
+  it("register without a Turnstile token is always rejected, for every legacy shape", async () => {
+    const input = {
+      email: "turnstile-register@vyapar.in",
+      name: "No Token",
+      password: "SecurePass1!",
+      confirmPassword: "SecurePass1!",
+    };
+    const shapes: Array<Record<string, string>> = [{}, legacyMobile, { "x-hisaabo-client": "desktop" }, { "x-hisaabo-client": "mobile" }];
+    for (const headers of shapes) {
+      await expect(callerWith(headers).auth.register(input)).rejects.toMatchObject(rejected);
+    }
+    // The Tauri webview gets an actionable message instead.
+    await expect(callerWith(tauriDesktop).auth.register(input)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Update the Hisaabo desktop app to create an account, or sign up in your browser.",
+    });
+    const rows = await db.select().from(users).where(eq(users.email, input.email));
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -776,5 +899,347 @@ describe("auth.revokeSession", () => {
       code: "NOT_FOUND",
       message: "Session not found",
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Break-glass: `admin login-link <email>` issues a token the normal
+// verifyMagicLink consumes (single use, expiring, existing users only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("admin login-link tokens redeem through auth.verifyMagicLink", () => {
+  const db = getControlDb();
+
+  const store: LoginLinkStore = {
+    async findUserByEmail(email) {
+      const [row] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, email)).limit(1);
+      return row ?? null;
+    },
+    async insertToken(row) {
+      await db.insert(magicLinkTokens).values(row);
+    },
+  };
+  const tokenOf = (url: string) => new URL(url).searchParams.get("token")!;
+
+  it("signs the user in once, then rejects reuse", async () => {
+    const user = await createUser({ email: "breakglass@example.in", name: "Break Glass" });
+    const link = await createLoginLink(store, { email: user.email, ttlMinutes: 15, baseUrl: "https://app.example.in" });
+
+    const first = await unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) });
+    expect(first.user.id).toBe(user.id);
+    expect(first.isNewUser).toBe(false);
+
+    await expect(unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("rejects an expired link and marks the row as operator-issued", async () => {
+    const user = await createUser({ email: "breakglass-expired@example.in", name: "Expired" });
+    const link = await createLoginLink(store, {
+      email: user.email,
+      ttlMinutes: 1,
+      baseUrl: "https://app.example.in",
+      now: new Date(Date.now() - 10 * 60 * 1000),
+    });
+
+    const [row] = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, user.email)).limit(1);
+    expect(row.ipAddress).toBe("admin-cli");
+    await expect(unauthCaller().auth.verifyMagicLink({ token: tokenOf(link.url) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("does not create accounts for unknown emails", async () => {
+    await expect(
+      createLoginLink(store, { email: "nobody-here@example.in", ttlMinutes: 15, baseUrl: "https://app.example.in" }),
+    ).rejects.toThrow(/no user/);
+    const rows = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, "nobody-here@example.in"));
+    expect(rows).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pre-registration account takeover: the first magic-link verification of an
+// account whose email was never verified must kill every credential issued
+// before that proof (sessions, API keys, password, pending credential minters).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.verifyMagicLink — first verification of an unverified account", () => {
+  const db = getControlDb();
+  const PASSWORD = "Attacker@1234!";
+
+  /** What the real request pipeline resolves for a Bearer token (hits the auth caches). */
+  async function resolveBearer(token: string) {
+    const req = new Request("http://localhost:3000/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}`, "x-requested-with": "hisaabo" },
+    });
+    return createContext({ req, resHeaders: new Headers(), info: {} as never });
+  }
+
+  async function seedMagicToken(email: string): Promise<string> {
+    const rawToken = "claim-" + nanoid(32);
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    return rawToken;
+  }
+
+  async function seedApiKey(userId: string, tenantId: string): Promise<string> {
+    const raw = "hisaabo_key_" + nanoid(40);
+    await db.insert(apiKeys).values({
+      userId,
+      tenantId,
+      keyHash: createHash("sha256").update(raw).digest("hex"),
+      keyPrefix: raw.slice(0, 20),
+      name: "attacker key",
+    });
+    return raw;
+  }
+
+  async function register(email: string) {
+    // Bearer client: the registrant receives the raw session token.
+    const res = await unauthCaller("mobile").auth.register({
+      email,
+      name: "Pre Registered",
+      password: PASSWORD,
+      confirmPassword: PASSWORD,
+    });
+    const [member] = await db.select().from(tenantMembers).where(eq(tenantMembers.userId, res.user.id)).limit(1);
+    return { userId: res.user.id, sessionToken: res.sessionToken!, tenantId: member!.tenantId };
+  }
+
+  it("kills the attacker's sessions, API keys and password; the victim's new session works", async () => {
+    const email = "victim-claim@vyapar.in";
+    const atk = await register(email);
+    const apiKey = await seedApiKey(atk.userId, atk.tenantId);
+    // A second attacker session, and the two credential minters an attacker could leave behind.
+    const atk2 = await createSession(atk.userId, atk.tenantId);
+    await db.insert(magicLinkTokens).values({
+      email: "attacker@evil.example",
+      tokenHash: createHash("sha256").update("pending-email-change-" + nanoid(12)).digest("hex"),
+      userId: atk.userId,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    await db.insert(nativeAuthRequests).values({
+      client: "cli",
+      redirectUri: "http://127.0.0.1:41234/callback",
+      codeChallenge: "x".repeat(43),
+      state: "s".repeat(16),
+      userId: atk.userId,
+      codeHash: "h".repeat(64),
+      authorizedAt: new Date(),
+      expiresAt: new Date(Date.now() + 2 * 60 * 1000),
+    });
+
+    // Everything works for the attacker before the victim signs in (and primes the auth caches).
+    expect((await resolveBearer(atk.sessionToken)).user?.id).toBe(atk.userId);
+    expect((await resolveBearer(atk2.id)).user?.id).toBe(atk.userId);
+    expect((await resolveBearer(apiKey)).user?.id).toBe(atk.userId);
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).resolves.toMatchObject({ user: { id: atk.userId } });
+
+    // The victim signs in by magic link for the first time.
+    const victim = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(victim.user.id).toBe(atk.userId); // same account row, now proven by the mailbox owner
+    expect(typeof victim.sessionToken).toBe("string");
+
+    // Attacker: session(s), API key and password are all dead; so are the credential minters.
+    expect((await resolveBearer(atk.sessionToken)).user).toBeNull();
+    expect((await resolveBearer(atk2.id)).user).toBeNull();
+    expect((await resolveBearer(apiKey)).user).toBeNull();
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(await db.select().from(apiKeys).where(eq(apiKeys.userId, atk.userId))).toHaveLength(0);
+    expect(await db.select().from(nativeAuthRequests).where(eq(nativeAuthRequests.userId, atk.userId))).toHaveLength(0);
+    expect(await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.userId, atk.userId))).toHaveLength(0);
+
+    const [row] = await db.select().from(users).where(eq(users.id, atk.userId)).limit(1);
+    expect(row!.passwordHash).toBeNull();
+    expect(row!.emailVerified).toBe(true);
+
+    // Victim: the new session is the only one and it works.
+    const sessionsLeft = await db.select().from(sessions).where(eq(sessions.userId, atk.userId));
+    expect(sessionsLeft.map((x) => x.id)).toEqual([victim.sessionToken]);
+    expect((await resolveBearer(victim.sessionToken!)).user?.id).toBe(atk.userId);
+  });
+
+  it("an already-verified user signing in by magic link keeps their password and other sessions", async () => {
+    const email = "verified-claim@vyapar.in";
+    const reg = await register(email);
+    // First (legitimate) verification: from here on the account is verified.
+    await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    // The user later sets up another login method: simulate a password + a second device + an API key.
+    const passwordHash = (await db.select({ h: users.passwordHash }).from(users).where(eq(users.id, reg.userId)))[0]!.h;
+    expect(passwordHash).toBeNull(); // wiped by the first verification, so re-seed it:
+    await unauthCaller().auth.register({ email: "second-" + email, name: "Other", password: PASSWORD, confirmPassword: PASSWORD });
+    const other = (await db.select({ h: users.passwordHash }).from(users).where(eq(users.email, "second-" + email)))[0]!.h;
+    await db.update(users).set({ passwordHash: other }).where(eq(users.id, reg.userId));
+    const device2 = await createSession(reg.userId, reg.tenantId);
+    const key = await seedApiKey(reg.userId, reg.tenantId);
+
+    const again = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(again.user.id).toBe(reg.userId);
+
+    // Password, the second device and the API key all survive a normal sign-in.
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).resolves.toMatchObject({ user: { id: reg.userId } });
+    expect((await resolveBearer(device2.id)).user?.id).toBe(reg.userId);
+    expect((await resolveBearer(key)).user?.id).toBe(reg.userId);
+  });
+
+  it("a v0.9.0 user who registered with a password and never verified can still log in with it", async () => {
+    const email = "never-verified@vyapar.in";
+    await register(email);
+    const result = await unauthCaller().auth.login({ email, password: PASSWORD });
+    expect(result.user.email).toBe(email);
+    const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    expect(row!.emailVerified).toBe(false);
+    expect(row!.passwordHash).not.toBeNull();
+  });
+
+  it("an operator break-glass link signs in without verifying the email or wiping credentials", async () => {
+    const email = "operator-link@vyapar.in";
+    const reg = await register(email);
+    const key = await seedApiKey(reg.userId, reg.tenantId);
+    const store: LoginLinkStore = {
+      async findUserByEmail(e) {
+        const [r] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, e)).limit(1);
+        return r ?? null;
+      },
+      async insertToken(row) {
+        await db.insert(magicLinkTokens).values(row);
+      },
+    };
+    const link = await createLoginLink(store, { email, ttlMinutes: 15, baseUrl: "https://app.example.in" });
+    const token = new URL(link.url).searchParams.get("token")!;
+
+    const res = await unauthCaller("mobile").auth.verifyMagicLink({ token });
+    expect(res.user.id).toBe(reg.userId);
+
+    const [row] = await db.select().from(users).where(eq(users.id, reg.userId)).limit(1);
+    expect(row!.emailVerified).toBe(false); // the mailbox was not proven
+    expect(row!.passwordHash).not.toBeNull();
+    expect((await resolveBearer(reg.sessionToken)).user?.id).toBe(reg.userId);
+    expect((await resolveBearer(key)).user?.id).toBe(reg.userId);
+    // The next real magic link is still the first proof of the mailbox.
+    await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect((await resolveBearer(reg.sessionToken)).user).toBeNull();
+    expect((await resolveBearer(key)).user).toBeNull();
+  });
+
+  it("a user created by their first magic link is verified and a later sign-in revokes nothing", async () => {
+    const email = "fresh-claim@vyapar.in";
+    const first = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(first.isNewUser).toBe(true);
+    const second = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect((await resolveBearer(first.sessionToken!)).user?.id).toBe(first.user.id);
+    expect((await resolveBearer(second.sessionToken!)).user?.id).toBe(first.user.id);
+  });
+
+  it("password login that was in flight when the wipe committed cannot mint a session", async () => {
+    const email = "inflight-claim@vyapar.in";
+    const reg = await register(email);
+
+    // Simulate the wipe transaction: it holds the user row lock with password_hash already nulled.
+    let releaseWipe!: () => void;
+    const wipeHeld = new Promise<void>((resolve) => { releaseWipe = resolve; });
+    let wipeLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { wipeLocked = resolve; });
+    const wipe = db.transaction(async (tx) => {
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, reg.userId)).for("update");
+      await tx.update(users).set({ passwordHash: null, emailVerified: true }).where(eq(users.id, reg.userId));
+      await tx.delete(sessions).where(eq(sessions.userId, reg.userId));
+      wipeLocked();
+      await wipeHeld;
+    });
+    await locked;
+
+    // The login reads the OLD hash (the wipe is uncommitted), verifies it, then must wait on the row lock.
+    const login = unauthCaller().auth.login({ email, password: PASSWORD });
+    const settled = vi.fn();
+    login.then(settled, settled);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(settled).not.toHaveBeenCalled(); // blocked on the lock
+
+    releaseWipe();
+    await wipe;
+    await expect(login).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(await db.select().from(sessions).where(eq(sessions.userId, reg.userId))).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPRECATED v0.9.0 native-client compatibility (remove in 0.11.0)
+//
+// The v0.9.0 mobile app never sends X-Hisaabo-Client; it sends only
+// `X-Requested-With: hisaabo` and reads `data.sessionToken`. Browsers always
+// carry Origin / Sec-Fetch-* and must never receive the token in the body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth sign-in — v0.9.0 legacy native client compat", () => {
+  const db = getControlDb();
+
+  function callerWithHeaders(headers: Record<string, string>) {
+    return _callerFactory(createTestContext({ headers }));
+  }
+
+  async function seedMagicToken(email: string) {
+    const rawToken = "legacy-compat-" + nanoid(24);
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    return rawToken;
+  }
+
+  it("verifyMagicLink returns sessionToken (bearer session) for the v0.9.0 mobile signature", async () => {
+    const rawToken = await seedMagicToken("legacy-mobile@vyapar.in");
+    const result = await callerWithHeaders({ "x-requested-with": "hisaabo" }).auth.verifyMagicLink({ token: rawToken });
+
+    expect(typeof result.sessionToken).toBe("string");
+    const [row] = await db.select().from(sessions).where(eq(sessions.id, result.sessionToken!)).limit(1);
+    expect(row?.authMethod).toBe("bearer");
+  });
+
+  it("verifyMagicLink does NOT return sessionToken for a browser (Origin + Sec-Fetch-* present)", async () => {
+    const rawToken = await seedMagicToken("legacy-browser@vyapar.in");
+    const ctx = createTestContext({
+      headers: {
+        "x-requested-with": "hisaabo",
+        origin: "https://app.example.com",
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+      },
+    });
+    const result = await _callerFactory(ctx).auth.verifyMagicLink({ token: rawToken });
+
+    expect(result.sessionToken).toBeUndefined();
+    // Cookie session: Set-Cookie is written instead.
+    expect(ctx.resHeaders.get("set-cookie")).toContain("session_id=");
+  });
+
+  it("verifyMagicLink returns sessionToken for the current X-Hisaabo-Client header", async () => {
+    const rawToken = await seedMagicToken("legacy-newhdr@vyapar.in");
+    const result = await callerWithHeaders({ "x-hisaabo-client": "mobile" }).auth.verifyMagicLink({ token: rawToken });
+    expect(typeof result.sessionToken).toBe("string");
+  });
+
+  it("password login returns sessionToken for the v0.9.0 mobile signature but not for a browser", async () => {
+    await unauthCaller().auth.register({
+      email: "legacy-login@vyapar.in",
+      name: "Legacy Login",
+      password: "Test@1234!",
+      confirmPassword: "Test@1234!",
+    });
+
+    const legacy = await callerWithHeaders({ "x-requested-with": "hisaabo" }).auth.login({
+      email: "legacy-login@vyapar.in",
+      password: "Test@1234!",
+    });
+    expect(typeof legacy.sessionToken).toBe("string");
+
+    const browser = await callerWithHeaders({
+      "x-requested-with": "hisaabo",
+      origin: "https://app.example.com",
+    }).auth.login({ email: "legacy-login@vyapar.in", password: "Test@1234!" });
+    expect(browser.sessionToken).toBeUndefined();
   });
 });
