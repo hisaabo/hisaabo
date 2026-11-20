@@ -155,6 +155,13 @@
       "when": 1795203952563,
       "tag": "0021_queue_and_ops",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795204051600,
+      "tag": "0022_notifications",
+      "breakpoints": true
     }
   ]
 }

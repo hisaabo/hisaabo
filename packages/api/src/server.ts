@@ -27,6 +27,7 @@ import { shouldPromoteDraftOnPdf } from "./lib/invoice-pdf-promotion.js";
 import { startRecurringScheduler, stopRecurringScheduler } from "./lib/recurring-invoice-scheduler.js";
 import { stopSenderBoss } from "./queue/boss.js";
 import { registerOpsRoutes } from "./ops/routes.js";
+import { startNotificationWorkers, stopNotificationWorkers, emitNotificationEventSafe } from "./lib/notifications/index.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
@@ -2066,6 +2067,22 @@ app.post("/store/:slug/order", async (c) => {
         source: "online_store",
       }).returning();
 
+      // Savepoint: a notification failure must never lose the customer's order.
+      await emitNotificationEventSafe(tx, {
+        tenantId: resolved.tenantId,
+        businessId: resolved.businessId,
+        type: "store.order_placed",
+        payload: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          customerName: order.customerName,
+          totalAmount: order.totalAmount,
+          itemCount: order.itemCount,
+        },
+        actorKind: "system",
+        dedupeKey: `store.order_placed:${order.id}`,
+      });
+
       return { order, invoice };
     });
 
@@ -2350,12 +2367,14 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
   logger.info({ port: info.port }, `Hisaabo API running on http://localhost:${info.port}`);
   logger.info({ port: info.port }, `  tRPC endpoint: http://localhost:${info.port}/api/trpc`);
   startRecurringScheduler();
+  startNotificationWorkers();
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────
 function shutdown(signal: string) {
   logger.info({ signal }, `Shutting down (${signal})...`);
   stopRecurringScheduler();
+  stopNotificationWorkers();
   void cacheListener?.stop().catch(() => {});
   void stopSenderBoss();
   server.close(() => {
