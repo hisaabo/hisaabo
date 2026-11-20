@@ -209,6 +209,8 @@ export async function truncateAllTables(): Promise<void> {
     TRUNCATE TABLE
       -- Tenant schema (leaf tables first)
       tds_section_configs,
+      notification_inbox,
+      notification_outbox,
       gstr2b_records,
       gstr2b_uploads,
       eway_bill_vehicle_updates,
@@ -248,6 +250,10 @@ export async function truncateAllTables(): Promise<void> {
       ops_sessions,
       ops_operators,
       queue_controls,
+      push_quota_usage,
+      push_devices,
+      notification_preferences,
+      user_notification_settings,
       access_tokens,
       api_keys,
       magic_link_tokens,

@@ -57,6 +57,13 @@
       "when": 1795203952967,
       "tag": "0007_queue_and_ops",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795204052022,
+      "tag": "0008_notifications",
+      "breakpoints": true
     }
   ]
 }
