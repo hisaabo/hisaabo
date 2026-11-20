@@ -287,7 +287,7 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
     {
       item_id: z.string().uuid()
         .describe("UUID of the parent item (must be in variants mode)."),
-      attribute_values: z.record(z.string())
+      attribute_values: z.record(z.string(), z.string())
         .describe("Key-value pairs defining the variant attributes, e.g. { size: 'L', color: 'Red' }."),
       sku: z.string().max(50).optional()
         .describe("Variant-specific SKU code."),
@@ -327,7 +327,7 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
     {
       variant_id: z.string().uuid()
         .describe("Variant UUID from item_list_variants."),
-      attribute_values: z.record(z.string()).optional()
+      attribute_values: z.record(z.string(), z.string()).optional()
         .describe("Updated attribute key-value pairs."),
       sku: z.string().max(50).optional()
         .describe("Updated variant SKU."),

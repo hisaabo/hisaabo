@@ -29,6 +29,7 @@ import {
   bankReconColumnMappingSchema,
   confirmBankMappingSchema,
   bankCategorizationRuleSchema,
+  partialWithoutDefaults,
   paginationSchema,
   createExpenseSchema,
   money,
@@ -1135,7 +1136,7 @@ export const bankReconRouter = router({
   ruleUpdate: adminProcedure
     .input(z.object({
       id: z.string().uuid(),
-      data: bankCategorizationRuleSchema.partial().extend({
+      data: partialWithoutDefaults(bankCategorizationRuleSchema).extend({
         isActive: z.boolean().optional(),
       }),
     }))

@@ -285,7 +285,7 @@ print("Unblocked:", eligible["status"])`,
             urgency: "warning",
           },
           {
-            itcEntryId: "01957c4d-5e6f-7890-1234-bcdef0123456",
+            itcEntryId: "01957c4d-5e6f-7890-9234-bcdef0123456",
             invoiceId: "inv-uuid-2",
             invoiceNumber: "PUR-2025-0072",
             partyName: "Delhi Paper Mills",

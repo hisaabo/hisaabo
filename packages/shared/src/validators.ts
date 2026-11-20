@@ -1,7 +1,35 @@
 import { z } from "zod";
+import "./zod-messages.js";
 import { validateInvoiceTotals } from "./calc.js";
 
 // ── Common ─────────────────────────────────────────────────────
+
+type WithoutDefault<S> =
+  S extends z.ZodDefault<infer I> ? WithoutDefault<I>
+  : S extends z.ZodOptional<infer I> ? WithoutDefault<I>
+  : S;
+
+function withoutDefault(schema: z.ZodType): z.ZodType {
+  const def = schema._zod.def as { type: string; innerType?: z.ZodType };
+  return (def.type === "default" || def.type === "optional") && def.innerType
+    ? withoutDefault(def.innerType)
+    : schema;
+}
+
+/**
+ * `schema.partial()` for update inputs: every field optional, field defaults
+ * dropped. zod 4 applies a `.default()` even under `.partial()`, so an update
+ * that omits a field would silently reset it to its create-time default.
+ */
+export function partialWithoutDefaults<T extends z.ZodRawShape>(
+  schema: z.ZodObject<T>,
+): z.ZodObject<{ [K in keyof T]: z.ZodOptional<WithoutDefault<T[K]>> }> {
+  const shape: Record<string, z.ZodType> = {};
+  for (const [key, field] of Object.entries(schema.shape)) {
+    shape[key] = withoutDefault(field as z.ZodType).optional();
+  }
+  return schema.extend(shape) as never;
+}
 
 export const paginationSchema = z.object({
   page: z.number().int().min(1).default(1),
@@ -95,7 +123,7 @@ export const createBusinessSchema = z.object({
   defaultTermsAndConditions: z.string().max(2000).nullable().optional(),
 });
 
-export const updateBusinessSchema = createBusinessSchema.partial();
+export const updateBusinessSchema = partialWithoutDefaults(createBusinessSchema);
 
 // Logo upload: data URL ≤ ~1.4MB base64 (≈ 1MB decoded), PNG or JPEG only.
 // Server performs a second magic-byte check on decoded bytes — do NOT
@@ -154,7 +182,7 @@ export const createPartySchema = z.object({
   bankName: z.string().max(200).optional(),
 });
 
-export const updatePartySchema = createPartySchema.partial().omit({ type: true });
+export const updatePartySchema = partialWithoutDefaults(createPartySchema).omit({ type: true });
 
 // ── Item ───────────────────────────────────────────────────────
 
@@ -214,7 +242,7 @@ export const createItemSchema = createItemBaseSchema.refine((d) => {
   return true;
 }, { message: "An item cannot have both unit variants and product variants" });
 
-export const updateItemSchema = createItemBaseSchema.partial();
+export const updateItemSchema = partialWithoutDefaults(createItemBaseSchema);
 
 // ── Item Images ────────────────────────────────────────────────
 // Max images kept per item. Enough for a rich gallery without letting a
@@ -332,7 +360,7 @@ export const createInvoiceSchema = createInvoiceBaseSchema.superRefine((d, ctx) 
     invoiceDiscountType: d.invoiceDiscountType,
     roundOff: d.roundOff,
   });
-  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  if (message) ctx.addIssue({ code: "custom", message });
 });
 
 export const updateInvoiceStatusSchema = z.object({
@@ -411,8 +439,7 @@ export const createPaymentGatewayConfigSchema = z.object({
   autoSettle: z.boolean().default(true),
 });
 
-export const updatePaymentGatewayConfigSchema = createPaymentGatewayConfigSchema
-  .partial()
+export const updatePaymentGatewayConfigSchema = partialWithoutDefaults(createPaymentGatewayConfigSchema)
   .omit({ bankAccountId: true });
 
 // ── Bank Accounts ──────────────────────────────────────────────
@@ -427,7 +454,7 @@ export const createBankAccountSchema = z.object({
   isDefault: z.boolean().default(false),
 });
 
-export const updateBankAccountSchema = createBankAccountSchema.partial();
+export const updateBankAccountSchema = partialWithoutDefaults(createBankAccountSchema);
 
 export const createBankTransactionSchema = z.object({
   bankAccountId: z.string().uuid(),

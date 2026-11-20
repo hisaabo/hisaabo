@@ -166,7 +166,7 @@ describe("factory status transitions", () => {
 
   it("unknown documents are NOT_FOUND", async () => {
     await expect(
-      owner.quotation.updateStatus({ id: "00000000-0000-0000-0000-000000000001", status: "sent" }),
+      owner.quotation.updateStatus({ id: "00000000-0000-4000-8000-000000000001", status: "sent" }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
