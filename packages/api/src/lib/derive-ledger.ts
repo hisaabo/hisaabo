@@ -18,6 +18,8 @@
  *                    → Dr 1510/1511 Input CGST+SGST / Cr 2000 Payable (intra-state)
  *                    → Dr 1512 Input IGST  / Cr 2000 Payable (inter-state)
  *   Payment Received → Dr 1000/1010 Cash/Bank / Cr 1100 Receivable
+ *   Payment Received with customer TDS → Dr 1000/1010 Cash/Bank (net cash)
+ *                       + Dr 1600 TDS Receivable (tax withheld) / Cr 1100 Receivable (cash + TDS)
  *   Payment Made     → Dr 2000 Payable / Cr 1000/1010 Cash/Bank
  *   Expense          → Dr 5xxx (by category) / Cr 1000/1010 Cash/Bank
  *   Credit Note / Sales Return  → Dr 4010 Sales Returns + Dr Output GST / Cr 1100 Receivable
@@ -37,6 +39,7 @@ import {
   journalEntryLines,
 } from "@hisaabo/db";
 import { buildBusinessDateFilter } from "./business-date.js";
+import { paymentSettlement, paymentTdsSql } from "./payment-settlement.js";
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -205,11 +208,12 @@ export async function deriveLedger(
     .limit(1);
 
   // ── 2. Load the Chart of Accounts for this business ────────────
-  const coaRows: Array<{ id: string; code: string; name: string }> = await db
+  const coaRows: Array<{ id: string; code: string; name: string; isSystem: boolean }> = await db
     .select({
       id: chartOfAccounts.id,
       code: chartOfAccounts.code,
       name: chartOfAccounts.name,
+      isSystem: chartOfAccounts.isSystem,
     })
     .from(chartOfAccounts)
     .where(
@@ -220,6 +224,7 @@ export async function deriveLedger(
     );
 
   const coa: CoaMap = new Map(coaRows.map((r) => [r.code, r]));
+  const systemCodes = new Set(coaRows.filter((r) => r.isSystem).map((r) => r.code));
 
   const entries: DerivedEntry[] = [];
 
@@ -446,6 +451,7 @@ export async function deriveLedger(
     amount: string;
     mode: string;
     partyType: string;
+    tdsAmount: string;
   }> = await db
     .select({
       id: payments.id,
@@ -454,6 +460,7 @@ export async function deriveLedger(
       amount: payments.amount,
       mode: payments.mode,
       partyType: parties.type,
+      tdsAmount: paymentTdsSql(),
     })
     .from(payments)
     .innerJoin(parties, eq(parties.id, payments.partyId))
@@ -477,9 +484,22 @@ export async function deriveLedger(
     const pmtNum = pmt.paymentNumber ?? pmt.id.slice(0, 8);
 
     if (pmt.partyType === "customer") {
-      // Payment received: Dr Cash/Bank / Cr Receivable
+      // Payment received: Dr Cash/Bank + TDS receivable / Cr Receivable.
+      // Account 1600 is required only for a receipt that actually carries TDS,
+      // so a business whose chart lacks it still derives every other entry.
+      const settlement = paymentSettlement(amount, pmt.tdsAmount);
       lines.push(debitLine(cashOrBank, amount));
-      lines.push(creditLine(receivable, amount));
+      if (settlement.hasTds) {
+        // Never post withheld TDS into a user-created account that happens to
+        // use code 1600: it must be the system "TDS Receivable" account.
+        if (!systemCodes.has("1600")) {
+          throw new Error(
+            'Withheld TDS must post to the system "TDS Receivable" account (1600), which is missing, inactive, or taken by a user-created account.',
+          );
+        }
+        lines.push(debitLine(getAccount(coa, "1600"), settlement.tds));
+      }
+      lines.push(creditLine(receivable, settlement.hasTds ? settlement.settled : amount));
 
       entries.push({
         date: pmt.paymentDate,

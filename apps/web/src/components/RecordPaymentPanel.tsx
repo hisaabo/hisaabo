@@ -7,7 +7,8 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { InputField, TextareaField } from "@/components/ui/FormField";
-import { calculateGatewayCharge } from "@hisaabo/shared";
+import { calculateGatewayCharge, money, normalizeMoneyInput, suggestTdsAmount, TDS_GOI_RATES_URL } from "@hisaabo/shared";
+import { allocationsForRequest, buildAllocationPayload } from "@/lib/paymentAllocations";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -66,6 +67,29 @@ const GATEWAY_PAYMENT_MODES = [
   { value: "other", label: "Other" },
 ] as const;
 
+function formatPaymentError(error: { message?: string }): string {
+  const message = error.message ?? "";
+  if (!message.startsWith("[")) return message || "Unable to save payment";
+
+  try {
+    const issues = JSON.parse(message) as Array<{ path?: unknown; message?: unknown }>;
+    const issue = issues[0];
+    const path = Array.isArray(issue?.path) ? issue.path.map(String) : [];
+    if (path.includes("tdsSectionCode")) {
+      return "Select a TDS section when TDS amount is positive.";
+    }
+    if (path.includes("tdsRate")) {
+      return "Enter a TDS rate greater than zero when TDS amount is positive.";
+    }
+    if (path.includes("tdsAmount")) {
+      return "Enter a valid non-negative TDS amount.";
+    }
+    return typeof issue?.message === "string" ? issue.message : "Please check the payment details.";
+  } catch {
+    return "Please check the payment details.";
+  }
+}
+
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
@@ -90,6 +114,11 @@ export function RecordPaymentPanel({
   const [paymentDate, setPaymentDate] = useState(todayISODate);
   const [notes, setNotes] = useState("");
   const [gatewayMode, setGatewayMode] = useState<string>("credit_card");
+  const [tdsAmount, setTdsAmount] = useState("");
+  const [tdsSectionCode, setTdsSectionCode] = useState("");
+  const [tdsRate, setTdsRate] = useState("");
+  // Once the user types a TDS amount we stop auto-filling it from the rate.
+  const [tdsAmountTouched, setTdsAmountTouched] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -110,6 +139,13 @@ export function RecordPaymentPanel({
       { partyId },
       { enabled: open && !!partyId }
     );
+  const { data: tdsSections } = trpc.tdsSection.list.useQuery(undefined, { enabled: open });
+
+  const { data: partyData } = trpc.party.getById.useQuery(
+    { id: partyId },
+    { enabled: open && !!partyId }
+  );
+  const isCustomer = partyData?.type === "customer";
 
   // Fetch existing payment when editing
   const { data: editData } = trpc.payment.getById.useQuery(
@@ -133,6 +169,12 @@ export function RecordPaymentPanel({
         editData.paymentDate ? formatDateInput(editData.paymentDate) : todayISODate()
       );
       setNotes(editData.notes ?? "");
+      const firstTds = editData.linkedInvoices[0];
+      setTdsAmount(firstTds?.tdsAmount && firstTds.tdsAmount !== "0.00" ? firstTds.tdsAmount : "");
+      setTdsSectionCode(firstTds?.tdsSectionCode ?? "");
+      setTdsRate(firstTds?.tdsRate ?? "");
+      // Stored amounts are authoritative: never overwrite them with a suggestion.
+      setTdsAmountTouched(true);
       // Restore gateway mode from edit data if it's a gateway mode
       const gwModes = ["credit_card", "debit_card", "net_banking", "wallet"];
       if (editData.mode && gwModes.includes(editData.mode)) {
@@ -140,7 +182,7 @@ export function RecordPaymentPanel({
       } else {
         setGatewayMode("credit_card");
       }
-      // Pre-check the linked invoices
+      // Pre-check the linked invoices (alloc.amount is gross)
       if (editData.linkedInvoices.length > 0) {
         const checked = new Set(editData.linkedInvoices.map((li) => li.invoiceId));
         const allocs: Record<string, string> = {};
@@ -163,6 +205,10 @@ export function RecordPaymentPanel({
       setPaymentDate(todayISODate());
       setNotes("");
       setGatewayMode("credit_card");
+      setTdsAmount("");
+      setTdsSectionCode("");
+      setTdsRate("");
+      setTdsAmountTouched(false);
     }
   }, [open, isEditMode, editData, preSelectedPartyId]);
 
@@ -193,18 +239,56 @@ export function RecordPaymentPanel({
 
   // ── Amount calculation ──────────────────────────────────────────────────────
 
-  const allocatedTotal = Object.entries(allocations)
-    .filter(([id]) => checkedInvoices.has(id))
-    .reduce((sum, [, amt]) => sum + (parseFloat(amt) || 0), 0);
+  const allocatedGrossTotal = useMemo(() => {
+    const list = Object.entries(allocations)
+      .filter(([id]) => checkedInvoices.has(id))
+      .map(([, amt]) => amt || "0");
+    return money.sum(list);
+  }, [allocations, checkedInvoices]);
 
-  const displayAmount = amountOverridden ? manualAmount : allocatedTotal.toFixed(2);
+  const tdsVal = tdsAmount.trim() || "0";
+  const hasPositiveTds = isCustomer && money.compare(tdsVal, "0") > 0;
 
-  // When allocations change and user hasn't manually overridden, sync amount
+  // Suggested TDS: the single selected invoice's share of its taxable value
+  // (excluding GST) x the entered rate. Only a suggestion — the amount the
+  // customer actually withheld is what gets recorded, and the user can override.
+  const tdsSuggestion = useMemo(() => {
+    if (!isCustomer || checkedInvoices.size !== 1 || !unpaidInvoices) return null;
+    const rate = tdsRate.trim();
+    if (!rate || !money.isPositive(rate)) return null;
+    const [invoiceId] = checkedInvoices;
+    const inv = unpaidInvoices.find((candidate) => candidate.id === invoiceId);
+    if (!inv) return null;
+    const amount = suggestTdsAmount({
+      allocationAmount: allocations[inv.id] ?? inv.balance,
+      invoiceTotal: inv.totalAmount,
+      invoiceTaxAmount: inv.taxAmount,
+      rate,
+    });
+    if (!money.isPositive(amount)) return null;
+    return { amount, taxableValue: inv.taxableValue };
+  }, [isCustomer, checkedInvoices, unpaidInvoices, tdsRate, allocations]);
+
+  useEffect(() => {
+    if (!tdsAmountTouched && tdsSuggestion) setTdsAmount(tdsSuggestion.amount);
+  }, [tdsAmountTouched, tdsSuggestion]);
+
+  // Net cash received = gross allocation sum minus TDS deduction
+  const calculatedNetAmount = useMemo(() => {
+    if (hasPositiveTds) {
+      return money.max0(money.sub(allocatedGrossTotal, tdsVal));
+    }
+    return allocatedGrossTotal;
+  }, [allocatedGrossTotal, hasPositiveTds, tdsVal]);
+
+  const displayAmount = amountOverridden ? manualAmount : calculatedNetAmount;
+
+  // When allocations or TDS change and user hasn't manually overridden, sync amount
   useEffect(() => {
     if (!amountOverridden) {
-      setManualAmount(allocatedTotal > 0 ? allocatedTotal.toFixed(2) : "");
+      setManualAmount(money.isPositive(calculatedNetAmount) ? calculatedNetAmount : "");
     }
-  }, [allocatedTotal, amountOverridden]);
+  }, [calculatedNetAmount, amountOverridden]);
 
   // ── Checkbox/allocation handlers ────────────────────────────────────────────
 
@@ -241,22 +325,22 @@ export function RecordPaymentPanel({
     setManualAmount(value);
     setAmountOverridden(true);
 
-    // Auto-select invoices oldest-first until the amount is consumed
-    const target = parseFloat(value) || 0;
-    if (target > 0 && unpaidInvoices?.length) {
-      let remaining = target;
+    const netTarget = value.trim() || "0";
+    const grossTarget = hasPositiveTds ? money.add(netTarget, tdsVal) : netTarget;
+    if (money.isPositive(grossTarget) && unpaidInvoices?.length) {
+      let remaining = grossTarget;
       const nextChecked = new Set<string>();
       const nextAllocations: Record<string, string> = {};
 
       for (const inv of unpaidInvoices) {
-        if (remaining <= 0) break;
-        const balance = parseFloat(inv.balance);
-        if (balance <= 0) continue;
+        if (!money.isPositive(remaining)) break;
+        const balance = inv.balance;
+        if (!money.isPositive(balance)) continue;
 
         nextChecked.add(inv.id);
-        const allocAmt = Math.min(remaining, balance);
-        nextAllocations[inv.id] = allocAmt.toFixed(2);
-        remaining -= allocAmt;
+        const allocAmt = money.compare(remaining, balance) >= 0 ? balance : remaining;
+        nextAllocations[inv.id] = allocAmt;
+        remaining = money.sub(remaining, allocAmt);
       }
 
       setCheckedInvoices(nextChecked);
@@ -275,6 +359,10 @@ export function RecordPaymentPanel({
     setCheckedInvoices(new Set());
     setAmountOverridden(false);
     setManualAmount("");
+    setTdsAmount("");
+    setTdsSectionCode("");
+    setTdsRate("");
+    setTdsAmountTouched(false);
   };
 
   // ── Submit ──────────────────────────────────────────────────────────────────
@@ -297,7 +385,7 @@ export function RecordPaymentPanel({
       toast.success("Payment recorded");
       onClose();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(formatPaymentError(err)),
   });
 
   const updateMutation = trpc.payment.update.useMutation({
@@ -306,7 +394,7 @@ export function RecordPaymentPanel({
       toast.success("Payment updated");
       onClose();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(formatPaymentError(err)),
   });
 
   const activeMutation = isEditMode ? updateMutation : createMutation;
@@ -348,16 +436,24 @@ export function RecordPaymentPanel({
     };
   }, [isGatewaySelected, gatewayConfig, displayAmount, gatewayMode]);
 
-  function handleSubmit() {
-    if (!partyId || !displayAmount) return;
+  const hasMultiInvoiceTdsError = checkedInvoices.size > 1 && hasPositiveTds;
+  const hasTdsExceedError = hasPositiveTds && money.compare(tdsVal, allocatedGrossTotal) > 0;
 
-    const allocationList: { invoiceId: string; amount: string }[] = [];
-    for (const id of checkedInvoices) {
-      const amt = allocations[id];
-      if (amt && parseFloat(amt) > 0) {
-        allocationList.push({ invoiceId: id, amount: parseFloat(amt).toFixed(2) });
-      }
+  function handleSubmit() {
+    if (!partyId || !displayAmount || !money.isPositive(displayAmount)) return;
+
+    const built = buildAllocationPayload({
+      checkedInvoiceIds: checkedInvoices,
+      allocations,
+      tds: { amount: tdsAmount, sectionCode: tdsSectionCode, rate: tdsRate },
+      isCustomer,
+    });
+    if (!built.ok) {
+      toast.error(built.error);
+      return;
     }
+    // Edit mode always sends the array ([] clears); create omits it when empty.
+    const allocationList = allocationsForRequest(isEditMode, built.allocations);
 
     // For gateway accounts, use the selected gateway mode; otherwise map from account type
     const mode = isGatewaySelected
@@ -375,25 +471,25 @@ export function RecordPaymentPanel({
     if (isEditMode) {
       updateMutation.mutate({
         id: editPaymentId!,
-        amount: parseFloat(displayAmount).toFixed(2),
+        amount: normalizeMoneyInput(displayAmount),
         mode,
         bankAccountId: selectedAccountId ?? null,
         referenceNumber: referenceNumber || null,
         paymentDate: paymentDateISO,
         notes: notes || null,
-        allocations: allocationList.length > 0 ? allocationList : undefined,
+        allocations: allocationList,
       });
     } else {
       createMutation.mutate({
         partyId,
-        amount: parseFloat(displayAmount).toFixed(2),
+        amount: normalizeMoneyInput(displayAmount),
         discount: "0",
         mode,
         bankAccountId: selectedAccountId ?? undefined,
         referenceNumber: referenceNumber || undefined,
         paymentDate: paymentDateISO,
         notes: notes || undefined,
-        allocations: allocationList.length > 0 ? allocationList : undefined,
+        allocations: allocationList,
       });
     }
   }
@@ -407,7 +503,9 @@ export function RecordPaymentPanel({
   const canSubmit =
     !!partyId &&
     !!displayAmount &&
-    parseFloat(displayAmount) > 0 &&
+    money.isPositive(displayAmount) &&
+    !hasMultiInvoiceTdsError &&
+    !hasTdsExceedError &&
     !activeMutation.isPending;
 
   return (
@@ -493,6 +591,51 @@ export function RecordPaymentPanel({
                 </button>
               )}
             </div>
+
+            {isCustomer && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <InputField label="TDS Amount (₹)" type="number" min="0" step="0.01" value={tdsAmount} onChange={(e) => { setTdsAmount(e.target.value); setTdsAmountTouched(true); setAmountOverridden(false); }} placeholder="0.00" />
+                <InputField label="TDS Rate (%)" type="number" min="0" max="100" step="0.01" value={tdsRate} onChange={(e) => setTdsRate(e.target.value)} placeholder="0.00" />
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="label">TDS Section</label>
+                    <a
+                      href={TDS_GOI_RATES_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 hover:underline transition-colors pb-1"
+                      title="View Official Government of India TDS Rates"
+                    >
+                      <span>Rates (GoI)</span>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                        <polyline points="15 3 21 3 21 9" />
+                        <line x1="10" y1="14" x2="21" y2="3" />
+                      </svg>
+                    </a>
+                  </div>
+                  <select className="input w-full" value={tdsSectionCode} onChange={(e) => setTdsSectionCode(e.target.value)}>
+                    <option value="">Select section</option>
+                    {tdsSections?.map((section) => <option key={section.id} value={section.sectionCode}>{section.sectionCode} - {section.sectionLabel}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            {tdsSuggestion && tdsSuggestion.amount !== normalizeMoneyInput(tdsVal) && (
+              <p className="text-xs text-text-tertiary">
+                Suggested TDS ₹{tdsSuggestion.amount} (rate × invoice value excluding GST, ₹{tdsSuggestion.taxableValue}).{" "}
+                <button
+                  type="button"
+                  className="font-medium text-brand-600 hover:underline"
+                  onClick={() => { setTdsAmount(tdsSuggestion.amount); setTdsAmountTouched(false); setAmountOverridden(false); }}
+                >
+                  Use suggested
+                </button>
+              </p>
+            )}
+            {hasPositiveTds && <p className="text-xs text-text-tertiary">Gross settlement: ₹{allocatedGrossTotal} (cash ₹{displayAmount}) + TDS ₹{tdsVal}</p>}
+            {hasMultiInvoiceTdsError && <p className="text-xs text-red-500 font-medium">Multi-invoice payments with TDS are not supported. Please select one invoice to record TDS.</p>}
+            {hasTdsExceedError && <p className="text-xs text-red-500 font-medium">TDS amount (₹{tdsVal}) cannot exceed gross allocation (₹{allocatedGrossTotal}).</p>}
             <div className="rounded-xl border border-border-light overflow-hidden bg-surface-0">
               {loadingInvoices ? (
                 <div className="p-4 space-y-3 animate-pulse">
@@ -514,16 +657,20 @@ export function RecordPaymentPanel({
                 <div className="divide-y divide-border-light">
                   {unpaidInvoices.map((inv) => {
                     const isChecked = checkedInvoices.has(inv.id);
-                    const allocAmt = isChecked ? (parseFloat(allocations[inv.id] ?? inv.balance) || 0) : 0;
-                    const balance = parseFloat(inv.balance);
-                    const remainingBal = isChecked ? Math.max(balance - allocAmt, 0) : balance;
-                    const isFullyPaid = isChecked && allocAmt >= balance;
-                    const isPartial = isChecked && !isFullyPaid;
+                    const allocAmt = isChecked ? (allocations[inv.id] ?? inv.balance) : "0";
+                    const balance = inv.balance;
+                    const remainingBal = isChecked ? money.max0(money.sub(balance, allocAmt)) : balance;
+                    const isFullyPaid = isChecked && money.compare(allocAmt, balance) >= 0;
+                    const isPartial = isChecked && !isFullyPaid && money.isPositive(allocAmt);
 
                     // Projected progress: existing paid + this allocation
-                    const existingPaid = parseFloat(inv.amountPaid);
-                    const totalAmt = parseFloat(inv.totalAmount);
-                    const projectedPaid = isChecked ? existingPaid + allocAmt : existingPaid;
+                    const existingPaid = inv.amountPaid;
+                    const totalAmt = inv.totalAmount;
+                    const projectedPaid = isChecked ? money.add(existingPaid, allocAmt) : existingPaid;
+                    const progressPercent = Math.min(
+                      (money.toNumber(projectedPaid) / (money.toNumber(totalAmt) || 1)) * 100,
+                      100
+                    );
 
                     return (
                       <div
@@ -603,13 +750,13 @@ export function RecordPaymentPanel({
                               <div
                                 className={cn(
                                   "h-full rounded-full transition-all duration-300",
-                                  isFullyPaid || projectedPaid >= totalAmt
+                                  isFullyPaid || money.compare(projectedPaid, totalAmt) >= 0
                                     ? "bg-emerald-500"
-                                    : projectedPaid > 0
+                                    : money.isPositive(projectedPaid)
                                       ? "bg-amber-400"
                                       : "bg-transparent"
                                 )}
-                                style={{ width: `${Math.min((projectedPaid / totalAmt) * 100, 100)}%` }}
+                                style={{ width: `${progressPercent}%` }}
                               />
                             </div>
 
@@ -678,7 +825,7 @@ export function RecordPaymentPanel({
             onChange={(e) => handleAmountChange(e.target.value)}
             placeholder="0.00"
           />
-          {!amountOverridden && allocatedTotal > 0 && (
+          {!amountOverridden && money.isPositive(allocatedGrossTotal) && (
             <p className="mt-1 text-xs text-text-tertiary">
               Auto-calculated from selected invoices
             </p>

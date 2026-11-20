@@ -454,6 +454,9 @@ function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () =
                   {party.pan && (
                     <p className="font-mono text-[13px] text-text-secondary">PAN: {party.pan}</p>
                   )}
+                  {party.tan && (
+                    <p className="font-mono text-[13px] text-text-secondary">TAN: {party.tan}</p>
+                  )}
                 </div>
               </div>
 
@@ -1162,6 +1165,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
   const [openingBalance, setOpeningBalance] = useState("");
   const [gstin, setGstin] = useState("");
   const [pan, setPan] = useState("");
+  const [tan, setTan] = useState("");
   const [category, setCategory] = useState("");
   const [billingAddress, setBillingAddress] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
@@ -1198,6 +1202,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
     setOpeningBalance("");
     setGstin("");
     setPan("");
+    setTan("");
     setCategory("");
     setBillingAddress("");
     setShippingAddress("");
@@ -1228,6 +1233,7 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
       openingBalance: openingBalance || "0",
       gstin: gstin || undefined,
       pan: pan || undefined,
+      tan: tan ? tan.toUpperCase() : undefined,
       category: category || undefined,
       billingAddress: billingAddress || undefined,
       shippingAddress: sameAsBilling ? billingAddress || undefined : shippingAddress || undefined,
@@ -1331,14 +1337,20 @@ function AddPartyModal({ open, onClose }: { open: boolean; onClose: () => void }
         <div className="space-y-1">
           <Disclosure
             label="Tax & Identity"
-            count={countFilled(pan, category)}
+            count={countFilled(pan, tan, category)}
           >
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <InputField
                 label="PAN"
                 value={pan}
-                onChange={(e) => setPan(e.target.value)}
+                onChange={(e) => setPan(e.target.value.toUpperCase())}
                 placeholder="AAAAA0000A"
+              />
+              <InputField
+                label="TAN"
+                value={tan}
+                onChange={(e) => setTan(e.target.value.toUpperCase())}
+                placeholder="AAAA00000A"
               />
               <InputField
                 label="Category"

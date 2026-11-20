@@ -5,7 +5,14 @@ import { money } from "@hisaabo/shared";
 import { router, viewerProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
+import { paymentSettledSql } from "../lib/payment-settlement.js";
 
+// "Collected" means two different things and must not be mixed within a widget:
+//   - SETTLED  = cash + customer-withheld TDS (payments.amount + tds). Compare it
+//                with invoiced amounts: salesTrend.collected, and
+//                collectionEfficiency (invoices.amount_paid is already settled).
+//   - CASH     = payments.amount, money that actually moved: summary.cashInHand,
+//                paymentModeBreakdown, salesTrend.cashCollected.
 
 export const dashboardRouter = router({
   summary: viewerProcedure
@@ -272,7 +279,8 @@ export const dashboardRouter = router({
                 THEN EXTRACT(YEAR FROM p.payment_date)::int
               ELSE (EXTRACT(YEAR FROM p.payment_date) - 1)::int
             END AS fy_year,
-            COALESCE(SUM(p.amount::numeric), 0)::text AS collected
+            COALESCE(SUM(${paymentSettledSql("p")}), 0)::text AS collected,
+            COALESCE(SUM(p.amount::numeric), 0)::text AS cash_collected
           FROM payments p
           WHERE p.business_id = ${ctx.businessId}
           GROUP BY fy_year
@@ -280,10 +288,10 @@ export const dashboardRouter = router({
           LIMIT 5
         `);
 
-        type FyRow = { fy_year: number; invoiced?: string; collected?: string };
+        type FyRow = { fy_year: number; invoiced?: string; collected?: string; cash_collected?: string };
         const rows = fyResults as unknown as FyRow[];
         const collectedMap = new Map(
-          (fyCollected as unknown as FyRow[]).map(r => [r.fy_year, r.collected ?? "0"])
+          (fyCollected as unknown as FyRow[]).map(r => [r.fy_year, r])
         );
 
         // Return most recent 5 FYs ascending
@@ -293,7 +301,8 @@ export const dashboardRouter = router({
           .map(r => ({
             period: String(r.fy_year),
             invoiced: r.invoiced ?? "0",
-            collected: collectedMap.get(r.fy_year) ?? "0",
+            collected: collectedMap.get(r.fy_year)?.collected ?? "0",
+            cashCollected: collectedMap.get(r.fy_year)?.cash_collected ?? "0",
           }));
       }
 
@@ -351,20 +360,31 @@ export const dashboardRouter = router({
               AND invoice_date < p.period_start + ${stepInterval}::interval
           ), 0)::text as invoiced,
           COALESCE((
+            SELECT SUM(${paymentSettledSql()})
+            FROM payments
+            WHERE business_id = ${ctx.businessId}
+              AND payment_date >= p.period_start
+              AND payment_date < p.period_start + ${stepInterval}::interval
+          ), 0)::text as collected,
+          COALESCE((
             SELECT SUM(amount::numeric)
             FROM payments
             WHERE business_id = ${ctx.businessId}
               AND payment_date >= p.period_start
               AND payment_date < p.period_start + ${stepInterval}::interval
-          ), 0)::text as collected
+          ), 0)::text as cash_collected
         FROM periods p
         ORDER BY p.period_start ASC
       `);
 
-      return (results as unknown as Array<{ period_start: Date; invoiced: string; collected: string }>).map(r => ({
+      // `collected` is what the period's receipts SETTLED (cash + customer-withheld
+      // TDS), the like-for-like counterpart of `invoiced`; `cashCollected` is the
+      // money that actually arrived.
+      return (results as unknown as Array<{ period_start: Date; invoiced: string; collected: string; cash_collected: string }>).map(r => ({
         period: new Date(r.period_start).toISOString(),
         invoiced: r.invoiced,
         collected: r.collected,
+        cashCollected: r.cash_collected,
       }));
     }),
 

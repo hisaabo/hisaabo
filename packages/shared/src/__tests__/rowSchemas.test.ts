@@ -14,7 +14,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { businessRowSchema } from "../selfExport/rowSchemas.js";
+import {
+  ROW_SCHEMAS,
+  businessRowSchema,
+  paymentAllocationRowSchema,
+  tdsSectionConfigRowSchema,
+} from "../selfExport/rowSchemas.js";
 
 // A minimum valid businesses-row skeleton. Each test overrides just the
 // logo fields so the rest of the schema doesn't obscure the assertion.
@@ -226,5 +231,46 @@ describe("businessRowSchema — companion logo metadata (mime/width/height/updat
   it("rejects a non-ISO logoUpdatedAt — `2026-04-19` without time is not ISO-8601 datetime", () => {
     const row = withLogoFields({ logoUpdatedAt: "2026-04-19" });
     expect(businessRowSchema.safeParse(row).success).toBe(false);
+  });
+});
+
+// ── TDS columns ───────────────────────────────────────────────────────────────
+
+describe("TDS export rows", () => {
+  const alloc = {
+    id: "33333333-3333-4333-8333-333333333333",
+    paymentId: "44444444-4444-4444-8444-444444444444",
+    invoiceId: "55555555-5555-4555-8555-555555555555",
+    amount: "100.00",
+    createdAt: "2026-10-12T00:00:00.000Z",
+  };
+
+  it("keeps tdsAmount / tdsSectionCode / tdsRate (the row schema strips unknown keys)", () => {
+    const parsed = paymentAllocationRowSchema.parse({ ...alloc, tdsAmount: "10.00", tdsSectionCode: "1024", tdsRate: "10.00" });
+    expect(parsed).toMatchObject({ tdsAmount: "10.00", tdsSectionCode: "1024", tdsRate: "10.00" });
+  });
+
+  it("defaults tdsAmount to 0 for backups taken before TDS support", () => {
+    const parsed = paymentAllocationRowSchema.parse(alloc);
+    expect(parsed.tdsAmount).toBe("0");
+    expect(parsed.tdsSectionCode).toBeUndefined();
+  });
+
+  it("registers a tds_section_configs row schema that revives dates", () => {
+    expect(ROW_SCHEMAS["tds_section_configs"]).toBe(tdsSectionConfigRowSchema);
+    const parsed = tdsSectionConfigRowSchema.parse({
+      id: "66666666-6666-4666-8666-666666666666",
+      businessId: "11111111-1111-4111-8111-111111111111",
+      sectionCode: "1024",
+      sectionLabel: "Contract payment",
+      effectiveFrom: "2026-04-01T00:00:00.000Z",
+      effectiveTo: null,
+      status: "active",
+      version: 1,
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    });
+    expect(parsed.effectiveFrom).toBeInstanceOf(Date);
+    expect(parsed.effectiveTo).toBeNull();
   });
 });

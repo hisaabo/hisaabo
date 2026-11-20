@@ -19,6 +19,7 @@ const DEFAULT_ACCOUNTS: SeedAccount[] = [
   { code: "1510", name: "Input CGST", accountType: "asset" },
   { code: "1511", name: "Input SGST", accountType: "asset" },
   { code: "1512", name: "Input IGST", accountType: "asset" },
+  { code: "1600", name: "TDS Receivable", accountType: "asset" },
 
   // Liabilities
   { code: "2000", name: "Accounts Payable", accountType: "liability" },

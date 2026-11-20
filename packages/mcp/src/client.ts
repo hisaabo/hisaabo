@@ -331,6 +331,15 @@ export class HisaaboClient {
     };
   }
 
+  get tdsSection() {
+    const c = this;
+    return {
+      list(input?: InputOf<"tdsSection.list">) {
+        return c.query("tdsSection.list", input);
+      },
+    };
+  }
+
   get expense() {
     const c = this;
     return {

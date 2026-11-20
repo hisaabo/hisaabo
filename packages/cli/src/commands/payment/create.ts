@@ -1,3 +1,4 @@
+import { money, moneyStringSchema, paymentAllocationSchema } from "@hisaabo/shared";
 import * as readline from "readline";
 import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
@@ -15,10 +16,56 @@ interface CreateOpts {
   date?: string;
   notes?: string;
   yes?: boolean;
+  tdsAmount?: string;
+  tdsSection?: string;
+  tdsRate?: string;
 }
 
 async function prompt(rl: readline.Interface, q: string): Promise<string> {
   return new Promise((resolve) => rl.question(q, resolve));
+}
+
+/**
+ * Receivable-side TDS: `--amount` is the NET cash received, `--tds-amount` what
+ * the customer withheld; the allocation settles the gross (net + TDS) against
+ * one invoice. Inputs are validated with the shared validators BEFORE any
+ * arithmetic so a typo like "1,000" cannot silently become 0 or NaN.
+ */
+export function buildTdsAllocations(
+  opts: Pick<CreateOpts, "invoiceId" | "tdsAmount" | "tdsSection" | "tdsRate">,
+  netAmount: string,
+) {
+  if (opts.tdsAmount === undefined) {
+    if (opts.tdsSection !== undefined || opts.tdsRate !== undefined) {
+      fatalError("--tds-section and --tds-rate require --tds-amount", EXIT.USAGE);
+    }
+    return undefined;
+  }
+  if (!opts.invoiceId) {
+    fatalError("--invoice-id is required when recording TDS", EXIT.USAGE);
+  }
+  if (!moneyStringSchema.safeParse(netAmount).success || !money.isPositive(netAmount)) {
+    fatalError("--amount must be a positive amount with at most 2 decimals (e.g. 9000.00)", EXIT.USAGE);
+  }
+  if (!moneyStringSchema.safeParse(opts.tdsAmount).success || !money.isPositive(opts.tdsAmount)) {
+    fatalError("--tds-amount must be a positive amount with at most 2 decimals (e.g. 1000.00)", EXIT.USAGE);
+  }
+
+  const allocation = {
+    invoiceId: opts.invoiceId,
+    amount: money.add(netAmount, opts.tdsAmount),
+    tdsAmount: opts.tdsAmount,
+    tdsSectionCode: opts.tdsSection,
+    tdsRate: opts.tdsRate,
+  };
+  const parsed = paymentAllocationSchema.safeParse(allocation);
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "allocation"}: ${issue.message}`)
+      .join("; ");
+    fatalError(`Invalid TDS options: ${problems}`, EXIT.USAGE);
+  }
+  return [allocation];
 }
 
 export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
@@ -102,6 +149,8 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
     if (!amount) fatalError("--amount is required", EXIT.USAGE);
     if (!mode) mode = "cash";
 
+    const allocations = buildTdsAllocations(opts, amount);
+
     const payment = await client.payment.create({
       partyId,
       amount,
@@ -110,6 +159,7 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
       paymentDate,
       notes,
       invoiceId: opts.invoiceId,
+      allocations,
     });
 
     if (opts.json) {
