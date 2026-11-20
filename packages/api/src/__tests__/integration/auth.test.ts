@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, t
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations } from "@hisaabo/db";
+import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, apiKeys, nativeAuthRequests } from "@hisaabo/db";
 import { isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
@@ -37,6 +37,7 @@ import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
 import { createLoginLink, type LoginLinkStore } from "../../lib/admin/login-link.js";
+import { createContext } from "../../context.js";
 
 // ── Caller factory ────────────────────────────────────────────────────────────
 
@@ -947,6 +948,216 @@ describe("admin login-link tokens redeem through auth.verifyMagicLink", () => {
     ).rejects.toThrow(/no user/);
     const rows = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, "nobody-here@example.in"));
     expect(rows).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pre-registration account takeover: the first magic-link verification of an
+// account whose email was never verified must kill every credential issued
+// before that proof (sessions, API keys, password, pending credential minters).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.verifyMagicLink — first verification of an unverified account", () => {
+  const db = getControlDb();
+  const PASSWORD = "Attacker@1234!";
+
+  /** What the real request pipeline resolves for a Bearer token (hits the auth caches). */
+  async function resolveBearer(token: string) {
+    const req = new Request("http://localhost:3000/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}`, "x-requested-with": "hisaabo" },
+    });
+    return createContext({ req, resHeaders: new Headers(), info: {} as never });
+  }
+
+  async function seedMagicToken(email: string): Promise<string> {
+    const rawToken = "claim-" + nanoid(32);
+    await db.insert(magicLinkTokens).values({
+      email,
+      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    return rawToken;
+  }
+
+  async function seedApiKey(userId: string, tenantId: string): Promise<string> {
+    const raw = "hisaabo_key_" + nanoid(40);
+    await db.insert(apiKeys).values({
+      userId,
+      tenantId,
+      keyHash: createHash("sha256").update(raw).digest("hex"),
+      keyPrefix: raw.slice(0, 20),
+      name: "attacker key",
+    });
+    return raw;
+  }
+
+  async function register(email: string) {
+    // Bearer client: the registrant receives the raw session token.
+    const res = await unauthCaller("mobile").auth.register({
+      email,
+      name: "Pre Registered",
+      password: PASSWORD,
+      confirmPassword: PASSWORD,
+    });
+    const [member] = await db.select().from(tenantMembers).where(eq(tenantMembers.userId, res.user.id)).limit(1);
+    return { userId: res.user.id, sessionToken: res.sessionToken!, tenantId: member!.tenantId };
+  }
+
+  it("kills the attacker's sessions, API keys and password; the victim's new session works", async () => {
+    const email = "victim-claim@vyapar.in";
+    const atk = await register(email);
+    const apiKey = await seedApiKey(atk.userId, atk.tenantId);
+    // A second attacker session, and the two credential minters an attacker could leave behind.
+    const atk2 = await createSession(atk.userId, atk.tenantId);
+    await db.insert(magicLinkTokens).values({
+      email: "attacker@evil.example",
+      tokenHash: createHash("sha256").update("pending-email-change-" + nanoid(12)).digest("hex"),
+      userId: atk.userId,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    await db.insert(nativeAuthRequests).values({
+      client: "cli",
+      redirectUri: "http://127.0.0.1:41234/callback",
+      codeChallenge: "x".repeat(43),
+      state: "s".repeat(16),
+      userId: atk.userId,
+      codeHash: "h".repeat(64),
+      authorizedAt: new Date(),
+      expiresAt: new Date(Date.now() + 2 * 60 * 1000),
+    });
+
+    // Everything works for the attacker before the victim signs in (and primes the auth caches).
+    expect((await resolveBearer(atk.sessionToken)).user?.id).toBe(atk.userId);
+    expect((await resolveBearer(atk2.id)).user?.id).toBe(atk.userId);
+    expect((await resolveBearer(apiKey)).user?.id).toBe(atk.userId);
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).resolves.toMatchObject({ user: { id: atk.userId } });
+
+    // The victim signs in by magic link for the first time.
+    const victim = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(victim.user.id).toBe(atk.userId); // same account row, now proven by the mailbox owner
+    expect(typeof victim.sessionToken).toBe("string");
+
+    // Attacker: session(s), API key and password are all dead; so are the credential minters.
+    expect((await resolveBearer(atk.sessionToken)).user).toBeNull();
+    expect((await resolveBearer(atk2.id)).user).toBeNull();
+    expect((await resolveBearer(apiKey)).user).toBeNull();
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(await db.select().from(apiKeys).where(eq(apiKeys.userId, atk.userId))).toHaveLength(0);
+    expect(await db.select().from(nativeAuthRequests).where(eq(nativeAuthRequests.userId, atk.userId))).toHaveLength(0);
+    expect(await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.userId, atk.userId))).toHaveLength(0);
+
+    const [row] = await db.select().from(users).where(eq(users.id, atk.userId)).limit(1);
+    expect(row!.passwordHash).toBeNull();
+    expect(row!.emailVerified).toBe(true);
+
+    // Victim: the new session is the only one and it works.
+    const sessionsLeft = await db.select().from(sessions).where(eq(sessions.userId, atk.userId));
+    expect(sessionsLeft.map((x) => x.id)).toEqual([victim.sessionToken]);
+    expect((await resolveBearer(victim.sessionToken!)).user?.id).toBe(atk.userId);
+  });
+
+  it("an already-verified user signing in by magic link keeps their password and other sessions", async () => {
+    const email = "verified-claim@vyapar.in";
+    const reg = await register(email);
+    // First (legitimate) verification: from here on the account is verified.
+    await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    // The user later sets up another login method: simulate a password + a second device + an API key.
+    const passwordHash = (await db.select({ h: users.passwordHash }).from(users).where(eq(users.id, reg.userId)))[0]!.h;
+    expect(passwordHash).toBeNull(); // wiped by the first verification, so re-seed it:
+    await unauthCaller().auth.register({ email: "second-" + email, name: "Other", password: PASSWORD, confirmPassword: PASSWORD });
+    const other = (await db.select({ h: users.passwordHash }).from(users).where(eq(users.email, "second-" + email)))[0]!.h;
+    await db.update(users).set({ passwordHash: other }).where(eq(users.id, reg.userId));
+    const device2 = await createSession(reg.userId, reg.tenantId);
+    const key = await seedApiKey(reg.userId, reg.tenantId);
+
+    const again = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(again.user.id).toBe(reg.userId);
+
+    // Password, the second device and the API key all survive a normal sign-in.
+    await expect(unauthCaller().auth.login({ email, password: PASSWORD })).resolves.toMatchObject({ user: { id: reg.userId } });
+    expect((await resolveBearer(device2.id)).user?.id).toBe(reg.userId);
+    expect((await resolveBearer(key)).user?.id).toBe(reg.userId);
+  });
+
+  it("a v0.9.0 user who registered with a password and never verified can still log in with it", async () => {
+    const email = "never-verified@vyapar.in";
+    await register(email);
+    const result = await unauthCaller().auth.login({ email, password: PASSWORD });
+    expect(result.user.email).toBe(email);
+    const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    expect(row!.emailVerified).toBe(false);
+    expect(row!.passwordHash).not.toBeNull();
+  });
+
+  it("an operator break-glass link signs in without verifying the email or wiping credentials", async () => {
+    const email = "operator-link@vyapar.in";
+    const reg = await register(email);
+    const key = await seedApiKey(reg.userId, reg.tenantId);
+    const store: LoginLinkStore = {
+      async findUserByEmail(e) {
+        const [r] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, e)).limit(1);
+        return r ?? null;
+      },
+      async insertToken(row) {
+        await db.insert(magicLinkTokens).values(row);
+      },
+    };
+    const link = await createLoginLink(store, { email, ttlMinutes: 15, baseUrl: "https://app.example.in" });
+    const token = new URL(link.url).searchParams.get("token")!;
+
+    const res = await unauthCaller("mobile").auth.verifyMagicLink({ token });
+    expect(res.user.id).toBe(reg.userId);
+
+    const [row] = await db.select().from(users).where(eq(users.id, reg.userId)).limit(1);
+    expect(row!.emailVerified).toBe(false); // the mailbox was not proven
+    expect(row!.passwordHash).not.toBeNull();
+    expect((await resolveBearer(reg.sessionToken)).user?.id).toBe(reg.userId);
+    expect((await resolveBearer(key)).user?.id).toBe(reg.userId);
+    // The next real magic link is still the first proof of the mailbox.
+    await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect((await resolveBearer(reg.sessionToken)).user).toBeNull();
+    expect((await resolveBearer(key)).user).toBeNull();
+  });
+
+  it("a user created by their first magic link is verified and a later sign-in revokes nothing", async () => {
+    const email = "fresh-claim@vyapar.in";
+    const first = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect(first.isNewUser).toBe(true);
+    const second = await unauthCaller("mobile").auth.verifyMagicLink({ token: await seedMagicToken(email) });
+    expect((await resolveBearer(first.sessionToken!)).user?.id).toBe(first.user.id);
+    expect((await resolveBearer(second.sessionToken!)).user?.id).toBe(first.user.id);
+  });
+
+  it("password login that was in flight when the wipe committed cannot mint a session", async () => {
+    const email = "inflight-claim@vyapar.in";
+    const reg = await register(email);
+
+    // Simulate the wipe transaction: it holds the user row lock with password_hash already nulled.
+    let releaseWipe!: () => void;
+    const wipeHeld = new Promise<void>((resolve) => { releaseWipe = resolve; });
+    let wipeLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { wipeLocked = resolve; });
+    const wipe = db.transaction(async (tx) => {
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, reg.userId)).for("update");
+      await tx.update(users).set({ passwordHash: null, emailVerified: true }).where(eq(users.id, reg.userId));
+      await tx.delete(sessions).where(eq(sessions.userId, reg.userId));
+      wipeLocked();
+      await wipeHeld;
+    });
+    await locked;
+
+    // The login reads the OLD hash (the wipe is uncommitted), verifies it, then must wait on the row lock.
+    const login = unauthCaller().auth.login({ email, password: PASSWORD });
+    const settled = vi.fn();
+    login.then(settled, settled);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(settled).not.toHaveBeenCalled(); // blocked on the lock
+
+    releaseWipe();
+    await wipe;
+    await expect(login).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(await db.select().from(sessions).where(eq(sessions.userId, reg.userId))).toHaveLength(0);
   });
 });
 

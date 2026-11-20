@@ -25,7 +25,7 @@ import {
 } from "../lib/magic-link";
 
 function fakeStore(users: Array<{ id: string; email: string }>) {
-  const inserted: Array<{ email: string; tokenHash: string; expiresAt: Date; ipAddress: string }> = [];
+  const inserted: Array<{ email: string; tokenHash: string; userId: string; expiresAt: Date; ipAddress: string }> = [];
   const store: LoginLinkStore = {
     async findUserByEmail(email) {
       return users.find((u) => u.email.toLowerCase() === email) ?? null;
@@ -118,6 +118,8 @@ describe("createLoginLink", () => {
     const row = inserted[0];
     expect(row.email).toBe("owner@example.com");
     expect(row.ipAddress).toBe(ADMIN_LOGIN_LINK_MARKER);
+    // Bound to the account it signs into: verifyMagicLink's operator-issued marker.
+    expect(row.userId).toBe("u1");
     expect(row.expiresAt.toISOString()).toBe("2026-01-01T00:15:00.000Z");
 
     // The printed token hashes to the stored hash (what verifyMagicLink looks up).

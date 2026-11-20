@@ -101,7 +101,7 @@ export function parseLoginLinkArgs(argv: string[]): LoginLinkArgs {
 /** The two database operations the command needs; the real one wraps controlDb. */
 export interface LoginLinkStore {
   findUserByEmail(normalizedEmail: string): Promise<{ id: string; email: string } | null>;
-  insertToken(row: { email: string; tokenHash: string; expiresAt: Date; ipAddress: string }): Promise<void>;
+  insertToken(row: { email: string; tokenHash: string; userId: string; expiresAt: Date; ipAddress: string }): Promise<void>;
 }
 
 export interface LoginLink {
@@ -146,9 +146,17 @@ export async function createLoginLink(
   const expiresAt = new Date(now.getTime() + opts.ttlMinutes * 60_000);
 
   // Stored under the user's canonical email, which is what verifyMagicLink resolves the user by.
+  // `userId` binds the token to the account it signs into. verifyMagicLink treats a
+  // token whose userId is the very account it resolves as operator-issued: no request
+  // path can produce that (sendMagicLink never binds a user; requestEmailChange refuses
+  // an address that already has an account), so it is an unforgeable marker, unlike
+  // `ip_address` (which can be client-influenced). Such a link signs in without
+  // marking the email verified and without the first-verification credential wipe,
+  // because an operator's link proves nothing about the mailbox.
   await store.insertToken({
     email: normalizeEmail(user.email),
     tokenHash,
+    userId: user.id,
     expiresAt,
     ipAddress: ADMIN_LOGIN_LINK_MARKER,
   });

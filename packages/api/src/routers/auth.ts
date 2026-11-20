@@ -93,7 +93,7 @@ type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
 // harmlessly). Emitting inside the tx would let a concurrent read re-cache the
 // pre-commit state. `session{userId}` also covers sessions evicted by
 // enforceSessionLimit(…, tx) and `user` the emailVerified flip.
-interface SignInTouched { userId?: string; tenantId?: string }
+interface SignInTouched { userId?: string; tenantId?: string; credentialsRevoked?: boolean }
 
 async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise<T> {
   try {
@@ -103,6 +103,8 @@ async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise
     if (touched.userId) {
       events.push({ kind: "user", userId: touched.userId }, { kind: "session", userId: touched.userId });
     }
+    // First verification of an unverified account deletes its API keys too.
+    if (touched.userId && touched.credentialsRevoked) events.push({ kind: "apiKey", userId: touched.userId });
     if (touched.tenantId) events.push({ kind: "membership", tenantId: touched.tenantId, userId: touched.userId });
     if (events.length) cacheBus.invalidate(events);
   }
@@ -143,12 +145,18 @@ async function getOrCreateDefaultTenant(userId: string, parentTx?: ControlTx): P
 }
 
 // ── Shared helper: create session + resolve tenant ─────────────
+//
+// With `tx` the memberships read, eviction and insert run inside the caller's
+// transaction and the cookie is NOT set here: the caller sets it after COMMIT and
+// emits `session{userId}` once the transaction settled (see settleSignIn).
 async function createSessionForUser(
   userId: string,
   ctx: { req: Request; resHeaders: Headers },
   authMethod: "cookie" | "bearer" = "cookie",
+  tx?: ControlTx,
 ): Promise<string> {
-  const memberships = await controlDb
+  const db = tx ?? controlDb;
+  const memberships = await db
     .select({ tenantId: tenantMembers.tenantId })
     .from(tenantMembers)
     .where(eq(tenantMembers.userId, userId));
@@ -156,7 +164,7 @@ async function createSessionForUser(
   const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
 
   // Evict oldest sessions if at plan limit (FIFO, never blocks login)
-  await enforceSessionLimit(userId);
+  await enforceSessionLimit(userId, tx);
 
   const previousSessionId = getSessionIdFromRequest(ctx.req);
   if (previousSessionId && !previousSessionId.startsWith("hisaabo_key_")) {
@@ -176,7 +184,7 @@ async function createSessionForUser(
   const expiresAt = new Date(now + (authMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
   const maxExpiresAt = authMethod === "bearer" ? new Date(now + BEARER_MAX_SESSION_DURATION_MS) : null;
 
-  await controlDb.insert(sessions).values({
+  await db.insert(sessions).values({
     id: sessionId,
     userId,
     tenantId: resolvedTenantId,
@@ -188,7 +196,7 @@ async function createSessionForUser(
   });
 
   // Cookie clients always get Set-Cookie; Bearer clients hold the token in-app.
-  if (authMethod === "cookie") {
+  if (authMethod === "cookie" && !tx) {
     setSessionCookie(ctx.resHeaders, sessionId);
   }
   return sessionId;
@@ -503,7 +511,30 @@ export const authRouter = router({
     }
 
     const bearer = isBearerClient(ctx.req);
-    const sessionToken = await createSessionForUser(user.id, ctx, bearer ? "bearer" : "cookie");
+    const authMethod = bearer ? "bearer" : "cookie";
+
+    // The argon2 verification above takes long enough for verifyMagicLink's
+    // first-verification credential wipe (which nulls password_hash and deletes
+    // sessions under a row lock on this user) to commit in between. Take the same
+    // row lock and require the hash we verified to still be the stored one, so a
+    // login that was in flight cannot mint a session after the wipe.
+    const touched: SignInTouched = { userId: user.id };
+    const sessionToken = await settleSignIn(touched, controlDb.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .for("update")
+        .limit(1);
+      if (!locked?.passwordHash || locked.passwordHash !== user.passwordHash) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+      }
+      return createSessionForUser(user.id, ctx, authMethod, tx);
+    }));
+    // Set-Cookie only after COMMIT (a rolled-back session must never reach the client).
+    if (authMethod === "cookie") {
+      setSessionCookie(ctx.resHeaders, sessionToken);
+    }
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
@@ -667,6 +698,18 @@ export const authRouter = router({
 
     // ── Phase 3 (tx) + Phase 4 (compensate on failure or unused) ─────
     const touched: SignInTouched = {};
+    // Set inside the tx when this token is the first proof of mailbox ownership
+    // for an unverified account; logged after COMMIT.
+    // (A holder object: TypeScript does not track assignments made inside the closure.)
+    const claim: {
+      counts: {
+        sessions: number;
+        apiKeys: number;
+        pendingEmailChanges: number;
+        nativeRequests: number;
+        hadPassword: boolean;
+      } | null;
+    } = { counts: null };
     const { user, sessionToken, isNewUser, email } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
@@ -695,10 +738,13 @@ export const authRouter = router({
           let isNew = false;
 
           // Find or create user
+          // FOR UPDATE: an existing account's credentials may be revoked below, and
+          // password login takes the same lock before it mints a session.
           let [user] = await tx
-            .select({ id: users.id, email: users.email, name: users.name })
+            .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified, passwordHash: users.passwordHash })
             .from(users)
             .where(emailEq(users.email, emailLocal))
+            .for("update")
             .limit(1);
 
           if (!user) {
@@ -707,7 +753,7 @@ export const authRouter = router({
             const [newUser] = await tx.insert(users).values({
               email: emailLocal,
               emailVerified: true,
-            }).returning({ id: users.id, email: users.email, name: users.name });
+            }).returning({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified, passwordHash: users.passwordHash });
             user = newUser;
 
             // Re-check invitation using tx state (not the peek)
@@ -739,8 +785,42 @@ export const authRouter = router({
             } else {
               touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
             }
+          } else if (tokenRow.userId !== null && tokenRow.userId === user.id) {
+            // Operator break-glass link (`admin login-link`): the only way a token
+            // can carry the user id of the very account it signs into, because
+            // sendMagicLink never binds a user and requestEmailChange refuses an
+            // address that already has an account. It proves nothing about the
+            // mailbox, so it neither marks the email verified nor revokes anything.
+          } else if (!user.emailVerified) {
+            // First proof of mailbox ownership for an account that existed before
+            // the email was verified (password sign-up: anyone could register an
+            // address they do not own). Every credential issued before this point
+            // was not issued to the mailbox owner, so all of it dies now: sessions,
+            // API keys, the password, and anything that could mint a new credential
+            // later (a pending email change, an authorised native sign-in code).
+            // Deleting sessions cascades to their access tokens.
+            const revokedSessions = await tx.delete(sessions).where(eq(sessions.userId, user.id)).returning({ id: sessions.id });
+            const revokedKeys = await tx.delete(apiKeys).where(eq(apiKeys.userId, user.id)).returning({ id: apiKeys.id });
+            const revokedEmailChanges = await tx.delete(magicLinkTokens)
+              .where(and(eq(magicLinkTokens.userId, user.id), isNull(magicLinkTokens.usedAt)))
+              .returning({ id: magicLinkTokens.id });
+            const revokedNativeRequests = await tx.delete(nativeAuthRequests)
+              .where(eq(nativeAuthRequests.userId, user.id))
+              .returning({ id: nativeAuthRequests.id });
+            await tx.update(users)
+              .set({ emailVerified: true, passwordHash: null, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
+            touched.credentialsRevoked = true;
+            claim.counts = {
+              sessions: revokedSessions.length,
+              apiKeys: revokedKeys.length,
+              pendingEmailChanges: revokedEmailChanges.length,
+              nativeRequests: revokedNativeRequests.length,
+              hadPassword: user.passwordHash !== null,
+            };
           } else {
-            // Existing user path — mark email verified
+            // Existing, already-verified user: a normal sign-in leaves every
+            // credential (password, other sessions, API keys) untouched.
             await tx.update(users)
               .set({ emailVerified: true, updatedAt: new Date() })
               .where(eq(users.id, user.id));
@@ -783,6 +863,16 @@ export const authRouter = router({
     }
     // `email` is captured to keep parity with the old log surface if needed later.
     void email;
+
+    if (claim.counts) {
+      // Ids and counts only: no email, no token. Informational for operators.
+      logSecurityEvent("unverified_account_claimed", {
+        ip: getClientIpFromRequest(ctx.req),
+        path: "/api/trpc/auth.verifyMagicLink",
+        reason: "first_magic_link_verification",
+        extra: { userId: user.id, ...claim.counts },
+      });
+    }
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
