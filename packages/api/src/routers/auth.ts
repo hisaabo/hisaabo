@@ -585,7 +585,8 @@ export const authRouter = router({
     // Legacy (Turnstile-exempt) callers can only trigger mail to people who already
     // have, or are invited to have, an account, and only a bounded number per
     // address per day. Same response either way, so nothing is revealed.
-    if (exempt && process.env.TURNSTILE_SECRET_KEY) {
+    const legacyExemptGated = exempt && !!process.env.TURNSTILE_SECRET_KEY;
+    if (legacyExemptGated) {
       if (!existingUser && !(await hasPendingInvitation(controlDb, email))) {
         return { success: true };
       }
@@ -646,7 +647,18 @@ export const authRouter = router({
     // (legacyHandoffSource is null — no suffix — when the compat switch is off).
     const webUrl = buildMagicLinkUrl(baseUrl, rawToken, legacyHandoffSource(ctx.req, input.source) ?? undefined);
 
-    await emailService.sendMagicLink(email, webUrl, !existingUser);
+    if (legacyExemptGated) {
+      // Turnstile-exempt callers are answered before the mail provider has
+      // replied: otherwise the response time separates "known address" (a send
+      // happened) from "unknown / over the daily cap" (returned early), an
+      // enumeration oracle for a caller that carries no Turnstile token. A send
+      // failure is logged, never surfaced.
+      void emailService.sendMagicLink(email, webUrl, !existingUser).catch((err) => {
+        logger.warn({ err }, "Failed to send magic link to a Turnstile-exempt (legacy) client");
+      });
+    } else {
+      await emailService.sendMagicLink(email, webUrl, !existingUser);
+    }
 
     return { success: true }; // Always success — no email enumeration
   }),

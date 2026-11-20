@@ -576,6 +576,33 @@ describe("auth.sendMagicLink — Turnstile enforcement and the DEPRECATED v0.9.x
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
+  it("the exempt path does not wait for the mail provider (no timing oracle), and a failing provider never surfaces", async () => {
+    const email = "legacy-exempt-timing@vyapar.in";
+    await createUser({ email, name: "Timing" });
+    // A provider that never answers: the known-address response still comes back.
+    sendSpy.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const raced = await Promise.race([
+      send(legacyMobile, email, "mobile").then(() => "returned"),
+      new Promise<string>((r) => setTimeout(() => r("blocked"), 2000)),
+    ]);
+    expect(raced).toBe("returned");
+    expect(sendSpy).toHaveBeenCalledOnce();
+
+    // A provider that fails: logged, not thrown.
+    sendSpy.mockClear();
+    const other = "legacy-exempt-timing2@vyapar.in";
+    await createUser({ email: other, name: "Timing 2" });
+    sendSpy.mockRejectedValueOnce(new Error("provider down"));
+    await expect(send(legacyMobile, other, "mobile")).resolves.toEqual({ success: true });
+  });
+
+  it("outside the exempt branch the send is still awaited (the fire-and-forget is limited to exempt callers)", async () => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    await createUser({ email: "legacy-awaited@vyapar.in", name: "Awaited" });
+    sendSpy.mockRejectedValueOnce(new Error("provider down"));
+    await expect(send({}, "legacy-awaited@vyapar.in")).rejects.toThrow("provider down");
+  });
+
   it("Tauri desktop shape + existing user: mail is sent and the link ends &source=desktop", async () => {
     await createUser({ email: "legacy-tauri@vyapar.in", name: "Tauri" });
     // The v0.9.0 desktop webview does not always send `source`; it is inferred from the Tauri shape.
