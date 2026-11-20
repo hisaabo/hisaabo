@@ -77,6 +77,8 @@ jobs:
         env:
           VITE_API_URL: ${{ inputs.ref && secrets.VITE_API_URL || vars.PREVIEW_API_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+          # Shown next to the version in the sidebar (vite.config.ts shortens it).
+          VITE_APP_COMMIT: ${{ github.sha }}
           # Public values (repository variables, not secrets) for the generated
           # .well-known app-link files; placeholders are emitted until they are set.
           VITE_ANDROID_APP_CERT_SHA256: ${{ vars.VITE_ANDROID_APP_CERT_SHA256 }}

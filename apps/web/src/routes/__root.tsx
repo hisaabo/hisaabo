@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { trpc, setBusinessId, queryClient } from "@/lib/trpc";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useTheme } from "@/hooks/useTheme";
+import { appVersionLabel } from "@/lib/app-version";
 import { isGstRegisteredBusiness } from "@/hooks/useActiveBusiness";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { KbdShortcut } from "@/components/ui/KbdShortcut";
@@ -724,12 +725,12 @@ function RootLayout() {
                   <path d="M8 9l4-4 4 4" /><path d="M16 15l-4 4-4-4" />
                 </svg>
               </p>
-              <p className="text-[10px] text-text-tertiary/30 mt-0.5 tabular-nums">v{__APP_VERSION__}</p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 tabular-nums">{appVersionLabel()}</p>
             </button>
           ) : (
             <div className="px-4 py-2.5">
               <p className="text-[11px] text-text-tertiary/50 truncate select-none">{tenantName}</p>
-              <p className="text-[10px] text-text-tertiary/30 mt-0.5 select-none tabular-nums">v{__APP_VERSION__}</p>
+              <p className="text-[10px] text-text-tertiary/30 mt-0.5 select-none tabular-nums">{appVersionLabel()}</p>
             </div>
           )}
         </div>

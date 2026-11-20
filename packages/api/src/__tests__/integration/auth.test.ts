@@ -36,6 +36,7 @@ import { createTestContext } from "../helpers/test-context.js";
 import { createCallerFactory } from "../../trpc.js";
 import { appRouter } from "../../router.js";
 import { emailService } from "../../lib/email.js";
+import { buildInfo } from "../../lib/build-info.js";
 
 // ── Caller factory ────────────────────────────────────────────────────────────
 
@@ -373,6 +374,8 @@ describe("auth.me", () => {
     expect(result.tenantName).toBe("Me Test Org");
     // me returns the raw DB role; mapDbRole is applied in the permission middleware
     expect(result.role).toBe("owner");
+    // Build identity is disclosed to signed-in users only.
+    expect(result.server).toEqual({ version: buildInfo.version, commit: buildInfo.commit });
   });
 
   it("returns null user and null tenant for an unauthenticated request — no session present", async () => {
@@ -384,6 +387,7 @@ describe("auth.me", () => {
     expect(result.tenantName).toBeNull();
     expect(result.role).toBeNull();
     expect(result.needsProfile).toBe(false);
+    expect(result.server).toBeUndefined(); // no build fingerprint for anonymous callers
   });
 
   it("needsProfile is true when user has no display name", async () => {

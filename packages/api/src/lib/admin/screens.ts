@@ -15,6 +15,7 @@ import type { PlatformStats, TenantWithMetrics, TenantMetrics, PlatformFailure, 
 import type { QueueRow, QueueWorker, QueueFailure } from "./queues.js";
 import type { MigrationStatus } from "./migrations.js";
 import { deriveAlerts, type Alert } from "./alerts.js";
+import { shortCommit, UNKNOWN_COMMIT } from "../build-info.js";
 
 export type View = "overview" | "tenants" | "ops" | "infra" | "queues";
 
@@ -31,6 +32,8 @@ export interface ViewState {
   nextRefreshAt: number | null;
   runnerLabel: string;
   version: string;
+  /** Full git SHA of the build (or "unknown"); shown shortened next to the version. */
+  commit?: string;
   now: Date;
   /** True when PII in `stats` is masked (the default). */
   masked: boolean;
@@ -41,9 +44,15 @@ const MIN_COLS = 60;
 
 // ── Shared chrome ───────────────────────────────────────────────
 
+/** `v0.9.0 · abc123def456`; the commit is omitted when the build did not record one. */
+function versionLabel(s: ViewState): string {
+  const commit = s.commit && s.commit !== UNKNOWN_COMMIT ? ` · ${shortCommit(s.commit)}` : "";
+  return `v${s.version}${commit}`;
+}
+
 function header(s: ViewState, cols: number): string {
   const brand = c.brandBg(c.ink(c.bold(" ◆ HISAABO ADMIN ")));
-  const parts: string[] = [c.muted(`v${s.version}`)];
+  const parts: string[] = [c.muted(versionLabel(s))];
   if (s.stats) {
     const dbs = s.stats.databases.queried;
     parts.push(s.stats.mode === "multi-db" ? `multi-db · ${dbs} db${dbs === 1 ? "" : "s"}` : "shared-db");
