@@ -117,7 +117,7 @@ export const notificationRouter = router({
       cursor: z.string().datetime().optional(),
       unreadOnly: z.boolean().default(false),
       channel: channelSchema.optional(),
-    }).default({}))
+    }).prefault({}))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
         .select({
