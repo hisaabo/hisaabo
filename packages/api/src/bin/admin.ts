@@ -29,6 +29,7 @@ import { setColorEnabled, c } from "../lib/admin/tui.js";
 import { splitKeys } from "../lib/admin/keys.js";
 import { maskStats } from "../lib/admin/privacy.js";
 import { loadJournals } from "../lib/admin/migrations.js";
+import { buildInfo } from "../lib/build-info.js";
 
 // ── CLI args ────────────────────────────────────────────────────
 
@@ -145,18 +146,6 @@ function parseArgs(argv: string[]): Args {
 
 // ── Wiring ──────────────────────────────────────────────────────
 
-function readVersion(): string {
-  if (process.env.HISAABO_VERSION && process.env.HISAABO_VERSION !== "dev") return process.env.HISAABO_VERSION;
-  try {
-    // dist/bin/admin.js → ../../package.json, and src/bin/admin.ts → ../../package.json
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(path.join(here, "..", "..", "package.json"), "utf8")) as { version?: string };
-    return pkg.version ?? "dev";
-  } catch {
-    return "dev";
-  }
-}
-
 function buildRunner(a: Args): SqlRunner {
   const url = a.databaseUrl ?? process.env.CONTROL_DATABASE_URL ?? process.env.DATABASE_URL ?? null;
   const via = a.via === "auto" ? (url ? "direct" : "docker") : a.via;
@@ -193,12 +182,12 @@ const CURSOR_SHOW = "\x1b[?25h";
 const HOME = "\x1b[H";
 const CLEAR = "\x1b[2J";
 
-async function runInteractive(collect: () => Promise<PlatformStats>, close: () => Promise<void>, a: Args, runnerLabel: (masked: boolean) => string, version: string): Promise<void> {
+async function runInteractive(collect: () => Promise<PlatformStats>, close: () => Promise<void>, a: Args, runnerLabel: (masked: boolean) => string, version: string, commit: string): Promise<void> {
   const out = process.stdout;
   const inp = process.stdin;
   const state: ViewState = {
     view: a.view, stats: null, loading: true, refreshing: false, error: null, selected: 0,
-    interactive: true, intervalSec: a.interval, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, now: new Date(),
+    interactive: true, intervalSec: a.interval, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, commit, now: new Date(),
     masked: !a.reveal,
   };
   let raw: PlatformStats | null = null;
@@ -333,7 +322,7 @@ async function main(): Promise<void> {
   else if (a.forceColor || process.env.FORCE_COLOR) setColorEnabled(true);
   else setColorEnabled(Boolean(process.stdout.isTTY));
 
-  const version = readVersion();
+  const { version, commit } = buildInfo;
   let runner: SqlRunner | null = null;
   let collect: () => Promise<PlatformStats>;
   let runnerLabel: (masked: boolean) => string;
@@ -355,7 +344,7 @@ async function main(): Promise<void> {
 
   const interactive = !a.once && !a.json && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
   if (interactive) {
-    await runInteractive(collect, close, a, runnerLabel, version);
+    await runInteractive(collect, close, a, runnerLabel, version, commit);
     return;
   }
 
@@ -367,7 +356,7 @@ async function main(): Promise<void> {
       const cols = a.width ?? process.stdout.columns ?? 120;
       const state: ViewState = {
         view: a.view, stats, loading: false, refreshing: false, error: stats.errors[0] ?? null, selected: 0,
-        interactive: false, intervalSec: 0, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, now: new Date(),
+        interactive: false, intervalSec: 0, nextRefreshAt: null, runnerLabel: runnerLabel(!a.reveal), version, commit, now: new Date(),
         masked: !a.reveal,
       };
       process.stdout.write(frameToString(renderFrame(state, cols)));

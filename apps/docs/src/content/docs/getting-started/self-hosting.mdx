@@ -131,6 +131,10 @@ volumes:
 The PostgreSQL port is **not** exposed to the host by default — only the API container connects to it. This is intentional for security. If you need direct database access for debugging, temporarily add `ports: ["5432:5432"]` under the `postgres` service.
 :::
 
+:::tip[Pin a version for production]
+`:latest` moves with every stable release. For a production install, replace it with a release tag such as `ghcr.io/hisaabo/hisaabo-api:v0.10.0` (tags are published once and never overwritten), and upgrade by changing the tag. The release notes also list each image's digest (`...@sha256:...`) if you want to pin the exact bytes.
+:::
+
 ## Step 4: Start the containers
 
 ```bash

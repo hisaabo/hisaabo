@@ -29,6 +29,7 @@ import { stopSenderBoss } from "./queue/boss.js";
 import { registerOpsRoutes } from "./ops/routes.js";
 import { startNotificationWorkers, stopNotificationWorkers, emitNotificationEventSafe } from "./lib/notifications/index.js";
 import { logger, logSecurityEvent } from "./lib/logger.js";
+import { buildInfo, shortCommit } from "./lib/build-info.js";
 import { validateEnv } from "./lib/env.js";
 import { createCsrfMiddleware } from "./lib/csrf-middleware.js";
 import { assertAllowedStoreOrigin } from "./lib/store-origin.js";
@@ -64,6 +65,12 @@ process.on("uncaughtException", (err) => {
 
 // ── Environment validation ────────────────────────────────────
 validateEnv();
+
+// Logged at every boot so any log excerpt identifies the exact build.
+logger.info(
+  { version: buildInfo.version, commit: buildInfo.commit },
+  `Hisaabo API v${buildInfo.version} (commit ${shortCommit(buildInfo.commit)})`,
+);
 
 function escapeHtml(str: string): string {
   return str

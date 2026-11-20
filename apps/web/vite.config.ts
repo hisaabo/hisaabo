@@ -4,6 +4,7 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import path from "path";
 import { readFileSync } from "fs";
 import { generateWellKnown } from "./src/lib/well-known.ts";
+import { shortCommit } from "./src/lib/app-version.ts";
 
 const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8"));
 
@@ -150,9 +151,19 @@ function getVersion(): string {
   return pkg.version;
 }
 
+function getCommit(): string {
+  // Short SHA of the commit being built, shown next to the version so a
+  // deployed bundle can be matched to its source. CI passes the full
+  // `github.sha` as VITE_APP_COMMIT (deploy-web.yml, release.yml); it is
+  // shortened here. Empty (omitted from the UI) when unset, e.g. local dev.
+  // Passed in rather than discovered via `git`: see the note in getVersion().
+  return shortCommit(process.env.VITE_APP_COMMIT);
+}
+
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(getVersion()),
+    __APP_COMMIT__: JSON.stringify(getCommit()),
   },
   plugins: [
     cspPlugin(),

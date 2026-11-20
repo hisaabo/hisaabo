@@ -417,6 +417,18 @@ function stateFor(view: ViewState["view"], interactive = false): ViewState {
 }
 
 describe("renderFrame", () => {
+  it("shows the version with the short commit in the header, and omits an unknown commit", () => {
+    const sha = "26c61bb0f3a1d2e4c5b6a79881726354abcdef01";
+    const withCommit = stripAnsi(renderFrame({ ...stateFor("overview"), commit: sha }, 140)[0]);
+    expect(withCommit).toContain("v0.9.0 · 26c61bb0f3a1");
+    expect(withCommit).not.toContain(sha);
+    for (const commit of [undefined, "unknown"]) {
+      const header = stripAnsi(renderFrame({ ...stateFor("overview"), commit }, 140)[0]);
+      expect(header).toContain("v0.9.0");
+      expect(header).not.toContain("v0.9.0 ·");
+    }
+  });
+
   it.each([60, 80, 100, 120, 160, 200])("overview at %i columns fills the width exactly on every row", (cols) => {
     const frame = renderFrame(stateFor("overview"), cols);
     expect(frame.length).toBeGreaterThan(20);
