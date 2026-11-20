@@ -45,7 +45,22 @@ async function openPaymentPanel(page: Page, invoiceId: string, invoiceNumber?: s
   return paymentPanel;
 }
 
-async function seedTdsSection(api: SeedApi, businessId: string, version: number) {
+// `tdsSection.create` rejects an existing (business, code, version) and caps the
+// version at 1000, so derive the next free version instead of using a timestamp.
+// A business that was never seeded lists the registry defaults (version 1) and
+// `create` persists them before inserting, hence the floor of 1.
+async function nextTdsSectionVersion(api: SeedApi, businessId: string) {
+  const sections = await api.query<Array<{ sectionCode: string; version: number }>>(
+    "tdsSection.list",
+    { includeInactive: true },
+    { "x-business-id": businessId },
+  );
+  const versions = sections.filter((section) => section.sectionCode === REGISTRY_CODE).map((section) => section.version);
+  return Math.max(1, ...versions) + 1;
+}
+
+async function seedTdsSection(api: SeedApi, businessId: string) {
+  const version = await nextTdsSectionVersion(api, businessId);
   return api.mutate("tdsSection.create", {
     sectionCode: REGISTRY_CODE,
     sectionLabel: "Incorrect caller label",
@@ -78,7 +93,7 @@ test.describe("TDS payment allocation", () => {
     });
     await updateInvoiceStatus(seedApi, seed.businessId, invoice.id, "sent");
     await updateInvoiceStatus(seedApi, seed.businessId, replacementInvoice.id, "sent");
-    await seedTdsSection(seedApi, seed.businessId, Date.now() % 1_000_000);
+    await seedTdsSection(seedApi, seed.businessId);
 
     const beforeTrialBalance = await api.query<{ accounts: Array<{ accountCode: string; debit: string; credit: string }> }>(
       "reports.trialBalance",
@@ -197,7 +212,7 @@ test.describe("TDS payment allocation", () => {
     await paymentPanel.getByLabel("TDS Amount (₹)").fill("2000.00");
     await paymentPanel.getByLabel("TDS Rate (%)").fill("0.00");
     await paymentPanel.getByRole("button", { name: /Record ₹96,000\.00/ }).click();
-    await expect(page.getByText(/TDS amount requires section code and rate|TDS rate must be greater than zero/i)).toBeVisible();
+    await expect(page.getByText(/TDS amount requires (a )?section code and (a )?rate/i)).toBeVisible();
     await expect(paymentPanel).toBeVisible();
   });
 });
