@@ -41,7 +41,7 @@ export interface JobOptions<P> {
   name: string;
   scope?: JobScope;
   pool?: PoolName;
-  payload: z.ZodType<P, z.ZodTypeDef, unknown>;
+  payload: z.ZodType<P, unknown>;
   /** Retries after the first attempt (pg-boss retryLimit). */
   retries?: number;
   backoff?: { delaySeconds: number; exponential?: boolean; maxDelaySeconds?: number };

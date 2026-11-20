@@ -15,7 +15,7 @@ export const envelopeSchema = z.object({
   actorUserId: uuid.optional(),
   requestId: z.string().max(128).optional(),
   tags: z.array(z.string().max(64)).max(20),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
 }).strict().superRefine((e, ctx) => {
   if (e.scope === "tenant" && !e.tenantId) {
     ctx.addIssue({ code: "custom", message: "tenant-scoped job without tenantId", path: ["tenantId"] });
