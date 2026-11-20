@@ -462,7 +462,20 @@ export async function pruneNotifications(db: TenantDatabase, now: Date = new Dat
 // ── Scheduler ───────────────────────────────────────────────────────────────
 
 const TICK_MS = 3_000;
-const FULL_SWEEP_MS = 60_000;
+const DEFAULT_FULL_SWEEP_SECONDS = 60;
+const MIN_FULL_SWEEP_SECONDS = 5;
+
+/**
+ * How often multi-tenant mode scans EVERY active tenant for pending events
+ * (kicked tenants are served on every tick regardless). Each scan touches every
+ * tenant database, so large deployments can stretch it, or turn the worker off
+ * (NOTIFICATIONS_WORKER=false) until the queue-backed dispatcher lands.
+ */
+export function fullSweepMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.NOTIFICATIONS_FULL_SWEEP_SECONDS);
+  const seconds = Number.isFinite(raw) && raw >= MIN_FULL_SWEEP_SECONDS ? raw : DEFAULT_FULL_SWEEP_SECONDS;
+  return seconds * 1000;
+}
 const PRUNE_MS = 60 * 60 * 1000;
 const isMultiTenant = () => process.env.MULTI_TENANT === "true";
 
@@ -488,7 +501,7 @@ async function tick(): Promise<void> {
       await dispatchPending(db);
       if (prune) await pruneNotifications(db);
     } else {
-      const fullSweep = now - lastFullSweep > FULL_SWEEP_MS;
+      const fullSweep = now - lastFullSweep > fullSweepMs();
       const ids = fullSweep ? await activeTenantIds() : drainKickedTenants();
       if (fullSweep) {
         drainKickedTenants();

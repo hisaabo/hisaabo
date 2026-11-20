@@ -202,6 +202,14 @@ Desktop (Tauri) uses web push in its webview where supported. Otherwise `tauri-p
 
 **Event emission** is a single helper, `emitNotificationEvent(tx, { type, businessId, subjectId, actorUserId, actorKind, payload, dedupeKey })`, called inside the same transaction as the domain write. If the write rolls back, the notification never exists. `actorKind` is `user | api_key | agent | system`, so agent/API activity can be reported distinctly.
 
+**Hot-path isolation**: the transactional outbox must never be able to take a business write down with it. Domain code on a hot path (`payment.create`, the public storefront order) emits through `emitNotificationEventSafe(tx, …)` / `withNotificationSavepoint(tx, …)`, which run the emit in a SAVEPOINT. If the outbox rejects it (bad payload, constraint violation, the table missing on a half-migrated database), only the savepoint is rolled back, a warning naming the event type is logged, and the payment or order commits without its notification. A rollback of the *outer* transaction still drops the event, so the outbox guarantee is unchanged. Tenant-level emitters (`emitTenantEvent`: team, role change, API key) run on their own connection and swallow errors for the same reason. Without the savepoint, one failed statement would abort the whole Postgres transaction.
+
+**Clock rule**: due-ness, the claim lease and retry backoff are all evaluated on the database clock (`now()` in SQL), never compared with a JS timestamp. `available_at` is stamped by Postgres at microsecond precision; comparing it with a millisecond-truncated JS time can leave a just-inserted row "not yet due".
+
+**Operating the workers**: the dispatcher (every 3 s) and the hourly collections sweep run in-process and are controlled by `NOTIFICATIONS_WORKER` (default on; `false` on replicas that should only serve requests; claiming is safe across replicas). In multi-tenant mode the dispatcher serves tenants that just emitted an event on every tick and, every `NOTIFICATIONS_FULL_SWEEP_SECONDS` (default 60, minimum 5), scans *every* active tenant database for events emitted by other replicas. With more active tenants than `TENANT_POOL_MAX` (default 50) that scan churns the tenant connection pool. **Cloud/multi-tenant deployments with many tenants should set `NOTIFICATIONS_WORKER=false` until the queue-backed dispatcher lands**, or at least raise the full-sweep interval. Caveat: if no replica runs the worker, events keep queuing in `notification_outbox` and are all delivered when a worker is enabled later; enable the worker before accepting traffic you care about, not after a long pause. Self-hosted single-tenant installs are unaffected (one database, two cheap queries every 3 s).
+
+**Email copies** need a provider (`RESEND_API_KEY`). Without one, production skips the copy and logs `notification emails disabled: no email provider configured` once per process; the inbox row is still written, and nothing throws. (Magic-link and invitation emails are unchanged: they remain an error without a provider.) The Resend notification request has a 10 s timeout so a hung connection cannot stall the single-flight dispatch tick.
+
 **Self-notification suppression**: the actor is never notified of their own action, except security events about their own account (e.g. "API key created"): if the account is compromised, that alert and its email copy are how the real owner finds out. An admin changing someone else's role is not notified of it.
 
 **Templates** live in `@hisaabo/shared` as `{type → (payload, locale) → {title, body, deepLink}}`. They are rendered at dispatch time (so a later locale change applies) and shared with the CLI/MCP for parity. **Launch locales: English (`en`) and Hindi (`hi`).** Every template must exist in both before an event type ships, enforced by a unit test. Amounts use Indian digit grouping (₹1,20,000) in both locales. The recipient's locale comes from the user's app language setting, falling back to `en`. Other Indian languages come later.
@@ -489,7 +497,7 @@ New tRPC router `notification`:
 
 | Procedure | Purpose |
 |---|---|
-| `notification.list` | Inbox for the active business plus tenant-level entries; keyset pagination, filter by channel / unread |
+| `notification.list` | Inbox for the active business plus tenant-level entries; keyset pagination on `(created_at, id)`, filter by channel / unread. Pass the previous page's `nextCursor` and `nextCursorId` as `cursor` and `cursorId`. `cursorId` is optional: a bare `cursor` paginates by timestamp alone, as older clients do. `nextCursor` carries microsecond precision, so entries created in the same millisecond are not skipped |
 | `notification.unreadCounts` | Total, tenant-level and per-business unread counts for the tenant |
 | `notification.markRead` / `markAllRead` / `archive` | Inbox state |
 | `notification.getPreferences` / `updatePreference` | Effective preference per channel with its source (`role_default` / `tenant` / `business`) and `locked` / `available` flags; set or reset one override |
@@ -555,7 +563,7 @@ CLI: `hisaabo notifications list|read|prefs|set`. MCP: `notification_list`, `not
 | RFC 8291 payload encryption (verified against the RFC test vector) | `…/notifications/push-crypto.ts` |
 | Gorush and no-op push providers, dead-token pruning | `…/notifications/push-provider.ts` |
 | Instance / tenant / user quotas; `pushPerDay` in plan limits | `…/notifications/quota.ts`, `lib/plan-limits.ts` |
-| Collections sweep (due today, 7/30/60 days overdue) | `…/notifications/collections-sweep.ts` |
+| Collections sweep (due today, 7/30/60 days overdue). Emits at most 50 new events per business per run (`MAX_EVENTS_PER_BUSINESS_PER_SWEEP`): turning the feature on for an existing install finds every open invoice inside a bucket window at once, and the remainder is picked up by the next hourly run (bucket windows are 3 days wide and dedupe keys stop repeats) | `…/notifications/collections-sweep.ts` |
 | Events emitted: `payment.received`, `payment.made`, `store.order_placed`, `einvoice.failed`, `team.member_joined`, `team.role_changed`, `api_key.created`, `invoice.due_today`, `invoice.overdue` | payment, store order, e-invoice, tenant and API-key code paths |
 | tRPC router, CLI command, MCP tools | `routers/notification.ts`, `packages/cli/src/commands/notification/`, `packages/mcp/src/tools/notification.ts` |
 | Tests | `packages/shared/src/__tests__/notifications.test.ts`, `packages/api/src/__tests__/notifications-push.test.ts`, `…/integration/notifications.test.ts` |
@@ -568,4 +576,5 @@ CLI: `hisaabo notifications list|read|prefs|set`. MCP: `notification_list`, `not
 4. Digest (daily/weekly summary), grouping of bursts, holding pushes through quiet hours.
 5. Remaining event types: sales activity, inventory, banking, payables due dates, GST return due dates, ITC ageing, targets, general announcements tooling.
 6. Explicit inbox purge on user deletion (rows currently expire after 90 days).
+7. Queue-backed dispatcher for large multi-tenant deployments (today's full-tenant scan, §6 "Operating the workers"). Until then, cloud sets `NOTIFICATIONS_WORKER=false` or raises `NOTIFICATIONS_FULL_SWEEP_SECONDS`.
 
