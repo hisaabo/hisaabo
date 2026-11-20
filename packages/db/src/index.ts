@@ -45,6 +45,13 @@ export {
   renderCacheTriggerMigration,
 } from "./cache-triggers.js";
 
+// Store-slug helpers (shared by backfill and API)
+export {
+  fallbackSlug, FALLBACK_SLUG_MAX_ATTEMPTS, STORE_SLUG_REGEX,
+  storeSlugBusinessLockSql, storeSlugBusinessLockStatement, storeSlugBusinessLockKey,
+  STORE_SLUG_LOCK_HEAD, STORE_SLUG_LOCK_TAIL,
+} from "./store-slug.js";
+
 // Store-slug registry backfill / reconcile
 export {
   backfillStoreSlugRegistry,
@@ -52,6 +59,9 @@ export {
   STORE_SLUG_MARKER_KEY,
   type BackfillOptions,
   type BackfillReport,
+  type SlugRename,
+  type TenantRenamer,
+  type UnresolvedLoser,
   type BusinessSlugRow,
   type TenantReader,
   type TenantRow,

@@ -6,6 +6,7 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Modal } from "@/components/ui/Modal";
 import { PhoneInput } from "./PhoneInput";
+import { isStoreSlugLocked, showAutoAssignedNotice } from "./storeSlugLock";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,8 +89,9 @@ function StoreSettingsCard() {
   const effectiveRequirePhoneOtp = requirePhoneOtp ?? settings?.storeRequirePhoneOtp ?? false;
   const phoneOtpAvailable = settings?.phoneOtpAvailable ?? false;
 
-  // Slug is locked once saved — cannot be changed
-  const isSlugLocked = !!settings?.storeSlug;
+  // Slug is locked once saved, unless it was auto-assigned (one change allowed)
+  const isSlugLocked = isStoreSlugLocked(settings?.storeSlug, settings?.storeSlugAutoAssigned);
+  const slugAutoAssigned = showAutoAssignedNotice(settings?.storeSlug, settings?.storeSlugAutoAssigned);
 
   // Debounce slug for availability check (only when not locked)
   const debouncedSlug = useDebounce(effectiveSlug, 500);
@@ -183,6 +185,15 @@ function StoreSettingsCard() {
       {/* Store URL */}
       <div className="mb-4">
         <label className="label">Store URL</label>
+        {slugAutoAssigned && (
+          <div
+            role="status"
+            className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+          >
+            Your store link was changed to <span className="font-semibold">{settings?.storeSlug}</span> because the
+            original was already used by another store. You can choose a new link once.
+          </div>
+        )}
         <div className="flex items-center gap-0">
           <span className="inline-flex items-center px-3 py-2 rounded-l-lg border border-r-0 border-border-color bg-surface-1 text-text-tertiary text-sm select-none whitespace-nowrap">
             {STORE_PREFIX}
@@ -244,7 +255,9 @@ function StoreSettingsCard() {
           </p>
         ) : (
           <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
-            Choose carefully — this cannot be changed later
+            {slugAutoAssigned
+              ? "You can change this once — after saving it cannot be changed again"
+              : "Choose carefully — this cannot be changed later"}
           </p>
         )}
       </div>

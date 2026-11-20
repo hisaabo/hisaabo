@@ -16,7 +16,7 @@
  *   - Slug format is re-validated here (and by the table CHECK).
  */
 import { sql } from "drizzle-orm";
-import { controlDb, STORE_SLUG_MARKER_KEY } from "@hisaabo/db";
+import { controlDb, STORE_SLUG_MARKER_KEY, fallbackSlug, FALLBACK_SLUG_MAX_ATTEMPTS, storeSlugBusinessLockSql } from "@hisaabo/db";
 import { cacheBus } from "./cache/bus.js";
 import { logger } from "./logger.js";
 
@@ -157,7 +157,7 @@ export async function setEnabled(
 }
 
 async function lockBusiness(tx: Exec, tenantId: string, businessId: string): Promise<void> {
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${tenantId + ":" + businessId}, 0))`);
+  await tx.execute(storeSlugBusinessLockSql(tenantId, businessId));
 }
 
 export interface StoreChange<T> {
@@ -168,6 +168,12 @@ export interface StoreChange<T> {
   newEnabled: boolean;
   /** Slug currently in the tenant DB (for cache invalidation only). */
   oldSlug: string | null;
+  /**
+   * Optional. Runs under the per-business advisory lock, before any registry
+   * or tenant write; may throw to abort. Its result replaces
+   * oldSlug/newSlug/newEnabled (lets callers read current state under the lock).
+   */
+  prepare?: () => Promise<{ oldSlug: string | null; newSlug: string | null; newEnabled: boolean }>;
   /** The tenant-DB write. Runs inside the control transaction. */
   runTenantUpdate: () => Promise<T>;
   /** Best-effort undo of the tenant write if the control COMMIT fails. */
@@ -184,15 +190,17 @@ export interface StoreChange<T> {
  */
 export async function applyStoreChange<T>(c: StoreChange<T>): Promise<T> {
   let tenantDone = false;
+  let { oldSlug, newSlug, newEnabled } = c;
   try {
     return await controlDb.transaction(async (tx) => {
       await lockBusiness(tx, c.tenantId, c.businessId);
-      if (c.newSlug === null) {
+      if (c.prepare) ({ oldSlug, newSlug, newEnabled } = await c.prepare());
+      if (newSlug === null) {
         await releaseSlug(tx, { tenantId: c.tenantId, businessId: c.businessId });
       } else {
-        await releaseSlug(tx, { tenantId: c.tenantId, businessId: c.businessId, exceptSlug: c.newSlug });
+        await releaseSlug(tx, { tenantId: c.tenantId, businessId: c.businessId, exceptSlug: newSlug });
         await claimSlug(tx, {
-          tenantId: c.tenantId, businessId: c.businessId, slug: c.newSlug, storeEnabled: c.newEnabled,
+          tenantId: c.tenantId, businessId: c.businessId, slug: newSlug, storeEnabled: newEnabled,
         });
       }
       const out = await c.runTenantUpdate();
@@ -202,7 +210,7 @@ export async function applyStoreChange<T>(c: StoreChange<T>): Promise<T> {
   } catch (err) {
     if (tenantDone) {
       logger.error(
-        { err, event: "store_slug_registry_drift", tenantId: c.tenantId, businessId: c.businessId, slug: c.newSlug },
+        { err, event: "store_slug_registry_drift", tenantId: c.tenantId, businessId: c.businessId, slug: newSlug },
         "control commit failed after tenant write; reverting tenant row",
       );
       try {
@@ -213,7 +221,7 @@ export async function applyStoreChange<T>(c: StoreChange<T>): Promise<T> {
     }
     throw err;
   } finally {
-    notifySlugsChanged([c.oldSlug, c.newSlug]);
+    notifySlugsChanged([oldSlug, newSlug]);
   }
 }
 
@@ -272,4 +280,41 @@ export async function registerImportedSlugs(
     notifySlugsChanged(touched);
   }
   return out;
+}
+
+/**
+ * Duplicate-slug auto-rename for self-import: claim `<prefix>-<original>` for
+ * (tenant, business) and run `applyTenant(newSlug)` (the tenant-DB write)
+ * inside the same control transaction, so a tenant failure rolls the claim
+ * back. A registry conflict or a tenant-side unique violation retries with a
+ * fresh prefix (FALLBACK_SLUG_MAX_ATTEMPTS). Returns null when no slug could be
+ * claimed; any other error is rethrown (caller falls back to clear+disable).
+ * `tenantId` must come from the authenticated context.
+ */
+export async function claimFallbackSlug(p: {
+  tenantId: string;
+  businessId: string;
+  original: string;
+  storeEnabled: boolean;
+  applyTenant: (newSlug: string) => Promise<void>;
+}): Promise<string | null> {
+  for (let attempt = 0; attempt < FALLBACK_SLUG_MAX_ATTEMPTS; attempt++) {
+    const candidate = fallbackSlug(p.original);
+    try {
+      await controlDb.transaction(async (tx) => {
+        await lockBusiness(tx, p.tenantId, p.businessId);
+        await releaseSlug(tx, { tenantId: p.tenantId, businessId: p.businessId, exceptSlug: candidate });
+        await claimSlug(tx, {
+          tenantId: p.tenantId, businessId: p.businessId, slug: candidate, storeEnabled: p.storeEnabled,
+        });
+        await p.applyTenant(candidate);
+      });
+      notifySlugsChanged([candidate]);
+      return candidate;
+    } catch (err) {
+      if (err instanceof SlugConflictError || isUniqueViolation(err)) continue;
+      throw err;
+    }
+  }
+  return null;
 }

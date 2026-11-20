@@ -47,13 +47,14 @@ export function registerStoreTools(server: ToolServer, client: HisaaboClient) {
       "Update the online store configuration.",
       "Enable/disable the store, change the URL slug, tagline, accent color, minimum order amount, etc.",
       "store_slug must be unique across all businesses and match the pattern: lowercase letters, numbers, and hyphens.",
+      "The store URL slug can only be set ONCE: after it is set, later changes are rejected with FORBIDDEN (unless the system auto-assigned it because the original was already in use, which allows one change).",
       "Setting store_enabled=true activates the public storefront.",
     ].join(" "),
     {
       store_enabled: z.boolean().optional()
         .describe("Enable (true) or disable (false) the public storefront."),
       store_slug: z.string().min(3).max(50).regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/).optional().nullable()
-        .describe("URL slug for the store, e.g. 'acme-traders'. Must be lowercase alphanumeric with hyphens."),
+        .describe("URL slug for the store, e.g. 'acme-traders'. Must be lowercase alphanumeric with hyphens. Can only be set once; later changes are rejected."),
       store_tagline: z.string().max(200).optional().nullable()
         .describe("Short tagline shown on the store homepage, e.g. 'Fresh groceries delivered daily'."),
       store_accent_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable()
