@@ -22,7 +22,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import zlib from "node:zlib";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
@@ -51,6 +51,7 @@ import {
   recurringInvoiceTemplates,
   eInvoiceConfigs,
   auditLog,
+  tdsSectionConfigs,
 } from "@hisaabo/db";
 import {
   getControlDb,
@@ -1562,4 +1563,143 @@ describe("Test 9: imported businesses are accessible via businessProcedure", () 
     },
     60_000,
   );
+});
+
+// =============================================================================
+// TEST 10 — TDS data survives the round trip; pre-TDS backups still import
+// =============================================================================
+
+describe("Test 10: TDS allocations, TAN and section configs round-trip", () => {
+  beforeEach(async () => {
+    await truncateAllTables();
+  });
+
+  /** Seed a business with one TDS-settled receipt, export it, return the tar.gz. */
+  async function exportTdsTenant(suffix: string) {
+    const db = getTenantTestDb();
+    const owner = await createOwner(`${suffix}-src`);
+    const srcTenant = await createTestTenant(`Source Corp ${suffix}`);
+    await enrollMember(srcTenant.id, owner.id);
+    const biz = await seedBusiness(owner.id, suffix);
+    const party = await seedParty(biz.id);
+    await db.update(parties).set({ tan: "DELA12345B" }).where(eq(parties.id, party.id));
+    const invoice = await seedInvoice(biz.id, party.id, "100.00");
+    const [payment] = await db
+      .insert(payments)
+      .values({
+        businessId: biz.id,
+        partyId: party.id,
+        invoiceId: invoice.id,
+        amount: "90.00",
+        mode: "bank",
+        paymentDate: new Date("2026-10-12T00:00:00.000Z"),
+        paymentNumber: "PAY-00001",
+      })
+      .returning();
+    await db.insert(paymentAllocations).values({
+      paymentId: payment!.id,
+      invoiceId: invoice.id,
+      amount: "100.00",
+      tdsAmount: "10.00",
+      tdsSectionCode: "1024",
+      tdsRate: "10.00",
+    });
+    await db.insert(tdsSectionConfigs).values({
+      businessId: biz.id,
+      sectionCode: "1024",
+      sectionLabel: "Custom back-dated version",
+      effectiveFrom: new Date("2020-01-01T00:00:00.000Z"),
+      effectiveTo: new Date("2026-03-31T00:00:00.000Z"),
+      status: "inactive",
+      version: 3,
+    });
+
+    const exportCaller = buildCaller({
+      userId: owner.id,
+      email: owner.email,
+      name: `${suffix} Owner`,
+      tenantId: srcTenant.id,
+    });
+    const { token } = await exportCaller.selfExport.request({ tenantId: srcTenant.id });
+    const res = await httpExport(srcTenant.id, token);
+    expect(res.status).toBe(200);
+    return { tarGz: Buffer.from(await res.arrayBuffer()), biz, party, payment: payment! };
+  }
+
+  async function importInto(suffix: string, tarGz: Buffer) {
+    const { getTestClient } = await import("../helpers/test-db.js");
+    await getTestClient()`TRUNCATE TABLE businesses CASCADE`;
+    const tgtOwner = await createOwner(`${suffix}-tgt`);
+    const tgtTenant = await createTestTenant(`Target Corp ${suffix}`);
+    await enrollMember(tgtTenant.id, tgtOwner.id);
+    const token = await signImportTokenDirect(tgtTenant.id, tgtOwner.id);
+    return httpImport(tgtTenant.id, token, tarGz);
+  }
+
+  it("exports and restores tds_amount / section / rate, the party TAN and custom configs", async () => {
+    const db = getTenantTestDb();
+    const { tarGz, party, payment } = await exportTdsTenant("T10A");
+
+    const entries = await unpackTarGz(tarGz);
+    const manifest = JSON.parse(entries.get("manifest.json")!.toString("utf8")) as {
+      rowCounts: Record<string, number>;
+    };
+    expect(manifest.rowCounts["tds_section_configs"]).toBe(1);
+    expect(entries.get("payment_allocations.ndjson")!.toString("utf8")).toContain('"tdsAmount":"10.00"');
+
+    const res = await importInto("T10A", tarGz);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; rowsInserted: Record<string, number> };
+    expect(body.ok).toBe(true);
+    expect(body.rowsInserted["tds_section_configs"]).toBe(1);
+
+    const [alloc] = await db.select().from(paymentAllocations).where(eq(paymentAllocations.paymentId, payment.id));
+    expect(alloc).toMatchObject({ amount: "100.00", tdsAmount: "10.00", tdsSectionCode: "1024", tdsRate: "10.00" });
+    const [restoredParty] = await db.select({ tan: parties.tan }).from(parties).where(eq(parties.id, party.id));
+    expect(restoredParty?.tan).toBe("DELA12345B");
+    const [config] = await db.select().from(tdsSectionConfigs);
+    expect(config).toMatchObject({ sectionCode: "1024", version: 3, status: "inactive" });
+    expect(config!.effectiveFrom.toISOString()).toBe("2020-01-01T00:00:00.000Z");
+    expect(config!.effectiveTo?.toISOString()).toBe("2026-03-31T00:00:00.000Z");
+  }, 60_000);
+
+  it("a backup taken before TDS support (no tds_section_configs, no TDS columns) still imports", async () => {
+    const db = getTenantTestDb();
+    const { tarGz, payment } = await exportTdsTenant("T10B");
+
+    // Rewrite the archive the way a pre-TDS release would have produced it.
+    const entries = await unpackTarGz(tarGz);
+    const manifest = JSON.parse(entries.get("manifest.json")!.toString("utf8")) as {
+      rowCounts: Record<string, number>;
+      files: Record<string, { sha256: string; rows: number; bytes: number }>;
+    };
+    entries.delete("tds_section_configs.ndjson");
+    delete manifest.rowCounts["tds_section_configs"];
+    delete manifest.files["tds_section_configs.ndjson"];
+    const strip = (file: string, keys: string[]) => {
+      const lines = entries.get(file)!.toString("utf8").split("\n").filter(Boolean).map((line) => {
+        const row = JSON.parse(line) as Record<string, unknown>;
+        for (const key of keys) delete row[key];
+        return JSON.stringify(row);
+      });
+      const buf = Buffer.from(lines.join("\n") + "\n", "utf8");
+      entries.set(file, buf);
+      manifest.files[file] = {
+        ...manifest.files[file]!,
+        sha256: createHash("sha256").update(buf).digest("hex"),
+        bytes: buf.length,
+      };
+    };
+    strip("payment_allocations.ndjson", ["tdsAmount", "tdsSectionCode", "tdsRate"]);
+    strip("parties.ndjson", ["tan"]);
+    entries.set("manifest.json", Buffer.from(JSON.stringify(manifest), "utf8"));
+
+    const oldTarGz = await gzipBuffer(await repackTar(entries));
+    const res = await importInto("T10B", oldTarGz);
+    expect(res.status).toBe(200);
+
+    const [alloc] = await db.select().from(paymentAllocations).where(eq(paymentAllocations.paymentId, payment.id));
+    expect(alloc).toMatchObject({ amount: "100.00", tdsAmount: "0.00", tdsSectionCode: null, tdsRate: null });
+    expect(await db.select().from(tdsSectionConfigs)).toHaveLength(0);
+  }, 60_000);
 });
