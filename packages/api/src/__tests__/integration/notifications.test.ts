@@ -583,12 +583,17 @@ describe("collections sweep", () => {
     const countFor = async () =>
       (await db.select().from(notificationOutbox).where(eq(notificationOutbox.businessId, biz.id))).length;
 
-    // 5 invoices, cap 2: runs emit 2, 2, 1, then nothing (rows already emitted dedupe and do not count).
-    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(2);
+    // 5 invoices, cap 2: this business gains 2, 2, 1, then nothing (rows already
+    // emitted dedupe and do not count). Assert on this business's outbox rows, not
+    // on sweepCollections' return value: that is the total across EVERY business
+    // in the database, including the invoices the previous test left in business1.
+    await sweepCollections(db, world.tenant1.id, 2);
     expect(await countFor()).toBe(2);
-    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(2);
-    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(1);
-    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(0);
+    await sweepCollections(db, world.tenant1.id, 2);
+    expect(await countFor()).toBe(4);
+    await sweepCollections(db, world.tenant1.id, 2);
+    expect(await countFor()).toBe(5);
+    await sweepCollections(db, world.tenant1.id, 2);
     expect(await countFor()).toBe(5);
   });
 });
