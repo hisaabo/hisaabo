@@ -47,32 +47,17 @@
  *
  * DEPRECATION: remove the legacy signature (`isLegacyV09NativeClient` and its
  * use in `isBearerClient`) in 0.11.0, once v0.9.x apps are no longer supported.
+ * `LEGACY_V09_CLIENT_COMPAT=false` disables it earlier (see legacy-v09-compat.ts).
  */
 
 import { logger } from "./logger.js";
+import { isLegacyV09NativeClient, legacyV09CompatEnabled } from "./legacy-v09-compat.js";
+
+// Re-exported for existing callers/tests; the predicate lives in legacy-v09-compat.ts
+// next to the kill switch (LEGACY_V09_CLIENT_COMPAT=false disables it here too).
+export { isLegacyV09NativeClient };
 
 const NATIVE_CLIENT_HEADER_VALUES = new Set(["desktop", "mobile", "cli"]);
-
-const BROWSER_ONLY_HEADERS = [
-  "origin",
-  "sec-fetch-site",
-  "sec-fetch-mode",
-  "sec-fetch-dest",
-  "sec-fetch-user",
-] as const;
-
-/**
- * @deprecated v0.9.0 compatibility — remove in 0.11.0.
- * True for the header signature the v0.9.0 mobile app sends (see file comment).
- */
-export function isLegacyV09NativeClient(req: Request): boolean {
-  const h = req.headers;
-  if (h.get("x-requested-with") !== "hisaabo") return false;
-  for (const name of BROWSER_ONLY_HEADERS) {
-    if (h.has(name)) return false;
-  }
-  return true;
-}
 
 let loggedLegacyClient = false;
 
@@ -84,7 +69,7 @@ export function isBearerClient(req: Request): boolean {
   const client = req.headers.get("x-hisaabo-client");
   if (client !== null && NATIVE_CLIENT_HEADER_VALUES.has(client)) return true;
 
-  if (isLegacyV09NativeClient(req)) {
+  if (legacyV09CompatEnabled() && isLegacyV09NativeClient(req)) {
     if (!loggedLegacyClient) {
       loggedLegacyClient = true;
       logger.info(

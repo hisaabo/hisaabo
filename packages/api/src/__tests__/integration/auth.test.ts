@@ -18,7 +18,7 @@
  * header so the session-ID extraction path in auth.ts is exercised.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi, type MockInstance } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, type MockInstance } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
@@ -490,40 +490,161 @@ describe("auth.sendMagicLink — email URL shape", () => {
   });
 });
 
-describe("auth.sendMagicLink — Turnstile is never skipped by a client header", () => {
+describe("auth.sendMagicLink — Turnstile enforcement and the DEPRECATED v0.9.x exemption", () => {
+  const db = getControlDb();
   let sendSpy: MockInstance<typeof emailService.sendMagicLink>;
+  const SAVED_COMPAT = process.env.LEGACY_V09_CLIENT_COMPAT;
+
+  // Header shapes. v0.9.0 mobile: X-Requested-With only (no Origin / Sec-Fetch-*).
+  // v0.9.0 desktop (Tauri webview): X-Hisaabo-Client: desktop + a Tauri Origin.
+  const legacyMobile = { "x-requested-with": "hisaabo" };
+  const tauriDesktop = { "x-hisaabo-client": "desktop", origin: "http://tauri.localhost", "x-requested-with": "hisaabo" };
+
+  const callerWith = (headers: Record<string, string>) => _callerFactory(createTestContext({ headers }));
+  const send = (headers: Record<string, string>, email: string, source: "web" | "desktop" | "mobile" = "web") =>
+    callerWith(headers).auth.sendMagicLink({ email, source });
+
   beforeAll(() => {
     sendSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
   });
 
+  beforeEach(() => {
+    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+    delete process.env.LEGACY_V09_CLIENT_COMPAT;
+    sendSpy.mockClear();
+  });
+
+  afterEach(() => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    if (SAVED_COMPAT === undefined) delete process.env.LEGACY_V09_CLIENT_COMPAT;
+    else process.env.LEGACY_V09_CLIENT_COMPAT = SAVED_COMPAT;
+  });
+
   afterAll(() => {
     sendSpy.mockRestore();
-    delete process.env.TURNSTILE_SECRET_KEY;
   });
 
-  it("requires a Turnstile token when TURNSTILE_SECRET_KEY is set, even for X-Hisaabo-Client: desktop", async () => {
-    process.env.TURNSTILE_SECRET_KEY = "test-secret";
-    sendSpy.mockClear();
-    for (const client of [undefined, "desktop", "mobile", "cli"] as const) {
-      await expect(
-        unauthCaller(client).auth.sendMagicLink({ email: "turnstile-required@vyapar.in", source: "web" }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+  const rejected = { code: "BAD_REQUEST", message: "Turnstile verification required" };
+
+  it("legacy mobile shape + existing user: mail is sent and the link ends &source=mobile", async () => {
+    await createUser({ email: "legacy-exempt-existing@vyapar.in", name: "Existing" });
+    await expect(send(legacyMobile, "legacy-exempt-existing@vyapar.in", "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/\/auth\/verify\?token=[^&]+&source=mobile$/);
+  });
+
+  it("legacy mobile shape + unknown email: success, but no mail and no token row", async () => {
+    await expect(send(legacyMobile, "legacy-exempt-unknown@vyapar.in", "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).not.toHaveBeenCalled();
+    const rows = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.email, "legacy-exempt-unknown@vyapar.in"));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("legacy mobile shape + invited email: mail is sent", async () => {
+    const email = "legacy-exempt-invited@vyapar.in";
+    const [tenant] = await db.insert(tenants).values({ name: "Legacy Invite Org", slug: "legacy-invite-" + nanoid(6) }).returning({ id: tenants.id });
+    const inviter = await createUser({ email: "legacy-inviter@vyapar.in", name: "Inviter" });
+    await addMember(tenant!.id, inviter.id, "owner");
+    await db.insert(invitations).values({
+      tenantId: tenant!.id,
+      email,
+      role: "member",
+      token: "invite-" + nanoid(32),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      invitedBy: inviter.id,
+    });
+
+    await expect(send(legacyMobile, email, "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+  });
+
+  it("legacy shape: the 11th link for one address within 24h is silently not sent", async () => {
+    const email = "legacy-exempt-daily@vyapar.in";
+    await createUser({ email, name: "Daily" });
+    // Seed 10 recent tokens spread over the day so the 5-per-15-minutes limit is not what stops it.
+    for (let i = 0; i < 10; i++) {
+      await db.insert(magicLinkTokens).values({
+        email,
+        tokenHash: createHash("sha256").update(`daily-${i}-${nanoid(8)}`).digest("hex"),
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        createdAt: new Date(Date.now() - (i + 1) * 60 * 60 * 1000),
+      });
+    }
+    await expect(send(legacyMobile, email, "mobile")).resolves.toEqual({ success: true });
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("Tauri desktop shape + existing user: mail is sent and the link ends &source=desktop", async () => {
+    await createUser({ email: "legacy-tauri@vyapar.in", name: "Tauri" });
+    // The v0.9.0 desktop webview does not always send `source`; it is inferred from the Tauri shape.
+    await expect(send(tauriDesktop, "legacy-tauri@vyapar.in", "web")).resolves.toEqual({ success: true });
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/\/auth\/verify\?token=[^&]+&source=desktop$/);
+  });
+
+  it("X-Hisaabo-Client: mobile | cli alone is rejected", async () => {
+    for (const client of ["mobile", "cli"]) {
+      await expect(send({ "x-hisaabo-client": client }, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
     }
     expect(sendSpy).not.toHaveBeenCalled();
-    delete process.env.TURNSTILE_SECRET_KEY;
   });
 
-  it("register requires a Turnstile token when configured, even for the desktop client", async () => {
-    process.env.TURNSTILE_SECRET_KEY = "test-secret";
+  it("X-Hisaabo-Client: desktop without a Tauri Origin is rejected (also with a web Origin)", async () => {
+    await expect(send({ "x-hisaabo-client": "desktop" }, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
     await expect(
-      unauthCaller("desktop").auth.register({
-        email: "turnstile-register@vyapar.in",
-        name: "No Token",
-        password: "SecurePass1!",
-        confirmPassword: "SecurePass1!",
-      }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+      send({ "x-hisaabo-client": "desktop", origin: "https://app.example.com" }, "turnstile-required@vyapar.in"),
+    ).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("legacy headers plus an Origin (a browser) are rejected; so is a plain request", async () => {
+    await expect(
+      send({ ...legacyMobile, origin: "https://app.example.com" }, "turnstile-required@vyapar.in"),
+    ).rejects.toMatchObject(rejected);
+    await expect(send({}, "turnstile-required@vyapar.in")).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("LEGACY_V09_CLIENT_COMPAT=false rejects every legacy shape and adds no source suffix", async () => {
+    process.env.LEGACY_V09_CLIENT_COMPAT = "false";
+    await createUser({ email: "legacy-killswitch@vyapar.in", name: "Kill" });
+    await expect(send(legacyMobile, "legacy-killswitch@vyapar.in", "mobile")).rejects.toMatchObject(rejected);
+    await expect(send(tauriDesktop, "legacy-killswitch@vyapar.in", "desktop")).rejects.toMatchObject(rejected);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Without a secret (no Turnstile needed) the handoff suffix is still off.
     delete process.env.TURNSTILE_SECRET_KEY;
+    await send(legacyMobile, "legacy-killswitch@vyapar.in", "mobile");
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).not.toContain("source=");
+  });
+
+  it("without TURNSTILE_SECRET_KEY nothing is gated and legacy callers get the normal behaviour", async () => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    await createUser({ email: "legacy-nosecret@vyapar.in", name: "No Secret" });
+    await send(legacyMobile, "legacy-nosecret@vyapar.in", "mobile");
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(sendSpy.mock.calls[0]![1]).toMatch(/&source=mobile$/);
+  });
+
+  it("register without a Turnstile token is always rejected, for every legacy shape", async () => {
+    const input = {
+      email: "turnstile-register@vyapar.in",
+      name: "No Token",
+      password: "SecurePass1!",
+      confirmPassword: "SecurePass1!",
+    };
+    const shapes: Array<Record<string, string>> = [{}, legacyMobile, { "x-hisaabo-client": "desktop" }, { "x-hisaabo-client": "mobile" }];
+    for (const headers of shapes) {
+      await expect(callerWith(headers).auth.register(input)).rejects.toMatchObject(rejected);
+    }
+    // The Tauri webview gets an actionable message instead.
+    await expect(callerWith(tauriDesktop).auth.register(input)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Update the Hisaabo desktop app to create an account, or sign up in your browser.",
+    });
+    const rows = await db.select().from(users).where(eq(users.email, input.email));
+    expect(rows).toHaveLength(0);
   });
 });
 

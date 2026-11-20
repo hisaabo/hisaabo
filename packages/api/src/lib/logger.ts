@@ -30,7 +30,8 @@ export type SecurityEvent =
   | "csrf_fail"
   | "origin_block"
   | "login_fail"
-  | "login_lockout";
+  | "login_lockout"
+  | "turnstile_legacy_exempt";
 
 export function logSecurityEvent(
   event: SecurityEvent,

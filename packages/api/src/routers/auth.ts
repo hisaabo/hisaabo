@@ -15,6 +15,7 @@ import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { isBearerClient } from "../lib/bearer-client.js";
+import { isLegacyCaptchaExempt, isTauriDesktopRequest, legacyHandoffSource } from "../lib/legacy-v09-compat.js";
 import { MAGIC_LINK_TTL_MS, generateMagicLinkToken, buildMagicLinkUrl } from "../lib/magic-link.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
@@ -27,6 +28,9 @@ import {
   verifyPkceS256,
   buildNativeRedirectUrl,
 } from "../lib/native-auth.js";
+
+// Cap on emailed links per address per 24h for Turnstile-exempt v0.9.x clients.
+const LEGACY_EXEMPT_MAX_LINKS_PER_DAY = 10;
 
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -298,7 +302,15 @@ export const authRouter = router({
     // Self-hosted / dev without the key can skip verification.
     const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
     if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+      // Turnstile stays mandatory for account creation, including for v0.9.x apps
+      // (their sendMagicLink exemption never covers sign-up). The v0.9.0 desktop
+      // webview cannot solve a challenge, so tell it what to do instead.
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: isTauriDesktopRequest(ctx.req)
+          ? "Update the Hisaabo desktop app to create an account, or sign up in your browser."
+          : "Turnstile verification required",
+      });
     }
     if (input.turnstileToken) {
       const ip = getClientIpFromRequest(ctx.req);
@@ -501,9 +513,15 @@ export const authRouter = router({
 
   // ── Magic link: request ──────────────────────────────────────
   sendMagicLink: publicProcedure.input(magicLinkRequestSchema).mutation(async ({ input, ctx }) => {
-    // Turnstile is required whenever a secret key is configured; no client
-    // header can skip it. Dev / self-hosted without the key can omit it.
-    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
+    // Turnstile is required whenever a secret key is configured. Dev / self-hosted
+    // without the key can omit it. The only exception is the DEPRECATED v0.9.x
+    // native-client exemption (lib/legacy-v09-compat.ts, kill switch
+    // LEGACY_V09_CLIENT_COMPAT=false): those apps cannot solve a challenge and
+    // never needed to, so a tokenless request with their exact header signature is
+    // let through, then bounded below (existing/invited users only, 10 links per
+    // address per 24h). A request that carries a token is always verified.
+    const exempt = !input.turnstileToken && isLegacyCaptchaExempt(ctx.req);
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken && !exempt) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
     }
     if (input.turnstileToken) {
@@ -519,6 +537,30 @@ export const authRouter = router({
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)
     const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, email)).limit(1);
+
+    // Legacy (Turnstile-exempt) callers can only trigger mail to people who already
+    // have, or are invited to have, an account, and only a bounded number per
+    // address per day. Same response either way, so nothing is revealed.
+    if (exempt && process.env.TURNSTILE_SECRET_KEY) {
+      if (!existingUser && !(await hasPendingInvitation(controlDb, email))) {
+        return { success: true };
+      }
+      const dayTokens = await controlDb
+        .select({ id: magicLinkTokens.id })
+        .from(magicLinkTokens)
+        .where(and(
+          eq(magicLinkTokens.email, email),
+          gt(magicLinkTokens.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+        ));
+      if (dayTokens.length >= LEGACY_EXEMPT_MAX_LINKS_PER_DAY) {
+        return { success: true };
+      }
+      logSecurityEvent("turnstile_legacy_exempt", {
+        ip: getClientIpFromRequest(ctx.req),
+        path: "/api/trpc/auth.sendMagicLink",
+        reason: isTauriDesktopRequest(ctx.req) ? "desktop" : "mobile",
+      });
+    }
 
     // Closed self-hosted server: unknown, uninvited emails get no link. The
     // response is identical so this reveals nothing.
@@ -555,9 +597,10 @@ export const authRouter = router({
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
 
     // The email CTA is always the HTTPS link: email clients refuse to render
-    // custom URL schemes. `source` is still threaded through for older native
-    // clients whose /auth/verify page hands off to the app.
-    const webUrl = buildMagicLinkUrl(baseUrl, rawToken, input.source);
+    // custom URL schemes. For v0.9.x native clients the link carries
+    // `source=mobile|desktop` so /auth/verify can offer to open the app
+    // (legacyHandoffSource is null — no suffix — when the compat switch is off).
+    const webUrl = buildMagicLinkUrl(baseUrl, rawToken, legacyHandoffSource(ctx.req, input.source) ?? undefined);
 
     await emailService.sendMagicLink(email, webUrl, !existingUser);
 
