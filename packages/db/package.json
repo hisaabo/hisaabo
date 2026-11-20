@@ -12,6 +12,7 @@
   },
   "scripts": {
     "migrate": "tsx src/migrate-cli.ts",
+    "db:reconcile-store-slugs": "tsx src/migrate-cli.ts --reconcile-store-slugs",
     "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle-control.config.ts && drizzle-kit generate --config drizzle-tenant.config.ts",
     "db:generate:unified": "drizzle-kit generate",
     "db:generate:all": "drizzle-kit generate && drizzle-kit generate --config drizzle-control.config.ts && drizzle-kit generate --config drizzle-tenant.config.ts",
@@ -27,8 +28,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "dotenv": "^18.0.5",
-    "drizzle-orm": "^0.45.3",
+    "dotenv": "^18.0.7",
+    "drizzle-orm": "^0.45.4",
     "postgres": "^3.4.9"
   },
   "devDependencies": {

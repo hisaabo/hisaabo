@@ -217,7 +217,7 @@ export const posRouter = router({
         .select()
         .from(items)
         .where(and(...conditions))
-        .orderBy(desc(items.updatedAt))
+        .orderBy(desc(items.updatedAt), desc(items.id))
         .limit(input.limit)
         .offset(offset);
 

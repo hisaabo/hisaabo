@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { useCan } from "@/hooks/useCan";
+import { useActiveBusiness } from "@/hooks/useActiveBusiness";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { BusinessTab, BusinessForm } from "@/components/settings/BusinessTab";
@@ -35,7 +36,7 @@ function NoAccess({ what }: { what: string }) {
 function SettingsPage() {
   const [tab, setTab] = useState(() => sessionStorage.getItem("settings-tab") || "business");
   const handleTabChange = (t: string) => { setTab(t); sessionStorage.setItem("settings-tab", t); };
-  const { data: businesses, isLoading } = trpc.business.list.useQuery();
+  const { isLoading } = trpc.business.list.useQuery();
   const { data: session } = trpc.auth.me.useQuery();
   const [showWhatsNext, setShowWhatsNext] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -45,7 +46,8 @@ function SettingsPage() {
   );
   // "create" = show BusinessForm, "restore" = show RestoreOnboarding
   const [onboardingPath, setOnboardingPath] = useState<"choose" | "create" | "restore">("choose");
-  const biz = businesses?.[0];
+  // The business being worked in (switchable in the sidebar), not simply the first one.
+  const { business: biz } = useActiveBusiness();
   const hasRole = ["owner", "admin", "superadmin"].includes(session?.role ?? "");
   const { data: canCreateBizPlan } = trpc.business.canCreate.useQuery(undefined, {
     enabled: !!session?.tenantId && hasRole,

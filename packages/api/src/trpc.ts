@@ -1,11 +1,12 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
+import { z } from "zod";
 import type { Context } from "./context.js";
-import { getTenantDb, type TenantDatabase, controlDb, businesses, tenantMembers } from "@hisaabo/db";
-import { eq, and } from "drizzle-orm";
+import { getTenantDb, type TenantDatabase } from "@hisaabo/db";
 import { defineAbilityFor, mapDbRole, type AppAbility } from "./lib/permissions.js";
 import { getMaintenanceStatus } from "./lib/maintenance-cache.js";
 import { assertActiveMembership } from "./lib/tenant-access.js";
+import { getBusinessAccess, getMembership, authzDenialError } from "./lib/authz.js";
 
 // ── Middleware context shape interfaces ────────────────────────
 // These represent the enriched context after each middleware runs.
@@ -18,6 +19,17 @@ interface TenantCtx extends Context {
   db: TenantDatabase;
 }
 
+/**
+ * Input-validation failures as "path: message" lines. A ZodError's own
+ * message is its issue list as JSON, whose shape changes between zod
+ * versions; clients show this text to users as-is.
+ */
+export function formatZodIssues(error: z.ZodError): string {
+  return error.issues
+    .map((i) => (i.path.length > 0 ? `${i.path.join(".")}: ${i.message}` : i.message))
+    .join("\n");
+}
+
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
@@ -25,7 +37,11 @@ const t = initTRPC.context<Context>().create({
     const isInternal = error.code === "INTERNAL_SERVER_ERROR";
     return {
       ...shape,
-      message: isInternal ? "Something went wrong. Please try again." : shape.message,
+      message: isInternal
+        ? "Something went wrong. Please try again."
+        : error.cause instanceof z.ZodError
+          ? formatZodIssues(error.cause)
+          : shape.message,
       data: {
         ...shape.data,
         zodError: error.cause instanceof Error ? undefined : null,
@@ -145,34 +161,13 @@ const hasBusinessAccess = t.middleware(async ({ ctx, next }) => {
     throw new TRPCError({ code: "BAD_REQUEST", message: "No business selected" });
   }
 
-  // Verify business exists in this tenant's database (ctx.db injected by hasTenantAccess)
-  const [biz] = await (ctx as unknown as TenantCtx).db.select({
-    id: businesses.id,
-    createdByUserId: businesses.createdByUserId,
-  })
-    .from(businesses)
-    .where(eq(businesses.id, ctx.businessId))
-    .limit(1);
-
-  if (!biz) {
-    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: business not found in tenant DB. businessId:", ctx.businessId, "tenantId:", ctx.tenantId);
-    throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
-  }
-
-  // In self-hosted mode all businesses live in the same DB. Verify the business
-  // creator is a member of the caller's tenant to prevent cross-tenant access.
-  const [creatorMembership] = await controlDb
-    .select({ userId: tenantMembers.userId })
-    .from(tenantMembers)
-    .where(and(
-      eq(tenantMembers.tenantId, ctx.tenantId as string),
-      eq(tenantMembers.userId, biz.createdByUserId),
-    ))
-    .limit(1);
-
-  if (!creatorMembership) {
-    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL: creator not a tenant member. businessId:", ctx.businessId, "createdByUserId:", biz.createdByUserId, "tenantId:", ctx.tenantId);
-    throw new TRPCError({ code: "FORBIDDEN", message: "Business not found" });
+  // Business exists in this tenant's database AND its creator is (still) a
+  // member of the caller's tenant (critical in self-hosted mode where all
+  // tenants share one DB). Cached positive-only (lib/authz.ts).
+  const access = await getBusinessAccess((ctx as unknown as TenantCtx).db, ctx.tenantId as string, ctx.businessId);
+  if (!access.ok) {
+    if (process.env.NODE_ENV === "development") console.log("[hasBusinessAccess] FAIL:", access.reason, "businessId:", ctx.businessId, "tenantId:", ctx.tenantId);
+    throw authzDenialError(access.reason);
   }
 
   return next({
@@ -196,14 +191,9 @@ function withPermissions() {
     const tenantId = ctx.tenantId as string;
     const businessId = ctx.businessId as string;
 
-    const [membership] = await controlDb
-      .select({ role: tenantMembers.role })
-      .from(tenantMembers)
-      .where(and(
-        eq(tenantMembers.tenantId, tenantId),
-        eq(tenantMembers.userId, user.id),
-      ))
-      .limit(1);
+    // Same cached, positive-only membership the tenant middleware used; the
+    // role is re-read per procedure so a role change applies to the next call.
+    const membership = await getMembership(tenantId, user.id);
 
     if (!membership) {
       throw new TRPCError({ code: "FORBIDDEN", message: "No membership found" });

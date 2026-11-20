@@ -55,7 +55,7 @@ function PartyPickerModal({
   const ms = useMs();
   const colors = useColors();
   const [search, setSearch] = useState("");
-  const { data } = trpc.party.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
+  const { data } = trpc.party.list.useQuery({ page: 1, limit: 100 }, { enabled: visible });
   const parties = data?.data ?? [];
   const filtered = search ? parties.filter((p) => p.name.toLowerCase().includes(search.toLowerCase())) : parties;
 
@@ -106,7 +106,7 @@ function ItemPickerModal({
   const ms = useMs();
   const colors = useColors();
   const [search, setSearch] = useState("");
-  const { data } = trpc.item.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
+  const { data } = trpc.item.list.useQuery({ page: 1, limit: 100 }, { enabled: visible });
   const items = data?.data ?? [];
   const filtered = search ? items.filter((i) => i.name.toLowerCase().includes(search.toLowerCase())) : items;
 

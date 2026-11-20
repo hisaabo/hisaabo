@@ -146,7 +146,7 @@ export default function DashboardScreen() {
             <SummaryCard label="Total Purchases" value={formatSummary(summary.totalPurchases)} color={colors.info}
               onPress={() => router.push({ pathname: "/(invoices)", params: { type: "purchase" } })} />
             <SummaryCard label="Receivable" value={formatSummary(summary.receivable)} color={colors.warning}
-              onPress={() => router.push({ pathname: "/(invoices)", params: { type: "sale", status: "unpaid" } })} />
+              onPress={() => router.push({ pathname: "/(more)/reports", params: { section: "aging" } })} />
             <SummaryCard label="Payable" value={formatSummary(summary.payable)} color={colors.danger}
               onPress={() => router.push({ pathname: "/(invoices)", params: { type: "purchase", status: "unpaid" } })} />
             <SummaryCard label="Cash in Hand" value={formatSummary(summary.cashInHand)} color={colors.brand}

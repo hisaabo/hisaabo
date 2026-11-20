@@ -101,7 +101,10 @@ hisaabo whoami
 | `item stock <id> <adjustment>` | Adjust stock (+10, -5, or set to 100) |
 | `item update <id>` | Update an item (only the options you pass change) |
 | `item merge <sourceId> <targetId>` | Merge one item into another (`--conversion-factor`) |
-| `item price-history <id>` | Past invoiced prices for an item |
+| `item price-history <id>` | Past invoiced prices for an item (`--period 6m\|1y\|all`, `--limit`) |
+| `item price-summary <id>` | Min/max/avg/latest price over a period (`--period`, `--unit`, `--type sale\|purchase`) |
+| `item stock-movements <id>` | Invoice-driven stock in/out (`--period`, `--limit`) |
+| `item stock-summary <id>` | Total stock in/out/net over a period (`--period`, `--unit`) |
 | `item sales-stats <id>` | Lifetime sales totals for an item |
 | `item stock-history <id>` | Stock adjustment history |
 | `item rename-unit <id> --old <u> --new <u>` | Rename one of an item's units |

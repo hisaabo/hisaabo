@@ -1,17 +1,23 @@
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { keepPreviousData } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatQuantity, formatDate, cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Pagination } from "@/components/ui/Pagination";
 import { PillTabs } from "@/components/ui/Tabs";
 import { SegmentedControl } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SlideOver } from "@/components/ui/SlideOver";
+import { DocumentLineItemName } from "@/components/DocumentLineItemName";
 import { DocumentCreator, type DocumentType } from "@/components/DocumentCreator";
 import { toast } from "@/hooks/useToast";
 import { checkDocumentStatusTransition } from "@hisaabo/shared";
 import { useCan, useCanCreateDocument } from "@/hooks/useCan";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -98,6 +104,8 @@ function isTransitionAllowed(documentType: string, from: string, to: string): bo
 
 // ── Component ─────────────────────────────────────────────────────
 
+const PAGE_SIZE = 50;
+
 const typeOptions = [
   { value: "sale", label: "Sales" },
   { value: "purchase", label: "Purchases" },
@@ -133,6 +141,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
     hasTypeFilter ? "sale" : defaultInvoiceType
   );
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   // All these document types are Invoice-backed on the server, so the role
   // permission they require is "create:Invoice" / "update:Invoice" /
@@ -141,15 +150,26 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   // convert controls follow the active sale/purchase side.
   const canCreate = useCanCreateDocument(documentType, type);
   const canUpdate = useCan("update", "Invoice");
+  // Keyboard shortcut: N to create a new document (same as Invoices)
+  useHotkeys(canCreate ? [
+    { key: "n", handler: () => setShowCreate(true), description: `New ${title.replace(/s$/, "").toLowerCase()}`, scope: "invoices" },
+  ] : []);
   const canDelete = useCan("delete", "Invoice");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNumber, setDeleteNumber] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
-
-  // Auto-open slider when navigated with ?id= param
-  useEffect(() => {
-    if (initialSelectedId) setSelectedId(initialSelectedId);
-  }, [initialSelectedId]);
+  // The open document lives in the URL (?id=, passed in as initialSelectedId by
+  // the route wrapper) so a line-item link to /items can return here with the
+  // browser back button. Opening pushes a history entry; closing replaces it.
+  const navigate = useNavigate();
+  const selectedId = initialSelectedId ?? null;
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      // The wrappers are all `/<route>?id=` pages, so navigate within the current one.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (navigate as any)({ to: ".", search: id ? { id } : {}, replace: !id });
+    },
+    [navigate],
+  );
 
   const utils = trpc.useUtils();
 
@@ -172,8 +192,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
   const { data, isLoading } = router.list.useQuery({
     type,
     status: (status || undefined) as never,
-    page: 1,
-    limit: 50,
+    page,
+    limit: PAGE_SIZE,
+  }, {
+    // Keep the current rows visible while the next page loads.
+    placeholderData: keepPreviousData,
   });
 
   const updateStatus = router.updateStatus.useMutation({
@@ -214,8 +237,9 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
         description={description}
         actions={
           canCreate ? (
-            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setShowCreate(true)}>
               {buttonLabel}
+              <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
             </button>
           ) : null
         }
@@ -233,11 +257,11 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
           <SegmentedControl
             tabs={typeOptions}
             value={type}
-            onChange={(v) => setType(v as "sale" | "purchase")}
+            onChange={(v) => { setType(v as "sale" | "purchase"); setPage(1); }}
           />
         )}
         <div className={hasTypeFilter ? "ml-auto" : undefined}>
-          <PillTabs tabs={statusTabs} value={status} onChange={setStatus} />
+          <PillTabs tabs={statusTabs} value={status} onChange={(v) => { setStatus(v); setPage(1); }} />
         </div>
       </div>
 
@@ -371,6 +395,13 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
               ))}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            totalPages={Math.ceil(data.total / PAGE_SIZE)}
+            onPageChange={setPage}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+          />
         </div>
       )}
 
@@ -482,7 +513,7 @@ export function DocumentListPage({ config, initialSelectedId }: DocumentListPage
                     {selectedDoc.lineItems.map((li: any) => (
                       <tr key={li.id}>
                         <td className="px-3 py-2">
-                          <p className="font-medium text-text-primary">{li.itemName}</p>
+                          <DocumentLineItemName itemId={li.itemId} name={li.itemName} />
                           {li.description && (
                             <p className="text-[11px] italic text-text-secondary mt-0.5">{li.description}</p>
                           )}

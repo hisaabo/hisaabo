@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, text, timestamp, uuid, pgEnum, index, uniqueIndex, boolean, jsonb, check } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────
 
@@ -193,6 +193,63 @@ export const systemConfig = pgTable("system_config", {
   value: jsonb("value").notNull().default({}),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ── Store slug registry ───────────────────────────────────────
+//
+// Global (cross-tenant) registry of public storefront slugs, used only in
+// multi-tenant mode so /store/<slug> resolves with one PK lookup instead of
+// scanning every tenant DB.
+//
+// Semantics (enforced by application code, see the slug-registry design):
+//   - A LIVE row has released_at IS NULL: the slug is owned by business_id.
+//   - Renaming/clearing a slug does NOT delete the row; it sets
+//     released_at = now() on the old row. The slug stays reserved (PK) so old
+//     links cannot be hijacked immediately.
+//   - A released slug can be reclaimed by the SAME tenant at any time, and by
+//     a DIFFERENT tenant only once released_at < now() - interval '30 days'.
+//   - A business has at most one live slug (partial unique index below, scoped
+//     by tenant); it may have any number of released rows.
+//
+// Indexes (every index taxes writes, so the set is deliberately minimal;
+// write rate is a handful of store-settings saves per day, but each index
+// still has to earn its place):
+//   1. PRIMARY KEY (slug): the hot public lookup and global uniqueness.
+//   2. PARTIAL UNIQUE (tenant_id, business_id) WHERE released_at IS NULL:
+//      enforces one live slug per business and is the access path for rename/
+//      disable/checkSlug. Partial so released history rows are neither indexed
+//      nor constrained. Scoped by tenant on purpose: self-import inserts
+//      business rows whose ids come from an untrusted backup file, so a global
+//      unique index on business_id would let a crafted backup squat another
+//      tenant's business id and block that tenant's registration.
+// Deliberately NOT indexed: tenant_id (only used by the FK cascade, which the
+// app never triggers; the table is O(#stores)), store_enabled and released_at
+// (filtered after the PK hit; the reclaim check is also a PK hit).
+//
+// business_id has no FK: it points into a tenant database. It is NOT globally
+// unique and must never be used alone to identify a registry row.
+//
+// WRITE RULES (enforced by the single registry module in packages/api):
+//   - All registry writes go through that one module.
+//   - tenant_id always comes from the authenticated server context (or, in the
+//     backfill, from the control `tenants` row being scanned), never from
+//     request input or any value read out of a tenant database.
+//   - Updating or releasing an existing live row is allowed only when
+//     row.tenant_id = caller tenant (SQL WHERE / ON CONFLICT ... WHERE
+//     store_slugs.tenant_id = EXCLUDED.tenant_id). A released slug may be
+//     claimed by another tenant only via the 30-day rule above.
+//   - The slug-format CHECK stays as defence in depth.
+export const storeSlugs = pgTable("store_slugs", {
+  slug: text("slug").primaryKey(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull(),
+  storeEnabled: boolean("store_enabled").notNull(),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("store_slugs_live_business_idx").on(t.tenantId, t.businessId).where(sql`${t.releasedAt} IS NULL`),
+  check("store_slugs_slug_format", sql`${t.slug} ~ '^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$'`),
+]);
 
 // ── Relations ──────────────────────────────────────────────────
 

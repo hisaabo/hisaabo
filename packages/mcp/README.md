@@ -150,6 +150,10 @@ Up to 180 tools across all business domains, depending on the [safety mode](#saf
 | `item_rename_unit` | Rename a unit across all linked invoice line items |
 | `item_stock_adjustment_history` | View the audit log of stock adjustments |
 | `item_low_stock_count` | Count items below their low-stock alert threshold |
+| `item_price_history` | Recent invoiced prices for an item (period, limit) |
+| `item_price_summary` | Min/max/avg/latest price and series over a period |
+| `item_stock_movements` | Recent invoice-driven stock movements (period, limit) |
+| `item_stock_summary` | Stock in/out/net and balance series over a period |
 
 ### Payments
 

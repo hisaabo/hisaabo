@@ -463,7 +463,7 @@ function ShipmentsPage() {
 
   const loadMore = useCallback(() => setPage((p) => p + 1), []);
 
-  const { data, isFetching, isLoading } = trpc.shipment.list.useQuery({
+  const { data, isFetching, isLoading, isPlaceholderData } = trpc.shipment.list.useQuery({
     status: (status || undefined) as ShipmentStatus | undefined,
     page,
     limit: PAGE_SIZE,
@@ -477,6 +477,7 @@ function ShipmentsPage() {
     total: data?.total ?? 0,
     page,
     isFetching,
+    isPlaceholderData,
     onLoadMore: loadMore,
     resetDeps: [status],
   });

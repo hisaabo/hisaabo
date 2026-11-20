@@ -68,8 +68,11 @@ export function validateEnv(): void {
   }
 
   const encKey = process.env.ENCRYPTION_KEY;
-  if (encKey && process.env.NODE_ENV === "production" && !isValidEncryptionKey(encKey)) {
-    errors.push("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes) in production.");
+  // Multi-tenant stores per-tenant DB passwords; without a valid key they would
+  // be written in plaintext (crypto.ts encryptField falls back to plaintext).
+  const needsStrictKey = process.env.NODE_ENV === "production" || process.env.MULTI_TENANT === "true";
+  if (encKey && needsStrictKey && !isValidEncryptionKey(encKey)) {
+    errors.push("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes) in production and multi-tenant mode.");
   }
   if (
     process.env.NODE_ENV === "production" &&

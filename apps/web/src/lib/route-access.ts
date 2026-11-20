@@ -23,3 +23,28 @@ export function findRoutePermission(pathname: string, navItems: NavLike[]): Rout
   }
   return null;
 }
+
+type VisibleNavLike = NavLike & { label: string; gstOnly?: boolean };
+
+/**
+ * Nav items a user can see: role-permitted, GST-only entries hidden for
+ * unregistered businesses, and the compliance/report labels adjusted. Shared by
+ * the sidebar and the command palette so the two cannot drift.
+ */
+export function getVisibleNavItems<T extends VisibleNavLike>(
+  items: T[],
+  canAccess: (resource: Resource, action: Action) => boolean,
+  isGstRegistered: boolean,
+): T[] {
+  return items
+    .filter((item) => canAccess(item.resource, item.action) && (!item.gstOnly || isGstRegistered))
+    .map((item) => {
+      if (item.to === "/gst") {
+        return { ...item, label: isGstRegistered ? "GST Returns" : "Tax Reports" };
+      }
+      if (item.to === "/reports") {
+        return { ...item, label: "Business Reports" };
+      }
+      return item;
+    });
+}

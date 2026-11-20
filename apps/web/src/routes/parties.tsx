@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, formatDate, getInitials, cn, downloadCSV, toISOString } from "@/lib/utils";
 import { toast } from "@/hooks/useToast";
@@ -25,6 +25,12 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
 export const Route = createFileRoute("/parties")({
+  // ?id= opens the party detail panel and ?tab= selects its tab, so browser
+  // back from a linked document returns to the same party/tab.
+  validateSearch: (search: Record<string, unknown>): { id?: string; tab?: string } => ({
+    id: typeof search.id === "string" && search.id ? search.id : undefined,
+    tab: typeof search.tab === "string" && search.tab ? search.tab : undefined,
+  }),
   component: PartiesPage,
 });
 
@@ -53,7 +59,13 @@ function PartiesPage() {
   const [page, setPage] = useState(1);
   const [showAddModal, setShowAddModal] = useState(false);
   const deleteConfirm = useDeleteConfirmation();
-  const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const { id: idFromSearch } = useSearch({ from: "/parties" });
+  const selectedPartyId = idFromSearch ?? null;
+  // Opening pushes history; closing replaces so back never re-opens a dismissed panel.
+  const setSelectedPartyId = (id: string | null) => {
+    navigate({ to: "/parties", search: id ? { id } : {}, replace: !id });
+  };
   const [exporting, setExporting] = useState(false);
   const canCreate = useCan("create", "Party");
   const canDelete = useCan("delete", "Party");
@@ -342,7 +354,11 @@ const PARTY_DETAIL_TABS = [
 ];
 
 function PartyDetailPanel({ partyId, onClose }: { partyId: string; onClose: () => void }) {
-  const [tab, setTab] = useState("overview");
+  const { tab: tabFromSearch } = useSearch({ from: "/parties" });
+  const tab = PARTY_DETAIL_TABS.some((t) => t.value === tabFromSearch) ? (tabFromSearch as string) : "overview";
+  const setTab = (next: string) => {
+    navigate({ to: "/parties", search: { id: partyId, tab: next }, replace: true });
+  };
   const [showMerge, setShowMerge] = useState(false);
   const navigate = useNavigate();
   // party.merge deletes the source party, so the API requires delete:Party.

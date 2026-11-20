@@ -75,7 +75,7 @@ function PartyPickerModal({ visible, onSelect, onClose }: PartyPickerProps) {
   const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery(
-    { type: "customer", page: 1, limit: 200 },
+    { type: "customer", page: 1, limit: 100 },
     { enabled: visible }
   );
   const parties = data?.data ?? [];
@@ -143,7 +143,7 @@ function ItemPickerModal({ visible, onSelect, onClose }: ItemPickerProps) {
   const modalStyles = useModalStyles();
   const colors = useColors();
   const [search, setSearch] = useState("");
-  const { data } = trpc.item.list.useQuery({ page: 1, limit: 200 }, { enabled: visible });
+  const { data } = trpc.item.list.useQuery({ page: 1, limit: 100 }, { enabled: visible });
   const items = data?.data ?? [];
   const filtered = search
     ? items.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()))

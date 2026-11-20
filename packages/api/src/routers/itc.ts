@@ -173,7 +173,7 @@ export const itcRouter = router({
         .leftJoin(invoices, eq(itcLedgerEntries.invoiceId, invoices.id))
         .leftJoin(parties, eq(invoices.partyId, parties.id))
         .where(and(...conditions))
-        .orderBy(desc(itcLedgerEntries.createdAt))
+        .orderBy(desc(itcLedgerEntries.createdAt), desc(itcLedgerEntries.id))
         .limit(input.limit)
         .offset(offset);
 
@@ -640,29 +640,26 @@ export const itcRouter = router({
       // 4A2: Import of services (not tracked yet — always 0)
       const row4A2 = { cgst: ZERO, sgst: ZERO, igst: ZERO, cess: ZERO, total: ZERO };
 
-      // 4A3: Inward supplies liable to reverse charge (available)
-      const row4A3 = await sumItc([
-        eq(itcLedgerEntries.isReverseCharge, true),
-        eq(itcLedgerEntries.status, "available"),
+      const [row4A3, row4A5, row4B1, row4B2, row4D_reversed] = await Promise.all([
+        // 4A3: Inward supplies liable to reverse charge (available)
+        sumItc([
+          eq(itcLedgerEntries.isReverseCharge, true),
+          eq(itcLedgerEntries.status, "available"),
+        ]),
+        // 4A5: All other ITC (non-RCM, available)
+        sumItc([
+          eq(itcLedgerEntries.isReverseCharge, false),
+          eq(itcLedgerEntries.status, "available"),
+        ]),
+        // 4B1: ITC reversed per Rules 42 & 43
+        sumItc([sql`${itcLedgerEntries.reversalReason} IN ('rule_42', 'rule_43')`]),
+        // 4B2: ITC reversed per Section 17(5) — blocked entries (also 4D blocked)
+        sumItc([eq(itcLedgerEntries.status, "blocked")]),
+        // 4D: reversed entries
+        sumItc([eq(itcLedgerEntries.status, "reversed")]),
       ]);
-
-      // 4A5: All other ITC (non-RCM, available)
-      const row4A5 = await sumItc([
-        eq(itcLedgerEntries.isReverseCharge, false),
-        eq(itcLedgerEntries.status, "available"),
-      ]);
-
-      // 4B1: ITC reversed per Rules 42 & 43
-      const row4B1 = await sumItc([
-        sql`${itcLedgerEntries.reversalReason} IN ('rule_42', 'rule_43')`,
-      ]);
-
-      // 4B2: ITC reversed per Section 17(5) — blocked entries
-      const row4B2 = await sumItc([eq(itcLedgerEntries.status, "blocked")]);
-
-      // 4D: Total ineligible ITC (blocked + reversed)
-      const row4D_blocked = await sumItc([eq(itcLedgerEntries.status, "blocked")]);
-      const row4D_reversed = await sumItc([eq(itcLedgerEntries.status, "reversed")]);
+      // 4D: Total ineligible ITC (blocked + reversed) — blocked is the same query as 4B2
+      const row4D_blocked = row4B2;
 
       // Compute totals for each section
       const toTaxRow = (r: typeof row4A1) => ({

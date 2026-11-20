@@ -1650,13 +1650,13 @@ function InvoiceCreateForm() {
   const [activeLineIndex, setActiveLineIndex] = useState(0);
 
   // G-08: fetch full item list so LineItemRow can read unitVariants
-  const { data: allItemsData } = trpc.item.list.useQuery({ page: 1, limit: 200 });
+  const { data: allItemsData } = trpc.item.list.useQuery({ page: 1, limit: 100 });
   const allItems = allItemsData?.data ?? [];
 
   // OPT-04: fetch party details when a party is selected (for creditPeriodDays)
   const partyType = invoiceType === "sale" ? "customer" : "supplier";
   const { data: partiesData } = trpc.party.list.useQuery(
-    { type: partyType, page: 1, limit: 200 },
+    { type: partyType, page: 1, limit: 100 },
     { enabled: showPartyPicker || selectedParty !== null }
   );
 

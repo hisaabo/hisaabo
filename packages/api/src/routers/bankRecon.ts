@@ -29,6 +29,7 @@ import {
   bankReconColumnMappingSchema,
   confirmBankMappingSchema,
   bankCategorizationRuleSchema,
+  partialWithoutDefaults,
   paginationSchema,
   createExpenseSchema,
   money,
@@ -444,7 +445,7 @@ export const bankReconRouter = router({
           .select()
           .from(bankStatementImports)
           .where(and(...conditions))
-          .orderBy(desc(bankStatementImports.createdAt))
+          .orderBy(desc(bankStatementImports.createdAt), desc(bankStatementImports.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db
@@ -522,7 +523,7 @@ export const bankReconRouter = router({
           .select()
           .from(bankStatementLines)
           .where(and(...conditions))
-          .orderBy(bankStatementLines.lineNumber)
+          .orderBy(bankStatementLines.lineNumber, bankStatementLines.id)
           .limit(input.limit)
           .offset(offset),
         ctx.db
@@ -1135,7 +1136,7 @@ export const bankReconRouter = router({
   ruleUpdate: adminProcedure
     .input(z.object({
       id: z.string().uuid(),
-      data: bankCategorizationRuleSchema.partial().extend({
+      data: partialWithoutDefaults(bankCategorizationRuleSchema).extend({
         isActive: z.boolean().optional(),
       }),
     }))

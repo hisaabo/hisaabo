@@ -68,7 +68,7 @@ function PartyPickerModal({ visible, type, onSelect, onClose }: PartyPickerProps
   const partyType = type === "sale" ? "customer" : "supplier";
 
   const { data } = trpc.party.list.useQuery(
-    { type: partyType, page: 1, limit: 200 },
+    { type: partyType, page: 1, limit: 100 },
     { enabled: visible }
   );
 
@@ -155,7 +155,7 @@ function ItemPickerModal({ visible, invoiceType, onSelect, onClose }: ItemPicker
   const [search, setSearch] = useState("");
 
   const { data } = trpc.item.list.useQuery(
-    { page: 1, limit: 200 },
+    { page: 1, limit: 100 },
     { enabled: visible }
   );
 

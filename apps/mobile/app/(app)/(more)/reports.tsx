@@ -6,9 +6,9 @@ import {
   RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { trpc } from "../../../src/lib/trpc";
 import { useBusinessStore } from "../../../src/stores/business";
 import { formatCurrency } from "../../../src/lib/utils";
@@ -94,6 +94,9 @@ export default function ReportsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const router = useRouter();
+  // ?section=aging (from the home Receivable card) scrolls to the aging table
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  const scrollRef = useRef<ScrollView>(null);
   const { businessId } = useBusinessStore();
   const [period, setPeriod] = useState<Period>("fy");
   const [customFrom, setCustomFrom] = useState<Date | null>(null);
@@ -108,7 +111,12 @@ export default function ReportsScreen() {
     cancelled: colors.textMuted,
   }), [colors]);
 
-  const dates = getPeriodDates(period, customFrom, customTo);
+  // Memoised: getPeriodDates embeds `new Date().toISOString()`, which would
+  // otherwise change the query key on every render.
+  const dates = useMemo(
+    () => getPeriodDates(period, customFrom, customTo),
+    [period, customFrom, customTo],
+  );
 
   const {
     data: plData,
@@ -171,6 +179,7 @@ export default function ReportsScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -254,7 +263,14 @@ export default function ReportsScreen() {
         </Card>
 
         {/* Receivables Aging */}
-        <Text style={styles.sectionTitle}>Receivables Aging</Text>
+        <Text
+          style={styles.sectionTitle}
+          onLayout={(e) => {
+            if (section === "aging") scrollRef.current?.scrollTo({ y: e.nativeEvent.layout.y, animated: true });
+          }}
+        >
+          Receivables Aging
+        </Text>
         <Card style={styles.card}>
           {agingLoading ? (
             <Skeleton width="100%" height={100} borderRadius={6} />
@@ -274,23 +290,30 @@ export default function ReportsScreen() {
                 <Text style={styles.emptyText}>No outstanding receivables</Text>
               ) : (
                 agingData.rows.map((row) => (
-                  <View key={row.partyId} style={styles.agingRow}>
-                    <Text style={[styles.agingCell, styles.agingPartyCell]} numberOfLines={1}>
+                  <TouchableOpacity
+                    key={row.partyId}
+                    style={styles.agingRow}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ledger for ${row.partyName}`}
+                    onPress={() => router.push(`/(app)/(parties)/${row.partyId}` as never)}
+                  >
+                    <Text style={[styles.agingCell, styles.agingPartyCell, { color: colors.brand }]} numberOfLines={1}>
                       {row.partyName}
                     </Text>
-                    <Text style={[styles.agingCell, parseFloat(row.current) > 0 && { color: colors.success }]}>
-                      {parseFloat(row.current) > 0 ? formatCurrency(row.current) : "-"}
+                    <Text style={[styles.agingCell, parseFloat(row.current) !== 0 && { color: colors.success }]}>
+                      {parseFloat(row.current) !== 0 ? formatCurrency(row.current) : "-"}
                     </Text>
-                    <Text style={[styles.agingCell, parseFloat(row.days31_60) > 0 && { color: colors.warning }]}>
-                      {parseFloat(row.days31_60) > 0 ? formatCurrency(row.days31_60) : "-"}
+                    <Text style={[styles.agingCell, parseFloat(row.days31_60) !== 0 && { color: colors.warning }]}>
+                      {parseFloat(row.days31_60) !== 0 ? formatCurrency(row.days31_60) : "-"}
                     </Text>
-                    <Text style={[styles.agingCell, parseFloat(row.days61_90) > 0 && { color: colors.amber }]}>
-                      {parseFloat(row.days61_90) > 0 ? formatCurrency(row.days61_90) : "-"}
+                    <Text style={[styles.agingCell, parseFloat(row.days61_90) !== 0 && { color: colors.amber }]}>
+                      {parseFloat(row.days61_90) !== 0 ? formatCurrency(row.days61_90) : "-"}
                     </Text>
-                    <Text style={[styles.agingCell, parseFloat(row.days90Plus) > 0 && { color: colors.danger }]}>
-                      {parseFloat(row.days90Plus) > 0 ? formatCurrency(row.days90Plus) : "-"}
+                    <Text style={[styles.agingCell, parseFloat(row.days90Plus) !== 0 && { color: colors.danger }]}>
+                      {parseFloat(row.days90Plus) !== 0 ? formatCurrency(row.days90Plus) : "-"}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 ))
               )}
               {agingData.rows.length > 0 && (

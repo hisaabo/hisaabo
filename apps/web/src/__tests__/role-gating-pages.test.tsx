@@ -278,14 +278,21 @@ describe("Invoices page", () => {
   });
 
   describe("detail panel", () => {
+    let view: ReturnType<typeof renderAs>;
     function openPanel(role: string, inv: Record<string, unknown>) {
       stub.data["invoice.list"] = { data: [inv], total: 1 };
       stub.data["invoice.getById"] = inv;
-      renderAs(role, Invoices);
-      // Real user path: the panel is mounted with no selection, then a row
-      // click selects an invoice. This transition is what crashed when the
+      // The open invoice lives in the URL (?id=). Render with no selection,
+      // click a row (which navigates), then re-render with the new search —
+      // the no-selection -> selected transition is what crashed when the
       // permission hook ran after the panel's early return.
+      view = renderAs(role, Invoices);
       fireEvent.click(screen.getByText("INV-001"));
+      expect(stub.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "/invoices", search: { id: (inv as { id: string }).id } }),
+      );
+      stub.search = { id: (inv as { id: string }).id };
+      view.rerender(<Invoices />);
       return screen.getByRole("dialog");
     }
 
@@ -307,6 +314,9 @@ describe("Invoices page", () => {
       const panel = openPanel("seller", invoice());
       expect(screen.getByRole("dialog", { name: "Invoice INV-001" })).toBe(panel);
       fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+      // Edit closes the detail panel by clearing ?id= from the URL.
+      stub.search = {};
+      view.rerender(<Invoices />);
       expect(screen.queryByRole("dialog", { name: "Invoice INV-001" })).not.toBeInTheDocument();
       expect(screen.getByRole("dialog", { name: "Edit Invoice" })).toBeInTheDocument();
     });

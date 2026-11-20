@@ -1026,7 +1026,7 @@ describe("invoice.delete", () => {
   it("deleting a non-existent invoice returns success gracefully", async () => {
     const caller = callerForRamesh();
 
-    const result = await caller.invoice.delete({ id: "00000000-0000-0000-0000-000000000001" });
+    const result = await caller.invoice.delete({ id: "00000000-0000-4000-8000-000000000001" });
     expect(result.success).toBe(true);
   });
 });

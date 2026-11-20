@@ -71,13 +71,13 @@ const hasBusinessAccessMw = businessMiddlewares[businessMiddlewares.length - 1];
 type AnyProc = { _def: { type: string; inputs?: unknown[]; middlewares: unknown[] } };
 const procedures = (appRouter as unknown as { _def: { procedures: Record<string, AnyProc> } })._def.procedures;
 
-/** Unwrap zod effect/optional/nullable/default wrappers down to the core type. */
+/** Unwrap zod pipe/optional/nullable/default wrappers down to the core type. */
 function unwrapZod(schema: unknown): any {
   let s: any = schema;
   for (let i = 0; i < 10 && s; i++) {
-    const tn = s?._def?.typeName;
-    if (tn === "ZodEffects") s = s._def.schema;
-    else if (tn === "ZodOptional" || tn === "ZodNullable" || tn === "ZodDefault") s = s._def.innerType;
+    const def = s?._zod?.def;
+    if (def?.type === "pipe") s = def.in;
+    else if (["optional", "nullable", "default", "prefault", "readonly", "catch"].includes(def?.type)) s = def.innerType;
     else break;
   }
   return s;
@@ -87,10 +87,9 @@ function unwrapZod(schema: unknown): any {
 function inputFieldNames(p: AnyProc): string[] {
   const keys = new Set<string>();
   for (const inp of p._def.inputs ?? []) {
-    const s = unwrapZod(inp);
-    if (s?._def?.typeName === "ZodObject") {
-      const shape = typeof s._def.shape === "function" ? s._def.shape() : s.shape;
-      for (const k of Object.keys(shape ?? {})) keys.add(k);
+    const def = unwrapZod(inp)?._zod?.def;
+    if (def?.type === "object") {
+      for (const k of Object.keys(def.shape ?? {})) keys.add(k);
     }
   }
   return [...keys];
@@ -150,5 +149,8 @@ describe("authorization coverage — every id-accepting procedure is ownership-g
     // and silently makes throughBusinessAccess() always false.
     expect(typeof hasBusinessAccessMw).toBe("function");
     expect(businessMiddlewares.length).toBe(4); // csrf, isAuthenticated, hasTenantAccess, hasBusinessAccess
+    // Input introspection depends on zod internals; if it stops finding id
+    // fields, the coverage check above would pass vacuously.
+    expect(Object.values(procedures).filter(acceptsClientId).length).toBeGreaterThan(100);
   });
 });

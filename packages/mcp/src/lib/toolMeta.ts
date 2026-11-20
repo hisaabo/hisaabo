@@ -159,6 +159,10 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   item_rename_unit: W,
   item_stock_adjustment_history: R,
   item_low_stock_count: R,
+  item_price_history: R,
+  item_price_summary: R,
+  item_stock_movements: R,
+  item_stock_summary: R,
 
   // journal
   journal_list: R,

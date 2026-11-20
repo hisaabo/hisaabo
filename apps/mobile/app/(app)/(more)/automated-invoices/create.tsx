@@ -76,7 +76,7 @@ function PartyPickerModal({ visible, onSelect, onClose }: PartyPickerProps) {
   const colors = useColors();
   const [search, setSearch] = useState("");
   const { data } = trpc.party.list.useQuery(
-    { page: 1, limit: 200 },
+    { page: 1, limit: 100 },
     { enabled: visible }
   );
   const parties = data?.data ?? [];

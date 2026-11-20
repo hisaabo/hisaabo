@@ -120,6 +120,7 @@ export const trpcModule = {
   trpc: node([]),
   getBusinessId: () => "biz-1",
   setBusinessId: vi.fn(),
+  subscribeBusinessId: () => () => {},
   queryClient: { invalidateQueries: vi.fn(), clear: vi.fn() },
 };
 

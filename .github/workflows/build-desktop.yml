@@ -46,7 +46,7 @@ jobs:
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -90,9 +90,22 @@ jobs:
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
 
       - name: Install Tauri CLI
-        # Pinned (no --force / floating ^2): a compromised or breaking tauri-cli
+        # Pinned (never a floating ^2): a compromised or breaking tauri-cli
         # release must not flow silently into signed-release builds.
-        run: cargo install tauri-cli --version "=2.12.1" --locked
+        # The Rust cache restores ~/.cargo/bin without cargo's install
+        # metadata, so a plain `cargo install` refuses to overwrite the cached
+        # binary. Reuse it only when it is exactly the pinned version;
+        # otherwise reinstall the pinned version over it.
+        shell: bash
+        env:
+          TAURI_CLI_VERSION: "2.12.1"
+        run: |
+          if [ "$(cargo tauri --version 2>/dev/null)" = "tauri-cli ${TAURI_CLI_VERSION}" ]; then
+            echo "Using cached tauri-cli ${TAURI_CLI_VERSION}"
+          else
+            cargo install tauri-cli --version "=${TAURI_CLI_VERSION}" --locked --force
+          fi
+          cargo tauri --version
 
       - name: Note optional Tauri updater signing key
         env:
@@ -123,7 +136,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-${{ github.sha }}
           path: ${{ matrix.artifact_paths }}

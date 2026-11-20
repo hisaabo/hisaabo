@@ -37,3 +37,14 @@ vulnerabilities:
     statement: >-
       image-size 1.2.1 via Expo/Metro dev toolchain only; fix requires 2.x
       which Metro does not support. Re-check on Expo/Metro upgrades.
+  # decode-uri-component 0.2.2 via apps/mobile > expo-router > query-string@7.
+  # The only patched release (0.5.1) is ESM-only and query-string@7 loads it
+  # with require(), so an override breaks every query-string parse; expo-router
+  # 58 drops query-string. Client-side DoS only. See SECURITY.md.
+  - id: CVE-2026-118664
+    paths:
+      - pnpm-lock.yaml
+    statement: >-
+      decode-uri-component 0.2.2 via expo-router > query-string@7; fix 0.5.1 is
+      ESM-only and incompatible with query-string@7's require(). Re-check on
+      Expo SDK 58 upgrade.

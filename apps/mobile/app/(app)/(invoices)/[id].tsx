@@ -26,6 +26,7 @@ import { makeStyles } from "../../../src/lib/makeStyles";
 import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../src/components/ui";
+import { LineItemNameLink } from "../../../src/components/LineItemNameLink";
 import { useCan, useCanModify, useCanCreateDocument } from "../../../src/hooks/useCan";
 
 type StatusKey = "draft" | "unfulfilled" | "sent" | "paid" | "partial" | "overdue" | "cancelled" | "adjusted";
@@ -716,9 +717,7 @@ export default function InvoiceDetailScreen() {
                 <View style={styles.tableDescCol}>
                   {/* Bug B: itemName is the primary display, description is
                       the optional italic notes line underneath. */}
-                  <Text style={styles.lineDesc} numberOfLines={2}>
-                    {li.itemName}
-                  </Text>
+                  <LineItemNameLink itemId={li.itemId} name={li.itemName} style={styles.lineDesc} />
                   {li.description && li.description.trim().length > 0 && (
                     <Text style={styles.lineNotes} numberOfLines={3}>
                       {li.description}

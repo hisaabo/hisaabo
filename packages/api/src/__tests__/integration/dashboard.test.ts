@@ -281,7 +281,7 @@ describe("dashboard.summary", () => {
     expect(result.totalSales).toBe("0");
     expect(result.totalPurchases).toBe("0");
     expect(result.totalExpenses).toBe("0");
-    expect(result.receivable).toBe("0");
+    expect(parseFloat(result.receivable)).toBe(0);
   });
 });
 

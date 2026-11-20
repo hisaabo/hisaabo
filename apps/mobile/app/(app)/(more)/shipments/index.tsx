@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../../../../src/lib/trpc";
 import { formatDate } from "../../../../src/lib/utils";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import {
@@ -82,6 +83,7 @@ export default function ShipmentsScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [docs, setDocs] = useState<NonNullable<typeof data>["data"]>([]);
 
   const queryInput = {
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -90,26 +92,34 @@ export default function ShipmentsScreen() {
     limit: PAGE_SIZE,
   };
 
-  const { data, isLoading, isError, refetch, isRefetching } =
-    trpc.shipment.list.useQuery(queryInput);
+  const { data, isLoading, isFetching, isPlaceholderData, isError, refetch, isRefetching } =
+    trpc.shipment.list.useQuery(queryInput, { placeholderData: (prev) => prev });
 
-  const docs = data?.data ?? [];
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  useEffect(() => {
+    if (data?.data && !isPlaceholderData) {
+      setDocs((prev) => accumulatePages(prev, data.data, page));
+    }
+  }, [data?.data, page, isPlaceholderData]);
+
   const total = data?.total ?? 0;
-  const hasMore = total > page * PAGE_SIZE;
+  const hasMore = docs.length < total;
 
   const handleStatusFilter = useCallback((status: StatusFilter) => {
     setStatusFilter(status);
     setPage(1);
+    setDocs([]);
   }, []);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearch(text);
     setPage(1);
+    setDocs([]);
   }, []);
 
   const handleLoadMore = useCallback(() => {
-    if (hasMore && !isLoading) setPage((p) => p + 1);
-  }, [hasMore, isLoading]);
+    if (hasMore && !isFetching) setPage((p) => p + 1);
+  }, [hasMore, isFetching]);
 
   const ListHeader = (
     <View style={styles.listHeader}>

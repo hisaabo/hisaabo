@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { validateEnv } from "../lib/env";
 
-const KEYS = ["NODE_ENV", "API_PUBLIC_URL", "DATABASE_URL", "CORS_ORIGINS", "ENCRYPTION_KEY", "RESEND_API_KEY"] as const;
+const KEYS = ["NODE_ENV", "API_PUBLIC_URL", "DATABASE_URL", "CORS_ORIGINS", "ENCRYPTION_KEY", "RESEND_API_KEY", "MULTI_TENANT"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 
@@ -46,6 +46,32 @@ describe("validateEnv — API_PUBLIC_URL", () => {
   it("is not required outside production", () => {
     setProd();
     process.env.NODE_ENV = "development";
+    expect(() => validateEnv()).not.toThrow();
+  });
+});
+
+describe("validateEnv — multi-tenant encryption key", () => {
+  it("requires ENCRYPTION_KEY when MULTI_TENANT=true (even outside production)", () => {
+    setProd("https://api.example.com");
+    process.env.NODE_ENV = "development";
+    process.env.MULTI_TENANT = "true";
+    delete process.env.ENCRYPTION_KEY;
+    expect(() => validateEnv()).toThrow(/ENCRYPTION_KEY is required/);
+  });
+
+  it("rejects a malformed ENCRYPTION_KEY when MULTI_TENANT=true", () => {
+    setProd("https://api.example.com");
+    process.env.NODE_ENV = "development";
+    process.env.MULTI_TENANT = "true";
+    process.env.ENCRYPTION_KEY = "short";
+    expect(() => validateEnv()).toThrow(/64 hex/);
+  });
+
+  it("does not require ENCRYPTION_KEY for self-hosted development", () => {
+    setProd("https://api.example.com");
+    process.env.NODE_ENV = "development";
+    process.env.MULTI_TENANT = "false";
+    delete process.env.ENCRYPTION_KEY;
     expect(() => validateEnv()).not.toThrow();
   });
 });

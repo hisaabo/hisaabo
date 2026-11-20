@@ -819,6 +819,59 @@ Get the total count of items (and variants) that are below their low-stock alert
 
 **Input:** `{}` (no parameters)
 
+#### `item_price_history`
+
+Newest invoice lines for an item (price, quantity, party, date). For whole-period statistics use `item_price_summary`.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  period?: "6m" | "1y" | "all"; // default "all"
+  limit?: number;               // 1-500, default 50
+}
+```
+
+#### `item_price_summary`
+
+Min, max, average and latest price over the whole period plus a downsampled price series, normalised to one display unit. Sale and purchase prices are separate series.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  period?: "6m" | "1y" | "all"; // default "all"
+  unit?: string;                // display unit (base or alt unit)
+  invoice_type?: "sale" | "purchase"; // default "sale"
+}
+```
+
+#### `item_stock_movements`
+
+Newest invoice-driven stock movements for an item, with direction (in/out). Manual adjustments are in `item_stock_adjustment_history`.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  period?: "6m" | "1y" | "all"; // default "all"
+  limit?: number;               // 1-500, default 50
+}
+```
+
+#### `item_stock_summary`
+
+Total in, total out and net stock change over the whole period plus a downsampled running-balance series.
+
+**Input:**
+```typescript
+{
+  item_id: string;
+  period?: "6m" | "1y" | "all"; // default "all"
+  unit?: string;                // display unit (base or alt unit)
+}
+```
+
 ---
 
 ### Payments

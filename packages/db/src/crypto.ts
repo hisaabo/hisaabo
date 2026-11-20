@@ -97,6 +97,11 @@ function rawDecrypt(parsed: ParsedCiphertext, key: Buffer): string {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
+/** Whether an encryption key is configured (ENCRYPTION_KEY or DB_ENCRYPTION_KEY). */
+export function hasEncryptionKey(): boolean {
+  return getCurrentKey() !== null;
+}
+
 /**
  * Check whether a stored value looks encrypted (versioned or legacy format).
  */
@@ -128,7 +133,13 @@ export function encryptField(plaintext: string): string {
  */
 export function decryptField(stored: string): string {
   const key = getCurrentKey();
-  if (!key) return stored;
+  if (!key) {
+    // Never hand back ciphertext as if it were the secret.
+    if (VERSIONED_RE.test(stored)) {
+      throw new Error("Cannot decrypt value: no ENCRYPTION_KEY configured");
+    }
+    return stored;
+  }
 
   const parsed = parseCiphertext(stored);
   if (!parsed) return stored; // Plaintext passthrough
@@ -150,9 +161,15 @@ export function decryptField(stored: string): string {
     }
   }
 
-  // If both keys fail and this looks like legacy format, treat as plaintext.
-  // This handles the edge case where a hex:hex:hex value was actually plaintext
-  // that coincidentally matched the pattern (extremely unlikely but safe).
+  // A versioned (v{n}:...) value is only ever produced by encryptField, so a
+  // failed authentication means wrong key or tampering — fail closed rather
+  // than returning ciphertext as the secret.
+  if (VERSIONED_RE.test(stored)) {
+    throw new Error("Failed to decrypt value: ENCRYPTION_KEY (or ENCRYPTION_KEY_PREVIOUS) does not match, or the data is corrupted");
+  }
+
+  // Unversioned hex:hex:hex that fails all keys: treat as legacy plaintext that
+  // coincidentally matched the pattern (the unversioned format is ambiguous).
   return stored;
 }
 

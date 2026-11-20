@@ -35,16 +35,27 @@ export function parseFlexibleDate(str: string): Date | null {
 }
 
 // ── Shared invoice status UPDATE SQL ────────────────────────────────────────
-export function buildInvoiceStatusUpdate(invoiceId: string, businessId: string, addAmount: string) {
+// Set-based form: adds `addAmount` to amount_paid for many invoices in one
+// statement and derives status with the same CASE logic. Callers pass unique
+// invoice ids and chunk to a few hundred rows per call.
+export function buildInvoiceStatusBatchUpdate(
+  rows: Array<{ invoiceId: string; addAmount: string }>,
+  businessId: string,
+) {
+  const values = sql.join(
+    rows.map((r) => sql`(${r.invoiceId}::uuid, ${r.addAmount}::numeric)`),
+    sql`, `,
+  );
   return sql`
     UPDATE invoices SET
-      amount_paid = amount_paid::numeric + ${addAmount}::numeric,
+      amount_paid = invoices.amount_paid::numeric + v.add_amount,
       status = CASE
-        WHEN (amount_paid::numeric + ${addAmount}::numeric) >= total_amount::numeric THEN 'paid'
-        WHEN (amount_paid::numeric + ${addAmount}::numeric) > 0 THEN 'partial'
-        ELSE status
+        WHEN (invoices.amount_paid::numeric + v.add_amount) >= invoices.total_amount::numeric THEN 'paid'
+        WHEN (invoices.amount_paid::numeric + v.add_amount) > 0 THEN 'partial'
+        ELSE invoices.status
       END,
       updated_at = NOW()
-    WHERE id = ${invoiceId} AND business_id = ${businessId}
+    FROM (VALUES ${values}) AS v(id, add_amount)
+    WHERE invoices.id = v.id AND invoices.business_id = ${businessId}
   `;
 }

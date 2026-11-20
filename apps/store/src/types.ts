@@ -23,6 +23,13 @@ export interface StoreConfig {
   categories: string[];
 }
 
+/** One page of `/<slug>/catalog.json`; `total` counts all items matching the filters. */
+export interface CatalogPage extends StoreConfig {
+  total: number;
+  page: number;
+  limit: number;
+}
+
 /** One photo in an item's gallery, served from the API. */
 export interface StoreImage {
   id: string;

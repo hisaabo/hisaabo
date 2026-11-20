@@ -13,8 +13,12 @@ const TICK_MS = 60_000; // 60 seconds
 const MAX_CATCHUP = 12; // Max invoices per template per tick to prevent runaway loops
 const isMultiTenant = process.env.MULTI_TENANT === "true";
 let timer: ReturnType<typeof setInterval> | null = null;
+let tickInFlight = false;
 
 async function tick() {
+  // Skip if the previous tick is still running so ticks never overlap
+  if (tickInFlight) return;
+  tickInFlight = true;
   try {
     if (!isMultiTenant) {
       // Self-hosted: single tenant DB
@@ -38,6 +42,8 @@ async function tick() {
     }
   } catch (err) {
     console.error("[recurring-scheduler] tick error:", err);
+  } finally {
+    tickInFlight = false;
   }
 }
 

@@ -402,7 +402,7 @@ function ActivityLogContent() {
   const [page, setPage] = useState(1);
   const dateRange = getDateRange(filter);
 
-  const { data, isFetching } = trpc.business.auditTrail.useQuery(
+  const { data, isFetching, isPlaceholderData } = trpc.business.auditTrail.useQuery(
     { page, limit: AUDIT_PAGE_SIZE, fromDate: dateRange.fromDate, toDate: dateRange.toDate },
     { placeholderData: (prev: any) => prev },
   );
@@ -415,6 +415,7 @@ function ActivityLogContent() {
     total: data?.total ?? 0,
     page,
     isFetching,
+    isPlaceholderData,
     onLoadMore: loadMore,
     resetDeps: [filter],
   });

@@ -6,7 +6,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 import postgres from "postgres";
-import { randomBytes } from "node:crypto";
+import { randomBytes, pbkdf2Sync, createHmac, createHash } from "node:crypto";
 import { migrateSingleTenantDb } from "./migrate.js";
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -47,6 +47,27 @@ function parseConnectionUrl(url: string): {
   };
 }
 
+/**
+ * Build a PostgreSQL SCRAM-SHA-256 verifier (RFC 5802 / 7677) for a password.
+ *
+ * Passing a pre-computed verifier to CREATE USER ... PASSWORD keeps the
+ * plaintext out of the SQL text (statement logs, pg_stat_statements); Postgres
+ * stores a string already in verifier format as-is.
+ * Format: SCRAM-SHA-256$<iter>:<salt-b64>$<StoredKey-b64>:<ServerKey-b64>
+ */
+export function scramSha256Verifier(password: string, iterations = 4096): string {
+  const salt = randomBytes(16);
+  const salted = pbkdf2Sync(password, salt, iterations, 32, "sha256");
+  const hmac = (key: Buffer, msg: string) => createHmac("sha256", key).update(msg).digest();
+  const storedKey = createHash("sha256").update(hmac(salted, "Client Key")).digest();
+  const serverKey = hmac(salted, "Server Key");
+  const verifier = `SCRAM-SHA-256$${iterations}:${salt.toString("base64")}$${storedKey.toString("base64")}:${serverKey.toString("base64")}`;
+  if (!/^SCRAM-SHA-256\$\d+:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/.test(verifier)) {
+    throw new Error("Generated SCRAM verifier has unexpected format — refusing to interpolate into SQL");
+  }
+  return verifier;
+}
+
 // ── Main export ────────────────────────────────────────────────
 
 export interface TenantDbConfig {
@@ -76,7 +97,13 @@ export interface TenantDbConfig {
  * re-validate with a character-class check as defence-in-depth against a
  * future caller passing attacker-controlled input.
  */
-export async function cleanupTenantDatabase(dbName: string, dbUser: string): Promise<void> {
+export async function cleanupTenantDatabase(
+  dbName: string,
+  dbUser: string,
+  // Restrict which objects are dropped. provisionTenantDatabase passes only the
+  // objects IT created so a pre-existing database/role is never touched.
+  only: { database?: boolean; role?: boolean } = { database: true, role: true },
+): Promise<void> {
   if (!/^[a-z0-9_]+$/.test(dbName) || !/^[a-z0-9_]+$/.test(dbUser)) {
     // Refuse to run DROP statements with an unsanitized identifier — no-op.
     return;
@@ -93,15 +120,17 @@ export async function cleanupTenantDatabase(dbName: string, dbUser: string): Pro
   });
 
   try {
-    // Terminate lingering sessions so DROP DATABASE doesn't block.
-    // The datname literal is quoted here because pg_terminate_backend takes
-    // datname as text (not an identifier); sanitization above guarantees
-    // no quote injection is possible.
-    await cleanupClient.unsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
-    ).catch(() => {});
-    await cleanupClient.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => {});
-    await cleanupClient.unsafe(`DROP USER IF EXISTS "${dbUser}"`).catch(() => {});
+    if (only.database) {
+      // Terminate lingering sessions so DROP DATABASE doesn't block.
+      await cleanupClient.unsafe(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+        [dbName],
+      ).catch(() => {});
+      await cleanupClient.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => {});
+    }
+    if (only.role) {
+      await cleanupClient.unsafe(`DROP USER IF EXISTS "${dbUser}"`).catch(() => {});
+    }
   } finally {
     await cleanupClient.end().catch(() => {});
   }
@@ -134,6 +163,17 @@ export async function provisionTenantDatabase(
   const dbUser = sanitizeIdentifier(`tenant_${safeSuffix}_user`);
   const dbPassword = randomBytes(32).toString("base64url");
 
+  // Defence in depth: in multi-tenant mode never hand back a plaintext DB
+  // password destined for the tenants table. Checked before creating anything.
+  const { hasEncryptionKey, encryptDbPassword } = await import("./crypto.js");
+  if (process.env.MULTI_TENANT === "true" && !hasEncryptionKey()) {
+    throw new Error("ENCRYPTION_KEY is required to provision tenant databases in multi-tenant mode");
+  }
+
+  // Track what THIS call created so a failure never drops a pre-existing
+  // database/role (e.g. another tenant's, when the name already exists).
+  const created = { database: false, role: false };
+
   // Single try/catch wraps ALL side-effecting steps (CREATE DATABASE, CREATE
   // USER, GRANT, schema grants, migrations). Any failure triggers
   // cleanupTenantDatabase() so we never leave a half-provisioned pair behind.
@@ -156,15 +196,15 @@ export async function provisionTenantDatabase(
     try {
       // Create the database (identifier is sanitized above — safe to interpolate)
       await adminClient.unsafe(`CREATE DATABASE "${dbName}"`);
+      created.database = true;
 
-      // Create the dedicated user with a securely-generated password.
-      // base64url output is [A-Za-z0-9_-] only — assert this before interpolating.
-      if (!/^[A-Za-z0-9_-]+$/.test(dbPassword)) {
-        throw new Error("Generated password contains unexpected characters — refusing to interpolate into SQL");
-      }
+      // Create the dedicated user. Only a SCRAM-SHA-256 verifier (base64 + fixed
+      // chars, format asserted in scramSha256Verifier) is sent — never the
+      // plaintext password.
       await adminClient.unsafe(
-        `CREATE USER "${dbUser}" WITH PASSWORD '${dbPassword}'`,
+        `CREATE USER "${dbUser}" WITH PASSWORD '${scramSha256Verifier(dbPassword)}'`,
       );
+      created.role = true;
 
       // Grant all privileges on the database to the dedicated user
       await adminClient.unsafe(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}"`);
@@ -224,14 +264,12 @@ export async function provisionTenantDatabase(
       await grantClient.end();
     }
   } catch (err) {
-    // Compensate: drop whatever was created (idempotent, best-effort).
-    await cleanupTenantDatabase(dbName, dbUser);
+    // Compensate: drop only what this call created (idempotent, best-effort).
+    await cleanupTenantDatabase(dbName, dbUser, created);
     throw err;
   }
 
   // Encrypt the password before returning — stored encrypted in the tenants table
-  const { encryptDbPassword } = await import("./crypto.js");
-
   return {
     dbName,
     dbHost: host,

@@ -7,7 +7,7 @@
  * These tests ensure:
  *   1. The version string never starts with "v" (the template adds its own).
  *   2. The version is a valid semver-like string.
- *   3. Various source formats (git tag, env var, package.json) are normalized.
+ *   3. Various source formats (env var, package.json) are normalized.
  */
 
 import { describe, it, expect } from "vitest";

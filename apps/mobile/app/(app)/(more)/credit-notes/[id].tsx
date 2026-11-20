@@ -16,6 +16,7 @@ import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { haptic } from "../../../../src/lib/haptics";
 import { StatusBadge, QueryError, Skeleton } from "../../../../src/components/ui";
+import { LineItemNameLink } from "../../../../src/components/LineItemNameLink";
 import { useCan } from "../../../../src/hooks/useCan";
 
 export default function CreditNoteDetailScreen() {
@@ -238,9 +239,7 @@ export default function CreditNoteDetailScreen() {
             <View key={idx}>
               <View style={styles.tableRow}>
                 <View style={styles.tableDescCol}>
-                  <Text style={styles.lineDesc} numberOfLines={2}>
-                    {li.itemName}
-                  </Text>
+                  <LineItemNameLink itemId={li.itemId} name={li.itemName} style={styles.lineDesc} />
                   {li.description && li.description.trim().length > 0 && (
                     <Text style={styles.lineNotes} numberOfLines={3}>
                       {li.description}

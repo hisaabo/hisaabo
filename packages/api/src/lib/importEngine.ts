@@ -13,13 +13,15 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import tarStream from "tar-stream";
-import { eq, getTableColumns } from "drizzle-orm";
+import { getTableColumns, sql, eq, isNotNull } from "drizzle-orm";
+import { getTableConfig, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { TenantDatabase } from "@hisaabo/db";
 import { businesses } from "@hisaabo/db";
 import { TABLE_REGISTRY } from "./tableRegistry.js";
 import { ROW_SCHEMAS, manifestSchema } from "@hisaabo/shared/selfExport";
 import type { Manifest } from "@hisaabo/shared/selfExport";
 import type { Logger } from "./logger.js";
+import { registerImportedSlugs } from "./store-slug-registry.js";
 import {
   APP_VERSION,
   SCHEMA_CHECKSUM,
@@ -430,21 +432,48 @@ export async function importTenantBackup(
             await tx.insert(tableObj).values(c as any[]);
           }
 
-          // Pass 2 — update self-FK columns row-by-row where non-null in original data
-          for (const r of rows) {
-            const row = r as Record<string, unknown>;
-            const updates: Record<string, unknown> = {};
-            for (const field of entry.selfFkFields) {
-              if (row[field] != null) {
-                updates[field] = row[field];
-              }
-            }
-            if (Object.keys(updates).length > 0) {
-              await tx
-                .update(tableObj)
-                .set(updates)
-                .where(eq(tableObj.id, row.id as string));
-            }
+          // Pass 2 — restore self-FK columns with set-based UPDATE ... FROM (VALUES ...)
+          // per chunk. Only rows with at least one non-null FK are included; a
+          // null FK in such a row is a no-op because pass 1 already nulled it.
+          const tableConfig = getTableConfig(tableObj);
+          const colMap = getTableColumns(tableObj) as Record<string, AnyPgColumn>;
+          const fkCols = entry.selfFkFields.map((f) => colMap[f]);
+          const idCol = colMap.id;
+          const fkRows = rows.filter((r) =>
+            entry.selfFkFields.some((f) => (r as Record<string, unknown>)[f] != null),
+          ) as Array<Record<string, unknown>>;
+          // Params per row = 1 (id) + number of FK columns
+          const pass2Limit = Math.max(1, Math.min(1000, Math.floor(60000 / (fkCols.length + 1))));
+          const tbl = sql.identifier(tableConfig.name);
+          for (const c of chunk(fkRows, pass2Limit)) {
+            const values = sql.join(
+              c.map(
+                (row) =>
+                  sql`(${sql.join(
+                    [
+                      sql`${row.id as string}::${sql.raw(idCol.getSQLType())}`,
+                      ...entry.selfFkFields.map(
+                        (f, k) => sql`${row[f] ?? null}::${sql.raw(fkCols[k].getSQLType())}`,
+                      ),
+                    ],
+                    sql`, `,
+                  )})`,
+              ),
+              sql`, `,
+            );
+            const aliases = sql.join(
+              [sql.identifier(idCol.name), ...fkCols.map((col) => sql.identifier(col.name))],
+              sql`, `,
+            );
+            const setList = sql.join(
+              fkCols.map((col) => sql`${sql.identifier(col.name)} = v.${sql.identifier(col.name)}`),
+              sql`, `,
+            );
+            await tx.execute(sql`
+              UPDATE ${tbl} SET ${setList}
+              FROM (VALUES ${values}) AS v(${aliases})
+              WHERE ${tbl}.${sql.identifier(idCol.name)} = v.${sql.identifier(idCol.name)}
+            `);
           }
 
           rowsInserted[entry.tableName] = rows.length;
@@ -552,4 +581,52 @@ export async function importTenantBackup(
     durationMs,
     compatibility,
   };
+}
+
+/**
+ * Multi-tenant only: register the slugs of just-imported businesses in the
+ * control-DB registry under `tenantId` (the AUTHENTICATED tenant from the
+ * import token — never anything from the backup file). The backup is
+ * untrusted: a slug that is taken elsewhere is cleared from the tenant DB and
+ * the store disabled, so the tenant never displays a slug the registry will
+ * not serve. Never throws; the restore itself has already committed.
+ */
+export async function registerImportedStoreSlugs(
+  tenantDb: TenantDatabase,
+  tenantId: string,
+  warnings: ImportResult["warnings"],
+  log: Logger,
+): Promise<void> {
+  try {
+    const rows = await tenantDb
+      .select({ id: businesses.id, storeSlug: businesses.storeSlug, storeEnabled: businesses.storeEnabled })
+      .from(businesses)
+      .where(isNotNull(businesses.storeSlug));
+    const results = await registerImportedSlugs(tenantId, rows);
+    for (const r of results) {
+      if (r.status === "registered") continue;
+      if (r.status === "conflict") {
+        await tenantDb.update(businesses)
+          .set({ storeSlug: null, storeEnabled: false, updatedAt: new Date() })
+          .where(eq(businesses.id, r.businessId));
+        warnings.push({
+          table: "businesses",
+          message: `Store URL '${r.slug}' is already used by another account; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
+          context: { businessId: r.businessId },
+        });
+      } else {
+        warnings.push({
+          table: "businesses",
+          message: `Store URL '${r.slug}' could not be registered; re-save Store settings to publish the storefront.`,
+          context: { businessId: r.businessId },
+        });
+      }
+    }
+  } catch (err) {
+    log.error({ err, tenantId }, "import: store slug registration failed");
+    warnings.push({
+      table: "businesses",
+      message: "Storefront URLs could not be registered; re-save Store settings to publish the storefront.",
+    });
+  }
 }

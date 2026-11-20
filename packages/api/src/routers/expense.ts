@@ -2,7 +2,7 @@ import { eq, and, sql, desc, ilike, or, isNull, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { expenses, bankAccounts, bankTransactions } from "@hisaabo/db";
-import { createExpenseSchema, paginationSchema, money } from "@hisaabo/shared";
+import { createExpenseSchema, paginationSchema, partialWithoutDefaults, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
@@ -49,7 +49,7 @@ export const expenseRouter = router({
       const [data, [{ count }]] = await Promise.all([
         ctx.db.select().from(expenses)
           .where(and(...conditions))
-          .orderBy(desc(expenses.expenseDate))
+          .orderBy(desc(expenses.expenseDate), desc(expenses.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: sql<number>`count(*)::int` }).from(expenses)
@@ -150,7 +150,7 @@ export const expenseRouter = router({
   }),
 
   update: memberProcedure
-    .input(z.object({ id: z.string().uuid(), data: createExpenseSchema.partial() }))
+    .input(z.object({ id: z.string().uuid(), data: partialWithoutDefaults(createExpenseSchema) }))
     .mutation(async ({ input, ctx }) => {
       requireCan(ctx.ability, "update", "Expense");
 

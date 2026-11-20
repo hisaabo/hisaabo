@@ -22,6 +22,8 @@ import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
 import { useCan } from "../../../src/hooks/useCan";
+import { PriceHistorySection } from "../../../src/components/items/PriceHistorySection";
+import { StockMovementsSection } from "../../../src/components/items/StockMovementsSection";
 
 type DetailTab = "stats" | "priceHistory" | "stockMovements";
 
@@ -94,18 +96,6 @@ export default function ItemDetailScreen() {
     trpc.item.salesStats.useQuery(
       { id: id ?? "" },
       { enabled: !!id && activeTab === "stats" }
-    );
-
-  const { data: priceHistory, isLoading: priceHistoryLoading } =
-    trpc.item.priceHistory.useQuery(
-      { id: id ?? "" },
-      { enabled: !!id && activeTab === "priceHistory" }
-    );
-
-  const { data: stockMovements, isLoading: stockMovementsLoading } =
-    trpc.item.stockMovements.useQuery(
-      { id: id ?? "" },
-      { enabled: !!id && activeTab === "stockMovements" }
     );
 
   const { data: adjHistory, isLoading: adjHistoryLoading } =
@@ -727,137 +717,21 @@ export default function ItemDetailScreen() {
 
         {/* Price History */}
         {activeTab === "priceHistory" && (
-          <View style={styles.tabContent}>
-            {priceHistoryLoading ? (
-              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
-            ) : priceHistory && priceHistory.length > 0 ? (
-              priceHistory.map((ph, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.historyRow,
-                    idx < priceHistory.length - 1 && styles.historyRowBorder,
-                  ]}
-                >
-                  <View style={styles.historyLeft}>
-                    <Text
-                      style={[styles.historyDocNum, { color: colors.brand }]}
-                      onPress={() => router.push(`/(invoices)/${ph.invoiceId}` as never)}
-                    >
-                      {ph.invoiceNumber}
-                    </Text>
-                    <Text style={styles.historyDate}>
-                      {formatDate(ph.invoiceDate)}
-                    </Text>
-                    <Text style={styles.historyParty}>{ph.partyName}</Text>
-                  </View>
-                  <View style={styles.historyRight}>
-                    <Text style={styles.historyPrice}>
-                      {formatCurrency(parseFloat(ph.unitPrice ?? "0"))}
-                    </Text>
-                    <Text style={styles.historyQty}>
-                      {parseFloat(ph.quantity ?? "0").toFixed(2)}{" "}
-                      {ph.selectedUnit ?? item.unit}
-                    </Text>
-                    <View
-                      style={[
-                        styles.historyTypeBadge,
-                        ph.invoiceType === "sale"
-                          ? styles.historyTypeSale
-                          : styles.historyTypePurchase,
-                      ]}
-                    >
-                      <Text style={styles.historyTypeText}>
-                        {ph.invoiceType === "sale" ? "Sale" : "Purchase"}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.emptyTab}>
-                <Ionicons
-                  name="pricetag-outline"
-                  size={40}
-                  color={colors.border}
-                />
-                <Text style={styles.emptyTabText}>No price history</Text>
-              </View>
-            )}
-          </View>
+          <PriceHistorySection
+            itemId={item.id}
+            baseUnit={item.unit}
+            unitVariants={item.unitVariants as { unit: string }[] | null}
+          />
         )}
 
         {/* Stock Movements */}
         {activeTab === "stockMovements" && (
           <View style={styles.tabContent}>
-            {stockMovementsLoading ? (
-              <ActivityIndicator color={colors.brand} style={styles.tabLoader} />
-            ) : stockMovements && stockMovements.length > 0 ? (
-              stockMovements.map((sm, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.movementRow,
-                    idx < stockMovements.length - 1 &&
-                      styles.movementRowBorder,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.movementArrow,
-                      sm.direction === "in"
-                        ? styles.movementArrowIn
-                        : styles.movementArrowOut,
-                    ]}
-                  >
-                    <Ionicons
-                      name={
-                        sm.direction === "in"
-                          ? "arrow-down-outline"
-                          : "arrow-up-outline"
-                      }
-                      size={16}
-                      color={sm.direction === "in" ? colors.success : colors.danger}
-                    />
-                  </View>
-                  <View style={styles.movementInfo}>
-                    <Text
-                      style={[styles.movementDoc, { color: colors.brand }]}
-                      onPress={() => router.push(`/(invoices)/${sm.invoiceId}` as never)}
-                    >
-                      {sm.invoiceNumber}
-                    </Text>
-                    <Text style={styles.movementDate}>
-                      {formatDate(sm.invoiceDate)}
-                    </Text>
-                    <Text style={styles.movementParty}>{sm.partyName}</Text>
-                  </View>
-                  <View style={styles.movementRight}>
-                    <Text
-                      style={[
-                        styles.movementQty,
-                        sm.direction === "in"
-                          ? styles.movementQtyIn
-                          : styles.movementQtyOut,
-                      ]}
-                    >
-                      {sm.direction === "in" ? "+" : "-"}
-                      {parseFloat(sm.quantity ?? "0").toFixed(2)}{" "}
-                      {sm.selectedUnit ?? item.unit}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.emptyTab}>
-                <Ionicons
-                  name="git-commit-outline"
-                  size={40}
-                  color={colors.border}
-                />
-                <Text style={styles.emptyTabText}>No stock movements</Text>
-              </View>
-            )}
+            <StockMovementsSection
+              itemId={item.id}
+              baseUnit={item.unit}
+              unitVariants={item.unitVariants as { unit: string }[] | null}
+            />
 
             {/* Stock Adjustment History */}
             {!isVariant && (

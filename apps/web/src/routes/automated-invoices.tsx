@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { toast } from "@/hooks/useToast";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { KbdShortcut } from "@/components/ui/KbdShortcut";
 import { useDeleteConfirmation } from "@/hooks/useDeleteConfirmation";
 import { useCan } from "@/hooks/useCan";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -183,7 +184,7 @@ function AutomatedInvoicesPage() {
   const { data: planUsage } = trpc.recurringInvoice.planUsage.useQuery();
   const { data: suggestions } = trpc.recurringInvoice.suggestions.useQuery();
   // Party search handled by PartyCombobox component
-  const { data: items } = trpc.item.list.useQuery({ page: 1, limit: 500 });
+  const { data: items } = trpc.item.list.useQuery({ page: 1, limit: 100 });
 
   const utils = trpc.useUtils();
 
@@ -440,8 +441,9 @@ function AutomatedInvoicesPage() {
         description="Manage recurring invoice templates"
         actions={
           canCreate ? (
-            <button className="btn-primary" onClick={openAdd}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={openAdd}>
               + New Template
+              <KbdShortcut keys={["N"]} className="opacity-60" aria-hidden />
             </button>
           ) : null
         }

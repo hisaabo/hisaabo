@@ -10,10 +10,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "../../../../src/lib/trpc";
 import { useAuthStore } from "../../../../src/stores/auth";
 import { useBusinessStore } from "../../../../src/stores/business";
+import { accumulatePages } from "../../../../src/lib/accumulate-pages";
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { QueryError, Skeleton, Card } from "../../../../src/components/ui";
@@ -324,24 +325,35 @@ function ActivityTab() {
   const colors = useColors();
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [page, setPage] = useState(1);
+  const [entries, setEntries] = useState<NonNullable<typeof data>["data"]>([]);
 
   const range = useMemo(() => getTimeRange(timeFilter), [timeFilter]);
 
-  const { data, isLoading, isError, refetch, isRefetching } =
-    trpc.business.auditTrail.useQuery({
-      page,
-      limit: 30,
-      fromDate: range.fromDate ?? null,
-      toDate: range.toDate ?? null,
-    });
+  const { data, isLoading, isError, refetch, isRefetching, isPlaceholderData, dataUpdatedAt } =
+    trpc.business.auditTrail.useQuery(
+      {
+        page,
+        limit: 30,
+        fromDate: range.fromDate ?? null,
+        toDate: range.toDate ?? null,
+      },
+      { placeholderData: (prev) => prev }
+    );
 
-  const entries = data?.data ?? [];
   const total = (data?.total ?? 0) as number;
-  const hasMore = page * 30 < total;
+  const hasMore = entries.length < total;
+
+  // Accumulate pages — see `accumulatePages` for the merge semantics.
+  useEffect(() => {
+    if (data?.data && !isPlaceholderData) {
+      setEntries((prev) => accumulatePages(prev, data.data, page));
+    }
+  }, [data?.data, page, isPlaceholderData, dataUpdatedAt]);
 
   const handleTimeChange = (key: TimeFilter) => {
     setTimeFilter(key);
     setPage(1);
+    setEntries([]);
   };
 
   return (
@@ -365,6 +377,7 @@ function ActivityTab() {
             refreshing={isRefetching}
             onRefresh={() => {
               setPage(1);
+              setEntries([]);
               refetch();
             }}
             tintColor={colors.brand}

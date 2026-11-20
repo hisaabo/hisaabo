@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
+import { PopoverMenu } from "@/components/ui/PopoverMenu";
 import { trpc } from "@/lib/trpc";
 import { formatCurrency, todayISODate, toISOString } from "@/lib/utils";
 import { apiUrl } from "@/lib/api-url";
@@ -629,6 +630,7 @@ function VariantSelector({ itemId, selectedVariantId, onSelect }: {
 export function DownloadPDFButton({ invoiceId, invoiceNumber }: { invoiceId: string; invoiceNumber: string }) {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const { data: businesses } = trpc.business.list.useQuery();
   const activeId = getBusinessId();
@@ -676,8 +678,11 @@ export function DownloadPDFButton({ invoiceId, invoiceNumber }: { invoiceId: str
   return (
     <div className="relative inline-block">
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         disabled={loading}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-950 transition-colors disabled:opacity-50 border border-brand-200 dark:border-brand-800"
       >
         {loading ? (
@@ -692,22 +697,18 @@ export function DownloadPDFButton({ invoiceId, invoiceNumber }: { invoiceId: str
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
         </svg>
       </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-1 z-20 min-w-[160px] rounded-lg border border-border-light bg-surface-1 shadow-lg py-1">
-            {options.map((opt) => (
-              <button
-                key={opt.format}
-                onClick={() => download(opt.format)}
-                className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+      <PopoverMenu open={open} onClose={() => setOpen(false)} anchorRef={triggerRef}>
+        {options.map((opt) => (
+          <button
+            key={opt.format}
+            role="menuitem"
+            onClick={() => download(opt.format)}
+            className="w-full text-left text-xs px-3 py-2 text-text-primary hover:bg-surface-2 transition-colors"
+          >
+            {opt.label}
+          </button>
+        ))}
+      </PopoverMenu>
     </div>
   );
 }

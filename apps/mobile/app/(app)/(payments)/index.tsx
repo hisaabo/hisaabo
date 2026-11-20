@@ -136,7 +136,7 @@ export default function PaymentsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const canCreate = useCan("create", "Payment");
 
-  const { data, isLoading, isFetching, refetch } = trpc.payment.list.useQuery(
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } = trpc.payment.list.useQuery(
     {
       page,
       limit: PAGE_SIZE,
@@ -151,10 +151,10 @@ export default function PaymentsScreen() {
   // user returns from the create screen (this was the "table doesn't
   // update after save" bug on the payments list).
   useEffect(() => {
-    if (data?.data) {
+    if (data?.data && !isPlaceholderData) {
       setAllPayments((prev) => accumulatePages(prev, data.data, page));
     }
-  }, [data?.data, page]);
+  }, [data?.data, page, isPlaceholderData, dataUpdatedAt]);
 
   // Reset accumulation when search changes
   useEffect(() => {

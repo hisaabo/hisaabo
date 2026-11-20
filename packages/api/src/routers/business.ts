@@ -10,6 +10,7 @@ import { validateLogoDataUrl } from "../lib/validate-logo.js";
 import { enforceBusinessLimit, enforceDataExport, getLimits } from "../lib/plan-limits.js";
 import { seedChartOfAccounts } from "../lib/coa-seed.js";
 import { encryptCarrierCredentials, decryptCarrierCredentials } from "../lib/field-encryption.js";
+import { cacheBus } from "../lib/cache/bus.js";
 import { requireTenantRole, getTenantRole, hasRole, ADMIN_ROLES } from "../lib/tenant-access.js";
 import { csvRow } from "@hisaabo/shared";
 import { getTenantMemberUserIds, businessTenantScope, assertBusinessInTenant } from "../lib/tenant-businesses.js";
@@ -89,6 +90,10 @@ export const businessRouter = router({
   create: tenantProcedure.input(createBusinessSchema).mutation(async ({ input, ctx }) => {
     await requireTenantAdmin(ctx.user.id, ctx.tenantId!);
     await enforceBusinessLimit(ctx.tenantId!, ctx.db);
+    // `business` is emitted after the transaction settled (authz business
+    // entries are positive-only, so this keeps the contract rather than fixing
+    // a stale negative).
+    let createdBizId: string | undefined;
     const biz = await ctx.db.transaction(async (tx) => {
       const [biz] = await tx.insert(businesses).values({
         ...input,
@@ -122,7 +127,10 @@ export const businessRouter = router({
       // the same transaction so a partial failure rolls back cleanly.
       await seedChartOfAccounts(tx, biz.id);
 
+      createdBizId = biz.id;
       return biz;
+    }).finally(() => {
+      cacheBus.invalidate({ kind: "business", tenantId: ctx.tenantId!, businessId: createdBizId });
     });
 
     logAudit(ctx.db, {
@@ -335,16 +343,17 @@ export const businessRouter = router({
       requireCan(ctx.ability, "manage", "Business");
 
       // Map documentType to the correct counter column
-      const counterColumns: Record<string, string> = {
-        invoice: "next_invoice_number",
-        payment: "next_payment_number",
-        quotation: "next_quotation_number",
-        credit_note: "next_credit_note_number",
-        delivery_challan: "next_delivery_challan_number",
-        proforma: "next_proforma_number",
-      };
+      // Map (not an object literal) so inherited keys like "constructor" can never match.
+      const counterColumns = new Map<string, string>([
+        ["invoice", "next_invoice_number"],
+        ["payment", "next_payment_number"],
+        ["quotation", "next_quotation_number"],
+        ["credit_note", "next_credit_note_number"],
+        ["delivery_challan", "next_delivery_challan_number"],
+        ["proforma", "next_proforma_number"],
+      ]);
 
-      const column = counterColumns[input.documentType];
+      const column = counterColumns.get(input.documentType);
       if (!column) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid document type" });
 
       // Verify new number >= current number (can't go backwards)
@@ -406,7 +415,7 @@ export const businessRouter = router({
         ctx.db.select()
           .from(auditLog)
           .where(and(...conditions))
-          .orderBy(desc(auditLog.createdAt))
+          .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
           .limit(input.limit)
           .offset(offset),
         ctx.db.select({ count: count() })

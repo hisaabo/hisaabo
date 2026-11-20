@@ -3,13 +3,14 @@
  * Used by both the scheduler (automatic) and the "runNow" manual trigger.
  */
 
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import {
-  invoices, invoiceItems, items, itemVariants, businesses, parties,
+  invoices, invoiceItems, items, businesses, parties,
   recurringInvoiceTemplates, recurringInvoiceRuns,
 } from "@hisaabo/db";
 import { calcLineItem, calcInvoiceTotals } from "@hisaabo/shared";
 import type { TenantDatabase } from "../trpc.js";
+import { applyStockDeltas } from "./stock-adjust.js";
 
 interface TemplateRow {
   id: string;
@@ -188,26 +189,11 @@ export async function generateInvoiceFromTemplate(
       );
     }
 
-    // Update stock per line item using PostgreSQL NUMERIC arithmetic
-    // to avoid JS floating-point drift in intermediate accumulation
-    for (const li of template.lineItems) {
-      if (li.variantId) {
-        await tx.update(itemVariants).set({
-          stockQuantity: template.type === "sale"
-            ? sql`${itemVariants.stockQuantity}::numeric - ${li.quantity}::numeric`
-            : sql`${itemVariants.stockQuantity}::numeric + ${li.quantity}::numeric`,
-          updatedAt: new Date(),
-        }).where(eq(itemVariants.id, li.variantId));
-      } else if (li.itemId) {
-        const cf = li.conversionFactor || "1";
-        await tx.update(items).set({
-          stockQuantity: template.type === "sale"
-            ? sql`${items.stockQuantity}::numeric - (${li.quantity}::numeric * ${cf}::numeric)`
-            : sql`${items.stockQuantity}::numeric + (${li.quantity}::numeric * ${cf}::numeric)`,
-          updatedAt: new Date(),
-        }).where(eq(items.id, li.itemId));
-      }
-    }
+    // Update stock (batched, NUMERIC arithmetic in SQL)
+    await applyStockDeltas(
+      tx,
+      template.lineItems.map((li) => ({ ...li, sign: template.type === "sale" ? -1 : 1 })),
+    );
 
     // Record execution
     const [run] = await tx.insert(recurringInvoiceRuns).values({

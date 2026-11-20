@@ -414,7 +414,16 @@ Every stock movement including invoice deductions, purchase additions, and manua
 
 ```bash
 hisaabo item stock-movements "Mustard Oil 15L"
-hisaabo item stock-movements item_xxxxxxxxxx --json
+hisaabo item stock-movements item_xxxxxxxxxx --period 6m --limit 100 --json
+```
+
+#### `hisaabo item stock-summary`
+
+Total stock in, total out and net change over a whole period (`--period 6m|1y|all`), optionally in an alt unit:
+
+```bash
+hisaabo item stock-summary "Mustard Oil 15L" --period 1y
+hisaabo item stock-summary item_xxxxxxxxxx --unit box --json
 ```
 
 #### `hisaabo item low-stock-count`
@@ -431,7 +440,16 @@ Historical sale price changes for an item:
 
 ```bash
 hisaabo item price-history "Basmati Rice 25kg"
-hisaabo item price-history item_xxxxxxxxxx --json
+hisaabo item price-history item_xxxxxxxxxx --period 6m --limit 100 --json
+```
+
+#### `hisaabo item price-summary`
+
+Min, max, average and latest price over a whole period. `--type sale|purchase` picks the series; `--unit` normalises to a display unit:
+
+```bash
+hisaabo item price-summary "Basmati Rice 25kg" --period 1y
+hisaabo item price-summary item_xxxxxxxxxx --type purchase --json
 ```
 
 #### `hisaabo item sales-stats`

@@ -21,6 +21,7 @@ import { useColors } from "../../../src/contexts/ThemeContext";
 import { haptic } from "../../../src/lib/haptics";
 import { QueryError } from "../../../src/components/ui";
 import { PermissionGate } from "../../../src/components/PermissionGate";
+import { ItemTypeToggle } from "../../../src/components/items/ItemTypeToggle";
 
 const UNITS = [
   "pcs", "kg", "g", "l", "ml", "m", "cm", "ft", "in", "box",
@@ -185,52 +186,11 @@ function EditItemScreenContent() {
           {/* Item Type Toggle */}
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Item Type</Text>
-            <View style={styles.typeToggle}>
-              <TouchableOpacity
-                style={[
-                  styles.typeOption,
-                  itemType === "product" && styles.typeOptionActive,
-                ]}
-                onPress={() => setItemType("product")}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="cube-outline"
-                  size={18}
-                  color={itemType === "product" ? colors.textPrimary : colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.typeOptionText,
-                    itemType === "product" && styles.typeOptionTextActive,
-                  ]}
-                >
-                  Product
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.typeOption,
-                  itemType === "service" && styles.typeOptionActive,
-                ]}
-                onPress={() => setItemType("service")}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="briefcase-outline"
-                  size={18}
-                  color={itemType === "service" ? colors.textPrimary : colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.typeOptionText,
-                    itemType === "service" && styles.typeOptionTextActive,
-                  ]}
-                >
-                  Service
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <ItemTypeToggle
+              value={itemType}
+              onChange={setItemType}
+              locked={item?.hasTransactions === true}
+            />
           </View>
 
           {/* Basic Info */}
@@ -551,34 +511,6 @@ const useStyles = makeStyles((colors) => ({
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 10,
-  },
-  typeToggle: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  typeOption: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 12,
-    borderRadius: 9,
-    gap: 8,
-  },
-  typeOptionActive: {
-    backgroundColor: colors.brand,
-  },
-  typeOptionText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: colors.textMuted,
-  },
-  typeOptionTextActive: {
-    color: colors.textPrimary,
   },
   card: {
     backgroundColor: colors.surface,

@@ -1,11 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import dayjs from "dayjs";
-import utc from "dayjs/plugin/utc";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { z } from "zod";
 import { trpc, getBusinessId } from "@/lib/trpc";
 import { formatCurrency, formatDate } from "@/lib/utils";
-
-dayjs.extend(utc);
 import { apiUrl } from "@/lib/api-url";
 import { StatCard } from "@/components/ui/StatCard";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -13,38 +10,51 @@ import { SegmentedControl, PillTabs } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Combobox } from "@/components/ui/Combobox";
 import { DateRangeBar } from "@/components/ui/DateRangeBar";
+import { LinkButton } from "@/components/ui/LinkButton";
+import { MonthPeriodBar } from "@/components/ui/MonthPeriodBar";
+import { getCurrentFYBounds, getPreviousFYBounds, fyLabel } from "@/lib/fy-bounds";
+import { documentRouteFor } from "@/lib/document-routes";
 import { toast } from "@/hooks/useToast";
 import { useDateRange } from "@/hooks/useDateRange";
+import { useActiveBusiness } from "@/hooks/useActiveBusiness";
+import {
+  REPORT_TABS,
+  type ReportTab,
+  availableReportTabs,
+  readStoredReportTab,
+  resolveReportTab,
+  storeReportTab,
+} from "@/lib/gst-report-tabs";
 
-export const Route = createFileRoute("/gst")({
-  component: GSTReportsPage,
+
+// The active tab and the Party Ledger's selected party live in the URL so that
+// deep links (dashboard → Aging, Aging → ledger) work and the browser back
+// button returns here from a document opened out of the ledger.
+const gstSearchSchema = z.object({
+  tab: z.enum(REPORT_TABS).optional().catch(undefined),
+  partyId: z.string().uuid().optional().catch(undefined),
 });
 
-const months = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-type ReportTab = "gstr1" | "gstr3b" | "gstr9" | "pnl" | "trial-balance" | "balance-sheet" | "aging" | "ledger" | "tally";
+export const Route = createFileRoute("/gst")({
+  validateSearch: (search) => gstSearchSchema.parse(search),
+  component: GSTReportsPage,
+});
 
 function GSTReportsPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [activeTab, setActiveTabRaw] = useState<ReportTab>(
-    () => (localStorage.getItem("hisaabo_gst_tab") as ReportTab) || "gstr1"
-  );
+  const navigate = useNavigate();
+  const { tab: tabFromSearch, partyId: partyIdFromSearch } = useSearch({ from: "/gst" });
+
+  // Labels, available tabs and the remembered tab all follow the business the
+  // user is working in — not businesses[0] — since GST status differs per business.
+  const { businessId, isGstRegistered } = useActiveBusiness();
+  const activeTab = resolveReportTab(tabFromSearch, readStoredReportTab(businessId), isGstRegistered);
   const setActiveTab = (tab: ReportTab) => {
-    setActiveTabRaw(tab);
-    localStorage.setItem("hisaabo_gst_tab", tab);
+    storeReportTab(businessId, tab);
+    navigate({ to: "/gst", search: { tab } });
   };
-
-  const { data: businesses } = trpc.business.list.useQuery();
-  const biz = businesses?.[0];
-
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
-
-  const isGstRegistered = biz?.gstRegistrationType !== "unregistered" || !!biz?.gstin;
 
   // Report labels adapt based on GST status
   const reportTitle = isGstRegistered ? "GST Returns" : "Tax Reports";
@@ -54,7 +64,7 @@ function GSTReportsPage() {
   const tab1Label = isGstRegistered ? "GSTR-1" : "Sales Report";
   const tab2Label = isGstRegistered ? "GSTR-3B" : "Tax Summary";
 
-  const tabs: Array<{ value: ReportTab; label: string }> = [
+  const allTabs: Array<{ value: ReportTab; label: string }> = [
     { value: "gstr1", label: tab1Label },
     { value: "gstr3b", label: tab2Label },
     { value: "gstr9", label: "GSTR-9" },
@@ -65,6 +75,8 @@ function GSTReportsPage() {
     { value: "ledger", label: "Party Ledger" },
     { value: "tally", label: "Tally Export" },
   ];
+  const available = availableReportTabs(isGstRegistered);
+  const tabs = allTabs.filter((t) => available.includes(t.value));
 
   return (
     <div>
@@ -84,25 +96,15 @@ function GSTReportsPage() {
 
       {/* Period selector — only shown for GST tabs */}
       {(activeTab === "gstr1" || activeTab === "gstr3b") && (
-        <div className="flex items-center gap-3 mb-6">
-          <select
-            className="input w-40"
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-          >
-            {months.map((m, i) => (
-              <option key={i} value={i + 1}>{m}</option>
-            ))}
-          </select>
-          <select
-            className="input w-28"
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
-          >
-            {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
+        <div className="flex items-center gap-3 mb-6 flex-wrap">
+          <MonthPeriodBar
+            year={year}
+            month={month}
+            onChange={(y, m) => {
+              setYear(y);
+              setMonth(m);
+            }}
+          />
 
           <div className="ml-4">
             <SegmentedControl
@@ -124,7 +126,7 @@ function GSTReportsPage() {
       {activeTab === "trial-balance" && <TrialBalanceView />}
       {activeTab === "balance-sheet" && <BalanceSheetView />}
       {activeTab === "aging" && <AgingReportView />}
-      {activeTab === "ledger" && <PartyLedgerView />}
+      {activeTab === "ledger" && <PartyLedgerView partyId={partyIdFromSearch ?? ""} />}
       {activeTab === "tally" && <TallyExportView />}
     </div>
   );
@@ -366,8 +368,8 @@ function ProfitAndLossView() {
   const { preset, setPreset, fromDate, toDate, customFrom, customTo, setCustomRange } =
     useDateRange("pnl-report", "this-fy");
 
-  const curFY = getCurrentFYBounds();
-  const prevFY = getPreviousFYBounds();
+  const curFY = useMemo(() => getCurrentFYBounds(), []);
+  const prevFY = useMemo(() => getPreviousFYBounds(), []);
 
   const { data, isLoading, error } = trpc.dashboard.profitAndLoss.useQuery(
     { fromDate: fromDate || undefined, toDate: toDate || undefined },
@@ -595,36 +597,6 @@ function ProfitAndLossView() {
   );
 }
 
-// ── FY date helpers ────────────────────────────────────────────
-// All boundaries are UTC — the DB stores UTC timestamps and local-time
-// construction in IST would shift April 1 → March 31 UTC, pulling the
-// previous March into the current FY.
-function getCurrentFYBounds(): { start: string; end: string; year: number } {
-  const now = dayjs.utc();
-  const mm = now.month();
-  const fyYear = mm >= 3 ? now.year() : now.year() - 1;
-  return {
-    start: dayjs.utc().year(fyYear).month(3).date(1).startOf("day").toISOString(),
-    end: now.toISOString(),
-    year: fyYear,
-  };
-}
-
-function getPreviousFYBounds(): { start: string; end: string; year: number } {
-  const now = dayjs.utc();
-  const mm = now.month();
-  const prevFyYear = mm >= 3 ? now.year() - 1 : now.year() - 2;
-  return {
-    start: dayjs.utc().year(prevFyYear).month(3).date(1).startOf("day").toISOString(),
-    end: dayjs.utc().year(prevFyYear + 1).month(2).date(31).endOf("day").toISOString(),
-    year: prevFyYear,
-  };
-}
-
-function fyLabel(year: number): string {
-  return `FY ${year}-${String(year + 1).slice(-2)}`;
-}
-
 // ── Client-side variance helper ───────────────────────────────
 function computeVarianceDisplay(current: string, previous: string): { variance: string; variancePercent: string } {
   const c = parseFloat(current) || 0;
@@ -691,8 +663,8 @@ function CompareToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () =
 
 function TrialBalanceView() {
   const [compareMode, setCompareMode] = useState(false);
-  const curFY = getCurrentFYBounds();
-  const prevFY = getPreviousFYBounds();
+  const curFY = useMemo(() => getCurrentFYBounds(), []);
+  const prevFY = useMemo(() => getPreviousFYBounds(), []);
 
   const { data, isLoading, error } = trpc.reports.trialBalance.useQuery(
     { asOfDate: curFY.end },
@@ -849,8 +821,8 @@ function TrialBalanceView() {
 
 function BalanceSheetView() {
   const [compareMode, setCompareMode] = useState(false);
-  const curFY = getCurrentFYBounds();
-  const prevFY = getPreviousFYBounds();
+  const curFY = useMemo(() => getCurrentFYBounds(), []);
+  const prevFY = useMemo(() => getPreviousFYBounds(), []);
 
   const { data, isLoading, error } = trpc.reports.balanceSheet.useQuery(
     { asOfDate: curFY.end },
@@ -1037,6 +1009,7 @@ type AgingSortKey = "partyName" | "current" | "days31_60" | "days61_90" | "days9
 function AgingReportView() {
   const [sortKey, setSortKey] = useState<AgingSortKey>("total");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const navigate = useNavigate();
 
   const { data, isLoading, error } = trpc.dashboard.receivablesAging.useQuery();
 
@@ -1071,7 +1044,7 @@ function AgingReportView() {
       {/* Info card */}
       <div className="card px-4 py-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
         <p className="text-sm text-blue-700 dark:text-blue-400">
-          Showing all unpaid sale invoices grouped by customer and bucketed by days overdue (based on due date or invoice date).
+          Showing outstanding sale invoices and debit notes, net of credit notes, sales returns and opening balances, grouped by customer and bucketed by days overdue (based on due date or invoice date). Opening balances are shown in 90+ days. Total matches the Receivable on the dashboard.
         </p>
       </div>
 
@@ -1162,18 +1135,25 @@ function AgingReportView() {
                 <tbody>
                   {sortedRows.map((row) => (
                     <tr key={row.partyId}>
-                      <td className="font-medium text-text-primary">{row.partyName}</td>
+                      <td className="font-medium text-text-primary">
+                        <LinkButton
+                          className="font-medium text-left"
+                          onClick={() => navigate({ to: "/gst", search: { tab: "ledger", partyId: row.partyId } })}
+                        >
+                          {row.partyName}
+                        </LinkButton>
+                      </td>
                       <td className="text-right tabular-nums text-emerald-700 dark:text-emerald-400">
-                        {parseFloat(row.current) > 0 ? fmtStr(row.current) : <span className="text-text-tertiary">—</span>}
+                        {parseFloat(row.current) !== 0 ? fmtStr(row.current) : <span className="text-text-tertiary">—</span>}
                       </td>
                       <td className="text-right tabular-nums text-amber-700 dark:text-amber-400">
-                        {parseFloat(row.days31_60) > 0 ? fmtStr(row.days31_60) : <span className="text-text-tertiary">—</span>}
+                        {parseFloat(row.days31_60) !== 0 ? fmtStr(row.days31_60) : <span className="text-text-tertiary">—</span>}
                       </td>
                       <td className="text-right tabular-nums text-orange-700 dark:text-orange-400">
-                        {parseFloat(row.days61_90) > 0 ? fmtStr(row.days61_90) : <span className="text-text-tertiary">—</span>}
+                        {parseFloat(row.days61_90) !== 0 ? fmtStr(row.days61_90) : <span className="text-text-tertiary">—</span>}
                       </td>
                       <td className="text-right tabular-nums text-red-700 dark:text-red-400">
-                        {parseFloat(row.days90Plus) > 0 ? fmtStr(row.days90Plus) : <span className="text-text-tertiary">—</span>}
+                        {parseFloat(row.days90Plus) !== 0 ? fmtStr(row.days90Plus) : <span className="text-text-tertiary">—</span>}
                       </td>
                       <td className="text-right tabular-nums font-semibold text-text-primary">
                         {fmtStr(row.total)}
@@ -1201,8 +1181,11 @@ function AgingReportView() {
 
 // ── Party Ledger View ──────────────────────────────────────────
 
-function PartyLedgerView() {
-  const [partyId, setPartyId] = useState("");
+function PartyLedgerView({ partyId }: { partyId: string }) {
+  const navigate = useNavigate();
+  // Push (not replace) so browser back steps through party selections.
+  const setPartyId = (id: string) =>
+    navigate({ to: "/gst", search: id ? { tab: "ledger", partyId: id } : { tab: "ledger" } });
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
 
@@ -1226,6 +1209,12 @@ function PartyLedgerView() {
   );
 
   const utils = trpc.useUtils();
+
+  // Open the source document's detail via the list page's ?id= param. The
+  // ledger selection is in this page's URL, so browser back returns here.
+  function openLedgerDocument(type: string, documentId: string) {
+    navigate({ to: documentRouteFor(type), search: { id: documentId } });
+  }
 
   async function handleExportCSV() {
     if (!partyId) return;
@@ -1415,9 +1404,24 @@ function PartyLedgerView() {
                       <td className="text-right tabular-nums font-medium">{fmtStr(data.party.openingBalance)}</td>
                     </tr>
                     {data.entries.map((e, i) => (
-                      <tr key={i}>
+                      <tr
+                        key={i}
+                        className="cursor-pointer hover:bg-surface-1"
+                        onClick={() => openLedgerDocument(e.type, e.documentId)}
+                      >
                         <td className="text-text-secondary text-[13px]">{formatDate(e.date)}</td>
-                        <td className="font-mono text-[13px] text-text-secondary">{e.number || "—"}</td>
+                        <td className="font-mono text-[13px]">
+                          <LinkButton
+                            className="font-mono text-[13px]"
+                            aria-label={`Open ${e.description || "document"} ${e.number || ""}`.trim()}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              openLedgerDocument(e.type, e.documentId);
+                            }}
+                          >
+                            {e.number || "—"}
+                          </LinkButton>
+                        </td>
                         <td className="text-text-primary">{e.description}</td>
                         <td className="text-right tabular-nums">
                           {e.debit !== "0" && e.debit !== "0.00" ? fmtStr(e.debit) : <span className="text-text-tertiary">—</span>}

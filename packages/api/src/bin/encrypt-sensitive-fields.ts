@@ -83,6 +83,7 @@ async function encryptControlDb(): Promise<EncryptStats> {
 
       if (EXECUTE) {
         const encrypted = encryptField(row.dbPassword);
+        // cache-guard: offline CLI; dbPassword is not part of any cached value
         await controlDb
           .update(tenants)
           .set({ dbPassword: encrypted, updatedAt: new Date() })

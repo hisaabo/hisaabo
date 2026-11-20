@@ -15,6 +15,7 @@ import { formatCurrency, formatQuantity, formatDate } from "../../../../src/lib/
 import { makeStyles } from "../../../../src/lib/makeStyles";
 import { useColors } from "../../../../src/contexts/ThemeContext";
 import { StatusBadge } from "../../../../src/components/ui";
+import { LineItemNameLink } from "../../../../src/components/LineItemNameLink";
 import { checkDocumentStatusTransition } from "@hisaabo/shared";
 import { useCan, useCanCreateDocument } from "../../../../src/hooks/useCan";
 
@@ -206,7 +207,7 @@ export default function DeliveryChallanDetailScreen() {
                   <View style={styles.lineItemLeft}>
                     {/* Bug B: primary display is itemName; description is
                         the optional italic notes line beneath. */}
-                    <Text style={styles.lineItemName} numberOfLines={2}>{li.itemName}</Text>
+                    <LineItemNameLink itemId={li.itemId} name={li.itemName} style={styles.lineItemName} />
                     {li.description && li.description.trim().length > 0 && (
                       <Text style={styles.lineItemNotes} numberOfLines={3}>{li.description}</Text>
                     )}

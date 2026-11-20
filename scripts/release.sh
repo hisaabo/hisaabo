@@ -5,8 +5,9 @@ set -euo pipefail
 # Usage: pnpm release <version>
 # Example: pnpm release 0.5.0
 #
-# Updates the version in ALL package.json files, app.json (Expo),
-# tauri.conf.json (Desktop), and commits the change.
+# Updates the version in every manifest listed in scripts/versions.mjs
+# (package.json files, Expo app.json, Tauri conf, desktop Cargo.toml/lock)
+# and commits the change.
 # Run `pnpm release:tag` afterwards to tag and push.
 
 VERSION="${1:-}"
@@ -32,64 +33,17 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
 fi
 
 # ─── Bump versions ─────────────────────────────────────────────────────────
+# scripts/versions.mjs holds the list of every version-bearing file (all
+# package.json files, Expo app.json, tauri.conf.json, the desktop Cargo.toml
+# and Cargo.lock). CI and the release workflow check the same list, so a tag
+# whose version differs from any of them is rejected before anything ships.
 
-# All package.json files (root + apps + packages)
-PACKAGE_FILES=(
-  package.json
-  apps/api-docs/package.json
-  apps/docs/package.json
-  apps/mobile/package.json
-  apps/store/package.json
-  apps/web/package.json
-  packages/api/package.json
-  packages/cli/package.json
-  packages/db/package.json
-  packages/mcp/package.json
-  packages/shared/package.json
-)
-
-echo "Bumping all packages to $VERSION..."
+echo "Bumping all manifests to $VERSION..."
 echo ""
 
-# Single node helper: the version and file path are passed as argv (never
-# spliced into the JS source), and the JSON key path is a fixed argument.
-#   bump_json <file> <label> [key-path]   e.g. bump_json app.json "app.json (expo)" expo.version
-bump_json() {
-  node -e '
-    const fs = require("fs");
-    const [file, label, keyPath, version] = process.argv.slice(1);
-    const obj = JSON.parse(fs.readFileSync(file, "utf8"));
-    const keys = keyPath.split(".");
-    const last = keys.pop();
-    let target = obj;
-    for (const k of keys) target = target[k];
-    const old = target[last];
-    target[last] = version;
-    fs.writeFileSync(file, JSON.stringify(obj, null, 2) + "\n");
-    console.log("  " + label.padEnd(40) + old + " → " + version);
-  ' "$1" "$2" "${3:-version}" "$VERSION"
-}
-
-CHANGED_FILES=()
-
-for f in "${PACKAGE_FILES[@]}"; do
-  if [ -f "$f" ]; then
-    bump_json "$f" "$f"
-    CHANGED_FILES+=("$f")
-  fi
-done
-
-# Expo app.json (version lives under expo.version)
-if [ -f apps/mobile/app.json ]; then
-  bump_json apps/mobile/app.json "apps/mobile/app.json (expo)" expo.version
-  CHANGED_FILES+=(apps/mobile/app.json)
-fi
-
-# Tauri conf (version at top level)
-if [ -f apps/desktop/src-tauri/tauri.conf.json ]; then
-  bump_json apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/tauri.conf.json version
-  CHANGED_FILES+=(apps/desktop/src-tauri/tauri.conf.json)
-fi
+BUMPED=$(node scripts/versions.mjs set "$VERSION")
+mapfile -t CHANGED_FILES <<< "$BUMPED"
+printf '  %s\n' "${CHANGED_FILES[@]}"
 
 echo ""
 

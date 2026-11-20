@@ -196,7 +196,9 @@ export default function SettingsScreen() {
         </View>
 
         {/* Footer */}
-        <Text style={styles.footer}>Hisaabo v{Constants.expoConfig?.version ?? "0.4.0"}</Text>
+        <Text style={styles.footer}>
+          {Constants.expoConfig?.version ? `Hisaabo v${Constants.expoConfig.version}` : "Hisaabo"}
+        </Text>
       </ScrollView>
 
       {/* Org Switcher Sheet */}

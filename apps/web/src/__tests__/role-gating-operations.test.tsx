@@ -99,8 +99,9 @@ describe("Items page (operations)", () => {
   describe("detail panel footer", () => {
     function openDetail(role: string, item = detail()) {
       stub.data["item.getById"] = item;
+      // The open item lives in the URL (?id=), not local state.
+      stub.search = { id: "i1" };
       renderAs(role, Items);
-      fireEvent.click(screen.getByText("Widget"));
       return screen.getByRole("dialog", { name: "Widget" });
     }
 
@@ -145,9 +146,12 @@ describe("Items page (operations)", () => {
 
     function openEditor(role: string) {
       stub.data["item.getById"] = variantItem;
+      stub.search = { id: "i1" };
       const view = renderAs(role, Items);
-      fireEvent.click(screen.getByText("Widget"));
       fireEvent.click(screen.getByRole("button", { name: "Edit Item" }));
+      // Edit closes the detail panel by clearing ?id= from the URL.
+      stub.search = {};
+      view.rerender(<Items />);
       return { view, editor: screen.getByRole("dialog", { name: "Edit Item" }) };
     }
 
