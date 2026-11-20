@@ -26,6 +26,12 @@ export interface NotificationEmail {
   locale: "en" | "hi";
 }
 
+/** One warning per process when notification emails are skipped for lack of a provider. */
+let warnedNotificationEmailsDisabled = false;
+
+/** A hung Resend request must not stall the notification dispatch tick. */
+const NOTIFICATION_EMAIL_TIMEOUT_MS = 10_000;
+
 class ConsoleEmailService implements EmailService {
   async sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void> {
     if (process.env.NODE_ENV === "production") {
@@ -57,16 +63,16 @@ class ConsoleEmailService implements EmailService {
     console.log("");
   }
 
+  // Notification emails are an optional copy of what is already in the inbox,
+  // so unlike magic links and invitations a missing provider is not an error:
+  // production warns once per process and skips the send; dev prints it.
   async sendNotification(to: string, message: NotificationEmail): Promise<void> {
-    await ConsoleNotificationEmail.send(to, message);
-  }
-}
-
-class ConsoleNotificationEmail {
-  static async send(to: string, message: NotificationEmail): Promise<void> {
     if (process.env.NODE_ENV === "production") {
-      console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
-      throw new Error("Email service not configured");
+      if (!warnedNotificationEmailsDisabled) {
+        warnedNotificationEmailsDisabled = true;
+        console.warn("[email] notification emails disabled: no email provider configured (set RESEND_API_KEY to enable)");
+      }
+      return;
     }
     console.log(`[email:console] notification to ${to}: ${message.title} — ${message.body} (${message.url})`);
   }
@@ -421,6 +427,8 @@ ${reassuranceHtml}
         html: renderNotificationEmailHtml(message),
         text: `${message.title}\n\n${message.body}\n\n${message.url}`,
       }),
+      // Covers connecting, the response and reading its body.
+      signal: AbortSignal.timeout(NOTIFICATION_EMAIL_TIMEOUT_MS),
     });
     if (!res.ok) {
       const text = await res.text();
