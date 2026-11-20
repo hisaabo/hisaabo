@@ -50,6 +50,13 @@
       "when": 1791617568446,
       "tag": "0006_confused_kree",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791660602861,
+      "tag": "0007_simple_dorian_gray",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
-  backfillStoreSlugRegistry, STORE_SLUG_MARKER_KEY, formatBackfillReport,
-  type BusinessSlugRow, type TenantReader, type TenantRow,
+  backfillStoreSlugRegistry, STORE_SLUG_MARKER_KEY, formatBackfillReport, fallbackSlug, STORE_SLUG_REGEX,
+  type BusinessSlugRow, type TenantReader, type TenantRow, type TenantRenamer,
 } from "@hisaabo/db";
 import { createScratchControlDb, type Scratch } from "./scratch-control-db";
 
@@ -15,6 +15,17 @@ afterAll(async () => { await scratch.drop(); });
 interface T { id: string; slug: string; status: string; createdAt: Date; rows: BusinessSlugRow[] }
 const day = (n: number) => new Date(Date.UTC(2025, 0, n));
 let seq = 0;
+const allTenants = new Map<string, T>();
+const autoAssigned = new Set<string>(); // businessIds flagged store_slug_auto_assigned in the fake tenant DBs
+
+/** Fake tenant DB write with the same contract as the real one (guarded by `store_slug = from`). */
+const fakeRename: TenantRenamer = async (tenant, p) => {
+  const row = allTenants.get(tenant.id)?.rows.find((r) => r.id === p.businessId);
+  if (!row || row.store_slug !== p.from) return 0;
+  row.store_slug = p.to;
+  autoAssigned.add(row.id);
+  return 1;
+};
 
 async function mkTenant(rows: Partial<BusinessSlugRow>[], o: { status?: string; createdAt?: Date } = {}): Promise<T> {
   const id = randomUUID();
@@ -23,6 +34,7 @@ async function mkTenant(rows: Partial<BusinessSlugRow>[], o: { status?: string; 
     createdAt: o.createdAt ?? day(10),
     rows: rows.map((r) => ({ id: randomUUID(), store_slug: null, store_enabled: true, created_at: day(10), ...r })),
   };
+  allTenants.set(id, t);
   await scratch.sql`INSERT INTO tenants (id, name, slug, db_name, status, created_at)
     VALUES (${t.id}, ${t.slug}, ${t.slug}, ${"db_" + t.slug.replace(/-/g, "_")}, ${t.status}, ${t.createdAt})`;
   return t;
@@ -35,7 +47,7 @@ const readerFor = (tenants: T[], failFor: Set<string> = new Set()) =>
   });
 
 const run = (readTenant: TenantReader, extra: Record<string, unknown> = {}) =>
-  backfillStoreSlugRegistry({ controlUrl: scratch.url, readTenant, logger: quiet, ...extra });
+  backfillStoreSlugRegistry({ controlUrl: scratch.url, readTenant, renameTenant: fakeRename, logger: quiet, ...extra });
 
 const registry = () => scratch.sql<{ slug: string; tenant_id: string; business_id: string; store_enabled: boolean; released_at: Date | null }[]>`
   SELECT slug, tenant_id, business_id, store_enabled, released_at FROM store_slugs ORDER BY slug`;
@@ -45,6 +57,8 @@ beforeEach(async () => {
   await scratch.sql`DELETE FROM store_slugs`;
   await scratch.sql`DELETE FROM system_config WHERE key = ${STORE_SLUG_MARKER_KEY}`;
   await scratch.sql`DELETE FROM tenants`;
+  allTenants.clear();
+  autoAssigned.clear();
 });
 
 describe("store slug backfill", () => {
@@ -125,7 +139,7 @@ describe("store slug backfill", () => {
     await scratch.sql`INSERT INTO store_slugs (slug, tenant_id, business_id, store_enabled) VALUES ('taken-shop', ${live.id}, ${bizLive}, true)`;
     const r = await run(readerFor([live, older]));
     expect(r.status).toBe("complete");
-    const row = (await registry())[0];
+    const row = (await registry()).find((x) => x.slug === "taken-shop")!;
     expect(row.tenant_id).toBe(live.id);
     expect(r.losers).toHaveLength(1);
     expect(r.losers[0]).toMatchObject({ reason: "registry", loserTenantId: older.id });
@@ -265,5 +279,174 @@ describe("dry run", () => {
     const before = await snap();
     await run(readerFor([a]), { dryRun: true });
     expect(await snap()).toBe(before);
+  });
+});
+
+describe("duplicate slug auto-rename", () => {
+  const dupSetup = async () => {
+    const winner = await mkTenant([{ store_slug: "dup-shop", created_at: day(1) }]);
+    const loser = await mkTenant([{ store_slug: "dup-shop", created_at: day(5), store_enabled: false }]);
+    return { winner, loser };
+  };
+
+  it("renames the loser in registry and tenant DB; winner untouched; re-run idempotent", async () => {
+    const { winner, loser } = await dupSetup();
+    const r = await run(readerFor([winner, loser]));
+    expect(r.status).toBe("complete");
+    expect(r.renames).toHaveLength(1);
+    const ren = r.renames[0];
+    expect(ren).toMatchObject({ tenantId: loser.id, businessId: loser.rows[0].id, from: "dup-shop" });
+    expect(ren.to).toMatch(/^[a-z0-9]{4}-dup-shop$/);
+    expect(loser.rows[0].store_slug).toBe(ren.to);
+    expect(autoAssigned.has(loser.rows[0].id)).toBe(true);
+    expect(winner.rows[0].store_slug).toBe("dup-shop");
+    expect(autoAssigned.has(winner.rows[0].id)).toBe(false);
+    const reg = await registry();
+    const w = reg.find((x) => x.slug === "dup-shop")!;
+    const l = reg.find((x) => x.slug === ren.to)!;
+    expect(w.tenant_id).toBe(winner.id);
+    expect(l).toMatchObject({ tenant_id: loser.id, business_id: loser.rows[0].id, store_enabled: false, released_at: null });
+    const m = await marker();
+    expect(m.renames).toEqual([ren]);
+
+    // forced re-run: nothing left to do
+    const again = await run(readerFor([winner, loser]), { force: true });
+    expect(again.status).toBe("complete");
+    expect(again.renames).toHaveLength(0);
+    expect(again.losers).toHaveLength(0);
+    expect(await registry()).toHaveLength(2);
+  });
+
+  it("registry-reason losers are renamed too", async () => {
+    const live = await mkTenant([{ store_slug: "reg-shop", created_at: day(20) }]);
+    const other = await mkTenant([{ store_slug: "reg-shop", created_at: day(1) }]);
+    await scratch.sql`INSERT INTO store_slugs (slug, tenant_id, business_id, store_enabled) VALUES ('reg-shop', ${live.id}, ${live.rows[0].id}, true)`;
+    const r = await run(readerFor([live, other]));
+    expect(r.renames).toHaveLength(1);
+    expect(r.renames[0].tenantId).toBe(other.id);
+  });
+
+  it("tenant update failure rolls the control tx back, withholds the marker, next run succeeds", async () => {
+    const { winner, loser } = await dupSetup();
+    const failing: TenantRenamer = async () => { throw new Error("tenant db down"); };
+    const r1 = await run(readerFor([winner, loser]), { renameTenant: failing });
+    expect(r1.status).toBe("incomplete");
+    expect(r1.renames).toHaveLength(0);
+    expect(r1.unresolved).toHaveLength(1);
+    expect(r1.unresolved[0].reason).toContain("tenant db down");
+    expect((await registry()).map((x) => x.slug)).toEqual(["dup-shop"]); // no stray candidate row
+    expect(await marker()).toBeUndefined();
+
+    const r2 = await run(readerFor([winner, loser]));
+    expect(r2.status).toBe("complete");
+    expect(r2.renames).toHaveLength(1);
+    expect(await marker()).toBeDefined();
+    expect(await registry()).toHaveLength(2);
+  });
+
+  it("0 rows updated (slug changed concurrently) is unresolved and leaves no registry row", async () => {
+    const { winner, loser } = await dupSetup();
+    const changed: TenantRenamer = async () => 0;
+    const r1 = await run(readerFor([winner, loser]), { renameTenant: changed });
+    expect(r1.unresolved).toHaveLength(1);
+    expect(r1.status).toBe("incomplete");
+    expect((await registry()).map((x) => x.slug)).toEqual(["dup-shop"]);
+    expect(await marker()).toBeUndefined();
+  });
+
+  it("retries with a fresh prefix on a registry conflict, and gives up after the attempt cap", async () => {
+    const { winner, loser } = await dupSetup();
+    // Make the first candidate collide: pre-claim whatever the tenant renamer is asked to write... simulate via
+    // a tenant unique violation on the first attempt (savepoint rolled back, new prefix).
+    let calls = 0;
+    const uniqueOnce: TenantRenamer = async (t, p) => {
+      if (calls++ === 0) throw Object.assign(new Error("duplicate key"), { code: "23505" });
+      return fakeRename(t, p);
+    };
+    const r1 = await run(readerFor([winner, loser]), { renameTenant: uniqueOnce });
+    expect(r1.status).toBe("complete");
+    expect(calls).toBe(2);
+    expect(await registry()).toHaveLength(2);
+
+    await scratch.sql`DELETE FROM store_slugs`;
+    await scratch.sql`DELETE FROM system_config WHERE key = ${STORE_SLUG_MARKER_KEY}`;
+    loser.rows[0].store_slug = "dup-shop";
+    calls = 0;
+    const alwaysUnique: TenantRenamer = async () => { calls++; throw Object.assign(new Error("duplicate key"), { code: "23505" }); };
+    const r2 = await run(readerFor([winner, loser]), { renameTenant: alwaysUnique });
+    expect(calls).toBe(10);
+    expect(r2.unresolved).toHaveLength(1);
+    expect(r2.unresolved[0].reason).toMatch(/no unique replacement/);
+    expect(r2.status).toBe("incomplete");
+  });
+
+  it("does not rename invalid-format slugs", async () => {
+    const a = await mkTenant([{ store_slug: "Bad_Slug" }]);
+    const b = await mkTenant([{ store_slug: "Bad_Slug" }]);
+    const r = await run(readerFor([a, b]));
+    expect(r.renames).toHaveLength(0);
+    expect(r.invalid).toHaveLength(2);
+    expect(a.rows[0].store_slug).toBe("Bad_Slug");
+  });
+
+  it("dry run lists planned renames and writes nothing", async () => {
+    const { winner, loser } = await dupSetup();
+    const renamer = vi.fn(fakeRename);
+    const r = await run(readerFor([winner, loser]), { dryRun: true, renameTenant: renamer });
+    expect(r.plannedRenames).toEqual([
+      { slug: "dup-shop", tenantId: loser.id, tenantSlug: loser.slug, businessId: loser.rows[0].id },
+    ]);
+    expect(r.renames).toHaveLength(0);
+    expect(renamer).not.toHaveBeenCalled();
+    expect(loser.rows[0].store_slug).toBe("dup-shop");
+    expect(await registry()).toHaveLength(0);
+    expect(await marker()).toBeUndefined();
+    expect(formatBackfillReport(r, { dryRun: true })).toContain("would rename dup-shop \u2192 <prefix>-dup-shop");
+  });
+
+  it("non-dry-run reconcile (force) applies the renames even with the marker present", async () => {
+    const a = await mkTenant([{ store_slug: "solo-shop" }]);
+    await run(readerFor([a])); // marker written
+    const { winner, loser } = await dupSetup();
+    const r = await run(readerFor([a, winner, loser]), { force: true });
+    expect(r.renames).toHaveLength(1);
+    expect(r.status).toBe("complete");
+  });
+});
+
+describe("fallbackSlug", () => {
+  it("always yields a valid, <= 50 char slug with a 4-char [a-z0-9] prefix (property)", () => {
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-";
+    const rnd = (n: number) => Math.floor(Math.random() * n);
+    for (let i = 0; i < 3000; i++) {
+      const len = i % 3 === 0 ? 50 : 3 + rnd(48);
+      let orig = "";
+      for (let j = 0; j < len; j++) orig += alphabet[rnd(alphabet.length)];
+      // force a valid original
+      orig = "a" + orig.slice(1, -1).replace(/^$/, "b") + "z";
+      orig = orig.slice(0, 50).replace(/-+$/, "z");
+      if (!STORE_SLUG_REGEX.test(orig)) continue;
+      const out = fallbackSlug(orig);
+      expect(out).toMatch(STORE_SLUG_REGEX);
+      expect(out.length).toBeLessThanOrEqual(50);
+      expect(out).toMatch(/^[a-z0-9]{4}-/);
+      if (orig.length <= 45) expect(out).toBe(out.slice(0, 5) + orig);
+    }
+  });
+
+  it("truncates 50-char originals and strips a trailing hyphen created by truncation", () => {
+    const orig = "a".repeat(44) + "-" + "b".repeat(5); // char 45 (index 44) is '-'
+    expect(orig).toHaveLength(50);
+    const out = fallbackSlug(orig);
+    expect(out).toHaveLength(49); // 4 + 1 + 44, trailing '-' stripped
+    expect(out.endsWith("-")).toBe(false);
+    expect(out).toMatch(STORE_SLUG_REGEX);
+    expect(fallbackSlug("x".repeat(50))).toHaveLength(50);
+  });
+
+  it("uses a fresh random prefix per call and rejects invalid originals", () => {
+    const set = new Set(Array.from({ length: 50 }, () => fallbackSlug("shop").slice(0, 4)));
+    expect(set.size).toBeGreaterThan(1);
+    expect(() => fallbackSlug("Bad_Slug")).toThrow();
   });
 });

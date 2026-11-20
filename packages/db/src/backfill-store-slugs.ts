@@ -16,16 +16,25 @@
  *  - Duplicate winner ranking: active tenant, business created_at, tenant
  *    created_at, business_id. Contested slugs are deferred while any tenant
  *    failed to read (no winner is chosen on partial information).
- *  - Tenant data is never modified. tenant_id always comes from the control
- *    `tenants` row being scanned, never from tenant-DB content.
+ *  - Duplicate losers are NOT dropped: each gets a new unique slug
+ *    (`fallbackSlug`: random prefix + original), claimed in the registry and
+ *    written to that business in its tenant DB (store_slug_auto_assigned=true)
+ *    inside ONE control transaction per loser. A failed/0-row tenant update
+ *    (e.g. the user changed the slug concurrently) rolls the registry insert
+ *    back and leaves the loser "unresolved": no marker, retried next run.
+ *    This is the ONLY tenant-DB write the backfill makes, and it is guarded by
+ *    `WHERE store_slug = <original>`.
+ *  - tenant_id always comes from the control `tenants` row being scanned,
+ *    never from tenant-DB content.
  *  - dryRun is strictly read-only (read-only sessions, no lock, no marker) and
  *    works when the store_slugs table does not exist yet.
  */
 import postgres from "postgres";
+import { fallbackSlug, FALLBACK_SLUG_MAX_ATTEMPTS, STORE_SLUG_REGEX, storeSlugBusinessLockStatement } from "./store-slug.js";
 
+export { STORE_SLUG_REGEX };
 export const STORE_SLUG_MARKER_KEY = "migration:store_slug_registry_v1";
 export const STORE_SLUG_BACKFILL_LOCK_ID = 72919284;
-export const STORE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/;
 
 // Server-side read-only sessions: dry-run cannot write even by mistake.
 // (postgres.js types only model boolean params; the server parses "on".)
@@ -55,6 +64,17 @@ export interface BusinessSlugRow {
 }
 
 export type TenantReader = (tenant: TenantRow) => Promise<BusinessSlugRow[]>;
+/**
+ * Tenant-DB write used for renames. Must run
+ *   UPDATE businesses SET store_slug = to, store_slug_auto_assigned = true, updated_at = now()
+ *   WHERE id = businessId AND store_slug = from
+ * and return the affected row count (0 = the slug changed concurrently).
+ * Throw on any failure (a unique violation must carry `code: "23505"`).
+ */
+export type TenantRenamer = (
+  tenant: TenantRow,
+  p: { businessId: string; from: string; to: string },
+) => Promise<number>;
 type LogFn = (level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) => void;
 
 export interface BackfillOptions {
@@ -67,6 +87,10 @@ export interface BackfillOptions {
   prune?: boolean;
   /** Injectable reader (tests). Default connects with buildTenantUrl. */
   readTenant?: TenantReader;
+  /** Test seam: candidate generator (default `fallbackSlug`). Only the slug choice is replaced; all SQL stays real. */
+  generateSlug?: (original: string) => string;
+  /** Injectable tenant renamer (tests). Default connects with buildTenantUrl. */
+  renameTenant?: TenantRenamer;
   /** Required when readTenant is not given (migrate.ts passes its admin-credential builder). */
   buildTenantUrl?: (t: TenantRow) => Promise<string>;
   logger?: LogFn;
@@ -92,6 +116,20 @@ export interface Loser {
   reason: "tenant" | "registry";
 }
 
+export interface SlugRename {
+  tenantId: string;
+  businessId: string;
+  from: string;
+  to: string;
+}
+
+export interface UnresolvedLoser {
+  slug: string;
+  tenantId: string;
+  businessId: string;
+  reason: string;
+}
+
 export interface DuplicateGroup {
   slug: string;
   winner: { tenantId: string; tenantSlug: string; businessId: string };
@@ -108,6 +146,12 @@ export interface BackfillReport {
   losers: Loser[];
   duplicates: DuplicateGroup[];
   invalid: { slug: string; tenantId: string; businessId: string }[];
+  /** losers given a new slug (applied; always empty for dry-run) */
+  renames: SlugRename[];
+  /** dry-run only: losers that would be renamed (the new slug is random, so only `from` is known) */
+  plannedRenames: { slug: string; tenantId: string; tenantSlug: string; businessId: string }[];
+  /** losers that could not be renamed this run (marker withheld, retried next run) */
+  unresolved: UnresolvedLoser[];
   failures: { tenantId: string; tenantSlug: string; error: string }[];
   deferred: number;
   /** reconcile (force) only */
@@ -126,6 +170,7 @@ const defaultLogger: LogFn = (level, msg, data) => {
 function emptyReport(): BackfillReport {
   return {
     status: "incomplete", tenants: 0, inserted: 0, wouldInsert: 0, losers: [], duplicates: [], invalid: [],
+    renames: [], plannedRenames: [], unresolved: [],
     failures: [], deferred: 0, enabledDriftFixed: 0, orphans: [], pruned: 0, tableExists: true,
   };
 }
@@ -156,6 +201,28 @@ function defaultReader(buildTenantUrl: (t: TenantRow) => Promise<string>, readOn
     }
   };
 }
+
+function defaultRenamer(buildTenantUrl: (t: TenantRow) => Promise<string>): TenantRenamer {
+  return async (tenant, p) => {
+    const url = await buildTenantUrl(tenant);
+    const client = postgres(url, {
+      max: 1, idle_timeout: 0, connect_timeout: 10, onnotice: () => {},
+      connection: { statement_timeout: 30000 },
+    });
+    try {
+      const rows = await client`
+        UPDATE businesses
+           SET store_slug = ${p.to}, store_slug_auto_assigned = true, updated_at = now()
+         WHERE id = ${p.businessId} AND store_slug = ${p.from}
+        RETURNING id`;
+      return rows.length;
+    } finally {
+      await client.end({ timeout: 5 });
+    }
+  };
+}
+
+const isUnique = (err: unknown) => (err as { code?: string } | null)?.code === "23505";
 
 export async function backfillStoreSlugRegistry(opts: BackfillOptions): Promise<BackfillReport> {
   const log = opts.logger ?? defaultLogger;
@@ -322,13 +389,18 @@ export async function backfillStoreSlugRegistry(opts: BackfillOptions): Promise<
     }
 
     if (dryRun) {
+      for (const l of report.losers) {
+        report.plannedRenames.push({
+          slug: l.slug, tenantId: l.loserTenantId, tenantSlug: tenantSlugById.get(l.loserTenantId) ?? "",
+          businessId: l.loserBusinessId,
+        });
+      }
       report.status = "dry-run";
       report.enabledDriftFixed = drift.length; // would-fix count
       return report;
     }
 
     // ── WRITE PHASE (one control transaction) ───────────────
-    const clean = report.failures.length === 0 && report.deferred === 0;
     await control.begin(async (tx) => {
       for (let i = 0; i < toInsert.length; i += INSERT_CHUNK) {
         const chunk = toInsert.slice(i, i + INSERT_CHUNK);
@@ -359,28 +431,72 @@ export async function backfillStoreSlugRegistry(opts: BackfillOptions): Promise<
           }
         }
       }
-      if (clean) {
-        const value = {
-          version: 1,
-          completedAt: new Date().toISOString(),
-          tenants: report.tenants,
-          inserted: report.inserted,
-          losers: report.losers.slice(0, MARKER_LIST_CAP),
-          invalid: report.invalid.slice(0, MARKER_LIST_CAP),
-        };
-        await tx`
-          INSERT INTO system_config (key, value, updated_at)
-          VALUES (${STORE_SLUG_MARKER_KEY}, ${tx.json(value as unknown as Parameters<typeof tx.json>[0])}, now())
-          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-        `;
-      }
     });
+
+    // ── RENAME PHASE (one control transaction per loser) ────
+    // After the winners are registered, so a loser's random candidate can
+    // never pre-empt a winner's slug.
+    if (report.losers.length > 0) {
+      const renameTenant = opts.renameTenant ?? (() => {
+        if (!opts.buildTenantUrl) throw new Error("buildTenantUrl or renameTenant is required");
+        return defaultRenamer(opts.buildTenantUrl);
+      })();
+      const tenantById = new Map(tenants.map((t) => [t.id, t]));
+      for (const l of report.losers) {
+        const tenant = tenantById.get(l.loserTenantId);
+        const biz = tenantBusinesses.get(l.loserTenantId)?.get(l.loserBusinessId);
+        const unresolved = (reason: string) => {
+          report.unresolved.push({ slug: l.slug, tenantId: l.loserTenantId, businessId: l.loserBusinessId, reason });
+          log("warn", "store slug backfill: loser could not be renamed (retried next run)", {
+            slug: l.slug, tenantId: l.loserTenantId, businessId: l.loserBusinessId, reason,
+          });
+        };
+        if (!tenant || !biz) { unresolved("tenant business not found"); continue; }
+        if (liveBusinessKeys.has(liveKey(l.loserTenantId, l.loserBusinessId))) {
+          // Registry already maps this business to another slug (drift). Needs an operator (--prune).
+          unresolved("business already has a different live registry slug; run --reconcile-store-slugs --prune");
+          continue;
+        }
+        try {
+          const to = await renameLoser(control, renameTenant, tenant, biz, l.slug, bySlug, log, opts.generateSlug ?? fallbackSlug);
+          if (to) {
+            report.renames.push({ tenantId: l.loserTenantId, businessId: l.loserBusinessId, from: l.slug, to });
+            log("warn", "store slug backfill: renamed duplicate slug", {
+              tenantId: l.loserTenantId, businessId: l.loserBusinessId, from: l.slug, to,
+            });
+          } else {
+            unresolved("no unique replacement slug could be claimed");
+          }
+        } catch (err) {
+          unresolved(err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+
+    const clean = report.failures.length === 0 && report.deferred === 0 && report.unresolved.length === 0;
+    if (clean) {
+      const value = {
+        version: 1,
+        completedAt: new Date().toISOString(),
+        tenants: report.tenants,
+        inserted: report.inserted,
+        losers: report.losers.slice(0, MARKER_LIST_CAP),
+        renames: report.renames.slice(0, MARKER_LIST_CAP),
+        renamed: report.renames.length,
+        invalid: report.invalid.slice(0, MARKER_LIST_CAP),
+      };
+      await control`
+        INSERT INTO system_config (key, value, updated_at)
+        VALUES (${STORE_SLUG_MARKER_KEY}, ${control.json(value as unknown as Parameters<typeof control.json>[0])}, now())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+      `;
+    }
 
     report.status = clean ? "complete" : "incomplete";
     log(clean ? "info" : "warn", "store slug backfill finished", {
       status: report.status, tenants: report.tenants, inserted: report.inserted,
-      losers: report.losers.length, invalid: report.invalid.length,
-      failures: report.failures.length, deferred: report.deferred,
+      losers: report.losers.length, renamed: report.renames.length, unresolved: report.unresolved.length,
+      invalid: report.invalid.length, failures: report.failures.length, deferred: report.deferred,
     });
     return report;
   } finally {
@@ -391,6 +507,79 @@ export async function backfillStoreSlugRegistry(opts: BackfillOptions): Promise<
   }
 }
 
+/**
+ * Give one loser a new unique slug. One control transaction:
+ *   advisory lock (same key as the API's per-business lock) →
+ *   per attempt (savepoint): INSERT registry row ON CONFLICT DO NOTHING →
+ *   tenant UPDATE guarded by `store_slug = original`.
+ * No insert ⇒ fresh prefix. Tenant unique violation ⇒ savepoint rolled back,
+ * fresh prefix. Tenant failure or 0 rows (slug changed concurrently) ⇒ the
+ * whole transaction rolls back (throws). Returns the new slug, or null when
+ * every attempt was a registry conflict.
+ */
+async function renameLoser(
+  control: postgres.Sql,
+  renameTenant: TenantRenamer,
+  tenant: TenantRow,
+  biz: BusinessSlugRow,
+  original: string,
+  knownSlugs: Map<string, unknown>,
+  log: LogFn,
+  generate: (original: string) => string,
+): Promise<string | null> {
+  let committedTenantSlug: string | null = null;
+  try {
+    return await control.begin(async (tx) => {
+      // Serialise with store.updateSettings (applyStoreChange) for this business.
+      const lock = storeSlugBusinessLockStatement(tenant.id, biz.id);
+      await tx.unsafe(lock.text, lock.params);
+      for (let attempt = 0; attempt < FALLBACK_SLUG_MAX_ATTEMPTS; attempt++) {
+        const candidate = generate(original);
+        if (knownSlugs.has(candidate)) continue; // someone's unregistered slug; don't pre-empt it
+        const outcome = await tx.savepoint(async (sp) => {
+          // tenant_id comes from the scanned control `tenants` row.
+          const ins = await sp`
+            INSERT INTO store_slugs (slug, tenant_id, business_id, store_enabled)
+            SELECT ${candidate}, t.id, ${biz.id}, ${!!biz.store_enabled} FROM tenants t WHERE t.id = ${tenant.id}
+            ON CONFLICT DO NOTHING`;
+          if (ins.count === 0) return "conflict" as const;
+          let affected: number;
+          try {
+            affected = await renameTenant(tenant, { businessId: biz.id, from: original, to: candidate });
+          } catch (err) {
+            if (isUnique(err)) throw new RetryAttempt();
+            throw err;
+          }
+          if (affected === 0) throw new Error("tenant business slug changed concurrently (0 rows updated)");
+          committedTenantSlug = candidate;
+          return "ok" as const;
+        }).catch((err) => {
+          if (err instanceof RetryAttempt) return "conflict" as const;
+          throw err;
+        });
+        if (outcome === "ok") return candidate;
+        log("info", "store slug backfill: replacement slug conflicted, retrying", { attempt });
+      }
+      return null;
+    });
+  } catch (err) {
+    // Control COMMIT failed after the tenant write: best-effort undo so the
+    // tenant does not keep an unregistered auto-assigned slug.
+    if (committedTenantSlug) {
+      try {
+        await renameTenant(tenant, { businessId: biz.id, from: committedTenantSlug, to: original });
+      } catch (revertErr) {
+        log("error", "store slug backfill: tenant revert failed after control rollback", {
+          tenantId: tenant.id, businessId: biz.id, error: revertErr instanceof Error ? revertErr.message : String(revertErr),
+        });
+      }
+    }
+    throw err;
+  }
+}
+
+class RetryAttempt extends Error {}
+
 /** Human-readable report for the CLI. */
 export function formatBackfillReport(r: BackfillReport, opts: { dryRun?: boolean } = {}): string {
   const lines: string[] = [];
@@ -398,6 +587,8 @@ export function formatBackfillReport(r: BackfillReport, opts: { dryRun?: boolean
   lines.push(`  tenants scanned:        ${r.tenants}`);
   if (!r.tableExists) lines.push("  store_slugs table:      does not exist yet (pre-upgrade check)");
   lines.push(`  ${opts.dryRun ? "would insert:          " : "inserted:              "} ${opts.dryRun ? r.wouldInsert : r.inserted}`);
+  lines.push(`  ${opts.dryRun ? "would rename:          " : "renamed:               "} ${opts.dryRun ? r.plannedRenames.length : r.renames.length}`);
+  lines.push(`  unresolved losers:      ${r.unresolved.length}`);
   lines.push(`  invalid slugs skipped:  ${r.invalid.length}`);
   lines.push(`  tenant read failures:   ${r.failures.length}`);
   lines.push(`  deferred (contested):   ${r.deferred}`);
@@ -416,6 +607,23 @@ export function formatBackfillReport(r: BackfillReport, opts: { dryRun?: boolean
     for (const l of r.losers.filter((x) => x.reason === "registry")) {
       lines.push(`  /store/${l.slug}: already registered to business ${l.winnerBusinessId}; tenant ${l.loserTenantId} business ${l.loserBusinessId} loses`);
     }
+  }
+  if (opts.dryRun && r.plannedRenames.length) {
+    lines.push("");
+    lines.push(`Planned renames (${r.plannedRenames.length}); each loser gets a random 4-char prefix:`);
+    for (const p of r.plannedRenames) {
+      lines.push(`  would rename ${p.slug} \u2192 <prefix>-${p.slug}   tenant ${p.tenantSlug} (${p.tenantId}) business ${p.businessId}`);
+    }
+  }
+  if (r.renames.length) {
+    lines.push("");
+    lines.push(`Renamed (${r.renames.length}):`);
+    for (const x of r.renames) lines.push(`  ${x.from} \u2192 ${x.to}   tenant ${x.tenantId} business ${x.businessId}`);
+  }
+  if (r.unresolved.length) {
+    lines.push("");
+    lines.push(`Unresolved losers (${r.unresolved.length}; marker withheld, retried next run):`);
+    for (const u of r.unresolved) lines.push(`  ${u.slug} tenant ${u.tenantId} business ${u.businessId}: ${u.reason}`);
   }
   if (r.invalid.length) {
     lines.push("");

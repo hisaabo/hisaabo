@@ -99,7 +99,9 @@ function StoreSettingsScreenContent() {
   const effectiveRequirePhoneOtp = requirePhoneOtp ?? settings?.storeRequirePhoneOtp ?? false;
   const phoneOtpAvailable = settings?.phoneOtpAvailable ?? false;
 
-  const isSlugLocked = !!settings?.storeSlug;
+  // Locked once set, unless auto-assigned (duplicate rename): one change allowed.
+  const slugAutoAssigned = !!settings?.storeSlug && !!settings?.storeSlugAutoAssigned;
+  const isSlugLocked = !!settings?.storeSlug && !slugAutoAssigned;
 
   // ── Slug availability check ─────────────────────────────────────
   const debouncedSlug = useDebounce(effectiveSlug, 500);
@@ -232,6 +234,14 @@ function StoreSettingsScreenContent() {
 
               {/* ── Store URL Slug ─────────────────────────────── */}
               <Text style={styles.sectionLabel}>Store URL</Text>
+              {slugAutoAssigned && (
+                <View style={styles.slugNotice}>
+                  <Text style={styles.slugNoticeText}>
+                    Your store link was changed to {settings?.storeSlug} because the original was
+                    already used by another store. You can choose a new link once.
+                  </Text>
+                </View>
+              )}
               <View style={styles.slugRow}>
                 <View style={styles.slugPrefix}>
                   <Text style={styles.slugPrefixText} numberOfLines={1}>
@@ -301,7 +311,9 @@ function StoreSettingsScreenContent() {
                 </Text>
               ) : (
                 <Text style={styles.slugHintLocked}>
-                  Choose carefully — this cannot be changed later
+                  {slugAutoAssigned
+                    ? "You can change this once — after saving it cannot be changed again"
+                    : "Choose carefully — this cannot be changed later"}
                 </Text>
               )}
 
@@ -1242,6 +1254,18 @@ const useStyles = makeStyles((colors) => ({
   slugStatusIcon: {
     position: "absolute",
     right: 12,
+  },
+  slugNotice: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.brand,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+  },
+  slugNoticeText: {
+    fontSize: 12,
+    color: colors.textPrimary,
   },
   slugHintLocked: {
     fontSize: 11,

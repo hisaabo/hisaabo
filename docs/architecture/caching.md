@@ -183,9 +183,34 @@ migrations (`packages/db/src/backfill-store-slugs.ts`):
 - Advisory lock `72919284` stops replicas from running it concurrently.
 - Existing registry rows are authoritative and never evicted. Duplicate slugs
   across tenants are won by: active tenant, then oldest business, then oldest
-  tenant, then business id. Losers are logged and listed in the marker; tenant
-  data is never modified. Contested slugs are deferred while any tenant failed
+  tenant, then business id. Contested slugs are deferred while any tenant failed
   to read.
+- **Losers are renamed, not dropped.** Each loser gets a new unique slug
+  `<4 random [a-z0-9]>-<original>` (`fallbackSlug` in `packages/db/src/store-slug.ts`,
+  total length <= 50). Per loser, in ONE control transaction: lock the business,
+  `INSERT INTO store_slugs ... ON CONFLICT DO NOTHING` (fresh prefix on conflict,
+  up to 10 attempts), then `UPDATE businesses SET store_slug = new,
+  store_slug_auto_assigned = true WHERE id = ... AND store_slug = <original>` in
+  the tenant DB. A failed or 0-row tenant update (e.g. the user changed the slug
+  meanwhile) rolls the control transaction back and the loser is reported as
+  **unresolved**: the marker is withheld and the next boot retries. This is the
+  only tenant-DB write the backfill makes. Renames (tenant, business, from, to)
+  are logged and listed in the marker (capped). Invalid-format slugs are still
+  skipped, never renamed. `store_enabled` is mirrored from the tenant row.
+- **Set once.** A store slug can be chosen once. `store.updateSettings` rejects
+  any later change (including clearing) with `FORBIDDEN` unless
+  `businesses.store_slug_auto_assigned` is true; that one allowed change clears
+  the flag. Re-saving the same slug and other store settings are always allowed.
+  The check runs under the per-business advisory lock (multi-tenant) or a row
+  lock (self-hosted), so concurrent requests cannot spend the change twice.
+  Web/mobile also lock the field in the UI and show a notice while the flag is
+  set. An operator can grant one more change with
+  `UPDATE businesses SET store_slug_auto_assigned = true WHERE id = '<business>'`
+  in the tenant DB.
+- Self-import applies the same rename: a slug taken elsewhere becomes
+  `<prefix>-<slug>` (flagged auto-assigned, store left enabled as imported) with
+  a warning naming old and new slug; only if no slug can be claimed is the slug
+  cleared and the store disabled.
 - Until the marker exists, a registry miss falls back to the legacy tenant scan
   so a partial backfill cannot cause an outage.
 - A backfill error never fails boot.
@@ -204,8 +229,10 @@ MULTI_TENANT=true CONTROL_DATABASE_URL=postgresql://... \
 ```
 
 Read the report: tenants scanned, rows it would insert, **duplicate slugs**
-(winner and losers per slug - contact the losing accounts if their storefront
-matters), invalid slugs (skipped; they never resolved before either) and
+(winner and losers per slug) and the **planned renames** (`would rename X ->
+<prefix>-X`; the prefix is random and chosen at the real run; losers keep a
+working storefront at the new URL and may change it once - consider telling
+those accounts), invalid slugs (skipped; they never resolved before either) and
 tenant read failures (fix those tenants first; exit code 1 when any tenant
 failed). Then deploy; the boot backfill does the real run.
 
@@ -219,7 +246,9 @@ node packages/db/dist/migrate.mjs --reconcile-store-slugs --prune    # also dele
 Multi-tenant only; runs no schema migrations. It inserts missing rows, repairs
 `store_enabled` drift and reports **orphans** (live registry rows whose tenant
 business no longer has that slug); `--prune` deletes only those. `--prune`
-cannot be combined with `--dry-run`. Run it once after a rolling deploy
+cannot be combined with `--dry-run`. A non-dry-run reconcile applies the same
+renames as the boot backfill (tenants must already be migrated to the schema
+with `store_slug_auto_assigned`). Run it once after a rolling deploy
 completes, because old-version replicas that saved a slug after the backfill
 read are not in the registry.
 

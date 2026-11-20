@@ -79,6 +79,10 @@ export const businesses = pgTable("businesses", {
   // ── Online Store settings ──
   storeEnabled: boolean("store_enabled").default(false).notNull(),
   storeSlug: text("store_slug"),
+  // True when the slug was assigned by the system (duplicate-slug auto-rename
+  // during the registry backfill or a self-import) rather than chosen by the
+  // user. The UI lets the user change it once; updateSettings clears the flag.
+  storeSlugAutoAssigned: boolean("store_slug_auto_assigned").default(false).notNull(),
   storeTagline: text("store_tagline"),
   storeAccentColor: text("store_accent_color"),
   storeMinOrderAmount: numeric("store_min_order_amount", { precision: 15, scale: 2 }),
