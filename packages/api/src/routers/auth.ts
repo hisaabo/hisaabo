@@ -14,6 +14,7 @@ import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
+import { isBearerClient } from "../lib/bearer-client.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
 import {
@@ -75,19 +76,6 @@ const IS_SECURE = (process.env.APP_URL || "").startsWith("https");
 
 function getClientIpFromRequest(req: Request): string | null {
   return getTrustedClientIp(req.headers);
-}
-
-/**
- * Returns true when the session being minted will be consumed as a Bearer
- * token rather than a cookie. Desktop, mobile and CLI clients carry
- * `X-Hisaabo-Client: desktop | mobile | cli`; they never rely on Set-Cookie.
- *
- * The header only selects the session type (and whether `sessionToken` is
- * returned in the body). It never relaxes any other check, Turnstile included.
- */
-function isBearerClient(req: Request): boolean {
-  const client = req.headers.get("x-hisaabo-client");
-  return client === "desktop" || client === "mobile" || client === "cli";
 }
 
 // ── Shared helper: self-hosted default tenant assignment ───────
