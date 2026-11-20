@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, notInArray, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions, tdsSectionConfigs } from "@hisaabo/db";
+import { payments, paymentAllocations, invoices, parties, businesses, bankAccounts, bankTransactions } from "@hisaabo/db";
 import { createPaymentSchema, updatePaymentSchema, paginationSchema, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase, type AppAbility } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
@@ -9,7 +9,7 @@ import { logAudit } from "../lib/audit.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { processGatewayPayment, reverseGatewayPayment } from "../lib/gateway.js";
-import { seedTdsSections } from "../lib/tds-seed.js";
+import { ensureTdsReceivableAccount, findEffectiveTdsSection } from "../lib/tds-sections.js";
 
 const ASSIGN_CHUNK_SIZE = 500;
 
@@ -24,6 +24,20 @@ type PaymentTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 // Allocations must fit inside the payment itself.
 type TdsAllocation = { amount: string; tdsAmount?: string; tdsSectionCode?: string | null; tdsRate?: string | null };
 
+/**
+ * Allocation / TDS invariants (BOUND-ONLY, see docs/architecture/tds.md):
+ *
+ *  - no TDS: the allocations must fit inside the cash payment;
+ *  - with TDS: gross allocations == net cash + TDS exactly;
+ *  - per allocation: 0 < tdsAmount <= its gross amount; a section code and a
+ *    rate (0 < rate <= 100) are required when tdsAmount > 0 and must be absent
+ *    when it is 0.
+ *
+ * The rate is stored as metadata only. It is deliberately NOT cross-checked
+ * against `rate x gross`: TDS is commonly computed on the pre-GST taxable
+ * value (invoice 10,000 + 18% GST = 11,800; 10% TDS on 10,000 = 1,000), and the
+ * amount the customer actually withheld is the source of truth.
+ */
 export function assertAllocationsFitPayment(allocations: TdsAllocation[], paymentAmount: string) {
   const gross = money.sum(allocations.map((a) => a.amount));
   const tds = money.sum(allocations.map((a) => a.tdsAmount || "0"));
@@ -43,18 +57,11 @@ export function assertAllocationsFitPayment(allocations: TdsAllocation[], paymen
     if (money.compare(amount, "0") > 0 && (!hasSection || !hasRate || money.compare(alloc.tdsRate || "0", "0") <= 0)) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "TDS amount requires section code and rate" });
     }
+    if (money.compare(amount, "0") > 0 && money.compare(alloc.tdsRate || "0", "100") > 0) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "TDS rate must be between 0 and 100" });
+    }
     if (money.compare(amount, "0") === 0 && (hasSection || hasRate)) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "TDS section and rate require a positive TDS amount" });
-    }
-    if (money.compare(amount, "0") > 0 && hasRate) {
-      const expected = money.percent(alloc.amount, alloc.tdsRate!);
-      const difference = money.sub(amount, expected);
-      if (money.compare(difference, "-0.01") < 0 || money.compare(difference, "0.01") > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `TDS amount must approximately equal ${alloc.tdsRate}% of the gross allocation`,
-        });
-      }
     }
   }
 }
@@ -78,6 +85,10 @@ async function assertAllocationAllowed(
   partyId: string,
   alloc: TdsAllocation & { invoiceId: string },
   paymentDate: Date = new Date(),
+  // Allocations carried over unchanged by payment.update were validated when
+  // first recorded; re-checking the section would block e.g. a notes edit on an
+  // old receipt after its section was later deactivated.
+  opts: { skipSectionCheck?: boolean } = {},
 ) {
   const [inv] = await tx.select({
     totalAmount: invoices.totalAmount,
@@ -100,36 +111,12 @@ async function assertAllocationAllowed(
     if (inv.type !== "sale") {
       throw new TRPCError({ code: "BAD_REQUEST", message: "TDS is supported only for sales invoices" });
     }
-    let [section] = await tx.select({ id: tdsSectionConfigs.id })
-      .from(tdsSectionConfigs)
-      .where(and(
-        eq(tdsSectionConfigs.businessId, businessId),
-        eq(tdsSectionConfigs.sectionCode, (alloc.tdsSectionCode || "").toUpperCase()),
-        eq(tdsSectionConfigs.status, "active"),
-        sql`${tdsSectionConfigs.effectiveFrom} <= ${paymentDate.toISOString()}::timestamptz`,
-        sql`(${tdsSectionConfigs.effectiveTo} IS NULL OR ${tdsSectionConfigs.effectiveTo} >= ${paymentDate.toISOString()}::timestamptz)`,
-      ))
-      .limit(1);
-    if (!section) {
-      const [anyConfig] = await tx.select({ id: tdsSectionConfigs.id })
-        .from(tdsSectionConfigs)
-        .where(eq(tdsSectionConfigs.businessId, businessId))
-        .limit(1);
-      if (!anyConfig) {
-        await seedTdsSections(tx, businessId);
-        [section] = await tx.select({ id: tdsSectionConfigs.id })
-          .from(tdsSectionConfigs)
-          .where(and(
-            eq(tdsSectionConfigs.businessId, businessId),
-            eq(tdsSectionConfigs.sectionCode, (alloc.tdsSectionCode || "").toUpperCase()),
-            eq(tdsSectionConfigs.status, "active"),
-            sql`${tdsSectionConfigs.effectiveFrom} <= ${paymentDate.toISOString()}::timestamptz`,
-            sql`(${tdsSectionConfigs.effectiveTo} IS NULL OR ${tdsSectionConfigs.effectiveTo} >= ${paymentDate.toISOString()}::timestamptz)`,
-          ))
-          .limit(1);
-      }
+    // Section validity is judged on the business-local (IST) calendar date of
+    // the receipt, not on the raw instant (see tds-sections.ts).
+    if (!opts.skipSectionCheck) {
+      const section = await findEffectiveTdsSection(tx, businessId, alloc.tdsSectionCode || "", paymentDate);
+      if (!section) throw new TRPCError({ code: "BAD_REQUEST", message: "TDS section is not active" });
     }
-    if (!section) throw new TRPCError({ code: "BAD_REQUEST", message: "TDS section is not active" });
   }
   if (inv.partyId !== partyId) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Invoice belongs to a different party than the payment" });
@@ -214,6 +201,7 @@ export const paymentRouter = router({
         invoiceNumber: invoices.invoiceNumber,
         invoiceDate: invoices.invoiceDate,
         totalAmount: invoices.totalAmount,
+        taxAmount: invoices.taxAmount,
         amountPaid: invoices.amountPaid,
         status: invoices.status,
         type: invoices.type,
@@ -235,6 +223,9 @@ export const paymentRouter = router({
       return rows.map((inv) => ({
         ...inv,
         balance: money.sub(inv.totalAmount, inv.amountPaid),
+        // Invoice value excluding GST: the usual base a customer deducts TDS on
+        // (CBDT Circular 23/2017). Lets clients pre-fill a TDS amount.
+        taxableValue: money.sub(inv.totalAmount, inv.taxAmount),
       }));
     }),
 
@@ -354,6 +345,11 @@ export const paymentRouter = router({
         ctx.businessId,
         input.allocations?.length ? input.allocations.map((a) => a.invoiceId) : input.invoiceId ? [input.invoiceId] : [],
       );
+      // The derived ledger posts withheld TDS to system account 1600; guarantee
+      // it exists (or fail cleanly) before anything is written.
+      if (input.allocations?.some((alloc) => money.compare(alloc.tdsAmount || "0", "0") > 0)) {
+        await ensureTdsReceivableAccount(tx, ctx.businessId);
+      }
 
       // Atomically generate payment number
       const [biz] = await tx.select({
@@ -646,7 +642,9 @@ export const paymentRouter = router({
         if (hasExistingTds || isMultiAllocation) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "Allocations are required when changing the payment amount",
+            message:
+              "Allocations are required when changing the payment amount of a payment that is split across invoices or carries TDS. " +
+              "Edit this payment on the web app, where you can re-allocate it.",
           });
         }
       }
@@ -760,8 +758,14 @@ export const paymentRouter = router({
             ? [{ invoiceId: primaryInvoiceId, amount: newAmount, tdsAmount: "0" }]
             : [];
 
+      if (newAllocations.some((alloc) => money.compare(alloc.tdsAmount || "0", "0") > 0)) {
+        await ensureTdsReceivableAccount(tx, ctx.businessId);
+      }
+
       for (const alloc of newAllocations) {
-        await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc, newDate);
+        await assertAllocationAllowed(tx, ctx.businessId, existing.partyId, alloc, newDate, {
+          skipSectionCheck: input.allocations === undefined,
+        });
 
         // Single SQL: update amountPaid and status atomically
         await tx.execute(sql`

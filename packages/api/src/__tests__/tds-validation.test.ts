@@ -92,28 +92,49 @@ describe("TDS payment allocation validation", () => {
     })).toThrow(/TDS section code is required when TDS amount is positive/);
   });
 
-  it("rejects TDS that does not match the recorded rate", () => {
+  it("accepts TDS computed on the pre-GST taxable value (no rate x gross equality)", () => {
+    // Invoice 10,000 + 18% GST = 11,800 gross; 10% TDS on 10,000 = 1,000 (not 1,180).
+    expect(() => assertAllocationsFitPayment([{
+      amount: "11800.00",
+      tdsAmount: "1000.00",
+      tdsSectionCode: "1023",
+      tdsRate: "10.00",
+    }], "10800.00")).not.toThrow();
+  });
+
+  it("treats the rate as metadata: any amount within (0, gross] is accepted", () => {
+    // Customer withheld 9,999 on a 100,000 invoice while quoting 1%: bound-only
+    // validation does not second-guess the deducted amount.
     expect(() => assertAllocationsFitPayment([{
       amount: "100000.00",
       tdsAmount: "9999.00",
       tdsSectionCode: "1023",
       tdsRate: "1.00",
-    }], "90001.00")).toThrow("TDS amount must approximately equal 1.00% of the gross allocation");
-  });
-
-  it("allows exactly one paise difference but rejects two paise", () => {
-    expect(() => assertAllocationsFitPayment([{
-      amount: "100000.00",
-      tdsAmount: "2000.01",
-      tdsSectionCode: "1023",
-      tdsRate: "2.00",
-    }], "97999.99")).not.toThrow();
+    }], "90001.00")).not.toThrow();
     expect(() => assertAllocationsFitPayment([{
       amount: "100000.00",
       tdsAmount: "2000.02",
       tdsSectionCode: "1023",
       tdsRate: "2.00",
-    }], "97999.98")).toThrow("TDS amount must approximately equal 2.00% of the gross allocation");
+    }], "97999.98")).not.toThrow();
+  });
+
+  it("allows TDS equal to the whole gross allocation", () => {
+    expect(() => assertAllocationsFitPayment([{
+      amount: "100.00",
+      tdsAmount: "100.00",
+      tdsSectionCode: "1023",
+      tdsRate: "100.00",
+    }], "0.00")).not.toThrow();
+  });
+
+  it("rejects a rate above 100 on the server even if the schema is bypassed", () => {
+    expect(() => assertAllocationsFitPayment([{
+      amount: "100.00",
+      tdsAmount: "10.00",
+      tdsSectionCode: "1023",
+      tdsRate: "100.01",
+    }], "90.00")).toThrow("TDS rate must be between 0 and 100");
   });
 
   it("supports decimal and 100 percent rates", () => {
@@ -147,15 +168,6 @@ describe("TDS payment allocation validation", () => {
       tdsAmount: "0.00",
       tdsRate: "0.00",
     }], "100.00")).toThrow("TDS section and rate require a positive TDS amount");
-  });
-
-  it("allows paise-level rounding of the rate calculation", () => {
-    expect(() => assertAllocationsFitPayment([{
-      amount: "100.01",
-      tdsAmount: "1.00",
-      tdsSectionCode: "1023",
-      tdsRate: "1.00",
-    }], "99.01")).not.toThrow();
   });
 
   it("rejects TDS amount exceeding gross allocation in schema", () => {

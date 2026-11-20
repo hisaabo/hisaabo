@@ -24,7 +24,10 @@ Hisaabo maintains a standard statutory tax code registry defined in `@hisaabo/sh
 
 ### Tenant Provisioning & Lazy Seeding:
 - When a new tenant is created via `business.create`, all default statutory sections are auto-seeded into `tds_section_configs` with `active: true`.
-- For existing tenants or test fixtures, `tdsSection.list` and `payment.create` employ lazy auto-seeding (`seedTdsSections`) with idempotency (`onConflictDoNothing`), guaranteeing that every tenant has active TDS sections ready in the UI dropdown without manual SQL migrations.
+- `tdsSection.list` is a read-only query: for a business with no section rows yet (created before TDS support, or restored from an older backup) it returns the registry defaults computed in memory, in the same shape and without writing anything. The rows are persisted by `business.create`, by `tdsSection.create`, or by the first payment create/update that records TDS (`seedTdsSections`, idempotent via `onConflictDoNothing`).
+- `tdsSection.create` (add a possibly back-dated configuration) requires `manage:Business` (admins), not the payment-entry permission. A duplicate `(business, code, version)` is a `CONFLICT`; `version` is capped at 1000.
+- Section validity is evaluated on the **business-local (IST) calendar date** of the receipt, so a receipt dated 1 Apr 2026 passes a section effective from 1 Apr 2026 even though an IST browser sends it as `2026-03-31T18:30:00Z`.
+- `tds_section_configs` is part of the self-export/import archive (as are `payment_allocations.tds_*` and `parties.tan`); older backups without them still import.
 
 ---
 
@@ -69,9 +72,17 @@ A TDS payment records balanced double-entry accounting entries:
 
 Total Debits (₹10,000.00) == Total Credits (₹10,000.00). The ledger is strictly balanced.
 
+**Account 1600.** The derived ledger needs the system **1600 – TDS Receivable** asset account only for a receipt that actually carries TDS. When such a receipt is written, the API makes sure a system, active 1600 exists (creating or reactivating it). If 1600 is a user-created (non-system) account, the receipt is rejected with a clear message and nothing is written; the derived ledger likewise refuses to post TDS into a non-system 1600. The system 1600 can be renamed but not deactivated. The cash-flow statement treats 1600 as a current asset (working capital), not investing.
+
 ---
 
-## 4. Customer Statement Accounting (`reports.partyStatement`)
+## 4. Settled vs cash across every party-ledger surface
+
+A receipt **settles** `payments.amount + SUM(payment_allocations.tds_amount)`; the single definition lives in `packages/api/src/lib/payment-settlement.ts` (SQL fragment + JS helper) and is used by:
+`reports.partyStatement`, `party.ledgerReport` / `ledgerReportCSV` / `ledger`, `party.tallyExport` (the TDS is emitted as a second Receipt leg Dr *TDS Receivable* / Cr party), the ledger PDF statement and its UPI QR (`lib/party-ledger.ts`), and the dashboard's invoiced-vs-collected trend (`salesTrend.collected`; `cashCollected` is reported alongside).
+Metrics about money that actually moved (bank balances, cash in hand, payment-mode breakdown, payment summary, bank reconciliation) intentionally stay on net cash; the two are never mixed within one widget.
+
+### Customer statement (`reports.partyStatement`)
 
 In the customer statement of account:
 - Invoices increase the customer's balance due (Debits).
@@ -89,24 +100,31 @@ In the customer statement of account:
 1. **Party Context Gating**:
    - TDS controls only appear when receiving payments from **Customers**.
    - TDS inputs are hidden and cleared for **Suppliers** (where TDS deduction by us would be TDS Payable, handled during invoice booking).
-2. **Multi-Invoice Guard**:
-   - If multiple invoices are selected, TDS input is disabled with a notice requiring single-invoice allocation per TDS payment, preventing ambiguous deduction assignment.
-3. **TAN Integration**:
+2. **Pre-fill on the taxable value**:
+   - With a single invoice selected and a rate entered, the TDS amount is pre-filled as the allocation's share of the invoice's **taxable value (excluding GST)** × rate (invoice 10,000 + 18% GST, 10% → ₹1,000, not ₹1,180). It is only a suggestion: the user can overwrite it, or press "Use suggested" to restore it.
+3. **Multi-Invoice Guard**:
+   - If multiple invoices are selected, the web UI blocks TDS with a notice requiring a single invoice per TDS payment, preventing ambiguous deduction assignment. The API itself accepts per-allocation TDS across several invoices.
+4. **Edit mode**: the panel always sends `allocations` on edit; `[]` (all invoices unchecked) clears the payment's allocations, whereas omitting the field keeps them. All amounts are normalised to 2-decimal strings before submit.
+5. **TAN Integration**:
    - Customer Tax Deduction and Collection Account Number (TAN) is recorded on the party profile (`PartyDetailSlideOver`, `AddPartyModal`, `QuickPartyCreate`).
 
 ---
 
 ## 6. Validation Rules & Invariants
 
-All TDS payments are strictly validated against repository invariants:
-1. `money.compare(tdsAmount, "0") > 0` requires `tdsSectionCode` to be present and `tdsRate > 0`.
-2. `money.compare(tdsAmount, grossAmount) <= 0`: TDS amount cannot exceed the gross invoice settlement.
-3. `money.compare(tdsAmount, "0") === 0`: TDS section code and rate must be omitted or undefined; even a zero rate is rejected as metadata without a deduction.
-4. Active section validation: `tdsSectionCode` must exist, be active, and be effective on the payment date in tenant-scoped `tds_section_configs`.
-5. `tdsAmount` must equal the gross allocation multiplied by `tdsRate`, rounded to paise; a one-paise tolerance permits normal decimal rounding.
+TDS validation is **bound-only**. For each allocation:
+1. `0 < tdsAmount <= grossAmount` (TDS cannot exceed the gross invoice settlement).
+2. `tdsAmount > 0` requires `tdsSectionCode` and a `tdsRate` with `0 < rate <= 100` (at most 2 decimals; stored as metadata).
+3. `tdsAmount == 0`: section code and rate must be omitted; even a zero rate is rejected as metadata without a deduction.
+4. Active section validation: `tdsSectionCode` must exist, be active, and be effective on the (IST) payment date in tenant-scoped `tds_section_configs`.
+5. Across the receipt: gross allocations == net cash + TDS exactly, and each allocation respects the invoice's remaining balance.
 6. All financial arithmetic uses the `@hisaabo/shared` `money` module with 2-decimal-place rounding.
 
-The rate check uses the gross invoice allocation as its base. It does not determine the legally eligible base, thresholds, exemptions, surcharge, or the applicable statutory rate; do not treat the recorded rate as verified tax advice. Historical payments before a code's configured effective date need an explicitly configured historical section; the application does not guess a legacy mapping or rate.
+The recorded rate is **not** cross-checked against `rate × gross`. TDS is commonly deducted on the pre-GST taxable value (invoice ₹10,000 + 18% GST = ₹11,800; 10% TDS on ₹10,000 = ₹1,000), and the amount the customer actually withheld is the source of truth. The application does not determine the legally eligible base, thresholds, exemptions, surcharge, or the applicable statutory rate; do not treat the recorded rate as verified tax advice. Historical payments before a code's configured effective date need an explicitly configured historical section; the application does not guess a legacy mapping or rate.
+
+### Editing a TDS receipt
+
+`payment.update` with `allocations` omitted re-applies the stored allocations; `allocations: []` clears them all. Changing the cash amount of a payment that is split across invoices or carries TDS requires `allocations` (otherwise the new amount would not reconcile with the gross settlement); the API answers with "Allocations are required when changing the payment amount of a payment that is split across invoices or carries TDS. Edit this payment on the web app, where you can re-allocate it."
 
 ## 7. Supplier-side TDS scope
 

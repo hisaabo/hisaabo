@@ -382,10 +382,13 @@ export const updateInvoiceStatusSchema = z.object({
 
 export const paymentModes = ["cash", "bank", "upi", "cheque", "other", "credit_card", "debit_card", "net_banking", "wallet"] as const;
 
+/** A non-negative amount string with at most 2 decimals, e.g. "1000" or "1000.50". */
+export const moneyStringSchema = z.string().regex(/^\d{1,13}(\.\d{1,2})?$/);
+
 export const paymentAllocationSchema = z.object({
   invoiceId: z.string().uuid(),
-  amount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") > 0, { message: "Amount must be greater than zero" }),
-  tdsAmount: z.string().regex(/^\d{1,13}(\.\d{1,2})?$/).default("0").refine((v) => money.compare(v, "0") >= 0, { message: "TDS amount cannot be negative" }),
+  amount: moneyStringSchema.refine((v) => money.compare(v, "0") > 0, { message: "Amount must be greater than zero" }),
+  tdsAmount: moneyStringSchema.default("0").refine((v) => money.compare(v, "0") >= 0, { message: "TDS amount cannot be negative" }),
   tdsSectionCode: z.string().trim().min(1).max(20).optional(),
   tdsRate: z.string().regex(/^\d{1,3}(\.\d{1,2})?$/).refine((v) => money.compare(v, "0") >= 0 && money.compare(v, "100") <= 0, { message: "TDS rate must be between 0 and 100" }).optional(),
 }).superRefine((value, ctx) => {
@@ -393,21 +396,21 @@ export const paymentAllocationSchema = z.object({
   if (hasPositiveTds) {
     if (!value.tdsSectionCode || value.tdsSectionCode.trim() === "") {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["tdsSectionCode"],
         message: "TDS section code is required when TDS amount is positive",
       });
     }
     if (!value.tdsRate || money.compare(value.tdsRate, "0") <= 0) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["tdsRate"],
         message: "TDS rate must be greater than zero when TDS amount is positive",
       });
     }
     if (money.compare(value.tdsAmount, value.amount) > 0) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["tdsAmount"],
         message: "TDS amount cannot exceed gross allocation",
       });
@@ -415,7 +418,7 @@ export const paymentAllocationSchema = z.object({
   } else {
     if (value.tdsSectionCode || value.tdsRate !== undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["tdsSectionCode"],
         message: "TDS section and rate must be omitted when TDS amount is zero",
       });
@@ -443,7 +446,7 @@ const tdsSectionConfigFields = {
   effectiveFrom: z.string().datetime(),
   effectiveTo: z.string().datetime().optional().nullable(),
   status: z.enum(["active", "inactive"]).default("active"),
-  version: z.number().int().positive().default(1),
+  version: z.number().int().positive().max(1000).default(1),
 };
 
 export const createTdsSectionConfigSchema = z.object(tdsSectionConfigFields).refine(
@@ -460,7 +463,8 @@ export const updatePaymentSchema = z.object({
   paymentDate: z.string().datetime().optional(),
   notes: z.string().max(500).optional().nullable(),
   bankAccountId: z.string().uuid().optional().nullable(),
-  // Replace all allocations (reverse old, apply new)
+  // Replace all allocations (reverse old, apply new). Omit the field to keep the
+  // existing allocations; an empty array clears them all.
   allocations: z.array(paymentAllocationSchema).optional(),
 });
 
