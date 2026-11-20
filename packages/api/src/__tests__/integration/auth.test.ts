@@ -952,6 +952,198 @@ describe("admin login-link tokens redeem through auth.verifyMagicLink", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Email change: the confirmation only takes effect for the REQUESTING account,
+// while it is signed in. A token that reaches anyone else (the mailbox owner
+// tricked into clicking) must not move the address, and must not be burnable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("auth.requestEmailChange / auth.confirmEmailChange", () => {
+  const db = getControlDb();
+  let confirmSpy: MockInstance<typeof emailService.sendEmailChangeConfirmation>;
+  let magicSpy: MockInstance<typeof emailService.sendMagicLink>;
+  let noticeSpy: MockInstance<typeof emailService.sendEmailChangedNotice>;
+
+  beforeAll(() => {
+    confirmSpy = vi.spyOn(emailService, "sendEmailChangeConfirmation").mockResolvedValue(undefined);
+    magicSpy = vi.spyOn(emailService, "sendMagicLink").mockResolvedValue(undefined);
+    noticeSpy = vi.spyOn(emailService, "sendEmailChangedNotice").mockResolvedValue(undefined);
+  });
+  beforeEach(() => {
+    confirmSpy.mockClear();
+    magicSpy.mockClear();
+    noticeSpy.mockClear();
+  });
+  afterAll(() => {
+    confirmSpy.mockRestore();
+    magicSpy.mockRestore();
+    noticeSpy.mockRestore();
+  });
+
+  async function signedInUser(verified = true) {
+    const email = `chg.${nanoid(8).toLowerCase()}@example.in`;
+    const user = await createUser({ email, name: "Changer", emailVerified: verified });
+    const session = await createSession(user.id);
+    return { user, email, caller: callerWithSession(session.id, user.id, email) };
+  }
+
+  const tokenFromLastMail = () => {
+    const url = confirmSpy.mock.calls.at(-1)![1];
+    return new URL(url).searchParams.get("token")!;
+  };
+  const newAddress = () => `new.${nanoid(8).toLowerCase()}@example.in`;
+  const rowFor = (token: string) =>
+    db.select().from(magicLinkTokens).where(eq(magicLinkTokens.tokenHash, createHash("sha256").update(token).digest("hex"))).then((r) => r[0]);
+
+  it("request sends the dedicated confirmation mail (not a magic link) to the NEW address with a /auth/confirm-email-change URL", async () => {
+    const { email, caller } = await signedInUser();
+    const to = newAddress();
+    await expect(caller.auth.requestEmailChange({ newEmail: to })).resolves.toEqual({ success: true });
+
+    expect(magicSpy).not.toHaveBeenCalled();
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    const [recipient, url, current] = confirmSpy.mock.calls[0]!;
+    expect(recipient).toBe(to);
+    expect(current).toBe(email);
+    expect(url).toMatch(/\/auth\/confirm-email-change\?token=[^&]+$/);
+    expect(url).not.toContain("/auth/verify");
+  });
+
+  it("the requester confirms while signed in: email changes and is verified; replay is rejected; the old address is told", async () => {
+    const { user, email, caller } = await signedInUser(true);
+    const to = newAddress();
+    await caller.auth.requestEmailChange({ newEmail: to });
+    const token = tokenFromLastMail();
+
+    await expect(caller.auth.confirmEmailChange({ token })).resolves.toEqual({ success: true, newEmail: to });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.email).toBe(to);
+    expect(row!.emailVerified).toBe(true);
+    expect((await rowFor(token))!.usedAt).not.toBeNull();
+
+    await expect(caller.auth.confirmEmailChange({ token })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    // Fire-and-forget notice to the previous (verified) address.
+    await vi.waitFor(() => expect(noticeSpy).toHaveBeenCalledWith(email, to));
+  });
+
+  it("no notice is sent when the old address was never verified", async () => {
+    const { caller } = await signedInUser(false);
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    await caller.auth.confirmEmailChange({ token: tokenFromLastMail() });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(noticeSpy).not.toHaveBeenCalled();
+  });
+
+  it("an unauthenticated confirm is UNAUTHORIZED and leaves the email and the token untouched", async () => {
+    const { user, caller } = await signedInUser();
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    const token = tokenFromLastMail();
+
+    await expect(unauthCaller().auth.confirmEmailChange({ token })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.email).toBe(user.email);
+    expect((await rowFor(token))!.usedAt).toBeNull();
+  });
+
+  it("a DIFFERENT signed-in user (the mailbox owner who was tricked into clicking) gets FORBIDDEN; nothing changes and the token is not consumed", async () => {
+    const attacker = await signedInUser();
+    const victim = await signedInUser();
+    const victimAddress = newAddress();
+    await attacker.caller.auth.requestEmailChange({ newEmail: victimAddress });
+    const token = tokenFromLastMail();
+
+    await expect(victim.caller.auth.confirmEmailChange({ token })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("different Hisaabo account"),
+    });
+    const [a] = await db.select().from(users).where(eq(users.id, attacker.user.id));
+    const [v] = await db.select().from(users).where(eq(users.id, victim.user.id));
+    expect(a!.email).toBe(attacker.email);
+    expect(v!.email).toBe(victim.email);
+    expect((await rowFor(token))!.usedAt).toBeNull();
+
+    // The legitimate requester can still use it.
+    await expect(attacker.caller.auth.confirmEmailChange({ token })).resolves.toMatchObject({ newEmail: victimAddress });
+  });
+
+  it("an address registered in the meantime is a CONFLICT (not a 500) and the token is not burned", async () => {
+    const { user, caller } = await signedInUser();
+    const to = newAddress();
+    await caller.auth.requestEmailChange({ newEmail: to });
+    const token = tokenFromLastMail();
+    await createUser({ email: to, name: "Took It" });
+
+    await expect(caller.auth.confirmEmailChange({ token })).rejects.toMatchObject({ code: "CONFLICT", message: "Email already in use" });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.email).toBe(user.email);
+    expect((await rowFor(token))!.usedAt).toBeNull();
+  });
+
+  it("a plain magic-link token is BAD_REQUEST and is not consumed", async () => {
+    const { caller } = await signedInUser();
+    const raw = "plain-" + nanoid(32);
+    await db.insert(magicLinkTokens).values({
+      email: "someone-else@example.in",
+      tokenHash: createHash("sha256").update(raw).digest("hex"),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    await expect(caller.auth.confirmEmailChange({ token: raw })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await rowFor(raw))!.usedAt).toBeNull();
+  });
+
+  it("an operator login-link token (the account's own email) is BAD_REQUEST", async () => {
+    const { user, email, caller } = await signedInUser();
+    const store: LoginLinkStore = {
+      async findUserByEmail(e) {
+        const [r] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, e)).limit(1);
+        return r ?? null;
+      },
+      async insertToken(row) {
+        await db.insert(magicLinkTokens).values(row);
+      },
+    };
+    const link = await createLoginLink(store, { email, ttlMinutes: 15, baseUrl: "https://app.example.in" });
+    const raw = new URL(link.url).searchParams.get("token")!;
+    await expect(caller.auth.confirmEmailChange({ token: raw })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await rowFor(raw))!.usedAt).toBeNull();
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.email).toBe(email);
+  });
+
+  it("a second request supersedes the first, and the 4th request within an hour is TOO_MANY_REQUESTS", async () => {
+    const { caller } = await signedInUser();
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    const first = tokenFromLastMail();
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    const second = tokenFromLastMail();
+
+    await expect(caller.auth.confirmEmailChange({ token: first })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    confirmSpy.mockClear();
+    await expect(caller.auth.requestEmailChange({ newEmail: newAddress() })).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(second).not.toBe(first);
+  });
+
+  it("confirming deletes the account's other unused user-bound tokens", async () => {
+    const { user, caller } = await signedInUser();
+    await caller.auth.requestEmailChange({ newEmail: newAddress() });
+    const token = tokenFromLastMail();
+    // An unused operator link for the old address must not outlive the change.
+    await db.insert(magicLinkTokens).values({
+      email: user.email,
+      tokenHash: createHash("sha256").update("op-" + nanoid(16)).digest("hex"),
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    await caller.auth.confirmEmailChange({ token });
+    const unused = await db.select().from(magicLinkTokens).where(eq(magicLinkTokens.userId, user.id));
+    expect(unused.filter((r) => r.usedAt === null)).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pre-registration account takeover: the first magic-link verification of an
 // account whose email was never verified must kill every credential issued
 // before that proof (sessions, API keys, password, pending credential minters).

@@ -1,3 +1,11 @@
+import {
+  renderEmailChangeConfirmation,
+  renderEmailChangedNotice,
+  renderSecurityNotice,
+  type RenderedEmail,
+  type SecurityNoticeOrg,
+} from "./email-templates.js";
+
 // ── Email service abstraction ──────────────────────────────────
 // Dev: prints magic link to console (no setup needed)
 // Prod: sends via Resend API (no npm dep — raw fetch)
@@ -14,6 +22,27 @@ function escapeHtml(str: string): string {
 interface EmailService {
   sendMagicLink(to: string, magicLinkUrl: string, isNewUser?: boolean): Promise<void>;
   sendInvitation(to: string, inviteUrl: string, businessName: string, inviterName: string | null): Promise<void>;
+  /** Sent to the NEW address of an email change; deliberately not a sign-in email. */
+  sendEmailChangeConfirmation(to: string, confirmUrl: string, currentEmail: string): Promise<void>;
+  /** Sent to the OLD address after a verified account's sign-in email was changed. */
+  sendEmailChangedNotice(to: string, newEmail: string): Promise<void>;
+  /** Sent after an account's email was proven for the first time; lists who already had access. */
+  sendSecurityNotice(to: string, orgs: SecurityNoticeOrg[]): Promise<void>;
+}
+
+function printConsoleEmail(to: string, email: RenderedEmail): void {
+  if (process.env.NODE_ENV === "production") {
+    console.error("[email] FATAL: No email service configured for production. Set RESEND_API_KEY.");
+    throw new Error("Email service not configured");
+  }
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════════════╗");
+  console.log(`║  ${email.subject}`);
+  console.log(`║  To: ${to}`);
+  console.log("╠══════════════════════════════════════════════════════════╣");
+  for (const line of email.text.split("\n")) console.log(`║  ${line}`);
+  console.log("╚══════════════════════════════════════════════════════════╝");
+  console.log("");
 }
 
 class ConsoleEmailService implements EmailService {
@@ -45,6 +74,18 @@ class ConsoleEmailService implements EmailService {
     console.log(`║  ${inviteUrl}`);
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log("");
+  }
+
+  async sendEmailChangeConfirmation(to: string, confirmUrl: string, currentEmail: string): Promise<void> {
+    printConsoleEmail(to, renderEmailChangeConfirmation(confirmUrl, currentEmail));
+  }
+
+  async sendEmailChangedNotice(to: string, newEmail: string): Promise<void> {
+    printConsoleEmail(to, renderEmailChangedNotice(to, newEmail));
+  }
+
+  async sendSecurityNotice(to: string, orgs: SecurityNoticeOrg[]): Promise<void> {
+    printConsoleEmail(to, renderSecurityNotice(orgs));
   }
 }
 
@@ -381,6 +422,34 @@ ${reassuranceHtml}
       console.error(`[email] Resend API error: ${res.status} ${text}`);
       throw new Error("Failed to send email");
     }
+  }
+
+  private async sendRendered(to: string, email: RenderedEmail): Promise<void> {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from: this.fromAddress, to, subject: email.subject, html: email.html, text: email.text }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`[email] Resend API error: ${res.status} ${text}`);
+      throw new Error("Failed to send email");
+    }
+  }
+
+  async sendEmailChangeConfirmation(to: string, confirmUrl: string, currentEmail: string): Promise<void> {
+    await this.sendRendered(to, renderEmailChangeConfirmation(confirmUrl, currentEmail));
+  }
+
+  async sendEmailChangedNotice(to: string, newEmail: string): Promise<void> {
+    await this.sendRendered(to, renderEmailChangedNotice(to, newEmail));
+  }
+
+  async sendSecurityNotice(to: string, orgs: SecurityNoticeOrg[]): Promise<void> {
+    await this.sendRendered(to, renderSecurityNotice(orgs));
   }
 }
 

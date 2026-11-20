@@ -32,7 +32,8 @@ export type SecurityEvent =
   | "login_fail"
   | "login_lockout"
   | "turnstile_legacy_exempt"
-  | "unverified_account_claimed";
+  | "unverified_account_claimed"
+  | "email_change_wrong_account";
 
 export function logSecurityEvent(
   event: SecurityEvent,

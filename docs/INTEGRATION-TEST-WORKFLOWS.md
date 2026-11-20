@@ -74,7 +74,7 @@ FIXTURE: Test Infrastructure
 ### A1. auth.test.ts
 
 **File**: `packages/api/src/routers/auth.ts`
-**Middleware chain**: publicProcedure (register, login, sendMagicLink, verifyMagicLink, confirmEmailChange), protectedProcedure (logout, logoutAll, completeProfile, updateName, requestEmailChange)
+**Middleware chain**: publicProcedure (register, login, sendMagicLink, verifyMagicLink), protectedProcedure (logout, logoutAll, completeProfile, updateName, requestEmailChange, confirmEmailChange)
 
 #### Workflow: Password Registration
 
