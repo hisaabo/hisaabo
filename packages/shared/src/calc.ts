@@ -93,12 +93,31 @@ export function calcInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals {
 /** Largest absolute round-off a document may carry (the UI floors to a whole rupee, so < 1). */
 export const MAX_ROUND_OFF = "1.00";
 
+/** True when `roundOff` is within +/- MAX_ROUND_OFF. */
+export function isRoundOffWithinBound(roundOff: string | number | null | undefined): boolean {
+  const value = roundOff ?? "0";
+  return money.compare(value, MAX_ROUND_OFF) <= 0 && money.compare(value, `-${MAX_ROUND_OFF}`) >= 0;
+}
+
+export interface ValidateInvoiceTotalsOptions {
+  /**
+   * Skip the +/- MAX_ROUND_OFF bound. Only for UPDATES where the round-off is
+   * the value already stored on the document: documents saved before the bound
+   * existed (v0.9.0 accepted any round-off) must stay editable, and "only
+   * changed values are validated" is the rule. Never set it for a new value.
+   */
+  skipRoundOffBound?: boolean;
+}
+
 /**
  * Server-side sanity check for invoice-level adjustments. Returns an error
  * message, or null when the document is acceptable. Kept separate from
  * calcInvoiceTotals so live UI previews keep computing while the user types.
  */
-export function validateInvoiceTotals(input: InvoiceTotalsInput): string | null {
+export function validateInvoiceTotals(
+  input: InvoiceTotalsInput,
+  opts: ValidateInvoiceTotalsOptions = {},
+): string | null {
   const discountInput = input.invoiceDiscount || "0";
   const discountType = input.invoiceDiscountType || "amount";
   if (money.compare(discountInput, 0) < 0) return "Invoice discount cannot be negative";
@@ -106,8 +125,7 @@ export function validateInvoiceTotals(input: InvoiceTotalsInput): string | null 
     return "Invoice discount cannot exceed 100%";
   }
 
-  const roundOff = input.roundOff || "0";
-  if (money.compare(roundOff, MAX_ROUND_OFF) > 0 || money.compare(roundOff, `-${MAX_ROUND_OFF}`) < 0) {
+  if (!opts.skipRoundOffBound && !isRoundOffWithinBound(input.roundOff || "0")) {
     return `Round off cannot exceed ${MAX_ROUND_OFF} in either direction`;
   }
 

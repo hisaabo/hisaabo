@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { invoices, invoiceItems } from "@hisaabo/db";
-import { convertDocumentSchema, createInvoiceSchema, type DocumentType } from "@hisaabo/shared";
+import { convertDocumentSchema, createInvoiceSchema, isRoundOffWithinBound, MAX_ROUND_OFF, type DocumentType } from "@hisaabo/shared";
 import { router, memberProcedure, createCallerFactory } from "../trpc.js";
 import { createDocumentRouter } from "../lib/document-router-factory.js";
 import { logAudit } from "../lib/audit.js";
@@ -106,6 +106,18 @@ export const documentRouter = router({
       const skipStockAdjustment =
         sourceDoc.documentType === "delivery_challan" &&
         input.targetDocumentType === "invoice";
+
+      // A conversion creates a NEW document, so it is held to the round-off bound.
+      // Documents saved by v0.9.0 (no bound) may carry a larger stored value; say so
+      // actionably instead of letting the schema throw an opaque validation error.
+      // Editing the source's round-off (allowed: a changed value within the bound)
+      // clears it.
+      if (!isRoundOffWithinBound(sourceDoc.roundOff)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `The source document's round off (${sourceDoc.roundOff}) is outside +/-${MAX_ROUND_OFF}. Edit its round off to within +/-${MAX_ROUND_OFF}, then convert it.`,
+        });
+      }
 
       const convertInput = createInvoiceSchema.parse({
         partyId: sourceDoc.partyId,

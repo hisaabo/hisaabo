@@ -1,7 +1,8 @@
 export * from "./validators.js";
 export * from "./money.js";
 export { formatQuantity } from "./quantity.js";
-export { calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF } from "./calc.js";
+export { calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF } from "./calc.js";
+export type { ValidateInvoiceTotalsOptions } from "./calc.js";
 export {
   checkInvoiceStatusTransition,
   checkDocumentStatusTransition,

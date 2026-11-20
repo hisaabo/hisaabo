@@ -111,6 +111,68 @@ describe("invoice.update guards", () => {
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  // Documents saved by v0.9.0 had no round-off bound. Simulate one by writing a
+  // large round-off straight into the row (create would now reject it).
+  async function legacyInvoice(roundOff: string, documentType: "invoice" | "quotation" = "invoice") {
+    const c = owner();
+    const doc = documentType === "quotation"
+      ? await c.quotation.create(saleInput())
+      : await c.invoice.create(saleInput());
+    await getTenantTestDb().update(invoices)
+      .set({ roundOff, totalAmount: (100 + parseFloat(roundOff)).toFixed(2) })
+      .where(eq(invoices.id, doc.id));
+    return doc;
+  }
+  const oneLine = (unitPrice = "100.00") => [
+    { itemName: "Widget", quantity: "1", unitPrice, taxPercent: "0", discountPercent: "0" },
+  ];
+
+  it("a document with a stored round-off beyond +/-1.00 stays editable when the round-off is unchanged", async () => {
+    const c = owner();
+    const doc = await legacyInvoice("2.50");
+
+    // Round-off omitted: the stored value is carried forward.
+    await expect(c.invoice.update({ id: doc.id, lineItems: oneLine("120.00") })).resolves.toBeTruthy();
+    // Round-off re-submitted verbatim (what the web editor does).
+    await expect(c.invoice.update({ id: doc.id, roundOff: "2.50", notes: "edited", lineItems: oneLine("130.00") })).resolves.toBeTruthy();
+    const [row] = await getTenantTestDb().select({ r: invoices.roundOff, t: invoices.totalAmount }).from(invoices).where(eq(invoices.id, doc.id));
+    expect(parseFloat(row!.r)).toBeCloseTo(2.5);
+    expect(parseFloat(row!.t)).toBeCloseTo(132.5);
+  });
+
+  it("a CHANGED round-off is still held to the bound on update", async () => {
+    const c = owner();
+    const doc = await legacyInvoice("2.50");
+    await expect(c.invoice.update({ id: doc.id, roundOff: "3.00" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(c.invoice.update({ id: doc.id, roundOff: "3.00", lineItems: oneLine() })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // Moving it back inside the bound is fine.
+    await expect(c.invoice.update({ id: doc.id, roundOff: "-0.40", lineItems: oneLine() })).resolves.toBeTruthy();
+  });
+
+  it("a fresh document cannot be updated to an out-of-bound round-off", async () => {
+    const c = owner();
+    const doc = await c.invoice.create(saleInput());
+    await expect(c.invoice.update({ id: doc.id, roundOff: "1.01", lineItems: oneLine() })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("converting a legacy document with an out-of-bound round-off fails actionably, then works after the round-off is edited", async () => {
+    const c = owner();
+    const quotation = await legacyInvoice("2.50", "quotation");
+    await expect(c.document.convert({ sourceDocumentId: quotation.id, targetDocumentType: "invoice" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("round off") });
+
+    await c.invoice.update({ id: quotation.id, roundOff: "0.50", lineItems: oneLine() });
+    const converted = await c.document.convert({ sourceDocumentId: quotation.id, targetDocumentType: "invoice" });
+    expect(converted.documentType).toBe("invoice");
+  });
+
+  it("v0.9.0 create payloads still pass: web floors to a whole rupee (|roundOff| < 1) and mobile sends '0'", async () => {
+    const c = owner();
+    await expect(c.invoice.create(saleInput({ roundOff: "-0.37" }))).resolves.toBeTruthy();
+    await expect(c.invoice.create(saleInput({ roundOff: "0" }))).resolves.toBeTruthy();
+    await expect(c.quotation.create(saleInput({ roundOff: "-0.99" }))).resolves.toBeTruthy();
+  });
+
   it("concurrent deletes reverse stock once", async () => {
     const c = owner();
     const db = getTenantTestDb();
