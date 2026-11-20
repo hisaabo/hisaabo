@@ -26,7 +26,7 @@ We will acknowledge receipt within 48 hours and aim to provide a fix or mitigati
 This section describes what the code does today. Where a protection depends on how you deploy Hisaabo, it says so.
 
 ### Authentication
-- **Magic link (passwordless)** is the only user-facing web sign-in — tokens are SHA-256 hashed before storage, single-use, 15-minute expiry. No client shows a password form. The legacy `auth.login` / `auth.register` API procedures (Argon2id hashes) remain for tests and scripted seeding only; nothing user-facing calls them.
+- **Magic link (passwordless)** is the only user-facing web sign-in — tokens are SHA-256 hashed before storage, single-use, 15-minute expiry. No client shows a password form. The legacy `auth.login` / `auth.register` API procedures (Argon2id hashes) remain through 0.10.x for older (v0.9.0) clients and scripted seeding; they are deprecated, log a rate-limited deprecation warning, and will be removed in 0.11.0.
 - **Native sign-in (desktop, mobile, CLI)** uses the system browser, not an embedded form (RFC 8252) with PKCE (S256): the app registers a request with `auth.nativeStart`, the user signs in and consents on `${APP_URL}/auth/native`, and the app exchanges a one-time code (2-minute lifetime, single use, stored only as a hash) plus its PKCE verifier through `auth.nativeExchange`. Desktop and CLI receive the code on a one-shot `http://127.0.0.1:<port>/callback` loopback listener; mobile receives it on a verified HTTPS app link (`/auth/native/callback`). Only a cookie web session can authorize a request. Every exchange failure returns the same generic error.
 - **App-link verification** requires the web build to publish `/.well-known/assetlinks.json` and `/.well-known/apple-app-site-association`. They are generated at build time from `VITE_ANDROID_APP_CERT_SHA256` (comma-separated signing-cert SHA-256 fingerprints) and `VITE_APPLE_TEAM_ID`; set both for your own mobile build or the OS will not hand the link to the app.
 - **Turnstile on every sign-in:** whenever `TURNSTILE_SECRET_KEY` is set (required in production), sign-in requests must carry a valid Turnstile token. There is no client-header bypass: `X-Hisaabo-Client` only selects bearer-token behaviour and never skips Turnstile.
@@ -129,6 +129,17 @@ The web app can expose tools to a browser's built-in AI agent through WebMCP. Th
 - **MCP:** credentials come only from environment variables set in the MCP host's configuration; the server stores nothing. Anyone who can read that host config can use the key, so keep it out of shared dotfiles and repositories.
 - Both clients refuse plain `http://` to non-loopback hosts unless explicitly overridden, and the CLI strips terminal control characters from server-supplied text before printing.
 - Revoke a leaked key immediately from Settings → API Keys (or `apiKey.revoke`).
+
+### Operator Dashboard (`/ops`)
+The job-queue dashboard is the most privileged web surface, so it is guarded in depth (full model: `docs/architecture/queue.md` §7.2):
+- **Off by default.** Unless `QUEUE_DASHBOARD_ENABLED=true`, every `/ops` path returns the API's normal 404. With `OPS_IP_ALLOWLIST` set, clients outside those CIDRs get the same 404.
+- **Three factors, all required:** a Hisaabo **cookie** session from a normal browser sign-in (Bearer sessions, access tokens and API keys are refused), an active row in `ops_operators` for that verified email, and a **TOTP** code (RFC 6238) or a single-use recovery code. Operators are created, re-roled and enrolled **only from the server shell** with the `ops` CLI, so a hijacked mailbox cannot enroll itself.
+- **Separate, short-lived session:** a random token (stored as SHA-256) in an `HttpOnly`, `SameSite=Strict`, `Path=/ops` cookie (`Secure` over https), idle timeout 15 min, absolute 8 h. It is bound to the Hisaabo session it came from and revoked when that session ends, the operator is removed, disabled, re-enrolled or re-roled.
+- **Step-up:** retry, delete, pause/resume and payload reveal need a TOTP re-entry within the last 5 minutes and the `admin` role (`viewer` is read-only).
+- **TOTP hardening:** secrets encrypted with `ENCRYPTION_KEY`, ±1 step window, each time step usable once (replay guard), 5 failures lock the operator for 15 minutes, recovery codes hashed and single-use.
+- **Request hardening:** every POST needs `X-Requested-With: hisaabo` and an `Origin` equal to the API's own origin; no CORS headers are sent for `/ops`; per-IP limits (60/min API, 10/min sign-in/step-up); `Cache-Control: no-store`; the app is served with `script-src 'self'`, `style-src 'self'`, `frame-ancestors 'none'` and no third-party hosts.
+- **Data minimisation:** tenant and business ids appear only as hashed handles, job payloads are hidden until an audited reveal, fields a job marks `encrypt` are never decrypted, and errors are masked; stack traces never leave the worker logs.
+- **Audit:** every sign-in attempt, step-up, action and reveal — and every `ops` CLI write (`cli:<os user>`) — is appended to `ops_audit_log`. Failed second-factor attempts also emit the `ops_auth_fail` security event, which the bundled fail2ban filter matches.
 
 ### Backups
 `scripts/backup.sh` (the `backup` sidecar in `docker-compose.prod.yml`) writes a base backup plus per-database SQL dumps:

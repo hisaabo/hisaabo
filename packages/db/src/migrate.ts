@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { backfillStoreSlugRegistry, formatBackfillReport } from "./backfill-store-slugs.js";
+import { installQueueSchema } from "./queue-schema.js";
 
 // ── Path resolution ──────────────────────────────────────────
 //
@@ -318,7 +319,11 @@ async function runMigrations(
   databaseUrl: string,
   migrationsFolder: string,
   label: string,
-  opts?: { migrationsTable?: string },
+  opts?: {
+    migrationsTable?: string;
+    /** Extra step run after the drizzle migrations, still under the advisory lock. */
+    afterMigrate?: () => Promise<void>;
+  },
 ): Promise<MigrationResult> {
   const start = Date.now();
   const client = postgres(databaseUrl, {
@@ -360,6 +365,7 @@ async function runMigrations(
           }),
         );
       }
+      await opts?.afterMigrate?.();
     } finally {
       await client.unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`);
     }
@@ -374,6 +380,32 @@ async function runMigrations(
     return { success: false, durationMs, error };
   } finally {
     await client.end();
+  }
+}
+
+// The job queue (pg-boss) lives in the control DB — the single DB when
+// self-hosted, never a tenant DB.
+//
+// NON-FATAL in this release: no product feature depends on the queue yet, so a
+// database role that cannot CREATE SCHEMA (managed Postgres, restricted roles)
+// or a connection pooler that rejects pg-boss's session-level features must not
+// stop the API from starting. The failure is logged loudly; the worker keeps
+// retrying until the schema exists and the API's queue-backed surfaces (the
+// /ops dashboard, `ops queue …`, the admin Queues view) report "not installed".
+async function installQueue(databaseUrl: string, label: string): Promise<void> {
+  try {
+    const version = await installQueueSchema(databaseUrl);
+    log("info", `${label}: job queue schema ready`, { schema: "pgboss", version });
+  } catch (err) {
+    log("warn", `${label}: job queue schema NOT installed — continuing without the background job queue`, {
+      schema: "pgboss",
+      error: err instanceof Error ? err.message : String(err),
+      remediation:
+        "Grant the migration role CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>) " +
+        "and point DATABASE_URL / CONTROL_DATABASE_URL at a direct (non-pooled, session-mode) connection, " +
+        "then re-run migrations (restart the api container, or: node packages/db/dist/migrate.mjs). " +
+        "The worker retries until the schema exists. See docs/UPGRADING.md.",
+    });
   }
 }
 
@@ -392,7 +424,9 @@ async function migrateSelfHosted(): Promise<boolean> {
   }
 
   log("info", "Self-hosted mode: running unified migrations", { target: "DATABASE_URL" });
-  const result = await runMigrations(databaseUrl, MIGRATIONS_UNIFIED, "unified");
+  const result = await runMigrations(databaseUrl, MIGRATIONS_UNIFIED, "unified", {
+    afterMigrate: () => installQueue(databaseUrl, "unified"),
+  });
   return result.success;
 }
 
@@ -414,6 +448,7 @@ async function migrateMultiTenant(): Promise<boolean> {
   log("info", "Multi-tenant mode: running control DB migrations", { target: "CONTROL_DATABASE_URL" });
   const controlResult = await runMigrations(controlUrl, MIGRATIONS_CONTROL, "control", {
     migrationsTable: "__drizzle_control_migrations",
+    afterMigrate: () => installQueue(controlUrl, "control"),
   });
   if (!controlResult.success) {
     log("error", "Control DB migration failed — cannot proceed to tenant migrations");

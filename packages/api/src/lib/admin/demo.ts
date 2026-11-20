@@ -8,6 +8,7 @@
 import type { PlatformStats, TenantMetrics, TenantOps, TenantWithMetrics, DbReport, DbInfra } from "./stats.js";
 import { lastTwelveMonths, sumMetrics, mergeFailures, emptyOps } from "./stats.js";
 import type { MigrationState } from "./migrations.js";
+import { parseQueueStats, type QueueStats } from "./queues.js";
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -256,6 +257,40 @@ export function buildDemoStats(now: Date = new Date()): PlatformStats {
     totals: sumMetrics(tenants.flatMap((t) => (t.metrics ? [t.metrics] : [])), now),
     tenants,
     databases: { queried: tenants.length, failed: 1 },
+    queues: demoQueues(now, tenants),
     errors: [`${tenants[17].dbKey}: ${tenants[17].error}`],
   };
+}
+
+/** Queue snapshot in the shape the SQL returns, run through the real parser. */
+function demoQueues(now: Date, tenants: TenantWithMetrics[]): QueueStats {
+  const ago = (sec: number) => iso(new Date(now.getTime() - sec * 1000));
+  const q = (name: string, queued: number, active: number, retry: number, failed: number, done: number, wait: number | null, paused = false, policy = "standard") => ({
+    name, policy, queued, active, retry, failed, done_15m: done, failed_15m: Math.min(failed, 1), oldest_wait_seconds: wait, paused,
+  });
+  const stats = parseQueueStats({
+    queues: [
+      q("einvoice.submit", 4, 2, 1, 2, 63, 41),
+      q("recurring.generate", 0, 1, 0, 0, 18, null),
+      q("export.tenant", 1, 1, 0, 0, 2, 380, false, "singleton"),
+      q("import.items", 0, 0, 0, 1, 3, null, false, "singleton"),
+      q("bank.statement.process", 2, 1, 0, 0, 9, 12, false, "singleton"),
+      q("notify.email", 0, 0, 0, 0, 141, null),
+      q("system.ping", 0, 0, 0, 0, 1, null, true),
+    ],
+    dead_15m: 2,
+    workers: [
+      { name: "worker:default,system", host: "c0ffee12ab34", pid: 7, version: "12.37.1", started_on: ago(19 * 3600), stopped_on: null, heartbeat_age_seconds: 12 },
+      { name: "worker:heavy", host: "deadbeef9876", pid: 7, version: "12.37.1", started_on: ago(19 * 3600), stopped_on: null, heartbeat_age_seconds: 4 },
+      { name: "api", host: "a1b2c3d4e5f6", pid: 1, version: "12.37.1", started_on: ago(19 * 3600), stopped_on: null, heartbeat_age_seconds: 21 },
+    ],
+    recent_failures: [
+      { queue: "einvoice.submit", job_id: "0b9c3f6e-1d2a-4c5b-9e8f-7a6b5c4d3e2f", failed_at: ago(240), created_at: ago(1500), attempts: 5, type: "RetryableError", error: "IRP gateway timeout after 30s", tenant_id: tenants[2]?.id ?? null },
+      { queue: "einvoice.submit", job_id: "5e4d3c2b-1a09-4f8e-8d7c-6b5a4f3e2d1c", failed_at: ago(610), created_at: ago(700), attempts: 0, type: "PermanentError", error: "3028: GSTIN of recipient is not active", tenant_id: tenants[5]?.id ?? null },
+      { queue: "import.items", job_id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", failed_at: ago(3 * 3600), created_at: ago(3 * 3600 + 90), attempts: 0, type: "ThreadTimeoutError", error: "Job exceeded 120s and was terminated", tenant_id: tenants[0]?.id ?? null },
+    ],
+  });
+  const names = new Map(tenants.map((t) => [t.id, t.name]));
+  for (const f of stats.recentFailures) f.tenantName = f.tenantId ? names.get(f.tenantId) ?? f.tenantId : null;
+  return stats;
 }
