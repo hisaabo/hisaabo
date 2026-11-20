@@ -69,6 +69,9 @@ The fields fail2ban relies on:
 - `origin_block` — Origin/Referer not on the allow-list.
 - `login_fail` — password login attempt failed.
 - `login_lockout` — per-email lockout threshold hit.
+- `turnstile_legacy_exempt` — informational: a token-less magic-link request was
+  accepted under the deprecated v0.9.x native-app exemption. Not banworthy and
+  deliberately not in the filter regex.
 
 If you add new event types in `packages/api/src/lib/logger.ts`, update
 the regex in `filter.d/hisaabo-api.conf` to include them.
