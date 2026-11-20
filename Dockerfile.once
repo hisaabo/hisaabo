@@ -23,10 +23,11 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.json ./
 COPY packages/api/package.json packages/api/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
+COPY apps/ops/package.json apps/ops/
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
@@ -38,6 +39,12 @@ COPY packages/api/ packages/api/
 # Build the API (tsup bundles server.ts + pdf-worker via tsup.config.ts)
 RUN pnpm --filter @hisaabo/api build
 
+# Operator dashboard (/ops): static React app served by the API from
+# dist/ops-public under a strict CSP. See docs/architecture/queue.md §9.
+COPY apps/ops/ apps/ops/
+RUN pnpm --filter @hisaabo/ops build && \
+    cp -r apps/ops/dist packages/api/dist/ops-public
+
 # Bundle the migration runner into a standalone JS file (no tsx needed at runtime).
 # Entry is migrate-cli.ts (thin wrapper) — migrate.ts itself has no top-level
 # side effects so importing it from application code does NOT run migrations.
@@ -45,7 +52,7 @@ RUN pnpm --filter @hisaabo/db exec esbuild src/migrate-cli.ts \
       --bundle --platform=node --format=esm \
       --target=node22 \
       --outfile=dist/migrate.mjs \
-      --external:postgres --external:drizzle-orm --external:dotenv
+      --external:postgres --external:drizzle-orm --external:dotenv --external:pg-boss
 
 # ── Stage 2: Production runtime ──────────────────────────────
 FROM node:22-alpine AS runtime
@@ -275,6 +282,34 @@ echo "[api] Starting Hisaabo API on port ${PORT:-80}..."
 exec su-exec node node packages/api/dist/server.js
 APIRUN
 RUN chmod +x /etc/s6-overlay/s6-rc.d/api/run
+
+# ── s6 service: queue worker ─────────────────────────────────
+# Background jobs (docs/architecture/queue.md). Never migrates: it waits for
+# the api service's migration step to install the job queue schema.
+
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/worker/dependencies.d \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/worker/type \
+    && touch /etc/s6-overlay/s6-rc.d/worker/dependencies.d/postgres-ready \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/worker
+
+COPY <<'WORKERRUN' /etc/s6-overlay/s6-rc.d/worker/run
+#!/bin/sh
+set -e
+SOCKETDIR="/storage/run"
+
+/usr/local/bin/once-pg-auth ensure-secret
+DB_PASSWORD="$(cat /storage/secrets/pg_app_password)"
+DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@/hisaabo?host=$SOCKETDIR"
+export DATABASE_URL
+unset DB_PASSWORD
+
+STORAGE_LOCAL_DIR="${STORAGE_LOCAL_DIR:-/storage/objects}"
+export STORAGE_LOCAL_DIR
+
+echo "[worker] Starting Hisaabo queue worker..."
+exec su-exec node node packages/api/dist/worker.js
+WORKERRUN
+RUN chmod +x /etc/s6-overlay/s6-rc.d/worker/run
 
 # ── ONCE hooks ───────────────────────────────────────────────
 

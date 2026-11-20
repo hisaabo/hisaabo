@@ -24,6 +24,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       web: ${{ steps.filter.outputs.web }}
       store: ${{ steps.filter.outputs.store }}
+      api_docs: ${{ steps.filter.outputs.api_docs }}
       mobile: ${{ steps.filter.outputs.mobile }}
       desktop: ${{ steps.filter.outputs.desktop }}
       cli: ${{ steps.filter.outputs.cli }}
@@ -63,6 +64,7 @@ jobs:
               - 'packages/api/**'
               - 'packages/db/**'
               - 'packages/shared/**'
+              - 'apps/ops/**'
               - 'Dockerfile'
               - 'Dockerfile.once'
               - 'docker-entrypoint.sh'
@@ -70,8 +72,15 @@ jobs:
               - 'apps/web/**'
               - 'packages/shared/**'
               - 'packages/api/src/index.ts'
+              - 'packages/api/src/router.ts'
+              - 'packages/api/src/routers/**'
             store:
               - 'apps/store/**'
+            api_docs:
+              - 'apps/api-docs/**'
+              - 'packages/api/src/index.ts'
+              - 'packages/api/src/router.ts'
+              - 'packages/api/src/routers/**'
             mobile:
               - 'apps/mobile/**'
               - 'packages/shared/**'
@@ -182,8 +191,45 @@ jobs:
           DIGEST: ${{ steps.build_once.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
-  # ── Web & Store deploy to Cloudflare Pages on push to main ─────
-  # (handled by deploy-web.yml and deploy-store.yml — no need to duplicate here)
+  # ── Web, store & API docs → Cloudflare Pages production ────────
+  # Production goes live only from a tag (pushes to main deploy previews, see
+  # deploy-web.yml / deploy-store.yml / deploy-api-docs.yml). Each waits for
+  # the API image of the same tag, so new frontends never ship ahead of it.
+  deploy-web:
+    name: Deploy Web
+    needs: [changes, docker]
+    if: always() && needs.changes.result == 'success' && needs.changes.outputs.web == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: read
+      deployments: write
+    uses: ./.github/workflows/deploy-web.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit
+
+  deploy-store:
+    name: Deploy Store
+    needs: [changes, docker]
+    if: always() && needs.changes.result == 'success' && needs.changes.outputs.store == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: read
+      deployments: write
+    uses: ./.github/workflows/deploy-store.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit
+
+  deploy-api-docs:
+    name: Deploy API Docs
+    needs: [changes, docker]
+    if: always() && needs.changes.result == 'success' && needs.changes.outputs.api_docs == 'true' && contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: read
+      deployments: write
+    uses: ./.github/workflows/deploy-api-docs.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit
 
   # ── Desktop (Tauri — Windows, macOS, Linux) ────────────────────
   desktop:
@@ -499,7 +545,7 @@ jobs:
   # ── Release Notes ──────────────────────────────────────────────
   release-notes:
     name: Publish Release Notes
-    needs: [changes, docker, desktop, mobile, cli, mcp]
+    needs: [changes, docker, deploy-web, deploy-store, deploy-api-docs, desktop, mobile, cli, mcp]
     # Not for a tag the version check rejected: nothing was built for it.
     if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
@@ -516,6 +562,10 @@ jobs:
           API: ${{ needs.changes.outputs.api }}
           WEB: ${{ needs.changes.outputs.web }}
           STORE: ${{ needs.changes.outputs.store }}
+          API_DOCS: ${{ needs.changes.outputs.api_docs }}
+          WEB_RESULT: ${{ needs.deploy-web.result }}
+          STORE_RESULT: ${{ needs.deploy-store.result }}
+          API_DOCS_RESULT: ${{ needs.deploy-api-docs.result }}
           MOBILE: ${{ needs.changes.outputs.mobile }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           CLI: ${{ needs.changes.outputs.cli }}
@@ -565,12 +615,13 @@ jobs:
             fi
           }
 
-          web_status() {
-            local changed=$1 label=$2
-            if [ "$changed" = "true" ]; then
-              echo "| $label | Updated (deploys on merge) | :white_check_mark: |"
+          # Pages deploys: "Build failed" also covers a failed or rejected deploy.
+          deploy_status() {
+            local changed=$1 result=$2 label=$3
+            if [ "$changed" = "true" ] && [ "$result" = "success" ]; then
+              echo "| $label | Deployed to production | :white_check_mark: |"
             else
-              echo "| $label | No changes | :heavy_minus_sign: |"
+              status "$changed" "$result" "$label"
             fi
           }
 
@@ -578,8 +629,9 @@ jobs:
           | Component | Status | Build |
           |---|---|---|
           $(status "$API" "$DOCKER_RESULT" "API (Docker)")
-          $(web_status "$WEB" "Web App")
-          $(web_status "$STORE" "Online Store")
+          $(deploy_status "$WEB" "$WEB_RESULT" "Web App")
+          $(deploy_status "$STORE" "$STORE_RESULT" "Online Store")
+          $(deploy_status "$API_DOCS" "$API_DOCS_RESULT" "API Docs")
           $(mobile_status)
           $(status "$DESKTOP" "$DESKTOP_RESULT" "Desktop (Win/Mac/Linux)")
           $(status "$CLI" "$CLI_RESULT" "CLI (@hisaabo/cli)")

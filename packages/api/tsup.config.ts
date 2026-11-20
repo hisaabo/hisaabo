@@ -6,15 +6,22 @@ import type { Options } from "tsup";
 // Transitive deps of workspace packages (dotenv, postgres) must be
 // explicitly externalized — they're not in api's package.json so tsup
 // would otherwise bundle them, causing CJS→ESM issues (dotenv require('fs')).
+// pg-boss is imported by @hisaabo/db's queue-schema.ts (inlined) too.
 const shared: Partial<Options> = {
   format: ["esm"],
   noExternal: ["@hisaabo/db", "@hisaabo/shared"],
-  external: ["dotenv", "postgres"],
+  external: ["dotenv", "postgres", "pg-boss"],
 };
 
 export default defineConfig([
   {
     entry: ["src/server.ts"],
+    ...shared,
+  },
+  // Background job worker process (docs/architecture/queue.md):
+  // `node packages/api/dist/worker.js`, or `command: worker` in docker.
+  {
+    entry: ["src/worker.ts"],
     ...shared,
   },
   {
@@ -27,6 +34,13 @@ export default defineConfig([
   // from an operator shell via docker compose + psql. No ORM, no extra deps.
   {
     entry: ["src/bin/admin.ts"],
+    outDir: "dist/bin",
+    ...shared,
+  },
+  // /ops operators + queue CLI (docs/architecture/queue.md §10):
+  // `docker compose exec api node packages/api/dist/bin/ops.js help`
+  {
+    entry: ["src/bin/ops.ts"],
     outDir: "dist/bin",
     ...shared,
   },

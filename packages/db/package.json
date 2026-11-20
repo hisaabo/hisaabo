@@ -30,6 +30,7 @@
   "dependencies": {
     "dotenv": "^18.0.7",
     "drizzle-orm": "^0.45.4",
+    "pg-boss": "12.37.1",
     "postgres": "^3.4.9"
   },
   "devDependencies": {
