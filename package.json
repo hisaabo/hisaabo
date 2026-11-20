@@ -26,7 +26,7 @@
     "versions:check": "node scripts/versions.mjs check"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.0",
     "oxlint": "^1.86.0",
     "turbo": "^2.11.7",
     "typescript": "^5.9.3"
@@ -71,14 +71,15 @@
       "zod@^4": "^4.6.6",
       "@expo/cli>zod": "^4.6.6",
       "body-parser@^2": "^2.4.0",
-      "undici@^8": "^8.12.2"
+      "undici@^8": "^8.12.2",
+      "node-forge@^1": "^1.4.1"
     },
     "auditConfig": {
       "ignoreGhsas": [
-        "GHSA-86w9-cpqp-85rv",
         "GHSA-5p2g-fcmc-qvqq",
         "GHSA-w3rx-r6r6-pgpr",
-        "GHSA-vfj7-8cjw-p6xm"
+        "GHSA-vfj7-8cjw-p6xm",
+        "GHSA-qr28-fpjm-wq7f"
       ]
     }
   },
