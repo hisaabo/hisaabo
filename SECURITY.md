@@ -45,7 +45,7 @@ This section describes what the code does today. Where a protection depends on h
 - **TLS is a deployment responsibility.** The API and the bundled nginx config speak plain HTTP; terminate TLS in front of them (Caddy, a cloud load balancer, Cloudflare Tunnel). Hono's `secureHeaders()` emits an HSTS header from the API, and `nginx/nginx.conf` emits HSTS only for requests the edge proxy marks `X-Forwarded-Proto: https`; HSTS has no effect unless clients actually reach you over HTTPS.
 - **Content-Security-Policy** is set by the web and store frontends (`apps/web/public/_headers` on Cloudflare Pages, a CSP meta tag, and the Tauri desktop CSP). The API itself sets a restrictive CSP only on its small HTML pages (landing, UPI pay link, 404); its JSON responses carry `X-Content-Type-Options: nosniff` and the other `secureHeaders()` defaults.
 - CORS is restricted to `CORS_ORIGINS` plus the first-party desktop webview origins (including `http://tauri.localhost`).
-- **`API_PUBLIC_URL` is required in production**: the API refuses to start without a valid `http(s)` value, since it is used to build absolute links and store share metadata.
+- **`API_PUBLIC_URL`** is used to build absolute links and store share metadata. If it is set it must be a valid `http(s)` URL (the API refuses to start otherwise). If it is unset the API starts with a warning and falls back as described in `docs/DEPLOYMENT.md`; public, cacheable routes never derive URLs from the `Host` header.
 - **CSRF:** cookie-authenticated, state-changing non-tRPC requests must carry `X-Requested-With: hisaabo`; tRPC enforces the same check in middleware. Bearer-token requests are exempt (not ambient credentials).
 
 ### Trusted Proxy / Client IP
