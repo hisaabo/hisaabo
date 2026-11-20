@@ -1,6 +1,7 @@
 /**
  * tenant-verified-gate.test.ts — cloud-only verified-email gate for team changes,
- * and claim-time cleanup of what a pre-registered account left behind.
+ * claim-time cleanup of what a pre-registered account left behind, and
+ * self-hosted invitation acceptance without working email.
  *
  * Requires the PostgreSQL test database (TEST_DATABASE_URL).
  */
@@ -9,7 +10,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, t
 import { eq, and } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import { nanoid } from "nanoid";
-import { tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
+import { users, tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
 import { createUser, createTenant, addMember, createSession, type TestUser, type TestTenant } from "../helpers/fixtures.js";
 import { getControlDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
 import { createTestContext } from "../helpers/test-context.js";
@@ -265,5 +266,80 @@ describe("pre-registered account: claim-time cleanup and notice", () => {
     const res = await anonCaller({ "x-hisaabo-client": "mobile" }).auth.verifyMagicLink({ token: await seedMagicToken(victimEmail) });
     const fresh = callerFor(pre, res.sessionToken!, tenant.id);
     await expect(fresh.tenant.inviteMember({ email: newEmail(), role: "seller" })).resolves.toBeTruthy();
+  });
+});
+
+describe("self-hosted invitation acceptance without working email", () => {
+  const db = getControlDb();
+
+  async function inviteFlowSetup() {
+    const tenant = await createTenant({ name: "Self Hosted Co" });
+    const owner = await createUser({ email: `sh.owner.${nanoid(6).toLowerCase()}@example.in`, emailVerified: true });
+    await addMember(tenant.id, owner.id, "owner");
+    const inviteeEmail = `sh.invitee.${nanoid(6).toLowerCase()}@example.in`;
+    const raw = nanoid(32);
+    await db.insert(invitations).values({
+      tenantId: tenant.id, email: inviteeEmail, role: "seller", token: hash(raw),
+      invitedBy: owner.id, expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    return { tenant, owner, inviteeEmail, raw };
+  }
+
+  it("an invited member who registered with a password (no email ever verified) can accept with the token", async () => {
+    delete process.env.MULTI_TENANT;
+    process.env.ALLOW_OPEN_SIGNUP = "false"; // invite-only server, as v0.9.0's compose deploys
+    const { tenant, inviteeEmail, raw } = await inviteFlowSetup();
+
+    // The invitee registers with a password (the only way in without email).
+    const reg = await anonCaller({ "x-hisaabo-client": "mobile" }).auth.register({
+      email: inviteeEmail, name: "Invitee", password: "Invitee@1234!", confirmPassword: "Invitee@1234!",
+    });
+    const [before] = await db.select().from(users).where(eq(users.id, reg.user.id));
+    expect(before!.emailVerified).toBe(false);
+    expect(await db.select().from(tenantMembers).where(eq(tenantMembers.userId, reg.user.id))).toHaveLength(0);
+
+    // Accepting with the emailed/shared token now works and counts as the proof.
+    const caller = callerFor(reg.user, reg.sessionToken!, null);
+    await expect(caller.tenant.acceptInvitation({ token: raw })).resolves.toMatchObject({ tenantId: tenant.id });
+    const [after] = await db.select().from(users).where(eq(users.id, reg.user.id));
+    expect(after!.emailVerified).toBe(true);
+    expect(after!.passwordHash).not.toBeNull(); // nothing is wiped on this path
+    const [member] = await db.select().from(tenantMembers).where(eq(tenantMembers.userId, reg.user.id));
+    expect(member).toMatchObject({ tenantId: tenant.id, role: "seller" });
+  });
+
+  it("the in-app path (acceptById, no token) still requires a verified email", async () => {
+    delete process.env.MULTI_TENANT;
+    const { tenant, owner } = await inviteFlowSetup();
+    const user = await createUser({ email: `sh.byid.${nanoid(6).toLowerCase()}@example.in`, emailVerified: false });
+    const [inv] = await db.insert(invitations).values({
+      tenantId: tenant.id, email: user.email, role: "seller", token: hash(nanoid(32)),
+      invitedBy: owner.id, expiresAt: new Date(Date.now() + 86_400_000),
+    }).returning();
+    const s = await createSession(user.id);
+    await expect(callerFor(user, s.id, null).tenant.acceptById({ invitationId: inv!.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("the token path still checks that the invitation is addressed to the signed-in email", async () => {
+    delete process.env.MULTI_TENANT;
+    const { raw } = await inviteFlowSetup();
+    const other = await createUser({ email: `sh.other.${nanoid(6).toLowerCase()}@example.in`, emailVerified: false });
+    const s = await createSession(other.id);
+    await expect(callerFor(other, s.id, null).tenant.acceptInvitation({ token: raw })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const [row] = await db.select().from(users).where(eq(users.id, other.id));
+    expect(row!.emailVerified).toBe(false);
+  });
+
+  it("in the cloud the token alone is not proof (the inviter also receives the link)", async () => {
+    process.env.MULTI_TENANT = "true";
+    const { tenant, owner, raw } = await inviteFlowSetup();
+    void tenant;
+    void owner;
+    const user = await createUser({ email: `cloud.${nanoid(6).toLowerCase()}@example.in`, emailVerified: false });
+    await db.update(invitations).set({ email: user.email }).where(eq(invitations.token, hash(raw)));
+    const s = await createSession(user.id);
+    await expect(callerFor(user, s.id, null).tenant.acceptInvitation({ token: raw })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.emailVerified).toBe(false);
   });
 });

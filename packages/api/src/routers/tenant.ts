@@ -65,11 +65,22 @@ type InvitationRow = typeof invitations.$inferSelect;
 
 // Claims the invitation (acceptedAt IS NULL guard) and creates the membership
 // in one transaction so a single invitation can only ever grant access once.
-async function claimInvitationAndAddMember(invitation: InvitationRow, userId: string): Promise<void> {
+//
+// `verifyEmail` (self-hosted token path only, see acceptInvitation) marks the
+// account's email verified in the same transaction, so it only sticks if the
+// invitation is really claimed.
+async function claimInvitationAndAddMember(
+  invitation: InvitationRow,
+  userId: string,
+  opts: { verifyEmail?: boolean } = {},
+): Promise<void> {
   // `membership` is emitted after the transaction settled (a new member can
   // change the authz result of anything cached for the tenant).
-  await cacheBus.afterWrite([{ kind: "membership", tenantId: invitation.tenantId, userId }], () =>
+  await cacheBus.afterWrite([{ kind: "membership", tenantId: invitation.tenantId, userId }, { kind: "user", userId }], () =>
     controlDb.transaction(async (tx) => {
+    if (opts.verifyEmail) {
+      await tx.update(users).set({ emailVerified: true, updatedAt: new Date() }).where(eq(users.id, userId));
+    }
     const claimed = await tx.update(invitations)
       .set({ acceptedAt: new Date() })
       .where(and(eq(invitations.id, invitation.id), isNull(invitations.acceptedAt)))
@@ -550,7 +561,16 @@ export const tenantRouter = router({
       if (!currentUser || normalizeEmail(currentUser.email) !== normalizeEmail(invitation.email)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "This invitation was sent to a different email address" });
       }
-      await assertEmailVerified(ctx.user.id);
+      // Cloud: the account's email must already have been proven by an email-link
+      // sign-in. Self-hosted: v0.9.0 had no such check and an install without
+      // working email can never produce that proof, so the invitation token itself
+      // (addressed to this email, held by the signed-in user) is accepted as proof
+      // and the email is marked verified together with the membership. No
+      // credential wipe is needed: the session and the token are the same person's.
+      // Not applied in the cloud because the inviter also receives the link
+      // (returnLink), so holding the token proves nothing about the mailbox there.
+      const selfHosted = process.env.MULTI_TENANT !== "true";
+      if (!selfHosted) await assertEmailVerified(ctx.user.id);
 
       // If already accepted, treat as idempotent — the user may be clicking
       // an old link or retrying after a partial failure. Check membership and
@@ -589,7 +609,7 @@ export const tenantRouter = router({
       // Create membership and mark invitation accepted atomically so a crash
       // between the two writes cannot leave the user as a member with a
       // re-usable invitation link.
-      await claimInvitationAndAddMember(invitation, ctx.user.id);
+      await claimInvitationAndAddMember(invitation, ctx.user.id, { verifyEmail: selfHosted });
 
       const tenantName = await autoSelectTenantInSession(ctx.req, invitation.tenantId);
       return { tenantId: invitation.tenantId, tenantName };

@@ -77,15 +77,25 @@ describe("acceptInvitation", () => {
     expect(res.tenantId).toBe(tenant.id);
   });
 
-  it("refuses accounts whose email is not verified", async () => {
-    const user = await createUser({ email: `unverified.${randomUUID().slice(0, 8)}@example.in`, emailVerified: false });
-    const raw = randomUUID();
-    await getControlDb().insert(invitations).values({
-      tenantId: tenant.id, email: user.email, role: "seller", token: hash(raw),
-      invitedBy: owner.id, expiresAt: new Date(Date.now() + 86_400_000),
-    });
-    const s = await createSession(user.id);
-    await expect(callerFor(user, s.id, null).tenant.acceptInvitation({ token: raw })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  it("cloud (MULTI_TENANT=true) refuses accounts whose email is not verified", async () => {
+    const saved = process.env.MULTI_TENANT;
+    process.env.MULTI_TENANT = "true";
+    try {
+      const user = await createUser({ email: `unverified.${randomUUID().slice(0, 8)}@example.in`, emailVerified: false });
+      const raw = randomUUID();
+      await getControlDb().insert(invitations).values({
+        tenantId: tenant.id, email: user.email, role: "seller", token: hash(raw),
+        invitedBy: owner.id, expiresAt: new Date(Date.now() + 86_400_000),
+      });
+      const s = await createSession(user.id);
+      await expect(callerFor(user, s.id, null).tenant.acceptInvitation({ token: raw })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const rows = await getControlDb().select().from(tenantMembers)
+        .where(and(eq(tenantMembers.tenantId, tenant.id), eq(tenantMembers.userId, user.id)));
+      expect(rows).toHaveLength(0);
+    } finally {
+      if (saved === undefined) delete process.env.MULTI_TENANT;
+      else process.env.MULTI_TENANT = saved;
+    }
   });
 });
 
