@@ -344,6 +344,9 @@ exceptions:
       - tenant.acceptInvitation
       - tenant.acceptById
       - tenant.canCreateOrg
+      # Cloud-only UI gate (hides invite / role controls for an unverified email);
+      # CLI and MCP just call the mutation and surface the server's message.
+      - tenant.canInviteMembers
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation
@@ -454,6 +457,9 @@ exceptions:
       - tenant.acceptInvitation
       - tenant.acceptById
       - tenant.canCreateOrg
+      # Cloud-only UI gate (hides invite / role controls for an unverified email);
+      # CLI and MCP just call the mutation and surface the server's message.
+      - tenant.canInviteMembers
       - tenant.create
       - tenant.myInvitations
       - tenant.peekInvitation

@@ -33,15 +33,32 @@ async function autoSelectTenantInSession(req: Request, tenantId: string): Promis
   return tenant?.name ?? "Organization";
 }
 
-async function assertEmailVerified(userId: string): Promise<void> {
+async function assertEmailVerified(
+  userId: string,
+  message = "Verify your email address (sign in with an email link) before accepting an invitation",
+): Promise<void> {
   const [row] = await controlDb.select({ emailVerified: users.emailVerified })
     .from(users).where(eq(users.id, userId)).limit(1);
   if (!row?.emailVerified) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Verify your email address (sign in with an email link) before accepting an invitation",
-    });
+    throw new TRPCError({ code: "FORBIDDEN", message });
   }
+}
+
+const TEAM_CHANGE_UNVERIFIED_MESSAGE =
+  "Verify your email address before inviting or changing team members: sign out and sign in with an email link. " +
+  "After that, your password and API keys stop working and you sign in by email link.";
+
+/**
+ * Cloud (multi-tenant) only: an account whose email was never proven (a password
+ * sign-up) may not grow or reshape a team. That is what stops a pre-registered
+ * account from seeding an organisation with its own people before the real
+ * mailbox owner arrives. Self-hosted installs are unaffected: invitations there
+ * are the operator's own people and email may not even be configured.
+ * removeMember and revokeInvitation stay allowed (they only reduce access).
+ */
+async function assertVerifiedForTeamChange(userId: string): Promise<void> {
+  if (process.env.MULTI_TENANT !== "true") return;
+  await assertEmailVerified(userId, TEAM_CHANGE_UNVERIFIED_MESSAGE);
 }
 
 type InvitationRow = typeof invitations.$inferSelect;
@@ -227,6 +244,17 @@ export const tenantRouter = router({
     return limits.maxOwnedOrgs === Infinity || ownedOrgs.length < limits.maxOwnedOrgs;
   }),
 
+  // Whether the caller may invite members / change roles right now. The UI hides
+  // those controls (instead of letting them fail) when this says no.
+  canInviteMembers: tenantProcedure.query(async ({ ctx }) => {
+    if (process.env.MULTI_TENANT !== "true") return { allowed: true, reason: null as "email_unverified" | null };
+    const [row] = await controlDb.select({ emailVerified: users.emailVerified })
+      .from(users).where(eq(users.id, ctx.user.id)).limit(1);
+    return row?.emailVerified
+      ? { allowed: true, reason: null as "email_unverified" | null }
+      : { allowed: false, reason: "email_unverified" as "email_unverified" | null };
+  }),
+
   // List user's tenant memberships
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await controlDb.select({
@@ -384,6 +412,7 @@ export const tenantRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can invite members");
+      await assertVerifiedForTeamChange(ctx.user.id);
 
       const inviteEmail = normalizeEmail(input.email);
 
@@ -656,6 +685,7 @@ export const tenantRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireTenantRole(ctx, ADMIN_ROLES, "Only owners and admins can change roles");
+      await assertVerifiedForTeamChange(ctx.user.id);
 
       // Prevent changing a superadmin/owner's role
       const [targetMembership] = await controlDb.select({ role: tenantMembers.role })

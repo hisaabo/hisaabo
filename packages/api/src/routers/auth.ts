@@ -1,4 +1,4 @@
-import { eq, ne, and, gt, lte, isNull, desc, sql } from "drizzle-orm";
+import { eq, ne, and, gt, lte, isNull, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
@@ -711,9 +711,12 @@ export const authRouter = router({
         apiKeys: number;
         pendingEmailChanges: number;
         nativeRequests: number;
+        pendingInvitations: number;
+        otherMembers: number;
         hadPassword: boolean;
       } | null;
-    } = { counts: null };
+      orgs: Array<{ orgName: string; members: Array<{ email: string; role: string }> }>;
+    } = { counts: null, orgs: [] };
     const { user, sessionToken, isNewUser, email } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
@@ -811,6 +814,32 @@ export const authRouter = router({
             const revokedNativeRequests = await tx.delete(nativeAuthRequests)
               .where(eq(nativeAuthRequests.userId, user.id))
               .returning({ id: nativeAuthRequests.id });
+            // Invitations this account issued before the proof were not issued by the
+            // mailbox owner either: a pending one is a ready-made way into the
+            // organisation for whoever holds its link.
+            const revokedInvitations = await tx.delete(invitations)
+              .where(and(eq(invitations.invitedBy, user.id), isNull(invitations.acceptedAt)))
+              .returning({ id: invitations.id });
+            // People who already have access to an organisation this account owns were
+            // added before the proof. They are NOT removed automatically (they may be
+            // legitimate); the owner is told who they are after the sign-in.
+            const owned = await tx
+              .select({ tenantId: tenantMembers.tenantId })
+              .from(tenantMembers)
+              .where(and(eq(tenantMembers.userId, user.id), inArray(tenantMembers.role, ["owner", "superadmin"])));
+            const others = owned.length === 0 ? [] : await tx
+              .select({ tenantId: tenantMembers.tenantId, tenantName: tenants.name, email: users.email, role: tenantMembers.role })
+              .from(tenantMembers)
+              .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+              .innerJoin(users, eq(users.id, tenantMembers.userId))
+              .where(and(inArray(tenantMembers.tenantId, owned.map((o) => o.tenantId)), ne(tenantMembers.userId, user.id)));
+            const byOrg = new Map<string, { orgName: string; members: Array<{ email: string; role: string }> }>();
+            for (const m of others) {
+              const org = byOrg.get(m.tenantId) ?? { orgName: m.tenantName, members: [] };
+              org.members.push({ email: m.email, role: m.role });
+              byOrg.set(m.tenantId, org);
+            }
+            claim.orgs = [...byOrg.values()];
             await tx.update(users)
               .set({ emailVerified: true, passwordHash: null, updatedAt: new Date() })
               .where(eq(users.id, user.id));
@@ -820,6 +849,8 @@ export const authRouter = router({
               apiKeys: revokedKeys.length,
               pendingEmailChanges: revokedEmailChanges.length,
               nativeRequests: revokedNativeRequests.length,
+              pendingInvitations: revokedInvitations.length,
+              otherMembers: others.length,
               hadPassword: user.passwordHash !== null,
             };
           } else {
@@ -876,6 +907,13 @@ export const authRouter = router({
         reason: "first_magic_link_verification",
         extra: { userId: user.id, ...claim.counts },
       });
+      // Tell the owner who already had access. Best effort: a mail failure (or no
+      // email service) must never fail the sign-in that just succeeded.
+      if (claim.counts.otherMembers > 0) {
+        void emailService.sendSecurityNotice(user.email, claim.orgs).catch((err) => {
+          logger.warn({ err }, "Failed to send security notice after first email verification");
+        });
+      }
     }
 
     return {
