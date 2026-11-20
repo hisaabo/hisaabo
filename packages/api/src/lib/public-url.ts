@@ -18,8 +18,10 @@
  *      controlled, so public/cacheable routes (store OG image, SEO shell) never
  *      opt in: a poisoned value there could be cached and served to others.
  *   3. `APP_URL`                     — configured by every v0.9.0 install (magic
- *      links). Correct for single-origin deployments (ONCE image, nginx serving
- *      web + API on one host); for split hosts it points at the frontend.
+ *      links). Correct only when the web app and the API share one origin; the
+ *      Docker images ship the API alone and the web app is normally hosted
+ *      separately, so this usually points at the frontend (only share-preview
+ *      metadata is affected).
  *   4. first valid `CORS_ORIGINS` entry — required since v0.9.0, so always
  *      present; same caveat as APP_URL.
  *   5. `http://localhost:<PORT>`     — last resort, never useful in production.
