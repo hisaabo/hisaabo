@@ -97,10 +97,15 @@ RUN chmod +x /app/docker-entrypoint.sh
 RUN mkdir -p /storage/objects && chown -R node:node /storage
 VOLUME ["/storage"]
 
+# Release builds pass VERSION (X.Y.Z, no leading v) and GIT_SHA (full commit);
+# see .github/workflows/release.yml. They also surface at runtime as
+# HISAABO_VERSION / HISAABO_COMMIT (packages/api/src/lib/build-info.ts).
 ARG VERSION=dev
+ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.title="Hisaabo API"
 LABEL org.opencontainers.image.description="Invoicing and business management API"
 LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
 LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
 
 EXPOSE 3000
@@ -108,6 +113,7 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HISAABO_VERSION=${VERSION}
+ENV HISAABO_COMMIT=${GIT_SHA}
 ENV STORAGE_LOCAL_DIR=/storage/objects
 
 # Drop root: application code under /app stays root-owned and read-only to it.

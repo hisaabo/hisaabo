@@ -14,6 +14,7 @@ import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
+import { buildInfo } from "../lib/build-info.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
 import {
@@ -1163,7 +1164,10 @@ export const authRouter = router({
       role = membership?.role ?? null;
     }
 
-    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, role, needsProfile: !ctx.user.name };
+    // Build identity is only disclosed to signed-in users (never via the
+    // unauthenticated /health or the logged-out branch above).
+    const server = { version: buildInfo.version, commit: buildInfo.commit };
+    return { user: ctx.user, tenantId: ctx.tenantId, tenantName, role, needsProfile: !ctx.user.name, server };
   }),
 });
 

@@ -38,6 +38,12 @@
 
 services:
   api:
+    # Pin a release in .env.prod, e.g.
+    #   HISAABO_API_IMAGE=ghcr.io/hisaabo/hisaabo-api:v0.10.0
+    # (add @sha256:<digest> from the release notes to pin the exact bytes).
+    # The default stays `latest` so existing installs keep upgrading with
+    # `docker compose pull`; production should pin. Pass --env-file .env.prod:
+    # Compose reads this variable from it, not from `env_file` below.
     image: ${HISAABO_API_IMAGE:-ghcr.io/hisaabo/hisaabo-api:latest}
     restart: unless-stopped
     ports:

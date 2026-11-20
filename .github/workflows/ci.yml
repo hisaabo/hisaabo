@@ -214,17 +214,44 @@ jobs:
           path: e2e/test-results/
           retention-days: 7
 
+  # Both release images are built (single-arch, no push) so a Dockerfile or
+  # Dockerfile.once break is caught on the PR, not at release time. Same
+  # build-args as release.yml, plus a check that the version/revision plumbing
+  # (ENV + OCI label) actually lands in the image.
   docker-build:
-    name: Docker Build (dry run)
+    name: Docker Build (dry run, ${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: typecheck-lint
     if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            file: Dockerfile
+          - image: once
+            file: Dockerfile.once
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: ${{ matrix.file }}
           push: false
-          tags: hisaabo-api:test
+          load: true
+          build-args: |
+            VERSION=0.0.0-ci
+            GIT_SHA=${{ github.sha }}
+          tags: hisaabo-${{ matrix.image }}:test
+
+      - name: Check version and revision are baked in
+        env:
+          IMAGE: hisaabo-${{ matrix.image }}:test
+        run: |
+          env_lines=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE")
+          grep -qx "HISAABO_VERSION=0.0.0-ci" <<<"$env_lines"
+          grep -qx "HISAABO_COMMIT=${GITHUB_SHA}" <<<"$env_lines"
+          revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")
+          test "$revision" = "$GITHUB_SHA"

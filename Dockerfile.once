@@ -438,10 +438,15 @@ RUN chmod +x /hooks/post-restore
 
 # ── Metadata ─────────────────────────────────────────────────
 
+# Release builds pass VERSION (X.Y.Z, no leading v) and GIT_SHA (full commit);
+# see .github/workflows/release.yml. They also surface at runtime as
+# HISAABO_VERSION / HISAABO_COMMIT (packages/api/src/lib/build-info.ts).
 ARG VERSION=dev
+ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.title="Hisaabo"
 LABEL org.opencontainers.image.description="Invoicing and business management — all-in-one (PostgreSQL + API)"
 LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
 LABEL org.opencontainers.image.source="https://github.com/hisaabo/hisaabo"
 
 # ── Environment ──────────────────────────────────────────────
@@ -450,6 +455,7 @@ ENV NODE_ENV=production
 ENV PORT=80
 ENV STORAGE_LOCAL_DIR=/storage/objects
 ENV HISAABO_VERSION=${VERSION}
+ENV HISAABO_COMMIT=${GIT_SHA}
 # DATABASE_URL is set dynamically in the API run script (Unix socket)
 # ONCE provides: SECRET_KEY_BASE, SMTP_*, VAPID_*
 # Custom env vars (set via ONCE TUI): CORS_ORIGINS, APP_URL, API_PUBLIC_URL (required), RESEND_API_KEY, EMAIL_FROM, TURNSTILE_SECRET_KEY

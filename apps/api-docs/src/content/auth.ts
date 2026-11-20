@@ -220,17 +220,18 @@ httpx.post(
       method: "query",
       path: "auth.me",
       title: "Get Current User",
-      description: "Returns the currently authenticated user's profile, organization ID, organization name, and role. Returns null fields if not authenticated. Results are cached in-process for performance.",
+      description: "Returns the currently authenticated user's profile, organization ID, organization name, and role. Also reports the API build (`server.version` and the git `server.commit` it was built from). Returns null fields (and no `server`) if not authenticated. Results are cached in-process for performance.",
       auth: "public",
       input: [],
       output: {
-        description: "Current session information. All fields are null when not authenticated.",
+        description: "Current session information. All fields are null when not authenticated. `server.commit` is `\"unknown\"` for builds that did not record one.",
         example: {
           user: { id: "01957a2b-3c4d-7e8f-9012-abcdef012345", email: "rahul@myshop.in", name: "Rahul Sharma" },
           tenantId: "tenant-uuid",
           tenantName: "Rahul's Organization",
           role: "owner",
           needsProfile: false,
+          server: { version: "0.9.0", commit: "0123456789abcdef0123456789abcdef01234567" },
         },
       },
       codeExamples: {

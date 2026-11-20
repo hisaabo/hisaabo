@@ -6,9 +6,9 @@
  * here, so the version and schema fingerprint always match between the
  * exporter and the validator running in the same process.
  *
- * APP_VERSION is read dynamically from the API package's own package.json at
- * module load. `pnpm release` bumps every package in lockstep, so this
- * reflects the true build version without hand-editing.
+ * APP_VERSION is the build version from `./build-info.js` (HISAABO_VERSION baked
+ * into release images, else this package's package.json). It never carries a
+ * leading `v`, so it matches the web UI and the image tags' `X.Y.Z` form.
  *
  * SCHEMA_CHECKSUM is a stable hash over the TABLE_REGISTRY — table names and
  * their redacted-field sets. Any schema change that touches the registry
@@ -16,40 +16,11 @@
  * will emit a "best-effort" warning for backups taken against the old shape.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { buildInfo } from "./build-info.js";
 import { TABLE_REGISTRY } from "./tableRegistry.js";
 
 // ── App version ───────────────────────────────────────────────────────────────
-//
-// Walk up from this file to find the api package's package.json. Works in
-// both source (tsx) and built (tsup → dist) layouts because we search upward
-// rather than assuming a fixed relative path.
-function readApiVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  // src/lib → src → packages/api    (source)
-  // dist    → packages/api          (built)
-  const candidates = [
-    resolve(here, "..", "..", "package.json"),
-    resolve(here, "..", "package.json"),
-  ];
-  for (const p of candidates) {
-    try {
-      const raw = readFileSync(p, "utf8");
-      const pkg = JSON.parse(raw) as { name?: string; version?: string };
-      if (pkg.name === "@hisaabo/api" && typeof pkg.version === "string") {
-        return pkg.version;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-  // Last resort so we never crash import/export on an unexpected layout.
-  return "0.0.0";
-}
-
-export const APP_VERSION = readApiVersion();
+export const APP_VERSION = buildInfo.version;
 
 // ── Schema checksum ───────────────────────────────────────────────────────────
 function computeSchemaChecksum(): string {

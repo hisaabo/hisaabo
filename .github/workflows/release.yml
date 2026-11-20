@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # Recovery only: re-run a release whose image push partially failed. Run it
+  # on the tag ref (a branch fails the version check). See `force` in the
+  # docker job.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Overwrite image tags that already exist for this version (recovery from a partial failure only; releases are otherwise immutable)"
+        type: boolean
+        default: false
 
 # Least privilege: read-only by default. Jobs that publish or sign request
 # exactly the extra scopes they need (id-token for npm Trusted Publishing and
@@ -87,12 +96,17 @@ jobs:
               - 'packages/shared/**'
 
   # ── Docker images (GHCR) ───────────────────────────────────────
+  # Runs for EVERY release tag (no paths filter): a version always has images,
+  # so `:vX.Y.Z` is never a dangling reference, and every image records the
+  # exact source revision. Tags pushed per image (docker/metadata-action):
+  #   v0.10.0  0.10.0  0.10  sha-<first 12 chars of the commit>  latest
+  # A pre-release (v0.10.0-rc.1) gets only v0.10.0-rc.1, 0.10.0-rc.1 and
+  # sha-<12>: never `latest` or the moving X.Y tag.
   docker:
     name: Docker Images
     needs: changes
-    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -100,29 +114,38 @@ jobs:
     env:
       REF_NAME: ${{ github.ref_name }}
       IMAGE_OWNER: ${{ github.repository_owner }}
+      # sha-<12> tag (7 by default), and OCI annotations on both the
+      # per-platform manifests and the multi-arch index (what registries show).
+      DOCKER_METADATA_SHORT_SHA_LENGTH: "12"
+      DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+    outputs:
+      version: ${{ steps.rel.outputs.version }}
+      api_image: ${{ steps.rel.outputs.api_image }}
+      api_digest: ${{ steps.build_api.outputs.digest }}
+      once_image: ${{ steps.rel.outputs.once_image }}
+      once_digest: ${{ steps.build_once.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # `latest` only moves for stable releases (no pre-release suffix such as
-      # -beta.1 / -rc.1 in the version).
-      - name: Compute image tags
-        id: tags
+      # `version` is the tag without its leading v (baked into the image as
+      # HISAABO_VERSION, the same form as package.json and the web UI). A "-"
+      # in the version marks a pre-release (-beta.1, -rc.1), which never moves
+      # `latest` or the X.Y tag. Image names must be lowercase.
+      - name: Resolve release version and image names
+        id: rel
         run: |
-          API="ghcr.io/${IMAGE_OWNER}/hisaabo-api"
-          ONCE="ghcr.io/${IMAGE_OWNER}/hisaabo"
-          API_TAGS="${API}:${REF_NAME}"
-          ONCE_TAGS="${ONCE}:${REF_NAME}"
-          if [[ "$REF_NAME" != *-* ]]; then
-            API_TAGS="${API_TAGS},${API}:latest"
-            ONCE_TAGS="${ONCE_TAGS},${ONCE}:latest"
+          OWNER="${IMAGE_OWNER,,}"
+          if [[ "$REF_NAME" == *-* ]]; then
+            echo "Pre-release ${REF_NAME}: not tagging latest or X.Y"
+            PRERELEASE=true
           else
-            echo "Pre-release ${REF_NAME}: not tagging latest"
+            PRERELEASE=false
           fi
           {
-            echo "api=${API_TAGS}"
-            echo "once=${ONCE_TAGS}"
-            echo "api_image=${API}"
-            echo "once_image=${ONCE}"
+            echo "version=${REF_NAME#v}"
+            echo "prerelease=${PRERELEASE}"
+            echo "api_image=ghcr.io/${OWNER}/hisaabo-api"
+            echo "once_image=ghcr.io/${OWNER}/hisaabo"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
@@ -141,14 +164,83 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Release tags are immutable: self-hosters pin `:vX.Y.Z` and expect the
+      # same bytes forever. Fail BEFORE anything is pushed if either image
+      # already has this version, unless a maintainer explicitly forces it
+      # (workflow_dispatch input `force`, to recover a half-pushed release).
+      # Only a clear "not found" counts as absent; any other failure (network,
+      # registry error) fails closed, so a blip can never allow an overwrite.
+      # ("denied" means the package does not exist yet, i.e. the first release
+      # of an image; a genuine auth problem fails the push below instead.)
+      - name: Refuse to overwrite an existing release tag
+        env:
+          API_IMAGE: ${{ steps.rel.outputs.api_image }}
+          ONCE_IMAGE: ${{ steps.rel.outputs.once_image }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -uo pipefail
+          existing=()
+          for image in "$API_IMAGE" "$ONCE_IMAGE"; do
+            ref="${image}:${REF_NAME}"
+            if out=$(docker buildx imagetools inspect "$ref" 2>&1); then
+              existing+=("$ref")
+            elif grep -qiE 'not found|manifest unknown|name unknown|denied|unauthorized' <<<"$out"; then
+              echo "${ref} does not exist yet"
+            else
+              echo "::error title=Cannot verify release tag::Could not determine whether ${ref} exists (failing closed): ${out}"
+              exit 1
+            fi
+          done
+          if [ "${#existing[@]}" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "${FORCE:-}" = "true" ]; then
+            echo "::warning title=Overwriting release tag::force=true: re-pushing ${existing[*]}. Digest pins stay valid; tag pins will move."
+          else
+            echo "::error title=Release image tag already exists::Already published: ${existing[*]}. Release images are immutable: cut a new version instead. To recover a partially failed release, run this workflow on the tag via workflow_dispatch with force=true."
+            exit 1
+          fi
+
+      # labels and annotations are generated independently, so each override
+      # appears in both. source/revision/created/url come from the workflow
+      # context. The licence has no SPDX identifier, so it is stated explicitly
+      # (instead of the generated NOASSERTION).
+      - name: Image metadata (API)
+        id: meta_api
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.rel.outputs.api_image }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rel.outputs.prerelease == 'false' }}
+            type=sha
+            type=raw,value=latest,enable=${{ steps.rel.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=Hisaabo API
+            org.opencontainers.image.description=Invoicing and business management API
+            org.opencontainers.image.version=${{ steps.rel.outputs.version }}
+            org.opencontainers.image.licenses=LicenseRef-O-Saasy-1.0
+          annotations: |
+            org.opencontainers.image.title=Hisaabo API
+            org.opencontainers.image.description=Invoicing and business management API
+            org.opencontainers.image.version=${{ steps.rel.outputs.version }}
+            org.opencontainers.image.licenses=LicenseRef-O-Saasy-1.0
+
       - name: Build & push API image
         id: build_api
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
-          build-args: VERSION=${{ github.ref_name }}
-          tags: ${{ steps.tags.outputs.api }}
+          build-args: |
+            VERSION=${{ steps.rel.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.meta_api.outputs.tags }}
+          labels: ${{ steps.meta_api.outputs.labels }}
+          annotations: ${{ steps.meta_api.outputs.annotations }}
           platforms: linux/amd64,linux/arm64
           provenance: mode=max
           sbom: true
@@ -157,9 +249,33 @@ jobs:
 
       - name: Sign API image (cosign, keyless)
         env:
-          IMAGE: ${{ steps.tags.outputs.api_image }}
+          IMAGE: ${{ steps.rel.outputs.api_image }}
           DIGEST: ${{ steps.build_api.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Image metadata (ONCE)
+        id: meta_once
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.rel.outputs.once_image }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rel.outputs.prerelease == 'false' }}
+            type=sha
+            type=raw,value=latest,enable=${{ steps.rel.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=Hisaabo
+            org.opencontainers.image.description=Invoicing and business management — all-in-one (PostgreSQL + API)
+            org.opencontainers.image.version=${{ steps.rel.outputs.version }}
+            org.opencontainers.image.licenses=LicenseRef-O-Saasy-1.0
+          annotations: |
+            org.opencontainers.image.title=Hisaabo
+            org.opencontainers.image.description=Invoicing and business management — all-in-one (PostgreSQL + API)
+            org.opencontainers.image.version=${{ steps.rel.outputs.version }}
+            org.opencontainers.image.licenses=LicenseRef-O-Saasy-1.0
 
       - name: Build & push ONCE image
         id: build_once
@@ -168,8 +284,12 @@ jobs:
           context: .
           file: Dockerfile.once
           push: true
-          build-args: VERSION=${{ github.ref_name }}
-          tags: ${{ steps.tags.outputs.once }}
+          build-args: |
+            VERSION=${{ steps.rel.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.meta_once.outputs.tags }}
+          labels: ${{ steps.meta_once.outputs.labels }}
+          annotations: ${{ steps.meta_once.outputs.annotations }}
           platforms: linux/amd64,linux/arm64
           provenance: mode=max
           sbom: true
@@ -178,7 +298,7 @@ jobs:
 
       - name: Sign ONCE image (cosign, keyless)
         env:
-          IMAGE: ${{ steps.tags.outputs.once_image }}
+          IMAGE: ${{ steps.rel.outputs.once_image }}
           DIGEST: ${{ steps.build_once.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
@@ -263,6 +383,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+          # Source revision shown next to the version in the app (vite.config.ts
+          # shortens it).
+          VITE_APP_COMMIT: ${{ github.sha }}
           # Tauri updater-bundle signing key, supplied from repository secrets.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -275,9 +398,13 @@ jobs:
           args: "--config src-tauri/tauri.conf.prod.json"
           tagName: ${{ github.ref_name }}
           releaseName: "Hisaabo ${{ github.ref_name }}"
-          releaseBody: "Desktop builds for ${{ github.ref_name }}. These installers are NOT code-signed or notarized (no Apple Developer ID or Windows Authenticode certificate is configured): macOS Gatekeeper and Windows SmartScreen will warn on first launch. Verify the download against the release page before running it. See the [release notes](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}) for details."
+          # No releaseBody on purpose: the release-notes job (which runs after
+          # every build job) owns the body. A body set here ended up as the
+          # published body of every release, because release-notes could not
+          # replace it (see the "Publish release" step there). The release
+          # stays a draft until release-notes publishes it.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # ── Mobile (Android APK via EAS) ───────────────────────────────
   mobile:
@@ -513,7 +640,8 @@ jobs:
       - name: Generate release notes
         id: notes
         env:
-          API: ${{ needs.changes.outputs.api }}
+          # The API image is rebuilt for every release tag, whatever changed.
+          API: "true"
           WEB: ${{ needs.changes.outputs.web }}
           STORE: ${{ needs.changes.outputs.store }}
           MOBILE: ${{ needs.changes.outputs.mobile }}
@@ -521,6 +649,11 @@ jobs:
           CLI: ${{ needs.changes.outputs.cli }}
           MCP: ${{ needs.changes.outputs.mcp }}
           DOCKER_RESULT: ${{ needs.docker.result }}
+          API_IMAGE: ${{ needs.docker.outputs.api_image }}
+          API_DIGEST: ${{ needs.docker.outputs.api_digest }}
+          ONCE_IMAGE: ${{ needs.docker.outputs.once_image }}
+          ONCE_DIGEST: ${{ needs.docker.outputs.once_digest }}
+          RELEASE_SHA: ${{ github.sha }}
           MOBILE_RESULT: ${{ needs.mobile.result }}
           MOBILE_PUBLISHED: ${{ needs.mobile.outputs.published }}
           DESKTOP_RESULT: ${{ needs.desktop.result }}
@@ -584,24 +717,57 @@ jobs:
           $(status "$DESKTOP" "$DESKTOP_RESULT" "Desktop (Win/Mac/Linux)")
           $(status "$CLI" "$CLI_RESULT" "CLI (@hisaabo/cli)")
           $(status "$MCP" "$MCP_RESULT" "MCP Server (@hisaabo/mcp)")
+          EOF
+
+          # Only describe images that were pushed AND signed: a tag that was
+          # never built must not be advertised.
+          if [ "$DOCKER_RESULT" = "success" ] && [ -n "$API_DIGEST" ] && [ -n "$ONCE_DIGEST" ]; then
+            DOCKER_SIGNING="signed (cosign, keyless); verify the digest as shown above."
+            cat >> /tmp/release-body.md << EOF
 
           ## Docker
 
+          Built from commit \`${RELEASE_SHA}\` (also tagged \`sha-${RELEASE_SHA:0:12}\`). The version tag \`${REF_NAME}\` is published once and never overwritten; the digest pins the exact bytes.
+
           \`\`\`bash
-          docker pull ghcr.io/hisaabo/hisaabo:${REF_NAME}
+          # API image
+          docker pull ${API_IMAGE}:${REF_NAME}
+          docker pull ${API_IMAGE}@${API_DIGEST}
+
+          # All-in-one (ONCE) image
+          docker pull ${ONCE_IMAGE}:${REF_NAME}
+          docker pull ${ONCE_IMAGE}@${ONCE_DIGEST}
           \`\`\`
 
-          Images are signed with cosign (keyless) and carry SLSA provenance and an SBOM:
+          Images are signed with cosign (keyless) and carry SLSA provenance and an SBOM. Verify by digest:
 
           \`\`\`bash
-          cosign verify ghcr.io/hisaabo/hisaabo:${REF_NAME} \\
+          cosign verify ${API_IMAGE}@${API_DIGEST} \\
+            --certificate-identity-regexp '^https://github.com/${REPOSITORY}/.github/workflows/release.yml@' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+          cosign verify ${ONCE_IMAGE}@${ONCE_DIGEST} \\
             --certificate-identity-regexp '^https://github.com/${REPOSITORY}/.github/workflows/release.yml@' \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
           \`\`\`
 
+          Each image records its source revision (\`org.opencontainers.image.revision\`), and the running API reports its version and commit in its startup log.
+          EOF
+          else
+            DOCKER_SIGNING="not published for this release (the image build did not succeed)."
+            cat >> /tmp/release-body.md << EOF
+
+          ## Docker
+
+          :x: No Docker images were published for ${REF_NAME} (the image build did not succeed), so there is nothing to pull for this version. See the table above.
+          EOF
+          fi
+
+          cat >> /tmp/release-body.md << EOF
+
           ## Signing status
 
-          - **Docker images:** signed (cosign, keyless).
+          - **Docker images:** ${DOCKER_SIGNING}
           - **Android APK:** published only when the project release keystore secrets are configured (signed with it); otherwise no APK is attached to the release. Debug-signed APKs are never published.
           - **Desktop installers (Windows/macOS/Linux):** **NOT code-signed or notarized.** No Apple Developer ID or Windows Authenticode certificate is configured, so Gatekeeper and SmartScreen will show warnings. Only install builds downloaded from this release page.
 
@@ -617,10 +783,51 @@ jobs:
 
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
-      - name: Create or update release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "Hisaabo ${{ github.ref_name }}"
-          body_path: ${{ steps.notes.outputs.body_path }}
-          draft: false
+      # Publishes the release with the final notes, addressing it by id.
+      # softprops/action-gh-release was not reliable here: the Tauri job leaves
+      # a DRAFT release behind and the releases-by-tag API never returns drafts.
+      # v2.6.2 (what `@v2` resolved to when v0.9.0 shipped) therefore did not see
+      # it, created a second draft with these notes, then "canonicalised" to the
+      # older Tauri draft, deleted its own and published the placeholder body,
+      # so every release showed only the Tauri text. Listing releases and
+      # patching the one for this tag does not depend on that behaviour.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          BODY_PATH: ${{ steps.notes.outputs.body_path }}
+        run: |
+          set -euo pipefail
+          # A "-" in the version marks a pre-release (-beta.1, -rc.1): flagged
+          # as such and never "Latest". Stable uses GitHub's own ordering.
+          if [[ "$REF_NAME" == *-* ]]; then
+            PRERELEASE=true
+            MAKE_LATEST=false
+          else
+            PRERELEASE=false
+            MAKE_LATEST=legacy
+          fi
+
+          matches=$(gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" \
+            | jq -r --arg tag "$REF_NAME" '.[] | select(.tag_name == $tag) | .id')
+          count=$(printf '%s' "$matches" | grep -c . || true)
+
+          if [ "$count" -gt 1 ]; then
+            echo "::error title=Duplicate releases::Found ${count} releases for ${REF_NAME} (ids: $(tr '\n' ' ' <<<"$matches")). Parallel jobs probably each created a draft. Merge their assets into one release by hand, delete the others, and re-run this job."
+            exit 1
+          fi
+
+          if [ "$count" -eq 0 ]; then
+            args=(--repo "$REPOSITORY" --verify-tag --title "Hisaabo ${REF_NAME}" --notes-file "$BODY_PATH")
+            if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease --latest=false); fi
+            gh release create "$REF_NAME" "${args[@]}"
+          else
+            gh api --method PATCH "repos/${REPOSITORY}/releases/${matches}" \
+              -f name="Hisaabo ${REF_NAME}" \
+              -F body=@"$BODY_PATH" \
+              -F draft=false \
+              -F prerelease="$PRERELEASE" \
+              -f make_latest="$MAKE_LATEST" \
+              --jq '"Published " + .html_url'
+          fi

@@ -38,7 +38,7 @@
 
 ### On every PR and push to `main`
 
-**`ci.yml`** runs typecheck, lint, and build for the entire monorepo. On PRs it also does a Docker build dry-run (no push) to catch Dockerfile issues early.
+**`ci.yml`** runs typecheck, lint, and build for the entire monorepo. On PRs it also builds both release images (`Dockerfile` and `Dockerfile.once`, no push) to catch Dockerfile issues early, and checks that the version and commit are baked into them.
 
 ### On push to `main` (path-filtered)
 
@@ -46,7 +46,8 @@
 |---|---|---|
 | `deploy-web.yml` | `apps/web/**`, `packages/shared/**`, `packages/api/src/index.ts` | Build web SPA, deploy to Cloudflare Pages |
 | `deploy-store.yml` | `apps/store/**` | Build store SPA, deploy to Cloudflare Pages |
-| `deploy-api.yml` | `packages/api/**`, `packages/db/**`, `packages/shared/**`, `Dockerfile` | Build Docker image, push to GHCR |
+
+Container images are not published from `main`: `release.yml` builds and pushes both of them, for every release tag whichever paths changed (see [Container images](#container-images-ghcr)).
 
 ## Environment Variables
 
@@ -120,8 +121,11 @@ cp .env.prod.example .env.prod
    - Set `API_PUBLIC_URL` (required in production) and the Turnstile keys
    - Signup is invite-only after the first owner; invite teammates from Settings → Team, or set `ALLOW_OPEN_SIGNUP=true`
 
-3. Update `docker-compose.prod.yml`:
-   - Replace `ghcr.io/OWNER/hisaabo-api:latest` with your actual GHCR image path
+3. Choose the API image. `docker-compose.prod.yml` reads it from `HISAABO_API_IMAGE` and defaults to `ghcr.io/hisaabo/hisaabo-api:latest`. For production, pin a release in `.env.prod` so an upgrade is always a deliberate edit:
+   ```bash
+   HISAABO_API_IMAGE=ghcr.io/hisaabo/hisaabo-api:v0.10.0
+   ```
+   Use your own `ghcr.io/<owner>/hisaabo-api` path if you build from a fork. To pin the exact bytes, append the digest from the release notes (see [Container images](#container-images-ghcr)).
 
 4. Start the stack:
 
@@ -187,7 +191,80 @@ The `docker-compose.prod.yml` is compatible with Kamal's deploy model:
 - Health check endpoint: `GET /health` on port 3000
 - The container runs migrations on startup (idempotent)
 - Graceful shutdown: entrypoint uses `exec` so Node receives SIGTERM directly
-- Image is tagged with both `latest` and the commit SHA for rollback
+- Images are tagged with the immutable `vX.Y.Z` and with `sha-<commit>` (see [Container images](#container-images-ghcr)); deploy a pinned `vX.Y.Z` and roll back by deploying the previous one
+
+## Container images (GHCR)
+
+`release.yml` (on a `v*` tag) first checks that the tag matches every version manifest (`pnpm release <version>` bumps them together), then builds and pushes both images for **every** release tag, whichever paths changed, so a released version always has images. Each image is signed with cosign (keyless) and carries SLSA provenance and an SBOM.
+
+Two images are published, both multi-arch (`linux/amd64`, `linux/arm64`):
+
+| Image | Dockerfile | Use |
+|---|---|---|
+| `ghcr.io/hisaabo/hisaabo-api` | `Dockerfile` | API only; bring your own PostgreSQL (`docker-compose.prod.yml`) |
+| `ghcr.io/hisaabo/hisaabo` | `Dockerfile.once` | All-in-one (PostgreSQL + API) for ONCE |
+
+### Tags
+
+Each release publishes the following tags for both images (shown for `v0.10.0`):
+
+| Tag | Example | Moves? |
+|---|---|---|
+| `vX.Y.Z` | `v0.10.0` | No. Published once; the release workflow refuses to overwrite it. |
+| `X.Y.Z` | `0.10.0` | No (same image as `vX.Y.Z`) |
+| `sha-<12 hex>` | `sha-26c61bb0f3a1` | No. The first 12 characters of the commit the image was built from. |
+| `X.Y` | `0.10` | Yes: follows the latest patch release of that minor version |
+| `latest` | `latest` | Yes: follows every stable release |
+
+A pre-release such as `v0.10.0-rc.1` is published as `v0.10.0-rc.1`, `0.10.0-rc.1` and `sha-<12 hex>` only; it never moves `latest` or `X.Y`.
+
+For production, pin `vX.Y.Z` (or a digest), not `latest` or `X.Y`, so a restart or a `pull` can never change the running version unexpectedly.
+
+### Upgrading a pinned install
+
+Set `HISAABO_API_IMAGE` in `.env.prod` to the new version, then pull and restart. `--env-file` is required: Compose reads the image name from it, not from the container's `env_file`.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml pull api
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api
+```
+
+To roll back, restore the previous `HISAABO_API_IMAGE` value and run the same commands (if the newer version already applied database migrations, restore a backup taken before the upgrade). If you left the default `:latest`, the same commands upgrade to the newest stable release.
+
+### Pinning by digest
+
+The release notes list the digest of each image. A digest pins the exact bytes, even in the unlikely event a tag is ever re-pointed:
+
+```bash
+docker pull ghcr.io/hisaabo/hisaabo-api@sha256:<digest>
+# in .env.prod (keep the tag for readability; Docker resolves by the digest)
+HISAABO_API_IMAGE=ghcr.io/hisaabo/hisaabo-api:v0.10.0@sha256:<digest>
+```
+
+### Verifying an image
+
+Images are signed with cosign (keyless, via GitHub's OIDC identity). Verify the digest from the release notes:
+
+```bash
+cosign verify ghcr.io/hisaabo/hisaabo-api@sha256:<digest> \
+  --certificate-identity-regexp '^https://github.com/hisaabo/hisaabo/.github/workflows/release.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Provenance and the SBOM are attached to the image (`docker buildx imagetools inspect <image> --format '{{ json .Provenance }}'`).
+
+### Which build is this?
+
+Every release image records the source revision, so any running instance can be matched to a commit:
+
+- **Image labels** (`org.opencontainers.image.revision`, `.version`, `.created`, `.source`): `docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' <image>`
+- **Container environment**: `HISAABO_VERSION` (`0.10.0`, no leading `v`) and `HISAABO_COMMIT` (full SHA), set by the image. Do not override them in `.env.prod`.
+- **Startup log**: `Hisaabo API v0.10.0 (commit 26c61bb0f3a1)`
+- **Admin dashboard** header (`node packages/api/dist/bin/admin.js`): `v0.10.0 · 26c61bb0f3a1`
+- **Signed-in API clients**: `auth.me` returns `server: { version, commit }`. The unauthenticated `/health` deliberately does not.
+- **Web app**: the sidebar footer shows `v0.10.0 · 26c61bb` for the CI-built web deploy and the desktop release builds.
+
+An image built locally without the build args reports version `dev` (resolved from `package.json`) and commit `unknown`.
 
 ## Nginx Reverse Proxy
 
