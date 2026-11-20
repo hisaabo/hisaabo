@@ -12,7 +12,7 @@
 import { TRPCError } from "@trpc/server";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { and, desc, eq, inArray, isNull, lt, or, sql, count } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql, count } from "drizzle-orm";
 import {
   controlDb,
   accessTokens,
