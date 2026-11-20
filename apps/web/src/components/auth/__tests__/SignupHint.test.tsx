@@ -40,6 +40,9 @@ describe("login page source", () => {
   });
 
   it("does not skip Turnstile on desktop", () => {
-    expect(src).not.toMatch(/action\(undefined\)/);
+    // The only token-less path is a build with no site key (isTurnstileConfigured),
+    // never a client-type check.
+    expect(src).not.toMatch(/isDesktop\(\)\)\s*\{\s*action\(undefined\)/);
+    expect(src).toMatch(/!isTurnstileConfigured\(\)/);
   });
 });

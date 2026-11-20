@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { TurnstileModal } from "@/components/ui/TurnstileModal";
 import { isDesktop } from "@/lib/isDesktop";
+import { isTurnstileConfigured } from "@/lib/turnstile";
 import { DesktopSignIn } from "@/components/auth/DesktopSignIn";
 import { SignupHint } from "@/components/auth/SignupHint";
 
@@ -550,6 +551,12 @@ function LoginPage() {
 
   /** Wraps a form submission: opens the Turnstile modal, then fires the action with the token. */
   function withTurnstile(action: (token: string | undefined) => void) {
+    // A build without a Turnstile site key (self-hosted, no Turnstile) has no
+    // challenge to show; submit without a token and let the server decide.
+    if (!isTurnstileConfigured()) {
+      action(undefined);
+      return;
+    }
     pendingActionRef.current = action;
     setShowTurnstile(true);
   }
