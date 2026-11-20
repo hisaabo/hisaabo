@@ -16,6 +16,7 @@ import {
   journalEntryLines,
 } from "@hisaabo/db";
 import { deriveLedger, deriveFullLedger } from "../lib/derive-ledger.js";
+import { paymentLedgerLeg, paymentTdsSql } from "../lib/payment-settlement.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import {
   daybookInputSchema,
@@ -1093,6 +1094,7 @@ export const reportsRouter = router({
             date: payments.paymentDate,
             amount: payments.amount,
             mode: payments.mode,
+            tdsAmount: paymentTdsSql(),
           })
           .from(payments)
           .where(and(...paymentConditions))
@@ -1107,19 +1109,24 @@ export const reportsRouter = router({
           description: inv.type === "sale" ? "Sale Invoice" : "Purchase Invoice",
           debit: inv.type === "sale" ? inv.totalAmount : "0",
           credit: inv.type === "sale" ? "0" : inv.totalAmount,
+          tdsAmount: "0.00",
           status: inv.status as string | null,
           documentId: inv.id,
         })),
-        ...partyPayments.map((pmt) => ({
-          date: pmt.date,
-          type: "payment" as const,
-          number: pmt.paymentNumber ?? "",
-          description: `Payment (${pmt.mode})`,
-          debit: party.type === "supplier" ? pmt.amount : "0",
-          credit: party.type === "supplier" ? "0" : pmt.amount,
-          status: null as string | null,
-          documentId: pmt.id,
-        })),
+        ...partyPayments.map((pmt) => {
+          const leg = paymentLedgerLeg(party.type, pmt);
+          return {
+            date: pmt.date,
+            type: "payment" as const,
+            number: pmt.paymentNumber ?? "",
+            description: leg.description,
+            debit: leg.debit,
+            credit: leg.credit,
+            tdsAmount: leg.tds,
+            status: null as string | null,
+            documentId: pmt.id,
+          };
+        }),
       ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       let runningBalance = party.openingBalance;
@@ -1150,7 +1157,7 @@ export const reportsRouter = router({
           totalDebit,
           totalCredit,
           closingBalance,
-          isDebit: parseFloat(closingBalance) >= 0,
+          isDebit: money.compare(closingBalance, "0") >= 0,
         },
       };
     }),
@@ -2187,7 +2194,7 @@ export const reportsRouter = router({
 
       // Account classification (matches the seeded chart of accounts):
       //   cash & bank           1000, 1010            (the thing being explained)
-      //   current assets        1100 AR, 1200 Inventory, 1300 Advances, 1400 Prepaid, 1510-1512 Input GST
+      //   current assets        1100 AR, 1200 Inventory, 1300 Advances, 1400 Prepaid, 1510-1512 Input GST, 1600 TDS Receivable
       //   current liabilities   2000 AP, 2100-2102 Output GST, 2200 TDS, 2300 Other current
       //   investing             other asset accounts (1500 Fixed Assets, custom 15xx+/16xx...)
       //   financing             3xxx equity (capital / drawings / other) and other liabilities (loans)
@@ -2200,6 +2207,7 @@ export const reportsRouter = router({
         "1510": "Input CGST",
         "1511": "Input SGST",
         "1512": "Input IGST",
+        "1600": "TDS Receivable",
       };
       const CURRENT_LIABILITY_LABELS: Record<string, string> = {
         "2000": "Payables",

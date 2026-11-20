@@ -158,6 +158,8 @@ export const partyRowSchema = z.object({
   email: z.string().nullable(),
   gstin: z.string().nullable(),
   pan: z.string().nullable(),
+  // Customer TAN (TDS). Absent in backups taken before TDS support.
+  tan: z.string().nullable().optional(),
   billingAddress: z.string().nullable(),
   shippingAddress: z.string().nullable(),
   city: z.string().nullable(),
@@ -389,6 +391,13 @@ export const paymentAllocationRowSchema = z.object({
   paymentId: uuid,
   invoiceId: uuid,
   amount: money2,
+  // Customer-withheld TDS (gross allocation = net cash + TDS). Absent in
+  // backups taken before TDS support: tdsAmount defaults to "0" and the
+  // section/rate stay unset. They MUST be declared here — the row schema strips
+  // unknown keys, so omitting them would silently drop TDS on restore.
+  tdsAmount: money2.default("0"),
+  tdsSectionCode: z.string().nullable().optional(),
+  tdsRate: pct52.nullable().optional(),
   createdAt: isoDatetime,
 });
 
@@ -743,6 +752,19 @@ export const gstr2bRecordRowSchema = z.object({
   createdAt: isoDatetime,
 });
 
+export const tdsSectionConfigRowSchema = z.object({
+  id: uuid,
+  businessId: uuid,
+  sectionCode: z.string(),
+  sectionLabel: z.string(),
+  effectiveFrom: isoDatetime,
+  effectiveTo: isoDatetimeNullable,
+  status: z.string(),
+  version: z.number().int(),
+  createdAt: isoDatetime,
+  updatedAt: isoDatetime,
+});
+
 // ── Registry map ──────────────────────────────────────────────────────────────
 
 export const ROW_SCHEMAS: Record<string, z.ZodTypeAny> = {
@@ -781,4 +803,5 @@ export const ROW_SCHEMAS: Record<string, z.ZodTypeAny> = {
   audit_log: auditLogRowSchema,
   gstr2b_uploads: gstr2bUploadRowSchema,
   gstr2b_records: gstr2bRecordRowSchema,
+  tds_section_configs: tdsSectionConfigRowSchema,
 };

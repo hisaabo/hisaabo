@@ -35,6 +35,7 @@ import {
   auditLog,
   gstr2bUploads,
   gstr2bRecords,
+  tdsSectionConfigs,
 } from "@hisaabo/db";
 
 /**
@@ -528,6 +529,23 @@ export const TABLE_REGISTRY: TableRegistryEntry[] = [
     importable: true,
     selfFkFields: [],
     chunkSize: 5000,
+    recomputeOnImport: [],
+    scope: { type: "direct" },
+  },
+
+  // 36. TDS Section Configs — depends on businesses only. Holds the business's
+  //    customer-receipt TDS section configuration (including any custom or
+  //    back-dated versions), which receipts' tds_section_code values refer to
+  //    by code. Backups taken before TDS support simply lack the file: the
+  //    importer treats a missing table as empty and the sections are re-seeded
+  //    from the registry on first use.
+  {
+    tableName: "tds_section_configs",
+    drizzleTable: tdsSectionConfigs,
+    redactedFields: [],
+    importable: true,
+    selfFkFields: [],
+    chunkSize: 0,
     recomputeOnImport: [],
     scope: { type: "direct" },
   },

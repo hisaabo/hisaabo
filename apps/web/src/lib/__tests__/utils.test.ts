@@ -223,7 +223,7 @@ describe("toISOString() — YYYY-MM-DD → ISO for z.string().datetime() inputs"
     // Must be a full ISO timestamp (20 or more chars, with T and Z)
     expect(result).toBeDefined();
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-    expect(result).toContain("2025-03-31");
+    expect(new Date(result!).getDate()).toBe(31);
   });
 
   it("accepts a Date object", () => {

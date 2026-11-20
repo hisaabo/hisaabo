@@ -23,6 +23,7 @@ import { partyTools } from "./party";
 import { itemTools } from "./item";
 import { paymentTools } from "./payment";
 import { expenseTools } from "./expense";
+import { tdsSectionTools } from "./tdsSection";
 
 export { appTools } from "./app";
 export { dashboardTools } from "./dashboard";
@@ -31,6 +32,7 @@ export { partyTools } from "./party";
 export { itemTools } from "./item";
 export { paymentTools } from "./payment";
 export { expenseTools } from "./expense";
+export { tdsSectionTools } from "./tdsSection";
 
 export const webMcpTools: WebMcpToolDefinition[] = [
   ...appTools,
@@ -40,4 +42,5 @@ export const webMcpTools: WebMcpToolDefinition[] = [
   ...itemTools,
   ...paymentTools,
   ...expenseTools,
+  ...tdsSectionTools,
 ];

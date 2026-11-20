@@ -5,6 +5,7 @@ import { chartOfAccounts } from "@hisaabo/db";
 import { createAccountSchema, updateAccountSchema } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import { TDS_RECEIVABLE_CODE, TDS_RECEIVABLE_NAME } from "../lib/tds-sections.js";
 
 export const accountRouter = router({
   list: viewerProcedure.query(async ({ ctx }) => {
@@ -55,6 +56,16 @@ export const accountRouter = router({
 
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+      }
+
+      // The derived ledger posts withheld customer TDS to system account 1600 and
+      // throws if it is missing from the active chart, so it can be renamed but
+      // never switched off.
+      if (existing.isSystem && existing.code === TDS_RECEIVABLE_CODE && input.isActive === false) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `The system "${TDS_RECEIVABLE_NAME}" account (${TDS_RECEIVABLE_CODE}) cannot be deactivated`,
+        });
       }
 
       const updateFields: { name?: string; isActive?: boolean; updatedAt: Date } = {

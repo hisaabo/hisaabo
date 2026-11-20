@@ -34,6 +34,9 @@ export function registerPaymentCommands(program: Command): void {
     .option("--reference <ref>", "Reference number")
     .option("--date <date>", "Payment date")
     .option("--notes <text>", "Notes")
+    .option("--tds-amount <amount>", "TDS the customer withheld (--amount is then the NET cash received; needs --invoice-id)")
+    .option("--tds-section <code>", "TDS section code, e.g. 1023 or 1027 (see: hisaabo tds-section list)")
+    .option("--tds-rate <rate>", "TDS rate in percent, up to 2 decimals (e.g. 1 or 10.50); recorded as metadata")
     .option("-y, --yes", "Skip confirmation")
     .action(async (opts) => {
       await paymentCreateCommand({
@@ -46,6 +49,9 @@ export function registerPaymentCommands(program: Command): void {
         reference: opts.reference,
         date: opts.date,
         notes: opts.notes,
+        tdsAmount: opts.tdsAmount,
+        tdsSection: opts.tdsSection,
+        tdsRate: opts.tdsRate,
         yes: opts.yes,
       });
     });

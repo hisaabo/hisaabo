@@ -192,6 +192,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   payment_unpaid_invoices: R,
   payment_untracked: R,
   payment_default_account: R,
+  tds_section_list: R,
 
   // reports
   report_daybook: R,

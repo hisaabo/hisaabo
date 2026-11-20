@@ -299,6 +299,11 @@ exceptions:
       - hsn.validate
       - hsn.validateForTurnover
 
+      # --- TDS Section Configurations ---
+      # TDS section configuration listing feeds the web payment UI dropdown; mobile
+      # records simplified payments without TDS allocation.
+      - tdsSection.list
+
   cli:
     not-applicable:
       # --- Item history paging ---
