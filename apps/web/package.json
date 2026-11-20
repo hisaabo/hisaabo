@@ -15,8 +15,8 @@
   "dependencies": {
     "@hisaabo/shared": "workspace:*",
     "@tanstack/react-query": "^5.104.1",
-    "@tanstack/react-router": "^1.170.41",
-    "@tauri-apps/api": "^2.12.1",
+    "@tanstack/react-router": "^1.170.42",
+    "@tauri-apps/api": "^2.12.2",
     "@trpc/client": "^11.19.0",
     "@trpc/react-query": "^11.19.0",
     "dayjs": "^1.11.23",
@@ -31,7 +31,7 @@
   "devDependencies": {
     "@hisaabo/api": "workspace:*",
     "@tanstack/router-devtools": "^1.167.2",
-    "@tanstack/router-plugin": "^1.168.42",
+    "@tanstack/router-plugin": "^1.168.43",
     "@testing-library/jest-dom": "^6.0.0",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
@@ -47,7 +47,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
-    "vite": "^8.3.3",
+    "vite": "^8.3.4",
     "vitest": "^4.1.11",
     "vitest-axe": "0.1.0"
   }
