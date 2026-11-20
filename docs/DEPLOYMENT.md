@@ -218,6 +218,8 @@ It prints `${APP_URL}/auth/verify?token=...`; open it in a browser. Unlike an em
 
 On the ONCE all-in-one image the same command works inside the container (`docker exec -it <container> node packages/api/dist/bin/admin.js login-link <email>`); it reads the database password from `/storage/secrets/pg_app_password` automatically because `docker exec` shells do not inherit the API's `DATABASE_URL`.
 
+If you issue a login-link to an invited user on an install without email, first check the account was created by them. If in doubt, delete the user and re-invite them, since a pre-registered account's password stays valid.
+
 Each issued link leaves a row in `magic_link_tokens` with `ip_address = 'admin-cli'` (issue time in `created_at`, redemption time in `used_at`) and a line on stderr. There is no platform-level audit table; the per-business audit log is not used. After signing in, fix `RESEND_API_KEY` / `EMAIL_FROM` so normal sign-in works.
 
 ## Kamal / Once.com Compatibility
