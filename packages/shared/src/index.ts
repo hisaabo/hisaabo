@@ -42,3 +42,5 @@ export {
   normalizeTdsTaxCode,
 } from "./tax-codes.js";
 export type { TdsHistoricalValidity, TdsTaxCode, TdsTaxCodeStatus } from "./tax-codes.js";
+export { invoiceTaxableValue, normalizeMoneyInput, suggestTdsAmount } from "./tds.js";
+export type { SuggestTdsInput } from "./tds.js";

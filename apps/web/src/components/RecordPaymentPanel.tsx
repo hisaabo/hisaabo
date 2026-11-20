@@ -7,7 +7,8 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { PartyCombobox } from "@/components/ui/PartyCombobox";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { InputField, TextareaField } from "@/components/ui/FormField";
-import { calculateGatewayCharge, money, TDS_GOI_RATES_URL } from "@hisaabo/shared";
+import { calculateGatewayCharge, money, normalizeMoneyInput, suggestTdsAmount, TDS_GOI_RATES_URL } from "@hisaabo/shared";
+import { allocationsForRequest, buildAllocationPayload } from "@/lib/paymentAllocations";
 import type { GatewayChargeConfig } from "@hisaabo/shared";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -116,6 +117,8 @@ export function RecordPaymentPanel({
   const [tdsAmount, setTdsAmount] = useState("");
   const [tdsSectionCode, setTdsSectionCode] = useState("");
   const [tdsRate, setTdsRate] = useState("");
+  // Once the user types a TDS amount we stop auto-filling it from the rate.
+  const [tdsAmountTouched, setTdsAmountTouched] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -170,6 +173,8 @@ export function RecordPaymentPanel({
       setTdsAmount(firstTds?.tdsAmount && firstTds.tdsAmount !== "0.00" ? firstTds.tdsAmount : "");
       setTdsSectionCode(firstTds?.tdsSectionCode ?? "");
       setTdsRate(firstTds?.tdsRate ?? "");
+      // Stored amounts are authoritative: never overwrite them with a suggestion.
+      setTdsAmountTouched(true);
       // Restore gateway mode from edit data if it's a gateway mode
       const gwModes = ["credit_card", "debit_card", "net_banking", "wallet"];
       if (editData.mode && gwModes.includes(editData.mode)) {
@@ -203,6 +208,7 @@ export function RecordPaymentPanel({
       setTdsAmount("");
       setTdsSectionCode("");
       setTdsRate("");
+      setTdsAmountTouched(false);
     }
   }, [open, isEditMode, editData, preSelectedPartyId]);
 
@@ -242,6 +248,30 @@ export function RecordPaymentPanel({
 
   const tdsVal = tdsAmount.trim() || "0";
   const hasPositiveTds = isCustomer && money.compare(tdsVal, "0") > 0;
+
+  // Suggested TDS: the single selected invoice's share of its taxable value
+  // (excluding GST) x the entered rate. Only a suggestion — the amount the
+  // customer actually withheld is what gets recorded, and the user can override.
+  const tdsSuggestion = useMemo(() => {
+    if (!isCustomer || checkedInvoices.size !== 1 || !unpaidInvoices) return null;
+    const rate = tdsRate.trim();
+    if (!rate || !money.isPositive(rate)) return null;
+    const [invoiceId] = checkedInvoices;
+    const inv = unpaidInvoices.find((candidate) => candidate.id === invoiceId);
+    if (!inv) return null;
+    const amount = suggestTdsAmount({
+      allocationAmount: allocations[inv.id] ?? inv.balance,
+      invoiceTotal: inv.totalAmount,
+      invoiceTaxAmount: inv.taxAmount,
+      rate,
+    });
+    if (!money.isPositive(amount)) return null;
+    return { amount, taxableValue: inv.taxableValue };
+  }, [isCustomer, checkedInvoices, unpaidInvoices, tdsRate, allocations]);
+
+  useEffect(() => {
+    if (!tdsAmountTouched && tdsSuggestion) setTdsAmount(tdsSuggestion.amount);
+  }, [tdsAmountTouched, tdsSuggestion]);
 
   // Net cash received = gross allocation sum minus TDS deduction
   const calculatedNetAmount = useMemo(() => {
@@ -332,6 +362,7 @@ export function RecordPaymentPanel({
     setTdsAmount("");
     setTdsSectionCode("");
     setTdsRate("");
+    setTdsAmountTouched(false);
   };
 
   // ── Submit ──────────────────────────────────────────────────────────────────
@@ -411,39 +442,18 @@ export function RecordPaymentPanel({
   function handleSubmit() {
     if (!partyId || !displayAmount || !money.isPositive(displayAmount)) return;
 
-    if (checkedInvoices.size > 1 && hasPositiveTds) {
-      toast.error("Multi-invoice payments with TDS are not supported. Please select one invoice or remove TDS.");
+    const built = buildAllocationPayload({
+      checkedInvoiceIds: checkedInvoices,
+      allocations,
+      tds: { amount: tdsAmount, sectionCode: tdsSectionCode, rate: tdsRate },
+      isCustomer,
+    });
+    if (!built.ok) {
+      toast.error(built.error);
       return;
     }
-
-    const allocationList: { invoiceId: string; amount: string; tdsAmount?: string; tdsSectionCode?: string; tdsRate?: string }[] = [];
-    for (const id of checkedInvoices) {
-      const amt = allocations[id];
-      if (amt && money.isPositive(amt)) {
-        if (hasPositiveTds) {
-          if (money.compare(tdsVal, amt) > 0) {
-            toast.error("TDS amount cannot exceed gross allocation");
-            return;
-          }
-          if (!tdsSectionCode || !tdsRate || !money.isPositive(tdsRate)) {
-            toast.error("TDS amount requires section code and rate");
-            return;
-          }
-          allocationList.push({
-            invoiceId: id,
-            amount: amt,
-            tdsAmount: tdsVal,
-            tdsSectionCode,
-            tdsRate,
-          });
-        } else {
-          allocationList.push({
-            invoiceId: id,
-            amount: amt,
-          });
-        }
-      }
-    }
+    // Edit mode always sends the array ([] clears); create omits it when empty.
+    const allocationList = allocationsForRequest(isEditMode, built.allocations);
 
     // For gateway accounts, use the selected gateway mode; otherwise map from account type
     const mode = isGatewaySelected
@@ -461,25 +471,25 @@ export function RecordPaymentPanel({
     if (isEditMode) {
       updateMutation.mutate({
         id: editPaymentId!,
-        amount: displayAmount,
+        amount: normalizeMoneyInput(displayAmount),
         mode,
         bankAccountId: selectedAccountId ?? null,
         referenceNumber: referenceNumber || null,
         paymentDate: paymentDateISO,
         notes: notes || null,
-        allocations: allocationList.length > 0 ? allocationList : undefined,
+        allocations: allocationList,
       });
     } else {
       createMutation.mutate({
         partyId,
-        amount: displayAmount,
+        amount: normalizeMoneyInput(displayAmount),
         discount: "0",
         mode,
         bankAccountId: selectedAccountId ?? undefined,
         referenceNumber: referenceNumber || undefined,
         paymentDate: paymentDateISO,
         notes: notes || undefined,
-        allocations: allocationList.length > 0 ? allocationList : undefined,
+        allocations: allocationList,
       });
     }
   }
@@ -584,7 +594,7 @@ export function RecordPaymentPanel({
 
             {isCustomer && (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <InputField label="TDS Amount (₹)" type="number" min="0" step="0.01" value={tdsAmount} onChange={(e) => { setTdsAmount(e.target.value); setAmountOverridden(false); }} placeholder="0.00" />
+                <InputField label="TDS Amount (₹)" type="number" min="0" step="0.01" value={tdsAmount} onChange={(e) => { setTdsAmount(e.target.value); setTdsAmountTouched(true); setAmountOverridden(false); }} placeholder="0.00" />
                 <InputField label="TDS Rate (%)" type="number" min="0" max="100" step="0.01" value={tdsRate} onChange={(e) => setTdsRate(e.target.value)} placeholder="0.00" />
                 <div>
                   <div className="flex items-center justify-between">
@@ -610,6 +620,18 @@ export function RecordPaymentPanel({
                   </select>
                 </div>
               </div>
+            )}
+            {tdsSuggestion && tdsSuggestion.amount !== normalizeMoneyInput(tdsVal) && (
+              <p className="text-xs text-text-tertiary">
+                Suggested TDS ₹{tdsSuggestion.amount} (rate × invoice value excluding GST, ₹{tdsSuggestion.taxableValue}).{" "}
+                <button
+                  type="button"
+                  className="font-medium text-brand-600 hover:underline"
+                  onClick={() => { setTdsAmount(tdsSuggestion.amount); setTdsAmountTouched(false); setAmountOverridden(false); }}
+                >
+                  Use suggested
+                </button>
+              </p>
             )}
             {hasPositiveTds && <p className="text-xs text-text-tertiary">Gross settlement: ₹{allocatedGrossTotal} (cash ₹{displayAmount}) + TDS ₹{tdsVal}</p>}
             {hasMultiInvoiceTdsError && <p className="text-xs text-red-500 font-medium">Multi-invoice payments with TDS are not supported. Please select one invoice to record TDS.</p>}
