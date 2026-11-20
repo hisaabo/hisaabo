@@ -209,8 +209,16 @@ STEP 1: Atomic token consumption
 STEP 2: User upsert (inside transaction)
   BEGIN TRANSACTION
     STEP 2a: SELECT user by email
-      BRANCH: user exists
-        -> SET emailVerified=true
+      BRANCH: user exists (row locked FOR UPDATE)
+        -> operator login-link token (token.userId == user.id): sign in only; no verify, no revocation
+        -> emailVerified=false and (cloud, OR self-hosted with no membership / only the legacy
+           "member" role): first proof of the mailbox, so in the same transaction DELETE the
+           user's sessions, API keys, pending email-change tokens, authorised native sign-in
+           codes and the invitations it issued, SET password_hash=NULL, emailVerified=true;
+           after commit log unverified_account_claimed and, if it owns an org with other
+           members, send them in a best-effort notice (details: SECURITY.md)
+        -> otherwise (already verified, or an established self-hosted member:
+           owner/superadmin/admin/seller_manager/seller/accountant): SET emailVerified=true only
         -> isNewUser=false
       BRANCH: user does not exist
         -> INSERT user (email, emailVerified=true, name=null)
