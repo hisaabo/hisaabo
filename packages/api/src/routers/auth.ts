@@ -13,6 +13,7 @@ import { cacheBus, type CacheEvent } from "../lib/cache/bus.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
 import { logSecurityEvent } from "../lib/logger.js";
+import { warnPasswordSignInDeprecated } from "../lib/deprecations.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
@@ -305,6 +306,7 @@ async function withProvisionedTenantCleanup<T>(
 export const authRouter = router({
   // ── Password registration (keeps working for self-hosted) ────
   register: publicProcedure.input(registerSchema).mutation(async ({ input, ctx }) => {
+    warnPasswordSignInDeprecated("auth.register");
     // Require Turnstile when secret key is configured (production).
     // Self-hosted / dev without the key can skip verification.
     const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
@@ -443,6 +445,7 @@ export const authRouter = router({
 
   // ── Password login ───────────────────────────────────────────
   login: publicProcedure.input(loginSchema).mutation(async ({ input, ctx }) => {
+    warnPasswordSignInDeprecated("auth.login");
     // Per-email rate limiting: block after too many failed attempts
     const emailKey = normalizeEmail(input.email);
     const loginIp = getClientIpFromRequest(ctx.req);
