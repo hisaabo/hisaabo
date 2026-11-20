@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, t
 import { eq, and } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import { nanoid } from "nanoid";
-import { users, tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
+import { users, tenants, tenantMembers, invitations, magicLinkTokens } from "@hisaabo/db";
 import { createUser, createTenant, addMember, createSession, type TestUser, type TestTenant } from "../helpers/fixtures.js";
 import { getControlDb, truncateAllTables, closeTestDb } from "../helpers/test-db.js";
 import { createTestContext } from "../helpers/test-context.js";
@@ -158,7 +158,13 @@ describe("pre-registered account: claim-time cleanup and notice", () => {
     warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
   });
   afterAll(() => warnSpy.mockRestore());
-  beforeEach(() => warnSpy.mockClear());
+  beforeEach(() => {
+    warnSpy.mockClear();
+    // The claim-time cleanup scenario is the cloud's: on a self-hosted server an
+    // unverified OWNER is an upgraded v0.9.0 account and is deliberately not wiped
+    // (covered in auth.test.ts).
+    process.env.MULTI_TENANT = "true";
+  });
 
   async function seedMagicToken(email: string): Promise<string> {
     const raw = "gate-" + nanoid(32);
@@ -341,5 +347,71 @@ describe("self-hosted invitation acceptance without working email", () => {
     await expect(callerFor(user, s.id, null).tenant.acceptInvitation({ token: raw })).rejects.toMatchObject({ code: "FORBIDDEN" });
     const [row] = await db.select().from(users).where(eq(users.id, user.id));
     expect(row!.emailVerified).toBe(false);
+  });
+});
+
+describe("tenant.create on a self-hosted invite-only server", () => {
+  const db = getControlDb();
+
+  /** The default tenant with one existing owner, so the server is past its first-owner phase. */
+  async function defaultTenantWithOwner() {
+    const [existing] = await db.select().from(tenants).where(eq(tenants.slug, "default")).limit(1);
+    const tenant = existing ?? (await db.insert(tenants).values({ name: "Default Organization", slug: "default" }).returning())[0]!;
+    const members = await db.select().from(tenantMembers).where(eq(tenantMembers.tenantId, tenant.id));
+    if (members.length === 0) {
+      const owner = await createUser({ email: `default.owner.${nanoid(6).toLowerCase()}@example.in` });
+      await addMember(tenant.id, owner.id, "owner");
+    }
+    return tenant;
+  }
+
+  async function invitedAccount(emailVerified: boolean, tenantId: string) {
+    const user = await createUser({ email: `invitee.${nanoid(8).toLowerCase()}@example.in`, emailVerified });
+    const raw = nanoid(32);
+    const inviter = await createUser({ email: `inviter.${nanoid(6).toLowerCase()}@example.in` });
+    await db.insert(invitations).values({
+      tenantId, email: user.email, role: "seller", token: hash(raw),
+      invitedBy: inviter.id, expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    const s = await createSession(user.id);
+    return { user, raw, caller: callerFor(user, s.id, null) };
+  }
+
+  beforeEach(() => {
+    delete process.env.MULTI_TENANT;
+    process.env.ALLOW_OPEN_SIGNUP = "false";
+  });
+
+  it("an unverified account with a pending invitation cannot join through tenant.create", async () => {
+    const tenant = await defaultTenantWithOwner();
+    const { user, caller } = await invitedAccount(false, tenant.id);
+    await expect(caller.tenant.create()).rejects.toMatchObject({ code: "FORBIDDEN", message: "Open your invitation link to join" });
+    expect(await db.select().from(tenantMembers).where(eq(tenantMembers.userId, user.id))).toHaveLength(0);
+  });
+
+  it("a verified account with a pending invitation still can", async () => {
+    const tenant = await defaultTenantWithOwner();
+    const { user, caller } = await invitedAccount(true, tenant.id);
+    await expect(caller.tenant.create()).resolves.toMatchObject({ tenantId: tenant.id });
+    expect(await db.select().from(tenantMembers).where(eq(tenantMembers.userId, user.id))).toHaveLength(1);
+  });
+
+  it("without any invitation the server is still closed (unchanged message)", async () => {
+    await defaultTenantWithOwner();
+    const stranger = await createUser({ email: `stranger.${nanoid(6).toLowerCase()}@example.in`, emailVerified: true });
+    const s = await createSession(stranger.id);
+    await expect(callerFor(stranger, s.id, null).tenant.create()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Sign-up on this server is by invitation only",
+    });
+  });
+
+  it("the invitation-link (token) path still works for the unverified invitee", async () => {
+    const tenant = await defaultTenantWithOwner();
+    const { user, raw, caller } = await invitedAccount(false, tenant.id);
+    await expect(caller.tenant.acceptInvitation({ token: raw })).resolves.toMatchObject({ tenantId: tenant.id });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row!.emailVerified).toBe(true);
+    expect((await db.select().from(tenantMembers).where(eq(tenantMembers.userId, user.id)))[0]).toMatchObject({ role: "seller" });
   });
 });
