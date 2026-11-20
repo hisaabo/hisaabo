@@ -726,7 +726,7 @@ describe("payment.delete", () => {
   it("deleting a non-existent payment returns success=false", async () => {
     const caller = callerForRamesh();
 
-    const result = await caller.payment.delete({ id: "00000000-0000-0000-0000-000000000099" });
+    const result = await caller.payment.delete({ id: "00000000-0000-4000-8000-000000000099" });
     expect(result.success).toBe(false);
   });
 });

@@ -70,6 +70,8 @@ In-memory, per client IP, per API process (not shared across replicas), plus coa
 
 ### Input Validation
 - Every tRPC procedure validates input with Zod schemas from `@hisaabo/shared`
+- Zod is pinned to `>= 4.6.6` for every package, including transitive users (`pnpm.overrides`), for GHSA-mrhx-c7xc-m3w5 / CVE-2023-54404: zod 3 validated every element of an oversized array and kept one issue per failure, so one large request could exhaust the heap. Since 4.6.6 an array with `.max()` is rejected on its length before any element is checked. Arrays without `.max()` are still validated element by element, so the 10 MB tRPC body limit and any array-size guard in front of zod remain in place as defence in depth.
+- Validation errors are returned as `field: message` lines in the zod 3 wording (`packages/shared/src/zod-messages.ts`), never as raw issue JSON.
 - SQL injection prevented by Drizzle ORM parameterized queries
 - XSS prevented by React's default escaping + explicit `escapeHtml()` in email templates and server-rendered HTML
 
