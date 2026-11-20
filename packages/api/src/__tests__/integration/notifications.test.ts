@@ -34,6 +34,8 @@ import {
   createUser,
   addMember,
   createSession,
+  createBusiness,
+  createParty,
   createInvoiceWithItems,
   type TestWorld,
   type TestUser,
@@ -534,6 +536,29 @@ describe("collections sweep", () => {
     expect(await inboxOf(world.ramesh.id)).toHaveLength(2);
     const [reminder] = (await inboxOf(world.ramesh.id)).filter((r) => r.eventType === "invoice.overdue");
     expect(reminder.body).toBe(`Invoice ${overdue7.invoiceNumber} is 7 days overdue.`);
+  });
+
+  it("emits at most the cap of NEW events per business per run; later runs pick up the rest", async () => {
+    // A business of its own, so invoices left behind by the test above do not count.
+    const biz = await createBusiness(world.tenantDb, world.ramesh.id, { name: "Cap Test Traders", gstin: "24AABCT0000R1ZM" });
+    const party = await createParty(world.tenantDb, biz.id, { name: "Backlog Customer" });
+    for (let i = 0; i < 5; i++) {
+      await createInvoiceWithItems(
+        world.tenantDb, biz.id, party.id,
+        [{ itemName: "Cotton", quantity: "1", unitPrice: "1000" }],
+        { status: "sent", createdByUserId: world.suresh.id, dueDate: new Date() },
+      );
+    }
+    const countFor = async () =>
+      (await db.select().from(notificationOutbox).where(eq(notificationOutbox.businessId, biz.id))).length;
+
+    // 5 invoices, cap 2: runs emit 2, 2, 1, then nothing (rows already emitted dedupe and do not count).
+    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(2);
+    expect(await countFor()).toBe(2);
+    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(2);
+    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(1);
+    expect(await sweepCollections(db, world.tenant1.id, 2)).toBe(0);
+    expect(await countFor()).toBe(5);
   });
 });
 

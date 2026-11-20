@@ -9,6 +9,12 @@
  *   - overdue:    once per invoice per bucket (7, 30, 60 days)
  * A bucket only fires within 3 days of being crossed, so turning the feature on
  * does not flood owners with reminders for invoices that are years old.
+ *
+ * Even so, the first run on an upgraded install finds every open invoice that
+ * sits inside one of those windows at once. Each run therefore emits at most
+ * MAX_EVENTS_PER_BUSINESS_PER_SWEEP new events per business; the rest are left
+ * for the next hourly run, which is safe because the windows are 3 days wide
+ * and the dedupe keys stop anything from firing twice.
  */
 
 import { eq, sql } from "drizzle-orm";
@@ -19,6 +25,12 @@ import { emitNotificationEvent } from "./emit.js";
 
 export const OVERDUE_BUCKETS = [60, 30, 7] as const;
 const BUCKET_WINDOW_DAYS = 3;
+/**
+ * New due-today / overdue events one sweep may emit per business. Hourly runs
+ * (09:00-20:00 IST) give a backlog of N invoices roughly N / 50 hours to drain,
+ * well inside the 3-day bucket window for any realistic business.
+ */
+export const MAX_EVENTS_PER_BUSINESS_PER_SWEEP = 50;
 const SWEEP_START_MINUTE = 9 * 60;
 const SWEEP_END_MINUTE = 20 * 60;
 
@@ -45,7 +57,11 @@ export function overdueBucket(days: number): number | null {
  * Emit collection events for one tenant database. `tenantId` is null in
  * self-hosted mode, where each business's tenant is resolved on emit.
  */
-export async function sweepCollections(db: TenantDatabase, tenantId: string | null): Promise<number> {
+export async function sweepCollections(
+  db: TenantDatabase,
+  tenantId: string | null,
+  maxPerBusiness: number = MAX_EVENTS_PER_BUSINESS_PER_SWEEP,
+): Promise<number> {
   const tz = DEFAULT_TIME_ZONE;
   const result = await db.execute(sql`
     SELECT i.id, i.business_id, i.invoice_number, p.name AS party_name,
@@ -64,11 +80,20 @@ export async function sweepCollections(db: TenantDatabase, tenantId: string | nu
       AND ((now() AT TIME ZONE ${tz})::date - (i.due_date AT TIME ZONE ${tz})::date) IN (
         0, 7, 8, 9, 30, 31, 32, 60, 61, 62
       )
+    ORDER BY i.due_date DESC, i.id
   `);
   const rows = result as unknown as DueRow[];
 
   let emitted = 0;
+  const emittedByBusiness = new Map<string, number>();
+  const notExaminedByBusiness = new Map<string, number>();
   for (const r of rows) {
+    // Cap NEW events per business. Rows already emitted by an earlier run dedupe
+    // to null below and do not count, so each run makes progress through the backlog.
+    if ((emittedByBusiness.get(r.business_id) ?? 0) >= maxPerBusiness) {
+      notExaminedByBusiness.set(r.business_id, (notExaminedByBusiness.get(r.business_id) ?? 0) + 1);
+      continue;
+    }
     const days = Number(r.days);
     const common = {
       tenantId,
@@ -100,7 +125,16 @@ export async function sweepCollections(db: TenantDatabase, tenantId: string | nu
         dedupeKey: `invoice.overdue:${r.id}:${bucket}`,
       });
     }
-    if (id) emitted++;
+    if (id) {
+      emitted++;
+      emittedByBusiness.set(r.business_id, (emittedByBusiness.get(r.business_id) ?? 0) + 1);
+    }
+  }
+  for (const [businessId, notExamined] of notExaminedByBusiness) {
+    logger.info(
+      { businessId, notExamined, cap: maxPerBusiness },
+      "[notifications] collections sweep hit its per-business cap; the remaining invoices are examined by the next run",
+    );
   }
   return emitted;
 }
