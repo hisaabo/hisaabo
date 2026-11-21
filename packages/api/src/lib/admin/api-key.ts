@@ -34,6 +34,8 @@ import { deriveOnceDatabaseUrl } from "./login-link.js";
 
 /** Who the tenant's "API key created" alert says created an operator-issued key. */
 export const OPERATOR_LABEL = "Hisaabo operator";
+/** ...and when the operator went past the plan's key limit; the tenant sees this in the alert. */
+export const OPERATOR_OVERRIDE_LABEL = `${OPERATOR_LABEL} (plan override)`;
 export const MAX_EXPIRES_DAYS = 365;
 
 export const API_KEY_HELP = `
@@ -54,7 +56,11 @@ create OPTIONS
   --name "<label>"       Display label, 1-100 characters (required)
   --expires-days <n>     Lifetime in days, 1-${MAX_EXPIRES_DAYS} (default: 90)
   --override-plan        Issue the key even if the tenant's plan has no API keys or the key
-                         allowance is used up. Logged as a plan override.
+                         allowance is used up. Recorded as a plan override: the tenant's alert
+                         names "${OPERATOR_OVERRIDE_LABEL}" and the audit line and event say so.
+  --allow-unverified     Issue the key even though the user has not verified their email. Refused
+                         by default: nobody has proven they own the address, and on the cloud the
+                         key is revoked at the account's first email-link sign-in.
 
 list OPTIONS
   --tenant <slug|id>     Only that organisation's keys
@@ -77,6 +83,7 @@ export interface ApiKeyArgs {
   name: string | null;
   expiresDays: number | null;
   overridePlan: boolean;
+  allowUnverified: boolean;
   reveal: boolean;
   help: boolean;
 }
@@ -87,7 +94,7 @@ export class ApiKeyCommandError extends Error {}
 export function parseApiKeyArgs(argv: string[]): ApiKeyArgs {
   const a: ApiKeyArgs = {
     command: null, email: null, keyId: null, tenant: null, name: null, expiresDays: null,
-    overridePlan: false, reveal: false, help: false,
+    overridePlan: false, allowUnverified: false, reveal: false, help: false,
   };
   const value = (i: number, flag: string): string => {
     const v = argv[i + 1];
@@ -111,6 +118,7 @@ export function parseApiKeyArgs(argv: string[]): ApiKeyArgs {
         break;
       }
       case "--override-plan": a.overridePlan = true; break;
+      case "--allow-unverified": a.allowUnverified = true; break;
       case "--reveal": case "--show-pii": a.reveal = true; break;
       default:
         if (arg.startsWith("-")) throw new Error(`unknown option ${arg} (try api-key --help)`);
@@ -129,14 +137,14 @@ export function parseApiKeyArgs(argv: string[]): ApiKeyArgs {
   if (command === "revoke") {
     a.keyId = target ?? null;
     if (!a.keyId) throw new Error("api-key revoke needs a key id (see api-key list)");
-    if (a.tenant || a.name || a.expiresDays !== null || a.overridePlan) throw new Error("api-key revoke takes only a key id");
+    if (a.tenant || a.name || a.expiresDays !== null || a.overridePlan || a.allowUnverified) throw new Error("api-key revoke takes only a key id");
   } else {
     a.email = target ?? null;
     if (!a.email) throw new Error(`api-key ${command} needs the user's email address`);
     if (command === "create") {
       if (!a.tenant) throw new Error("api-key create needs --tenant <slug|id>");
       if (a.name === null) throw new Error('api-key create needs --name "<label>"');
-    } else if (a.name !== null || a.expiresDays !== null || a.overridePlan) {
+    } else if (a.name !== null || a.expiresDays !== null || a.overridePlan || a.allowUnverified) {
       throw new Error("api-key list takes only an email, --tenant and --reveal");
     }
   }
@@ -185,7 +193,10 @@ export interface IssuedKey {
   tenantSlug: string;
   tenantName: string;
   role: string;
+  /** True when the plan's key limit WOULD have refused this key and --override-plan let it through. */
   planOverride: boolean;
+  /** True when the user's email is unverified and --allow-unverified let it through. */
+  unverified: boolean;
   /** The tenant's plan when the key was issued (for the audit line). */
   plan: string;
 }
@@ -194,9 +205,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface TenantRef { id: string; slug: string; name: string; plan: string; status: string }
 
-async function findUser(email: string): Promise<{ id: string; email: string }> {
+async function findUser(email: string): Promise<{ id: string; email: string; emailVerified: boolean }> {
   const { db } = await deps();
-  const [row] = await db.controlDb.select({ id: db.users.id, email: db.users.email }).from(db.users).where(emailEq(db.users.email, email)).limit(1);
+  const [row] = await db.controlDb
+    .select({ id: db.users.id, email: db.users.email, emailVerified: db.users.emailVerified })
+    .from(db.users)
+    .where(emailEq(db.users.email, email))
+    .limit(1);
   if (!row) throw new ApiKeyCommandError(`no user with email ${normalizeEmail(email)}. api-key only works for existing users (it never creates accounts).`);
   return row;
 }
@@ -220,6 +235,7 @@ export async function issueApiKey(opts: {
   name: string;
   expiresDays?: number | null;
   overridePlan?: boolean;
+  allowUnverified?: boolean;
 }): Promise<IssuedKey> {
   const name = createApiKeySchema.shape.name.safeParse(opts.name);
   if (!name.success) throw new ApiKeyCommandError("--name must be 1-100 characters");
@@ -246,13 +262,27 @@ export async function issueApiKey(opts: {
     throw new ApiKeyCommandError(`${tenant.slug} is ${tenant.status}; a key for it would not authenticate.`);
   }
 
-  if (!opts.overridePlan) {
-    try {
-      await plan.enforceApiKeyLimit(tenant.id);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+  const unverified = !user.emailVerified;
+  if (unverified && !opts.allowUnverified) {
+    throw new ApiKeyCommandError(
+      `${normalizeEmail(user.email)} has not verified their email address, so nobody has proven they own it. ` +
+        "On the multi-tenant cloud a key issued to an unverified account is revoked at the account's first email-link sign-in " +
+        "(and on a self-hosted install upgraded from 0.9.0 an owner counts as unverified until then). " +
+        "Pass --allow-unverified to issue the key anyway.",
+    );
+  }
+
+  // The limit is always evaluated so the override is only recorded when it actually mattered.
+  let planOverride = false;
+  try {
+    await plan.enforceApiKeyLimit(tenant.id);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Only the plan's own FORBIDDEN refusal can be overridden; a database error never is.
+    if (!opts.overridePlan || (e as { code?: string } | null)?.code !== "FORBIDDEN") {
       throw new ApiKeyCommandError(`${msg} Pass --override-plan to issue the key anyway.`);
     }
+    planOverride = true;
   }
 
   const expiresAt = opts.expiresDays ? new Date(Date.now() + opts.expiresDays * 86_400_000) : undefined;
@@ -261,8 +291,9 @@ export async function issueApiKey(opts: {
     tenantId: tenant.id,
     name: name.data,
     expiresAt,
-    createdByName: OPERATOR_LABEL,
+    createdByName: planOverride ? OPERATOR_OVERRIDE_LABEL : OPERATOR_LABEL,
     actorUserId: null,
+    planOverride,
   });
 
   return {
@@ -277,7 +308,8 @@ export async function issueApiKey(opts: {
     tenantSlug: tenant.slug,
     tenantName: tenant.name,
     role: member.role,
-    planOverride: Boolean(opts.overridePlan),
+    planOverride,
+    unverified,
     plan: tenant.plan,
   };
 }
@@ -414,20 +446,28 @@ export async function runApiKey(
 
     if (args.command === "create") {
       const issued = await issueApiKey({
-        email: args.email!, tenant: args.tenant!, name: args.name!, expiresDays: args.expiresDays, overridePlan: args.overridePlan,
+        email: args.email!, tenant: args.tenant!, name: args.name!, expiresDays: args.expiresDays,
+        overridePlan: args.overridePlan, allowUnverified: args.allowUnverified,
       });
       logSecurityEvent("api_key_operator_issued", {
         ip: null,
         reason: "admin-cli",
-        extra: { keyId: issued.id, tenantId: issued.tenantId, userId: issued.userId, planOverride: issued.planOverride },
+        extra: {
+          keyId: issued.id, tenantId: issued.tenantId, userId: issued.userId,
+          planOverride: issued.planOverride, allowUnverified: issued.unverified,
+        },
       });
       if (issued.planOverride) {
-        io.err(`hisaabo admin: WARNING --override-plan: plan limits were bypassed for ${issued.tenantSlug} (plan ${issued.plan}).\n`);
+        io.err(`hisaabo admin: WARNING --override-plan: plan limits were bypassed for ${issued.tenantSlug} (plan ${issued.plan}); the tenant alert says "${OPERATOR_OVERRIDE_LABEL}".\n`);
+      }
+      if (issued.unverified) {
+        io.err(`hisaabo admin: WARNING --allow-unverified: ${issued.email} has not verified their email; on the cloud this key is revoked at their first email-link sign-in.\n`);
       }
       io.err(
         `[audit] admin api-key created: key ${issued.id} (${issued.keyPrefix}…, "${issued.name}") for ${issued.email} (user ${issued.userId}) ` +
           `in ${issued.tenantSlug} (${issued.tenantId}), role ${issued.role}, expires ${iso(issued.expiresAt)}` +
-          `${issued.planOverride ? `, PLAN LIMIT OVERRIDDEN (plan ${issued.plan})` : ""}\n`,
+          `${issued.planOverride ? `, PLAN LIMIT OVERRIDDEN (plan ${issued.plan})` : ""}` +
+          `${issued.unverified ? ", UNVERIFIED EMAIL (--allow-unverified)" : ""}\n`,
       );
       io.out(formatIssued(issued));
       return 0;

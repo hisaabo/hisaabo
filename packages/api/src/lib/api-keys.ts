@@ -49,6 +49,8 @@ export interface CreateApiKeyRecordInput {
   createdByName: string;
   /** The signed-in user who created it, or null when an operator did (alert actor becomes "system"). */
   actorUserId?: string | null;
+  /** The key was issued past the plan's API-key limit by an operator; recorded in the alert payload. */
+  planOverride?: boolean;
 }
 
 export interface CreatedApiKey {
@@ -95,7 +97,12 @@ export async function createApiKeyRecord(input: CreateApiKeyRecordInput): Promis
   // Tell the key's owner (and the tenant's other admins): a key is a standing credential.
   await emitTenantEvent(input.tenantId, {
     type: "api_key.created",
-    payload: { keyName: created.name, keyPrefix: created.keyPrefix, createdByName: input.createdByName },
+    payload: {
+      keyName: created.name,
+      keyPrefix: created.keyPrefix,
+      createdByName: input.createdByName,
+      ...(input.planOverride ? { planOverride: true } : {}),
+    },
     actorUserId: input.actorUserId ?? null,
     subjectUserId: input.userId,
     dedupeKey: `api_key.created:${created.id}`,

@@ -1,14 +1,22 @@
 import pino from "pino";
 
-export const logger = pino({
-  level: process.env.LOG_LEVEL || (process.env.NODE_ENV === "production" ? "info" : "debug"),
-  ...(process.env.NODE_ENV !== "production" && {
-    transport: {
-      target: "pino-pretty",
-      options: { colorize: true, translateTime: "HH:MM:ss.l" },
-    },
-  }),
-});
+const isProduction = process.env.NODE_ENV === "production";
+// HISAABO_LOG_STDERR=1 sends log lines to stderr. Set by operator CLIs whose stdout is the product
+// (`admin api-key create` prints a key there), so scripted capture of stdout stays clean.
+const logToStderr = process.env.HISAABO_LOG_STDERR === "1";
+const level = process.env.LOG_LEVEL || (isProduction ? "info" : "debug");
+
+export const logger = isProduction
+  ? logToStderr
+    ? pino({ level }, pino.destination(2))
+    : pino({ level })
+  : pino({
+      level,
+      transport: {
+        target: "pino-pretty",
+        options: { colorize: true, translateTime: "HH:MM:ss.l", ...(logToStderr && { destination: 2 }) },
+      },
+    });
 
 /** Create a child logger with request context */
 export function createRequestLogger(requestId: string, method: string, path: string) {

@@ -419,6 +419,9 @@ async function main(): Promise<void> {
   }
   // Subcommand: operator-issued API keys (create / list / revoke). Shell-only, same posture.
   if (process.argv[2] === "api-key") {
+    // stdout carries only the command's own output (the key block); log lines go to stderr. Must be
+    // set before anything imports the logger.
+    process.env.HISAABO_LOG_STDERR = "1";
     const { runApiKey } = await import("../lib/admin/api-key.js");
     process.exit(await runApiKey(process.argv.slice(3)));
   }

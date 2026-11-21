@@ -12,6 +12,9 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { apiKeys, notificationOutbox } from "@hisaabo/db";
 import {
   createUser, createTenant, addMember, type TestUser, type TestTenant,
@@ -24,7 +27,7 @@ import { logger } from "../../lib/logger.js";
 import { tenantHandle } from "../../lib/admin/privacy.js";
 import {
   issueApiKey, listApiKeys, revokeApiKey, runApiKey, parseApiKeyArgs, formatKeyList, ApiKeyCommandError,
-  OPERATOR_LABEL,
+  OPERATOR_LABEL, OPERATOR_OVERRIDE_LABEL,
 } from "../../lib/admin/api-key.js";
 import { API_KEY_DEFAULT_TTL_MS } from "../../lib/api-keys.js";
 
@@ -207,6 +210,106 @@ describe("api-key create: plan limits", () => {
     await issueApiKey({ email: user.email, tenant: tenant.slug, name: "k3", overridePlan: true });
     expect(await keyRows(tenant.id)).toHaveLength(4);
   });
+});
+
+describe("A1: a plan override is visible in the tenant's own alert", () => {
+  const alertFor = async (keyId: string) =>
+    (await getTenantTestDb().select().from(notificationOutbox).where(eq(notificationOutbox.dedupeKey, `api_key.created:${keyId}`)))[0];
+
+  it("names 'Hisaabo operator (plan override)' and carries planOverride: true when the limit was actually bypassed", async () => {
+    const { user, tenant } = await setup("owner", "free");
+    const issued = await issueApiKey({ email: user.email, tenant: tenant.slug, name: "granted", overridePlan: true });
+    const ev = await alertFor(issued.id);
+    expect(ev.payload).toEqual({ keyName: "granted", keyPrefix: issued.keyPrefix, createdByName: OPERATOR_OVERRIDE_LABEL, planOverride: true });
+    expect(OPERATOR_OVERRIDE_LABEL).toBe("Hisaabo operator (plan override)");
+  });
+
+  it("does not claim an override when --override-plan was passed but the plan allowed the key anyway", async () => {
+    const { user, tenant } = await setup("owner", "business");
+    const cap = capture();
+    expect(await runApiKey(["create", user.email, "--tenant", tenant.slug, "--name", "not needed", "--override-plan"], cap.io, { close: false })).toBe(0);
+    const [row] = await keyRows(tenant.id);
+    const ev = await alertFor(row.id);
+    expect(ev.payload).toEqual({ keyName: "not needed", keyPrefix: row.keyPrefix, createdByName: OPERATOR_LABEL });
+    expect(cap.err).not.toMatch(/WARNING --override-plan/);
+    expect(cap.err).not.toMatch(/PLAN LIMIT OVERRIDDEN/);
+  });
+
+  it("only the plan's own refusal can be overridden", async () => {
+    const { user, tenant } = await setup("owner", "free");
+    const plan = await import("../../lib/plan-limits.js");
+    vi.spyOn(plan, "enforceApiKeyLimit").mockRejectedValueOnce(new Error("connection terminated"));
+    await expectRefused(issueApiKey({ email: user.email, tenant: tenant.slug, name: "x", overridePlan: true }), /connection terminated/);
+    expect(await keyRows(tenant.id)).toHaveLength(0);
+  });
+});
+
+describe("A2: unverified accounts", () => {
+  it("is refused by default, with the reason, and nothing is written", async () => {
+    const user = await createUser({ emailVerified: false });
+    const tenant = await createTenant({ plan: "business" });
+    await addMember(tenant.id, user.id, "owner");
+    await expectRefused(issueApiKey({ email: user.email, tenant: tenant.slug, name: "x" }), /has not verified their email.*nobody has proven.*revoked at the account's first email-link sign-in.*--allow-unverified/);
+    expect(await keyRows(tenant.id)).toHaveLength(0);
+
+    const cap = capture();
+    expect(await runApiKey(["create", user.email, "--tenant", tenant.slug, "--name", "x"], cap.io, { close: false })).toBe(1);
+    expect(cap.err).toMatch(/has not verified their email/);
+    expect(cap.out).toBe("");
+  });
+
+  it("--allow-unverified issues it, warns, and records it in the audit line and event", async () => {
+    const user = await createUser({ emailVerified: false });
+    const tenant = await createTenant({ plan: "business" });
+    await addMember(tenant.id, user.id, "owner");
+    const warn = vi.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    const cap = capture();
+    expect(await runApiKey(["create", user.email, "--tenant", tenant.slug, "--name", "ok", "--allow-unverified"], cap.io, { close: false })).toBe(0);
+    expect(await keyRows(tenant.id)).toHaveLength(1);
+    expect(cap.err).toMatch(/WARNING --allow-unverified/);
+    expect(cap.err).toMatch(/UNVERIFIED EMAIL \(--allow-unverified\)/);
+    const ev = warn.mock.calls.map((c) => c[0] as Record<string, unknown>).find((o) => o?.event === "api_key_operator_issued");
+    expect(ev).toMatchObject({ allowUnverified: true, planOverride: false });
+  });
+
+  it("verified accounts are unaffected, and the flag is only for create", async () => {
+    const { user, tenant } = await setup("owner");
+    const issued = await issueApiKey({ email: user.email, tenant: tenant.slug, name: "verified", allowUnverified: true });
+    expect(issued.unverified).toBe(false);
+    expect(parseApiKeyArgs(["create", "a@b.in", "--tenant", "t", "--name", "n", "--allow-unverified"]).allowUnverified).toBe(true);
+    expect(() => parseApiKeyArgs(["list", "a@b.in", "--allow-unverified"])).toThrow(/only an email/);
+    expect(() => parseApiKeyArgs(["revoke", "id", "--allow-unverified"])).toThrow(/only a key id/);
+  });
+});
+
+describe("A3: stdout carries only the key block", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkgRoot = resolve(here, "..", "..", "..");
+
+  for (const nodeEnv of ["production", "development"]) {
+    it(`NODE_ENV=${nodeEnv}: the structured security event goes to stderr, never stdout`, async () => {
+      const { user, tenant } = await setup("owner");
+      const res = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "src/bin/admin.ts", "api-key", "create", user.email, "--tenant", tenant.slug, "--name", "scripted"],
+        { cwd: pkgRoot, encoding: "utf8", env: { ...process.env, NODE_ENV: nodeEnv }, timeout: 60_000 },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      // stdout: exactly the key block
+      expect(res.stdout.trimStart().startsWith(`API key created for ${user.email.toLowerCase()}`)).toBe(true);
+      expect(res.stdout).not.toContain("api_key_operator_issued");
+      expect(res.stdout).not.toContain('"sec"');
+      expect(res.stdout).not.toMatch(/\[audit\]/);
+      expect(res.stdout).toMatch(/Key\s+hisaabo_key_/);
+      // stderr: the audit line and the structured event
+      expect(res.stderr).toContain("[audit] admin api-key created");
+      expect(res.stderr).toContain("api_key_operator_issued");
+      const raw = /Key\s+(hisaabo_key_\S+)/.exec(res.stdout)![1];
+      expect(res.stderr).not.toContain(raw);
+      const [row] = await keyRows(tenant.id);
+      expect(row.keyHash).toBe(sha256(raw));
+    }, 90_000);
+  }
 });
 
 describe("api-key CLI (runApiKey): output, audit and secrecy", () => {

@@ -72,6 +72,8 @@ export interface EventPayloads {
     keyName: string;
     keyPrefix: string;
     createdByName: string;
+    /** Set when an operator issued the key past the plan's API-key limit (`admin api-key create --override-plan`). */
+    planOverride?: boolean;
   };
   "general.announcement": {
     title: Record<Locale, string>;
