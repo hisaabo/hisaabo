@@ -1270,8 +1270,10 @@ app.get("/store/:slug/catalog.json", async (c) => {
 
   const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10) || 24));
-  const category = c.req.query("category");
-  const search = c.req.query("search");
+  // Silently capped (never a 400) so older storefronts keep working while the
+  // ILIKE pattern and category compare stay bounded.
+  const category = c.req.query("category")?.slice(0, 100);
+  const search = c.req.query("search")?.slice(0, 100);
   const offset = (page - 1) * limit;
 
   const conditions = [
