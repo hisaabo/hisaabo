@@ -1,0 +1,14 @@
+export declare const REPO: string;
+export declare const MB_PER_WORKER: number;
+export declare const MAX_DEFAULT_WORKERS: number;
+export declare function availableMemoryMB(): number;
+export declare function resolveWorkers(env?: NodeJS.ProcessEnv): number;
+export declare function workerPorts(k: number, env?: NodeJS.ProcessEnv): { web: number; api: number };
+export declare function webOrigin(k: number, env?: NodeJS.ProcessEnv): string;
+export declare function apiOrigin(k: number, env?: NodeJS.ProcessEnv): string;
+export declare function baseDatabaseUrl(env?: NodeJS.ProcessEnv): string;
+export declare function baseDatabaseName(env?: NodeJS.ProcessEnv): string;
+export declare function workerDatabaseName(k: number, env?: NodeJS.ProcessEnv): string;
+export declare function workerDatabaseUrl(k: number, env?: NodeJS.ProcessEnv): string;
+export declare function adminDatabaseUrl(env?: NodeJS.ProcessEnv): string;
+export declare function quoteIdent(name: string): string;

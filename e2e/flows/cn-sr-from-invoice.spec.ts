@@ -9,7 +9,7 @@
  *
  * Also verifies that CN/SR buttons disappear once invoice is fully adjusted.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, settle } from "../helpers/fixtures";
 import {
   loadSeed,
   SeedApi,
@@ -18,6 +18,7 @@ import {
   createInvoice,
   updateInvoiceStatus,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyId: string;
@@ -35,7 +36,7 @@ test.beforeAll(async () => {
 test.describe("Issue Credit Note from Invoice", () => {
   test("Issue CN button opens DocumentCreator pre-filled from invoice", async ({ page }) => {
     // Seed a sent invoice
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
@@ -65,7 +66,7 @@ test.describe("Issue Credit Note from Invoice", () => {
   });
 
   test("Issue CN button not visible on draft invoice", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     // Leave as draft — don't update status
 
@@ -73,6 +74,8 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     // Issue CN should NOT be visible for drafts
     await expect(
@@ -81,7 +84,7 @@ test.describe("Issue Credit Note from Invoice", () => {
   });
 
   test("Issue CN button not visible on cancelled invoice", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "cancelled");
 
@@ -89,6 +92,8 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     await expect(
       panel.getByRole("button", { name: /issue.*credit.*note/i }),
@@ -98,7 +103,7 @@ test.describe("Issue Credit Note from Invoice", () => {
 
 test.describe("Create Sales Return from Invoice", () => {
   test("Create SR button opens DocumentCreator pre-filled from invoice", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
@@ -121,13 +126,15 @@ test.describe("Create Sales Return from Invoice", () => {
   });
 
   test("Create SR button not visible on draft invoice", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     await expect(
       panel.getByRole("button", { name: /create.*sales.*return/i }),
@@ -137,7 +144,7 @@ test.describe("Create Sales Return from Invoice", () => {
 
 test.describe("CN/SR Button Visibility — Status Matrix", () => {
   test("sent invoice shows both CN and SR buttons", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
@@ -151,7 +158,7 @@ test.describe("CN/SR Button Visibility — Status Matrix", () => {
   });
 
   test("paid invoice shows both CN and SR buttons (can still adjust)", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "paid");
 
@@ -166,7 +173,7 @@ test.describe("CN/SR Button Visibility — Status Matrix", () => {
   });
 
   test("partial invoice shows Record Payment AND CN/SR buttons", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "partial");
 

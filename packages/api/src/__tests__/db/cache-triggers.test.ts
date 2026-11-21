@@ -28,6 +28,9 @@ describe("cache triggers: real database", () => {
   let scratch: Scratch;
   let listener: postgres.Sql;
   const received: Record<string, unknown>[] = [];
+  const FLUSH_MARKER = "flush:";
+  const markerWaiters = new Map<string, () => void>();
+  let flushSeq = 0;
 
   beforeAll(async () => {
     // Previous schema (migrations 0000-0004), then apply the new ones.
@@ -38,14 +41,32 @@ describe("cache triggers: real database", () => {
       await applyMigrationFile(scratch.sql, "drizzle-control", f);
     }
     listener = postgres(scratch.url, { max: 1, onnotice: () => {} });
-    await listener.listen(CACHE_NOTIFY_CHANNEL, (p) => { received.push(JSON.parse(p)); });
+    await listener.listen(CACHE_NOTIFY_CHANNEL, (p) => {
+      if (p.startsWith(FLUSH_MARKER)) markerWaiters.get(p)?.();
+      else received.push(JSON.parse(p));
+    });
   });
   afterAll(async () => {
     await listener?.end({ timeout: 2 });
     await scratch?.drop();
   });
 
-  const settle = () => new Promise((r) => setTimeout(r, 250));
+  /**
+   * Resolves once every notification committed before this call has reached the
+   * listener. NOTIFY is queued at commit and delivered in commit order, so a marker
+   * sent AFTER the (awaited, hence committed) writes can only arrive after all of
+   * their notifications. Seeing it therefore proves a notification that never showed
+   * up is absent, which a fixed sleep could only suggest ("nothing within 250ms").
+   */
+  const flush = async () => {
+    const marker = `${FLUSH_MARKER}${++flushSeq}`;
+    const arrived = new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`NOTIFY marker ${marker} never reached the listener`)), 10_000);
+      markerWaiters.set(marker, () => { clearTimeout(t); resolve(); });
+    });
+    await scratch.sql`select pg_notify(${CACHE_NOTIFY_CHANNEL}, ${marker})`;
+    await arrived;
+  };
 
   it("migrations leave all triggers verified", async () => {
     expect(await verifyCacheTriggers(scratch.sql)).toEqual({ ok: true, missing: [] });
@@ -68,11 +89,11 @@ describe("cache triggers: real database", () => {
     const [t] = await sql`INSERT INTO tenants (name, slug) VALUES ('T', ${"t-" + Math.random().toString(36).slice(2)}) RETURNING id`;
     const [u] = await sql`INSERT INTO users (email) VALUES (${Math.random() + "@x.test"}) RETURNING id`;
     const [m] = await sql`INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (${t.id}, ${u.id}, 'member') RETURNING id`;
-    await settle();
+    await flush();
     received.length = 0;
 
     await sql`UPDATE tenant_members SET role = 'admin' WHERE id = ${m.id}`;
-    await settle();
+    await flush();
     expect(received).toEqual([{ t: "tenant_members", op: "UPDATE", k: { tenant_id: t.id, user_id: u.id } }]);
     expect(JSON.stringify(received)).not.toMatch(/admin/);
 
@@ -81,18 +102,18 @@ describe("cache triggers: real database", () => {
     const sid = "secret-session-token-" + Math.random();
     await sql`INSERT INTO sessions (id, user_id, expires_at) VALUES (${sid}, ${u.id}, now() + interval '1 day')`;
     await sql`INSERT INTO api_keys (user_id, tenant_id, key_hash, key_prefix, name) VALUES (${u.id}, ${t.id}, 'hash', 'pre', 'k')`;
-    await settle();
+    await flush();
     received.length = 0;
     await sql`UPDATE sessions SET last_used_at = now(), expires_at = now() + interval '2 days' WHERE id = ${sid}`;
     await sql`UPDATE api_keys SET last_used_at = now() WHERE user_id = ${u.id}`;
-    await settle();
+    await flush();
     expect(received).toEqual([]);
 
     // security-relevant: session expiry shortened, delete of live session, key revoke
     await sql`UPDATE sessions SET expires_at = now() + interval '1 hour' WHERE id = ${sid}`;
     await sql`DELETE FROM sessions WHERE id = ${sid}`;
     await sql`DELETE FROM api_keys WHERE user_id = ${u.id}`;
-    await settle();
+    await flush();
     expect(received.map((r) => r.t)).toEqual(["sessions", "sessions", "api_keys"]);
     expect(JSON.stringify(received)).not.toContain(sid);
     expect(JSON.stringify(received)).not.toContain("hash");
@@ -101,7 +122,7 @@ describe("cache triggers: real database", () => {
     received.length = 0;
     await sql`INSERT INTO sessions (id, user_id, expires_at) VALUES ('old-' || ${Math.random()}, ${u.id}, now() - interval '1 day')`;
     await sql`DELETE FROM sessions WHERE expires_at < now()`;
-    await settle();
+    await flush();
     expect(received).toEqual([]);
 
     // rollback never notifies
@@ -109,7 +130,7 @@ describe("cache triggers: real database", () => {
       await tx`UPDATE tenant_members SET role = 'viewer' WHERE id = ${m.id}`;
       throw new Error("rollback");
     }).catch(() => {});
-    await settle();
+    await flush();
     expect(received).toEqual([]);
   });
 
@@ -120,7 +141,7 @@ describe("cache triggers: real database", () => {
     await sql`INSERT INTO store_slugs (slug, tenant_id, business_id, store_enabled) VALUES ('my-shop', ${t.id}, gen_random_uuid(), true)`;
     await sql`UPDATE store_slugs SET released_at = now() WHERE slug = 'my-shop'`;
     await sql`DELETE FROM store_slugs WHERE slug = 'my-shop'`;
-    await settle();
+    await flush();
     expect(received).toEqual([
       { t: "store_slugs", op: "INSERT", k: { slug: "my-shop" } },
       { t: "store_slugs", op: "UPDATE", k: { slug: "my-shop" } },

@@ -13,9 +13,28 @@
  * correct model for the test environment.
  */
 
-const testUrl =
-  process.env.TEST_DATABASE_URL ??
-  "postgresql://test:test@localhost:5433/hisaabo_test";
+import { inject } from "vitest";
+import {
+  templateDatabaseUrl,
+  withDatabase,
+  workerDbName,
+} from "./worker-db-config.js";
+
+// When global-setup.ts cloned the test database (API_TEST_WORKERS > 1), this
+// worker gets its own clone, picked by vitest's worker slot. Every consumer
+// reads TEST_DATABASE_URL / DATABASE_URL / CONTROL_DATABASE_URL, so rewriting
+// them here redirects the whole process, including helpers that open their own
+// connection (scratch databases, LISTEN clients).
+let testUrl = templateDatabaseUrl();
+const workerDbs = inject("hisaaboWorkerDbs");
+if (workerDbs) {
+  const poolId = process.env.VITEST_POOL_ID;
+  if (!poolId) {
+    throw new Error("VITEST_POOL_ID is not set; cannot pick this worker's test database");
+  }
+  testUrl = withDatabase(testUrl, workerDbName(workerDbs, poolId));
+  process.env.TEST_DATABASE_URL = testUrl;
+}
 
 process.env.DATABASE_URL = testUrl;
 process.env.CONTROL_DATABASE_URL = testUrl;

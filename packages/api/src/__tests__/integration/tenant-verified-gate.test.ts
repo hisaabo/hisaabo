@@ -235,6 +235,7 @@ describe("pre-registered account: claim-time cleanup and notice", () => {
     const solo = await createUser({ email: `solo.${nanoid(8).toLowerCase()}@example.in`, emailVerified: false });
     await addMember(tenant.id, solo.id, "owner");
     await anonCaller({ "x-hisaabo-client": "mobile" }).auth.verifyMagicLink({ token: await seedMagicToken(solo.email) });
+    // "Nothing arrives": the notice is fire-and-forget, so give a wrongly-sent one time to show up.
     await new Promise((r) => setTimeout(r, 100));
     expect(noticeSpy).not.toHaveBeenCalled();
     expect(claimEvent()).toMatchObject({ pendingInvitations: 0, otherMembers: 0 });
@@ -252,6 +253,7 @@ describe("pre-registered account: claim-time cleanup and notice", () => {
     });
 
     await anonCaller({ "x-hisaabo-client": "mobile" }).auth.verifyMagicLink({ token: await seedMagicToken(owner.email) });
+    // "Nothing arrives": fire-and-forget side effects (notice, deletions) must not happen; give them time to.
     await new Promise((r) => setTimeout(r, 100));
 
     expect(await db.select().from(invitations).where(eq(invitations.invitedBy, owner.id))).toHaveLength(1);

@@ -27,7 +27,7 @@
  *   8. Cache-hit path respects the idle timeout (no DB round-trip needed)
  */
 
-import { describe, it, expect, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, afterAll, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { sessions, accessTokens } from "@hisaabo/db";
@@ -250,11 +250,12 @@ describe("createContext — cookie idle timeout (P2 #2)", () => {
     expect(ctx.user?.id).toBe(userId);
     expect(ctx.authTokenKind).toBe("cookie");
 
-    // The bump is fire-and-forget (.catch on a promise); give it a tick.
-    await new Promise((r) => setTimeout(r, 30));
+    // The bump is fire-and-forget (.catch on a promise): wait for it to land.
     const db = getControlDb();
-    const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId));
-    expect(row!.lastUsedAt!.getTime()).toBeGreaterThan(tenDaysAgo.getTime());
+    await vi.waitFor(async () => {
+      const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+      expect(row!.lastUsedAt!.getTime()).toBeGreaterThan(tenDaysAgo.getTime());
+    }, { timeout: 5_000, interval: 5 });
   });
 
   it("cookie session with lastUsedAt=null falls back to createdAt — legacy row 5d old is accepted", async () => {
@@ -297,13 +298,16 @@ describe("createContext — cached cookie session respects idle timeout", () => 
     const first = await resolveContext(makeCookieReq(sessionId));
     expect(first.user?.id).toBe(userId);
 
-    // Wait for the fire-and-forget DB bump to settle before we overwrite
+    // Wait for the fire-and-forget DB bump to land before we overwrite
     // lastUsedAt below — otherwise the tests race and the bump clobbers
-    // our stale value right after we set it.
-    await new Promise((r) => setTimeout(r, 50));
+    // our stale value right after we set it. (The row started 5 days old.)
+    const db = getControlDb();
+    await vi.waitFor(async () => {
+      const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+      expect(row!.lastUsedAt!.getTime()).toBeGreaterThan(Date.now() - 24 * 60 * 60 * 1000);
+    }, { timeout: 5_000, interval: 5 });
 
     // Edit DB directly — cache still has the fresh lastUsedAt.
-    const db = getControlDb();
     await db
       .update(sessions)
       .set({ lastUsedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000) })
@@ -313,8 +317,10 @@ describe("createContext — cached cookie session respects idle timeout", () => 
     const second = await resolveContext(makeCookieReq(sessionId));
     expect(second.user?.id).toBe(userId);
 
-    // Wait for any second-call bump to settle, then re-stale the row and
-    // force the next call into a DB read by invalidating the cache.
+    // The second call is a cache hit and the lastUsedAt bump is throttled, so no
+    // write is expected; this is a bounded "nothing arrives" wait (a late bump
+    // would clobber the stale value set next), not a wait for an event. Then
+    // re-stale the row and force the next call into a DB read by invalidating the cache.
     await new Promise((r) => setTimeout(r, 50));
     await db
       .update(sessions)

@@ -98,6 +98,8 @@ describe("dispatch", () => {
 
     await startRuntime([job]);
     await waitFor(async () => (await jobState(sender, job.name, committed!)) === "completed");
+    // "Nothing more arrives": the rolled-back dispatch must never run. Several polling cycles (0.5s
+    // each) are given to a phantom job; there is no event that proves its absence.
     await sleep(700);
     expect(seen).toEqual(["committed"]);
   });
@@ -171,6 +173,8 @@ describe("failures", () => {
     const id = await dispatch(job, {}, { boss: sender });
     await startRuntime([job]);
     await waitFor(async () => (await jobState(sender, job.name, id!)) === "failed");
+    // "Nothing more arrives": a permanent failure must not be retried; give a retry (polling
+    // interval 0.5s) time to show up.
     await sleep(700);
     expect(attempts).toBe(1);
     expect(failedCalls).toBe(1);
@@ -189,8 +193,7 @@ describe("failures", () => {
     await waitFor(async () => (await jobState(sender, job.name, id!)) === "failed");
     const j = await sender.getJobById(job.name, id!);
     expect(j?.retryCount).toBe(0);
-    await sleep(300);
-    expect(ran).toBe(true); // the well-formed one ran; the malformed one did not retry
+    await waitFor(async () => ran); // the well-formed one ran; the malformed one did not retry (retryCount 0 above)
   });
 });
 
@@ -284,6 +287,7 @@ describe("workers", () => {
     await controlDb.insert(queueControls).values({ queue: job.name, paused: true, pausedAt: new Date(), pausedBy: "test" });
     const id = await dispatch(job, {}, { boss: sender });
     const rt = await startRuntime([job]);
+    // "Nothing arrives": a paused queue must stay untouched across several polling cycles (0.5s each).
     await sleep(1500);
     expect(ran).toBe(0);
     expect(await jobState(sender, job.name, id!)).toBe("created");

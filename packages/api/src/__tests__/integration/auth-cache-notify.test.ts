@@ -179,6 +179,9 @@ describe("external writes invalidate caches via NOTIFY (no in-process call)", ()
         throw new Error("rollback");
       })
       .catch(() => {});
+    // "Nothing arrives": a rolled-back write sends no NOTIFY, so there is no event to wait for. The
+    // positive cases above resolve within ms (eventually() polls every 25ms); 300ms is ample for a
+    // spurious notification to have shown up.
     await new Promise((r) => setTimeout(r, 300));
     expect(membershipCache.get(`${tenant.id}:${user.id}`)?.role).toBe("admin");
   });

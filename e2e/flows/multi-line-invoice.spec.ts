@@ -8,6 +8,7 @@
  */
 import { test, expect, ApiHelper, waitForPageReady } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createParty, createItem } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyName: string;
@@ -33,7 +34,7 @@ test.beforeAll(async () => {
 
 test.describe("Multi-line Invoice Creation", () => {
   test("can create a multi-line invoice via API and view detail panel", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
 
     // Resolve the seeded party
     const partiesRaw = await api.query<unknown>(
@@ -118,7 +119,7 @@ test.describe("Multi-line Invoice Creation", () => {
   });
 
   test("multi-line invoice detail panel shows draft status", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
 
     // Resolve the seeded party and items (same pattern as above)
     const partiesRaw = await api.query<unknown>(

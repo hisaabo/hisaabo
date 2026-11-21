@@ -11,7 +11,7 @@
  * Each test seeds an invoice in a specific status via API, then verifies
  * which buttons are visible in the detail panel.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, settle, waitForPageReady } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import {
   loadSeed,
@@ -21,6 +21,7 @@ import {
   createInvoice,
   updateInvoiceStatus,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyId: string;
@@ -42,7 +43,7 @@ async function seedAndOpenInvoice(
   status?: string,
 ): Promise<{ invoiceId: string; panel: any }> {
   const { ApiHelper } = await import("../helpers/fixtures");
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+  const api = new ApiHelper(page, apiUrl());
   const invoice = await createInvoice(api, businessId, partyId, itemId);
   if (status && status !== "draft") {
     await updateInvoiceStatus(api, businessId, invoice.id, status);
@@ -51,6 +52,9 @@ async function seedAndOpenInvoice(
   await page.goto(`/invoices?id=${invoice.id}`);
   const panel = page.locator('[role="dialog"]').first();
   await expect(panel).toBeVisible({ timeout: 10_000 });
+  // The panel opens before its invoice data arrives; the "does NOT show" tests
+  // below must assert on the loaded panel, not an empty one.
+  await settle(page);
   return { invoiceId: invoice.id, panel };
 }
 
@@ -202,13 +206,15 @@ test.describe("Invoice Status — Cancelled", () => {
 
 test.describe("Invoice Table Row Actions", () => {
   test("draft invoice row shows delete button on hover", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto("/invoices");
+    await waitForPageReady(page);
 
     // Search for the specific invoice
     await page.getByPlaceholder(/search invoices/i).fill(invoice.invoiceNumber);
+    await settle(page);
 
     const row = page.locator("tbody tr").first();
     const count = await row.count();

@@ -11,10 +11,11 @@
  * Only tests seller + accountant (the two most different permission sets)
  * because the free plan limits to 3 team members total.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, newContext, settle } from "../helpers/fixtures";
 import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
+import { apiUrl, ownerStorageStatePath } from "../helpers/worker";
 
-const API_URL = process.env.API_URL ?? "http://localhost:3000";
+const API_URL = apiUrl();
 
 /** Nav items that each role should see in the sidebar */
 const ROLE_NAV_VISIBLE: Record<string, string[]> = {
@@ -29,27 +30,33 @@ const ROLE_NAV_VISIBLE: Record<string, string[]> = {
     "Items",
     "Payments",
   ],
+  // Accountants are read-only on sales (Invoice:read, see role-access.test.ts), so
+  // the sales document pages are in their nav; the reports entry is labelled
+  // "Business Reports" (getVisibleNavItems).
   accountant: [
     "Invoices",
-    "Parties",
-    "Items",
-    "Payments",
-    "Cash & Bank",
-    "Expenses",
-    "Reports",
-  ],
-};
-
-/** Nav items that each role should NOT see */
-const ROLE_NAV_HIDDEN: Record<string, string[]> = {
-  seller: ["Dashboard", "Cash & Bank", "Expenses", "Reports"],
-  accountant: [
     "Quotations",
     "Sales Returns",
     "Credit Notes",
     "Delivery Challans",
     "Proforma Invoices",
+    "Parties",
+    "Items",
+    "Payments",
+    "Cash & Bank",
+    "Expenses",
+    "Business Reports",
   ],
+};
+
+/**
+ * Nav items that each role should NOT see. An accountant can read every
+ * resource the nav is gated on, so nothing is hidden from them: what sets them
+ * apart is that they cannot create sales documents (asserted separately).
+ */
+const ROLE_NAV_HIDDEN: Record<string, string[]> = {
+  seller: ["Dashboard", "Cash & Bank", "Expenses", "Business Reports"],
+  accountant: [],
 };
 
 /**
@@ -67,10 +74,13 @@ async function createRoleUser(
   const password = "Test@1234!";
   const name = `E2E ${role} User`;
 
-  // Clean up any stale pending invitations to stay within plan limits
-  const pending = await api.query<Array<{ id: string }>>("tenant.pendingInvitations");
-  for (const inv of pending) {
-    await api.mutate("tenant.revokeInvitation", { id: inv.id }).catch(() => {});
+  // Clean up stale pending invitations left by earlier runs of THIS spec to stay
+  // within plan limits. Only our own (e2e-seller-* / e2e-accountant-*): other
+  // specs' invitations (invite-flow) are theirs to manage, not ours to revoke.
+  const pending = await api.query<Array<{ id: string; email: string }>>("tenant.pendingInvitations");
+  const ours = /^e2e-(seller|accountant)-\d+@test\.hisaabo\.in$/i;
+  for (const inv of pending.filter((p) => ours.test(p.email))) {
+    await api.mutate("tenant.revokeInvitation", { invitationId: inv.id });
   }
 
   // Step 1: Owner sends invite via API
@@ -86,7 +96,7 @@ async function createRoleUser(
   // load the resulting session cookie into a fresh browser context.
   const { sessionToken } = await registerUser(API_URL, { email, password, name });
   await markEmailVerified(email); // invite acceptance requires a verified email
-  const context = await browser.newContext({ storageState: sessionStorageState(sessionToken) });
+  const context = await newContext(browser, { storageState: sessionStorageState(sessionToken) });
   const page = await context.newPage();
 
   // Step 3: Visit the invite acceptance page
@@ -125,7 +135,7 @@ test.describe("Role: Seller", () => {
   let roleCtx: any;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: ownerStorageStatePath() });
     const ownerPage = await ownerCtx.newPage();
 
     const result = await createRoleUser(browser, ownerPage, "seller");
@@ -144,6 +154,7 @@ test.describe("Role: Seller", () => {
   test("seller sees expected nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -157,6 +168,7 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see restricted nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -196,6 +208,7 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
@@ -211,11 +224,13 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
+      await settle(rolePage);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {
@@ -229,7 +244,7 @@ test.describe("Role: Seller", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════
-// ACCOUNTANT — sees money/compliance, limited sales
+// ACCOUNTANT — sees money/compliance, read-only on sales
 // ═════════════════════════════════════════════════════════════════
 
 test.describe("Role: Accountant", () => {
@@ -238,7 +253,7 @@ test.describe("Role: Accountant", () => {
   let setupFailed = false;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: ownerStorageStatePath() });
     const ownerPage = await ownerCtx.newPage();
 
     try {
@@ -270,6 +285,7 @@ test.describe("Role: Accountant", () => {
   test("accountant sees expected nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -280,16 +296,21 @@ test.describe("Role: Accountant", () => {
     }
   });
 
-  test("accountant does NOT see restricted nav items", async () => {
+  test("accountant has read-only access to sales: no create action", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
+    // Positive anchor: the page and its sales-document nav rendered for them...
+    await expect(rolePage.locator("h1").first()).toContainText("Invoices");
     const sidebar = rolePage.locator("nav, aside").first();
+    await expect(sidebar.getByText("Quotations", { exact: true }).first()).toBeVisible();
+
+    // ...but they cannot create invoices (Invoice: read only).
+    await expect(rolePage.getByRole("button", { name: /new invoice/i })).toHaveCount(0);
 
     for (const item of ROLE_NAV_HIDDEN.accountant) {
-      await expect(
-        sidebar.getByText(item, { exact: true }),
-      ).not.toBeVisible();
+      await expect(sidebar.getByText(item, { exact: true })).not.toBeVisible();
     }
   });
 
@@ -305,7 +326,9 @@ test.describe("Role: Accountant", () => {
 
   test("accountant can access reports page", async () => {
     await rolePage.goto("/reports");
-    await expect(rolePage.locator("h1").first()).toContainText("Reports", { timeout: 10_000 });
+    // The page header is the active report; the default one is "Daybook" (see reports.spec.ts)
+    await expect(rolePage).toHaveURL(/\/reports/);
+    await expect(rolePage.locator("h1").first()).toContainText("Daybook", { timeout: 10_000 });
   });
 
   test("accountant can access invoices page", async () => {
@@ -316,6 +339,7 @@ test.describe("Role: Accountant", () => {
   test("accountant does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
@@ -329,11 +353,13 @@ test.describe("Role: Accountant", () => {
   test("accountant does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
+      await settle(rolePage);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {

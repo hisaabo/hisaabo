@@ -7,6 +7,16 @@
  */
 import { test, expect } from "../helpers/fixtures";
 import { PaymentsPage } from "../helpers/page-objects/payments.page";
+import { SeedApi, createInvoice, loadSeed, updateInvoiceStatus } from "../helpers/seed";
+
+// The row tests below need a payment to exist. Workers have separate databases,
+// so create one here rather than relying on whichever specs ran earlier on this worker.
+test.beforeAll(async () => {
+  const seed = loadSeed();
+  const api = new SeedApi();
+  const invoice = await createInvoice(api, seed.businessId, seed.partyId, seed.itemId);
+  await updateInvoiceStatus(api, seed.businessId, invoice.id, "paid");
+});
 
 // ═════════════════════════════════════════════════════════════════
 // Layer 1: PRESENCE

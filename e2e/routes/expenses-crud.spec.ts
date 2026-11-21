@@ -8,9 +8,10 @@
  *   - Delete button opens confirmation dialog
  *   - Confirming delete removes expense from list
  */
-import { test, expect, waitForSearchResults } from "../helpers/fixtures";
+import { test, expect, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createExpense } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 
@@ -33,6 +34,7 @@ test.beforeAll(async () => {
 test.describe("Expenses — Create", () => {
   test("create expense with all fields, verify it appears in list", async ({ page }) => {
     await page.goto("/expenses");
+    await waitForPageReady(page);
 
     // Open slide-over
     await page.getByRole("button", { name: /new expense/i }).first().click();
@@ -70,6 +72,7 @@ test.describe("Expenses — Create", () => {
 test.describe("Expenses — Edit", () => {
   test("clicking edit button opens slide-over with title 'Edit Expense'", async ({ page }) => {
     await page.goto("/expenses");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -86,6 +89,7 @@ test.describe("Expenses — Edit", () => {
 
   test("editing amount and saving persists changes", async ({ page }) => {
     await page.goto("/expenses");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -118,6 +122,7 @@ test.describe("Expenses — Edit", () => {
 test.describe("Expenses — Delete", () => {
   test("delete button opens delete confirmation dialog", async ({ page }) => {
     await page.goto("/expenses");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -135,7 +140,7 @@ test.describe("Expenses — Delete", () => {
 
   test("confirming delete removes expense from list", async ({ page }) => {
     // Seed a dedicated expense so the deletion is deterministic
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const _seeded = await createExpense(api, businessId, {
       category: "DeleteMe Category",
       description: "To be deleted",
@@ -143,6 +148,7 @@ test.describe("Expenses — Delete", () => {
     });
 
     await page.goto("/expenses");
+    await waitForPageReady(page);
 
     // Search for the seeded expense to isolate it
     await page.getByPlaceholder(/search category or description/i).fill("DeleteMe Category");

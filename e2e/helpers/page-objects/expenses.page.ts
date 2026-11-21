@@ -73,7 +73,7 @@ export class ExpensesPage extends BasePage {
 
   async searchExpenses(query: string) {
     await this.searchInput.fill(query);
-    await this.waitForTrpcResponse();
+    await this.settle();
   }
 
   async rowCount(): Promise<number> {

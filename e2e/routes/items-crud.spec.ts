@@ -7,11 +7,12 @@
  *   - Adjust stock (add and remove, verify quantity updates)
  *   - Detail panel tabs and content
  */
-import { test, expect, waitForSearchResults } from "../helpers/fixtures";
+import { test, expect, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 
 test.describe("Items — Create", () => {
   test("create a simple product via Add Item modal", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     // Open Add Item modal
     await page.getByRole("button", { name: /add item/i }).first().click();
@@ -45,6 +46,7 @@ test.describe("Items — Create", () => {
 
   test("create item form validates required name field", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     await page.getByRole("button", { name: /add item/i }).first().click();
     const dialog = page.locator('[role="dialog"]').first();
@@ -63,6 +65,7 @@ test.describe("Items — Create", () => {
 test.describe("Items — Edit", () => {
   test("edit item name and price via detail panel", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     // Click first item to open detail
     const rows = page.locator("tbody tr");
@@ -98,6 +101,7 @@ test.describe("Items — Stock Adjustment", () => {
   test("adjust stock via detail panel → Adjust Stock button", async ({ page }) => {
     // First create a product item so we know it has stock capabilities
     await page.goto("/items");
+    await waitForPageReady(page);
 
     // Create a dedicated product for stock testing
     await page.getByRole("button", { name: /add item/i }).first().click();
@@ -144,6 +148,7 @@ test.describe("Items — Stock Adjustment", () => {
 
   test("stock adjustment Remove Stock mode works", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -176,6 +181,7 @@ test.describe("Items — Stock Adjustment", () => {
 test.describe("Items — Detail Panel Tabs", () => {
   test("detail panel shows Overview, Price History, Stock Movements tabs", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();
@@ -202,6 +208,7 @@ test.describe("Items — Detail Panel Tabs", () => {
 
   test("detail panel overview shows item info fields", async ({ page }) => {
     await page.goto("/items");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

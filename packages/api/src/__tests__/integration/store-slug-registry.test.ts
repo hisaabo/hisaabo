@@ -199,7 +199,7 @@ describe("registry resolve + write path", () => {
       tenantId: world.tenant1.id, businessId: world.business1.id,
       oldSlug: null, newSlug: "commit-fail", newEnabled: true,
       runTenantUpdate: async () => {
-        await controlDb.execute(sql`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND state = 'idle in transaction'`);
+        await controlDb.execute(sql`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = current_database() AND state = 'idle in transaction'`);
         return 1;
       },
       revertTenant: revert,

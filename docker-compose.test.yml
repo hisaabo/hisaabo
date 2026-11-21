@@ -10,6 +10,13 @@
 # Set in your environment before running API integration tests:
 #   export TEST_DATABASE_URL=postgresql://test:test@localhost:5433/hisaabo_test
 #   pnpm --filter @hisaabo/api test
+#
+# The API suite runs test files in parallel. Before the run it clones
+# hisaabo_test (CREATE DATABASE ... TEMPLATE) into one database per worker and
+# drops them afterwards, so the database needs a superuser/CREATEDB role (the
+# `test` user here is one) and no other session connected to hisaabo_test while
+# it starts. Worker count defaults to what free memory allows (max 4);
+# API_TEST_WORKERS=1 runs everything serially against hisaabo_test itself.
 
 services:
   test-db:
