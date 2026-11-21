@@ -385,7 +385,7 @@ describe("tenant.create on a self-hosted invite-only server", () => {
   it("an unverified account with a pending invitation cannot join through tenant.create", async () => {
     const tenant = await defaultTenantWithOwner();
     const { user, caller } = await invitedAccount(false, tenant.id);
-    await expect(caller.tenant.create()).rejects.toMatchObject({ code: "FORBIDDEN", message: "Open your invitation link to join" });
+    await expect(caller.tenant.create()).rejects.toMatchObject({ code: "FORBIDDEN", message: "Sign in with an email link or open your invitation link to join" });
     expect(await db.select().from(tenantMembers).where(eq(tenantMembers.userId, user.id))).toHaveLength(0);
   });
 

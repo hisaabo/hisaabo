@@ -226,13 +226,13 @@ export const tenantRouter = router({
           // A pending invitation only counts for a verified email. Otherwise anyone
           // who could register an invited address (a password sign-up proves
           // nothing about the mailbox) would walk into the default tenant here
-          // without ever holding the invitation token. An invitee on an install
-          // without email uses the invitation link (acceptInvitation with the token,
-          // which counts as the proof on a self-hosted server).
+          // without ever holding the invitation token. An unverified invitee signs
+          // in by email link, or opens the invitation link (acceptInvitation with
+          // the token, which counts as the proof on a self-hosted server).
           const [verified] = await tx.select({ emailVerified: users.emailVerified })
             .from(users).where(eq(users.id, ctx.user.id)).limit(1);
           if (!verified?.emailVerified) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "Open your invitation link to join" });
+            throw new TRPCError({ code: "FORBIDDEN", message: "Sign in with an email link or open your invitation link to join" });
           }
         }
 
