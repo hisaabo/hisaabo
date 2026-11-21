@@ -610,6 +610,7 @@ export async function registerImportedStoreSlugs(
       if (r.status === "conflict") {
         // Rename instead of disabling: keep the storefront working at a new URL.
         const biz = rows.find((x) => x.id === r.businessId);
+        const why = r.reserved ? "is reserved by the platform" : "is already used by another account";
         let newSlug: string | null = null;
         try {
           newSlug = await claimFallbackSlug({
@@ -626,7 +627,7 @@ export async function registerImportedStoreSlugs(
         if (newSlug) {
           warnings.push({
             table: "businesses",
-            message: `Store URL '${r.slug}' is already used by another account; it was changed to '${newSlug}'. You can choose a new URL once in Store settings.`,
+            message: `Store URL '${r.slug}' ${why}; it was changed to '${newSlug}'. You can choose a new URL once in Store settings.`,
             context: { businessId: r.businessId, oldSlug: r.slug, newSlug },
           });
           continue;
@@ -636,7 +637,7 @@ export async function registerImportedStoreSlugs(
           .where(eq(businesses.id, r.businessId));
         warnings.push({
           table: "businesses",
-          message: `Store URL '${r.slug}' is already used by another account and no replacement could be assigned; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
+          message: `Store URL '${r.slug}' ${why} and no replacement could be assigned; the storefront was disabled and the URL cleared. Choose a new URL in Store settings.`,
           context: { businessId: r.businessId },
         });
       } else {

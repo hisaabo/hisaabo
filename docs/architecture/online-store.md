@@ -231,6 +231,8 @@ uniqueIndex("businesses_store_slug_idx").on(t.storeSlug),
 
 Note: In cloud/multi-tenant mode, store slugs must be globally unique across all tenants. This is enforced at the application level by querying the control DB before allowing slug creation. In self-hosted mode, slugs are unique within the single tenant's businesses table, which the unique index handles.
 
+**Reserved slugs (implemented).** Platform and infrastructure words (`hisaabo`, `official`, `admin`, `login`, `support`, `checkout`, `privacy`, `assets`, ... the full list is `RESERVED_STORE_SLUGS` in `packages/shared/src/store-slug.ts`) cannot be claimed, to prevent brand impersonation on `store.hisaabo.in/<slug>` and in OTP SMS. `store.updateSettings` rejects them with "This store address is reserved", both when the slug is first chosen and when it is changed; `store.checkSlug` returns `{ available: false, reserved: true }`; the web settings form checks the same list before submit; a multi-tenant self-import renames a reserved slug like a taken one. Only a slug that is being set or changed is checked: a business that already holds a reserved slug is grandfathered, keeps saving other settings, and its store keeps resolving (slug resolution never consults the list). Matching is exact for the list, plus any slug that starts with `hisaabo-` or ends with `-hisaabo` (so `hisaabo-support` is reserved); `hisaab-traders` is fine.
+
 #### `invoices` table -- no changes needed
 
 The existing `source` column (type `text`) already supports arbitrary source identifiers. Online store orders use `source = 'online_store'`. No schema change required.
@@ -1214,6 +1216,8 @@ The public store API must NEVER expose:
 - Business-sensitive fields (GSTIN, PAN, bank details) -- only name, logo, tagline
 - Other businesses' data (even within the same tenant)
 
+One deliberate exception to "internal fields never leak": the catalog publishes `COALESCE(store_description, description)` and `COALESCE(store_category, category)`, so a store-visible item with no store description shows its internal description (and category) on the storefront. This fallback is kept so existing stores do not go blank; the web Manage Store Items list marks items affected by it (the note appears only when the store and the item are both enabled), and the MCP/WebMCP `description` docs say so. Only the `store.updateItemStoreSettings` API procedure can set a store description today; no first-party client exposes it.
+
 This is enforced by:
 1. The store API handlers explicitly SELECT only safe columns (allowlist, not denylist).
 2. No use of `SELECT *` in store routes.
@@ -1223,14 +1227,16 @@ This is enforced by:
 
 Store routes have their own rate limits, separate from the tRPC rate limiter:
 
-| Endpoint | Limit | Key |
+| Endpoint (as implemented) | Limit | Key |
 |----------|-------|-----|
-| `GET /store/:slug/api/catalog` | 120 req/min | IP |
-| `GET /store/:slug/api/info` | 120 req/min | IP |
-| `POST /store/:slug/api/orders` | 5 req/min | IP + phone number |
-| `GET /store/:slug/api/orders/:id` | 30 req/min | IP |
+| `GET /store/:slug/catalog.json` | 120 req/min | IP |
+| `POST /store/:slug/order` | 20 req/min, plus 5 orders/min | IP, and phone number |
+| `POST /store/:slug/identify` | 20 req/min | IP |
+| `POST /store/:slug/otp/send` | 5 req/min, plus 3 codes per 15 min | IP, and phone number |
+| `POST /store/:slug/otp/verify` | 10 req/min (5 attempts per code) | IP |
+| logo, item images, OG image, meta, page shell | 20 req/min | IP |
 
-The order placement limit is per phone number to prevent spam. The phone number is hashed before use as a rate limit key to avoid storing PII in the rate limit map.
+The order placement limit is per phone number to prevent spam. The catalog also bounds its query: `search` is capped at 100 characters (silently truncated, never rejected, so existing clients keep working) and `limit` is capped at 100.
 
 ### 11.3 Input Validation
 
@@ -1256,18 +1262,19 @@ export const placeStoreOrderSchema = z.object({
 
 ### 11.4 CSRF Protection
 
-Since the store uses plain `fetch` (not cookie-based auth), CSRF is not a concern for the store API. The order endpoint is protected by:
-1. Rate limiting (5/min per phone).
-2. Phone number validation (must be a valid Indian mobile number).
-3. No sensitive actions (placing an order is not destructive -- the business must confirm).
+Since the store uses plain `fetch` (not cookie-based auth), classic CSRF is not a concern for the store API. The POST endpoints (`identify`, `otp/send`, `otp/verify`, `order`) are protected by:
+1. Cloudflare Turnstile, verified server-side (all but `otp/verify`, where the one-time code is the secret and attempts are capped).
+2. Rate limiting: per IP on every route, plus per phone on `order` (5/min) and `otp/send` (3 per 15 min).
+3. The Origin/Referer allow-list (below).
+4. Input validation, and server-side price recomputation: `order` takes the unit price from the database (`store_price`, else `sale_price`, per variant / unit where applicable) and totals from `calcInvoiceTotals`; any price or total in the request body is ignored.
 
-**Security model invariant (store POSTs):** the global CSRF middleware at `packages/api/src/server.ts` intentionally skips every `/store/*` path (`skipPathPrefixes: ["/api/trpc/", "/store/"]`). The exemption is correct only while the two layers below remain the protection model: (a) server-side Turnstile verification on `POST /store/:slug/identify` and `POST /store/:slug/order`, (b) per-IP rate limit (20/min per path) plus the existing per-phone 5/min cap on `order`, and (c) the Origin/Referer allow-list in `packages/api/src/lib/store-origin.ts`. The store SPA calls both endpoints with `credentials: "omit"` so the admin `session_id` cookie never rides along on a same-origin self-hosted deploy. If an authenticated `/store/*` endpoint is ever added (for example `POST /store/:slug/fulfill` reading the admin session), the `/store/` entry in the CSRF skip list must be narrowed to an explicit allow-list of public paths before that change merges.
+**Customer identification does not leak.** `POST /store/:slug/identify` performs no customer lookup and always answers the uniform `{ "known": false }`, so it reveals neither whether a phone number belongs to a customer nor their name. Only after a successful `otp/verify` does the response include `known` and the name on that phone's most recent store order for this business.
+
+**Security model invariant (store POSTs):** the global CSRF middleware at `packages/api/src/server.ts` intentionally skips every `/store/*` path (`skipPathPrefixes: ["/api/trpc/", "/store/"]`). The exemption is correct only while the layers below remain the protection model: (a) server-side Turnstile verification on `POST /store/:slug/identify`, `otp/send` and `order`, (b) per-IP rate limit (20/min per path; 5/min `otp/send`, 10/min `otp/verify`) plus the per-phone caps above, and (c) the Origin/Referer allow-list in `packages/api/src/lib/store-origin.ts`, which accepts `CORS_ORIGINS` plus the exact origins in `STORE_ALLOWED_ORIGINS` (and hosts under `STORE_ALLOWED_SUBDOMAINS_OF`), rejects a disallowed `Origin`/`Referer` with 403, and accepts a request that carries neither header (in-app webviews strip both). The store SPA calls both endpoints with `credentials: "omit"` so the admin `session_id` cookie never rides along on a same-origin self-hosted deploy. If an authenticated `/store/*` endpoint is ever added (for example `POST /store/:slug/fulfill` reading the admin session), the `/store/` entry in the CSRF skip list must be narrowed to an explicit allow-list of public paths before that change merges.
 
 ### 11.5 Bot / Spam Protection
 
-Phase 1: Rate limiting + phone validation is sufficient for launch.
-
-Phase 2: Add a simple proof-of-work challenge or invisible reCAPTCHA to the order form. A honeypot field (hidden input that bots fill) is a zero-cost addition in Phase 1.
+Implemented: Cloudflare Turnstile on `identify`, `otp/send` and `order` (`TURNSTILE_SECRET_KEY`; in production a missing key rejects requests rather than skipping the check), plus the rate limits above and optional per-store SMS code verification (`store_require_phone_otp`).
 
 ---
 

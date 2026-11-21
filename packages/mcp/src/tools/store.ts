@@ -47,6 +47,7 @@ export function registerStoreTools(server: ToolServer, client: HisaaboClient) {
       "Update the online store configuration.",
       "Enable/disable the store, change the URL slug, tagline, accent color, minimum order amount, etc.",
       "store_slug must be unique across all businesses and match the pattern: lowercase letters, numbers, and hyphens.",
+      "Reserved platform words (for example admin, login, support, hisaabo, or anything starting with hisaabo- or ending in -hisaabo) cannot be chosen; the server rejects them with \"This store address is reserved\".",
       "The store URL slug can only be set ONCE: after it is set, later changes are rejected with FORBIDDEN (unless the system auto-assigned it because the original was already in use, which allows one change).",
       "Setting store_enabled=true activates the public storefront.",
     ].join(" "),

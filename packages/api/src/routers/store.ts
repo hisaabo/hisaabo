@@ -1,7 +1,7 @@
 import { eq, and, ilike, sql, desc, gte, lte, inArray, or, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { businesses, items, itemVariants, storeOrders, invoices, invoiceItems } from "@hisaabo/db";
-import { paginationSchema } from "@hisaabo/shared";
+import { paginationSchema, isReservedStoreSlug, checkStoreSlugReserved } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -29,6 +29,10 @@ const SLUG_SET_ONCE_MESSAGE = "Your store link can only be set once.";
  *  - no slug yet: first choice allowed
  *  - same slug / slug omitted: no-op, allowed
  *  - different slug (or clearing it): allowed only while store_slug_auto_assigned
+ *  - a slug on the reserved list (shared RESERVED_STORE_SLUGS) can be neither
+ *    first chosen nor changed to. This runs only once the slug is known to be
+ *    changing, so a business that already holds a reserved slug (grandfathered)
+ *    keeps saving its other settings: the same-slug no-op above returns first.
  * Returns whether the slug is changing (the caller then clears the flag).
  */
 function assertSlugChangeAllowed(
@@ -41,6 +45,8 @@ function assertSlugChangeAllowed(
   if (cur.storeSlug && !cur.storeSlugAutoAssigned) {
     throw new TRPCError({ code: "FORBIDDEN", message: SLUG_SET_ONCE_MESSAGE });
   }
+  const reserved = checkStoreSlugReserved(next, cur.storeSlug);
+  if (reserved) throw new TRPCError({ code: "BAD_REQUEST", message: reserved });
   return { changing: true };
 }
 
@@ -74,8 +80,17 @@ export const storeRouter = router({
 
   checkSlug: viewerProcedure
     .input(z.object({ slug: z.string().min(3).max(50) }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input, ctx }): Promise<{ available: boolean; reserved?: boolean }> => {
       requireCan(ctx.ability, "read", "Store");
+      // Reserved platform words are never available, except to the business
+      // that already holds one (grandfathered), which stays "available" below.
+      if (isReservedStoreSlug(input.slug)) {
+        const [own] = await ctx.db.select({ storeSlug: businesses.storeSlug })
+          .from(businesses)
+          .where(eq(businesses.id, ctx.businessId))
+          .limit(1);
+        if (checkStoreSlugReserved(input.slug, own?.storeSlug)) return { available: false, reserved: true };
+      }
       const [existing] = await ctx.db.select({ id: businesses.id })
         .from(businesses)
         .where(and(

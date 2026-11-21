@@ -46,3 +46,9 @@ export type { TdsHistoricalValidity, TdsTaxCode, TdsTaxCodeStatus } from "./tax-
 export { invoiceTaxableValue, normalizeMoneyInput, suggestTdsAmount } from "./tds.js";
 export type { SuggestTdsInput } from "./tds.js";
 export * from "./notifications/index.js";
+export {
+  RESERVED_STORE_SLUGS,
+  STORE_SLUG_RESERVED_MESSAGE,
+  isReservedStoreSlug,
+  checkStoreSlugReserved,
+} from "./store-slug.js";

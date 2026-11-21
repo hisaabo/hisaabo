@@ -16,6 +16,7 @@
  *   - Slug format is re-validated here (and by the table CHECK).
  */
 import { sql } from "drizzle-orm";
+import { isReservedStoreSlug } from "@hisaabo/shared";
 import { controlDb, STORE_SLUG_MARKER_KEY, fallbackSlug, FALLBACK_SLUG_MAX_ATTEMPTS, storeSlugBusinessLockSql } from "@hisaabo/db";
 import { cacheBus } from "./cache/bus.js";
 import { logger } from "./logger.js";
@@ -74,6 +75,13 @@ export async function resolveSlug(slug: string): Promise<ResolvedSlug | null> {
      LIMIT 1`);
   const r = rows[0];
   return r ? { tenantId: r.tenant_id, businessId: r.business_id, storeEnabled: r.store_enabled } : null;
+}
+
+/** Does `tenantId` already hold `slug` live (any of its businesses)? */
+async function holdsLiveSlug(tenantId: string, slug: string): Promise<boolean> {
+  const rows = await controlDb.execute(sql`
+    SELECT 1 FROM store_slugs WHERE slug = ${slug} AND tenant_id = ${tenantId} AND released_at IS NULL LIMIT 1`);
+  return rows.length > 0;
 }
 
 /** Has the run-once backfill completed (marker row present)? */
@@ -235,7 +243,7 @@ export interface ImportedBusinessSlug {
 
 export type ImportRegistration =
   | { businessId: string; slug: string; status: "registered" }
-  | { businessId: string; slug: string; status: "conflict" }
+  | { businessId: string; slug: string; status: "conflict"; reserved?: true }
   | { businessId: string; slug: string; status: "error" };
 
 /**
@@ -243,6 +251,8 @@ export type ImportRegistration =
  * business ids/slugs come from an untrusted backup file, but they can only
  * ever create/refresh rows owned by `tenantId`; a slug owned by anyone else
  * (or held <30 days by another tenant) yields "conflict" and nothing changes.
+ * So does a reserved platform slug (`reserved: true`), unless this tenant already
+ * holds it live (grandfathered: restoring its own backup must not rename it).
  * Each business gets its own control transaction.
  */
 export async function registerImportedSlugs(
@@ -258,6 +268,20 @@ export async function registerImportedSlugs(
       if (!SLUG_RE.test(slug)) {
         out.push({ businessId: r.id, slug, status: "conflict" });
         continue;
+      }
+      if (isReservedStoreSlug(slug)) {
+        let grandfathered = false;
+        try {
+          grandfathered = await holdsLiveSlug(tenantId, slug);
+        } catch (err) {
+          logger.error({ err, tenantId, businessId: r.id }, "self-import: reserved-slug check failed");
+          out.push({ businessId: r.id, slug, status: "error" });
+          continue;
+        }
+        if (!grandfathered) {
+          out.push({ businessId: r.id, slug, status: "conflict", reserved: true });
+          continue;
+        }
       }
       try {
         await controlDb.transaction(async (tx) => {
