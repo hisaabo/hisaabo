@@ -12,6 +12,7 @@ import {
   createInvoice,
   createExpense,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 
@@ -22,7 +23,7 @@ test.beforeAll(async () => {
 test.describe("Delete Confirmation Flows", () => {
   test("delete expense shows confirmation dialog", async ({ page }) => {
     // Seed an expense
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     await createExpense(api, businessId, {
       category: `Delete Test ${Date.now()}`,
       amount: "100.00",
@@ -50,7 +51,7 @@ test.describe("Delete Confirmation Flows", () => {
   });
 
   test("cancel on delete dialog does not delete expense", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     await createExpense(api, businessId, {
       category: `Cancel Delete ${Date.now()}`,
       amount: "200.00",
@@ -84,7 +85,7 @@ test.describe("Delete Confirmation Flows", () => {
   });
 
   test("confirming delete removes expense from list", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const uniqueCategory = `Confirm Delete ${Date.now()}`;
     await createExpense(api, businessId, {
       category: uniqueCategory,
@@ -121,7 +122,7 @@ test.describe("Delete Confirmation Flows", () => {
   });
 
   test("draft invoice row shows delete action on hover", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
 
     // Seed party + item + invoice
     const party = await createParty(api, businessId, { name: `Del Inv Party ${Date.now()}` });

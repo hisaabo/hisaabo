@@ -11,6 +11,7 @@
 import { test, expect, waitForPageReady, waitForSearchResults } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createExpense } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 
@@ -139,7 +140,7 @@ test.describe("Expenses — Delete", () => {
 
   test("confirming delete removes expense from list", async ({ page }) => {
     // Seed a dedicated expense so the deletion is deterministic
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const _seeded = await createExpense(api, businessId, {
       category: "DeleteMe Category",
       description: "To be deleted",

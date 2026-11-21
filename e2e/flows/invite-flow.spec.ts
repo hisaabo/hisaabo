@@ -8,6 +8,18 @@
  *   - Invite accept page works for a new user
  */
 import { test, expect } from "../helpers/fixtures";
+import { SeedApi } from "../helpers/seed";
+
+/** Invitations this file creates; revoked afterwards so they do not count against the plan's member limit for specs that run later on the same worker. */
+const createdInviteEmails: string[] = [];
+
+test.afterAll(async () => {
+  const api = new SeedApi();
+  const pending = await api.query<Array<{ id: string; email: string }>>("tenant.pendingInvitations");
+  for (const inv of pending.filter((p) => createdInviteEmails.includes(p.email))) {
+    await api.mutate("tenant.revokeInvitation", { invitationId: inv.id });
+  }
+});
 
 test.describe("Invite Flow — Team Tab", () => {
   test("owner can navigate to Settings > Team tab", async ({ page }) => {
@@ -57,6 +69,7 @@ test.describe("Invite Flow — Team Tab", () => {
 
     // Fill email
     const inviteEmail = `invited-${Date.now()}@test.hisaabo.in`;
+    createdInviteEmails.push(inviteEmail);
     await modal.getByPlaceholder("colleague@example.com").fill(inviteEmail);
 
     // Submit

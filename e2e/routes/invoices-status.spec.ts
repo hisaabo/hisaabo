@@ -21,6 +21,7 @@ import {
   createInvoice,
   updateInvoiceStatus,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyId: string;
@@ -42,7 +43,7 @@ async function seedAndOpenInvoice(
   status?: string,
 ): Promise<{ invoiceId: string; panel: any }> {
   const { ApiHelper } = await import("../helpers/fixtures");
-  const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+  const api = new ApiHelper(page, apiUrl());
   const invoice = await createInvoice(api, businessId, partyId, itemId);
   if (status && status !== "draft") {
     await updateInvoiceStatus(api, businessId, invoice.id, status);
@@ -205,7 +206,7 @@ test.describe("Invoice Status — Cancelled", () => {
 
 test.describe("Invoice Table Row Actions", () => {
   test("draft invoice row shows delete button on hover", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto("/invoices");

@@ -8,6 +8,7 @@
  */
 import { test as base, expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 import { settle } from "./settle";
+import { apiUrl, baseUrl, ownerStorageStatePath } from "./worker";
 
 export { settle };
 export type { Page };
@@ -45,7 +46,8 @@ export async function stubThirdParty(context: BrowserContext): Promise<void> {
 
 /** `browser.newContext()` with the third-party stubs applied. */
 export async function newContext(browser: Browser, options?: BrowserContextOptions): Promise<BrowserContext> {
-  const context = await browser.newContext(options);
+  // baseURL explicitly: contexts made from hooks (beforeAll) would otherwise get the config's, i.e. worker 0's.
+  const context = await browser.newContext({ baseURL: baseUrl(), ...options });
   await stubThirdParty(context);
   return context;
 }
@@ -129,9 +131,15 @@ export const test = base.extend<{
     await stubThirdParty(context);
     await use(context);
   },
+  // Every worker has its own web server, API and owner session (see worker.ts).
+  baseURL: async ({}, use, testInfo) => {
+    await use(baseUrl(testInfo.parallelIndex));
+  },
+  storageState: async ({}, use, testInfo) => {
+    await use(ownerStorageStatePath(testInfo.parallelIndex));
+  },
   api: async ({ page }, use) => {
-    const baseUrl = process.env.API_URL ?? "http://localhost:3000";
-    const api = new ApiHelper(page, baseUrl);
+    const api = new ApiHelper(page, apiUrl());
     await use(api);
   },
 });

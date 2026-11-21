@@ -13,8 +13,9 @@
  */
 import { test, expect, ApiHelper, newContext, settle } from "../helpers/fixtures";
 import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
+import { apiUrl, ownerStorageStatePath } from "../helpers/worker";
 
-const API_URL = process.env.API_URL ?? "http://localhost:3000";
+const API_URL = apiUrl();
 
 /** Nav items that each role should see in the sidebar */
 const ROLE_NAV_VISIBLE: Record<string, string[]> = {
@@ -73,10 +74,13 @@ async function createRoleUser(
   const password = "Test@1234!";
   const name = `E2E ${role} User`;
 
-  // Clean up any stale pending invitations to stay within plan limits
-  const pending = await api.query<Array<{ id: string }>>("tenant.pendingInvitations");
-  for (const inv of pending) {
-    await api.mutate("tenant.revokeInvitation", { id: inv.id }).catch(() => {});
+  // Clean up stale pending invitations left by earlier runs of THIS spec to stay
+  // within plan limits. Only our own (e2e-seller-* / e2e-accountant-*): other
+  // specs' invitations (invite-flow) are theirs to manage, not ours to revoke.
+  const pending = await api.query<Array<{ id: string; email: string }>>("tenant.pendingInvitations");
+  const ours = /^e2e-(seller|accountant)-\d+@test\.hisaabo\.in$/i;
+  for (const inv of pending.filter((p) => ours.test(p.email))) {
+    await api.mutate("tenant.revokeInvitation", { invitationId: inv.id });
   }
 
   // Step 1: Owner sends invite via API
@@ -131,7 +135,7 @@ test.describe("Role: Seller", () => {
   let roleCtx: any;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await newContext(browser, { storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: ownerStorageStatePath() });
     const ownerPage = await ownerCtx.newPage();
 
     const result = await createRoleUser(browser, ownerPage, "seller");
@@ -249,7 +253,7 @@ test.describe("Role: Accountant", () => {
   let setupFailed = false;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await newContext(browser, { storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: ownerStorageStatePath() });
     const ownerPage = await ownerCtx.newPage();
 
     try {

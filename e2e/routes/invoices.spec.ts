@@ -9,7 +9,7 @@
  */
 import { test, expect } from "../helpers/fixtures";
 import { InvoicesPage } from "../helpers/page-objects/invoices.page";
-import { loadSeed, SeedApi, createParty, createItem } from "../helpers/seed";
+import { loadSeed, SeedApi, createParty, createItem, createInvoice } from "../helpers/seed";
 
 // ── Shared state seeded once for the entire file ──────────────────
 let businessId: string;
@@ -20,12 +20,17 @@ test.beforeAll(async () => {
   const api = new SeedApi();
 
   // Seed a party and item for invoice creation tests
-  await createParty(api, businessId, { name: "Invoice Test Customer" });
-  await createItem(api, businessId, {
+  const party = await createParty(api, businessId, { name: "Invoice Test Customer" });
+  const item = await createItem(api, businessId, {
     name: "Invoice Test Product",
     salePrice: "1000.00",
     taxPercent: "18.00",
   });
+
+  // The row tests below need an invoice to exist. Workers have separate
+  // databases, so create one here rather than relying on whichever specs ran
+  // earlier on this worker (their skip conditions are unchanged).
+  await createInvoice(api, businessId, party.id, item.id);
 });
 
 // ═════════════════════════════════════════════════════════════════

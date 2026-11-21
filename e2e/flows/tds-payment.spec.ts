@@ -7,10 +7,11 @@ import {
   createParty,
   updateInvoiceStatus,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 const REGISTRY_CODE = "1024";
 const REGISTRY_LABEL = "Contract payment - contractor is other than individual or HUF";
-const API_URL = process.env.API_URL ?? "http://localhost:3000";
+const API_URL = apiUrl();
 
 async function watchBrowserHealth(page: Page) {
   const consoleErrors: string[] = [];

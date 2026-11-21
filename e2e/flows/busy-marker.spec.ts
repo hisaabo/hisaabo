@@ -89,7 +89,10 @@ test.describe("Busy marker / settle()", () => {
     await partyInput.click();
     await partyInput.fill(name);
     await settle(page);
-    await page.getByRole("option").filter({ hasText: /Create customer/i }).click();
+    const createRow = page.getByRole("option").filter({ hasText: /Create customer/i });
+    // Fail fast with a clear message instead of an unbounded click wait
+    await expect(createRow).toBeVisible({ timeout: 5_000 });
+    await createRow.click();
     const modal = page.getByRole("dialog").last();
     await modal.locator('input[type="tel"]').fill("9876543210");
     await modal.getByRole("button", { name: /Create & Select/i }).click();

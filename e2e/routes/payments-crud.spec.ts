@@ -18,6 +18,7 @@ import {
   createInvoice,
   updateInvoiceStatus,
 } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyId: string;
@@ -31,12 +32,18 @@ test.beforeAll(async () => {
   partyId = party.id;
   const item = await createItem(api, businessId, { name: "Payment Test Widget", salePrice: "1000.00" });
   itemId = item.id;
+
+  // "Payment Detail" below needs a payment to exist. Workers have separate
+  // databases, so create one here rather than relying on whichever specs ran
+  // earlier on this worker.
+  const invoice = await createInvoice(api, businessId, partyId, itemId);
+  await updateInvoiceStatus(api, businessId, invoice.id, "paid");
 });
 
 test.describe("Payments — Record Payment Panel", () => {
   test("Record Payment button on sent invoice opens payment panel", async ({ page }) => {
     // Seed a sent invoice
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 
@@ -59,7 +66,7 @@ test.describe("Payments — Record Payment Panel", () => {
   });
 
   test("payment panel shows pre-selected invoice with balance", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
     await updateInvoiceStatus(api, businessId, invoice.id, "sent");
 

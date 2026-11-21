@@ -9,6 +9,7 @@
 import fs from "fs";
 import path from "path";
 import postgres from "postgres";
+import { apiUrl, authDir, databaseUrl, ownerStorageStatePath } from "./worker";
 
 // ── Shared API interface ─────────────────────────────────────────
 
@@ -28,15 +29,13 @@ export interface GlobalSeed {
   itemName: string;
 }
 
-const SEED_FILE = path.join(__dirname, "../.auth/seed.json");
-const STORAGE_STATE_FILE = path.join(__dirname, "../.auth/user.json");
-
 /**
- * Load pre-seeded IDs written by global-setup.
+ * Load the ids seeded for the current worker by global-setup. Each worker has
+ * its own database, owner, business, party and item (see worker.ts).
  * Available after the setup project runs.
  */
-export function loadSeed(): GlobalSeed {
-  return JSON.parse(fs.readFileSync(SEED_FILE, "utf-8"));
+export function loadSeed(k?: number): GlobalSeed {
+  return JSON.parse(fs.readFileSync(path.join(authDir(k), "seed.json"), "utf-8"));
 }
 
 // ── Lightweight API for beforeAll seeding ────────────────────────
@@ -45,14 +44,15 @@ export function loadSeed(): GlobalSeed {
  * Lightweight tRPC API client that reads auth cookies from the
  * storageState file and uses native fetch — no browser needed.
  * Use in beforeAll blocks instead of spinning up a browser context.
+ * Talks to the current worker's API as the current worker's owner.
  */
 export class SeedApi implements ApiClient {
   private cookies: string;
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl ?? process.env.API_URL ?? "http://localhost:3000";
-    const storageState = JSON.parse(fs.readFileSync(STORAGE_STATE_FILE, "utf-8"));
+    this.baseUrl = baseUrl ?? apiUrl();
+    const storageState = JSON.parse(fs.readFileSync(ownerStorageStatePath(), "utf-8"));
     this.cookies = storageState.cookies
       .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
       .join("; ");
@@ -416,12 +416,11 @@ export async function registerUser(
  * Mark a user's email as verified directly in the control DB. Invitation
  * acceptance requires a verified email (normally proven by signing in with a
  * magic link, which needs an inbox), so e2e users registered through
- * auth.register are verified here. Uses DATABASE_URL (same DB as the API).
+ * auth.register are verified here. Uses the current worker's database (the same
+ * one its API serves).
  */
 export async function markEmailVerified(email: string): Promise<void> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is required to mark an e2e user's email as verified");
-  const sql = postgres(url, { max: 1 });
+  const sql = postgres(databaseUrl(), { max: 1 });
   try {
     await sql`update users set email_verified = true where lower(email) = ${email.toLowerCase()}`;
   } finally {

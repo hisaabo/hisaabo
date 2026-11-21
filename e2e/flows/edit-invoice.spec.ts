@@ -7,6 +7,7 @@
  */
 import { test, expect, ApiHelper } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createParty, createItem, createInvoice } from "../helpers/seed";
+import { apiUrl } from "../helpers/worker";
 
 let businessId: string;
 let partyId: string;
@@ -30,7 +31,7 @@ test.beforeAll(async () => {
 
 test.describe("Edit Invoice Flow", () => {
   test("draft invoice detail panel shows invoice number and draft status", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     // Open detail panel via URL query param
@@ -47,7 +48,7 @@ test.describe("Edit Invoice Flow", () => {
   });
 
   test("edit button on draft invoice opens creator pre-filled", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     // Open the invoice detail panel
@@ -70,7 +71,7 @@ test.describe("Edit Invoice Flow", () => {
   });
 
   test("edit creator shows party selector pre-filled", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);
@@ -93,7 +94,7 @@ test.describe("Edit Invoice Flow", () => {
   });
 
   test("closing the edit creator returns to the invoices list", async ({ page }) => {
-    const api = new ApiHelper(page, process.env.API_URL ?? "http://localhost:3000");
+    const api = new ApiHelper(page, apiUrl());
     const invoice = await createInvoice(api, businessId, partyId, itemId);
 
     await page.goto(`/invoices?id=${invoice.id}`);

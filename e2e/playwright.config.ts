@@ -1,8 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveWorkers } from "./harness/topology.cjs";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 const DEV = process.env.E2E_DEV === "1";
+
+// One worker per isolated stack (own database, API, web server and seeded owner):
+// min(4, floor(available memory / 1500MB)) unless E2E_WORKERS says otherwise,
+// 1 for the shared dev stack. Resolved once here and exported to the environment
+// so the stack supervisor, the workers and global-setup (which all load this
+// file or inherit its env) agree even if free memory changes meanwhile.
+const WORKERS = resolveWorkers();
+process.env.E2E_WORKERS = String(WORKERS);
 
 export default defineConfig({
   testDir: ".",
@@ -10,7 +19,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1,
+  workers: WORKERS,
   reporter: process.env.CI ? "github" : "list",
   timeout: 30_000,
   expect: { timeout: 10_000 },
@@ -28,7 +37,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        storageState: "e2e/.auth/user.json",
+        // storageState and baseURL are per worker: see helpers/fixtures.ts
       },
       dependencies: ["setup"],
     },
@@ -38,9 +47,10 @@ export default defineConfig({
 });
 
 /**
- * Default: one production build of the web app + API (built and started by
- * harness/stack.mjs). The web app is served statically with the same /api proxy
- * as the Vite dev server, so tests exercise the bundle that ships.
+ * Default: one production build of the web app + API (built by
+ * harness/stack.mjs), run once per worker against that worker's own database.
+ * The web app is served statically with the same /api proxy as the Vite dev
+ * server, so tests exercise the bundle that ships.
  */
 function prodStack() {
   return {
@@ -53,10 +63,7 @@ function prodStack() {
     stdout: "pipe" as const,
     stderr: "pipe" as const,
     gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
-    env: {
-      E2E_WEB_PORT: new URL(BASE_URL).port || "80",
-      E2E_API_PORT: new URL(API_URL).port || "80",
-    },
+    env: { E2E_WORKERS: String(WORKERS), BASE_URL, API_URL },
   };
 }
 
