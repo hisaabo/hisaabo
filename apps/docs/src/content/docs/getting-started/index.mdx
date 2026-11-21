@@ -115,7 +115,7 @@ Yes. Once installed on your server, Hisaabo runs entirely on your local network.
 Yes. Hisaabo supports importing parties, items, invoices, and payments from MyBillBook export files. See [Import Data](/getting-started/import-data) for the step-by-step process.
 
 **How is security handled?**
-Passwords are hashed with Argon2id. Sessions use HttpOnly, Secure, SameSite=Lax cookies with a 30-day expiry. The mobile app authenticates via Bearer token in the `Authorization` header (using the same session ID). The API applies rate limiting (120 requests per minute per IP). All requests require authentication except the online store's public-facing product listing.
+Sign-in is by an emailed magic link, with no password to remember. Older accounts that still have a password keep them hashed with Argon2id, but password sign-in is deprecated in 0.10.0 and will be removed in 0.11.0. Sessions use HttpOnly, Secure, SameSite=Lax cookies with a 30-day expiry. The mobile app authenticates via Bearer token in the `Authorization` header (using the same session ID). The API applies rate limiting (120 requests per minute per IP). All requests require authentication except the online store's public-facing product listing.
 
 **Does it support multiple users per business?**
 Yes. You can invite team members and assign them roles: Superadmin, Admin, Seller Manager, Seller, or Accountant. Each role has different permissions. See [Team & Roles](/team) for details.

@@ -39,12 +39,20 @@ NODE_ENV=production
 
 # ── App URL (used in magic link emails) ───────────────────────
 APP_URL=https://YOUR_DOMAIN
+# Public URL of the API (recommended). Used for absolute links such as UPI pay
+# links in PDFs. Leave empty and the API starts with a warning.
+API_PUBLIC_URL=https://YOUR_API_DOMAIN
+
+# ── Sign-up policy ────────────────────────────────────────────
+# The first person to sign in becomes the owner; after that sign-up is by
+# invitation only. Set to true to let anyone create an account.
+ALLOW_OPEN_SIGNUP=false
 
 # ── Field-Level Encryption (required) ────────────────────────
 # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ENCRYPTION_KEY=
 
-# ── Email (optional — magic links print to console if not set)
+# ── Email (required in production: sign-in links are sent by email)
 RESEND_API_KEY=
 EMAIL_FROM=Hisaabo <noreply@yourdomain.com>
 
@@ -77,7 +85,9 @@ Replace `YOUR_STRONG_PASSWORD` with a randomly generated password. You can gener
 | `APP_URL` | Yes | Full URL of your Hisaabo web frontend, including `https://`. Used in magic link emails. |
 | `ENCRYPTION_KEY` | Yes | AES-256-GCM key for encrypting sensitive data at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | `ENCRYPTION_KEY_PREVIOUS` | No | Set only during key rotation. Allows decryption with the old key while re-encrypting with the new one. Remove after rotation completes. |
-| `RESEND_API_KEY` | No | If set, magic link emails are sent via [Resend](https://resend.com). If not set, magic links are printed to the API container log. |
+| `API_PUBLIC_URL` | Recommended | Public `https://` URL of the API, used for absolute links such as UPI pay links in PDFs and store share metadata. If empty the API still starts and logs a warning; the links then fall back to the request origin or `APP_URL`, which is wrong when the API and the web app are on different hosts. |
+| `ALLOW_OPEN_SIGNUP` | No | Default `false`: the first person to sign in becomes the owner and everyone after that needs an invitation (Settings → Team). `true` lets anyone create an account. |
+| `RESEND_API_KEY` | Yes (production) | Sign-in links and invitations are emailed through [Resend](https://resend.com), and the API refuses to start with `NODE_ENV=production` without this key. With `NODE_ENV=development` the link is printed to the API container log instead. |
 | `EMAIL_FROM` | No | Sender name and address for email, for example `Hisaabo <noreply@yourdomain.com>`. |
 | `MULTI_TENANT` | No | Set to `true` only for a cloud SaaS deployment serving multiple unrelated organisations. Leave `false` for personal or single-business use. |
 | `TURNSTILE_SECRET_KEY` / `VITE_TURNSTILE_SITE_KEY` | No | Cloudflare Turnstile keys for bot protection on the online store. Get keys from the [Cloudflare dashboard](https://dash.cloudflare.com/). Leave blank to disable bot protection (fine for private installs). |
@@ -99,6 +109,8 @@ services:
       PORT: 3000
       CORS_ORIGINS: ${CORS_ORIGINS}
       APP_URL: ${APP_URL}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-}
+      ALLOW_OPEN_SIGNUP: ${ALLOW_OPEN_SIGNUP:-false}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
@@ -212,9 +224,19 @@ Set the `CORS_ORIGINS` environment variable on the API to include the URL where 
 
 ## Step 7: Create your account
 
-Open your web frontend URL in your browser. The first time you visit, you will see the registration page. Create an account with your email address and a password.
+Open your web frontend URL in your browser. Hisaabo signs you in with an emailed link, so there is no registration form and no password to choose:
+
+1. Enter your email address and press **Send magic link**.
+2. Open the email and click the link. It works once and expires after 15 minutes. If it has not arrived, check your spam folder or press **Didn't receive it? Send again**.
+3. The first person to sign in with a new email address on a fresh server gets an account automatically and becomes the owner.
+
+After that, sign-up is by invitation only: invite teammates from **Settings → Team**, or set `ALLOW_OPEN_SIGNUP=true` to let anyone create an account. On an invitation-only server the sign-in page says "Sign-in is by invitation on this server", and an address with no account or invitation is sent no email.
 
 After signing in, you will be prompted to [create your first business](/getting-started/create-business).
+
+:::note
+Because the link arrives by email, `RESEND_API_KEY` has to work before you can sign in for the first time. Older versions also offered a password sign-in; it still works for existing accounts but is deprecated in 0.10.0 and will be removed in 0.11.0.
+:::
 
 :::tip[All-in-one deployment with ONCE]
 If you prefer a single-container deployment, Hisaabo supports [Basecamp ONCE](https://once.com/) which bundles PostgreSQL and the API into one container. See [Self-Hosting Reference](/self-hosting) for details.
@@ -230,6 +252,10 @@ docker compose up -d
 ```
 
 The API container runs migrations automatically on each startup, so schema changes are applied without any manual steps.
+
+:::caution[Upgrading from v0.9.0?]
+Back up first and read the [upgrade guide](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md). Keep the same `ENCRYPTION_KEY`, and note that v0.10.0 makes self-hosted sign-up invite-only after the first owner (set `ALLOW_OPEN_SIGNUP=true` to keep open sign-up).
+:::
 
 ## Backing up your data
 
@@ -256,7 +282,7 @@ Set up a cron job to run the backup command daily and copy the files off the ser
 Check that `DATABASE_URL` in your `.env` uses `postgres` (the service name) as the hostname — not `localhost`. Inside the Docker network, `localhost` refers to the API container itself, not the PostgreSQL container.
 
 **Magic links are not arriving in email.**
-If `RESEND_API_KEY` is not set, magic links are printed to the API container log. Run `docker compose logs api | grep "magic"` to find the link. To send real emails, create a free account at [Resend](https://resend.com), add your sending domain, and set `RESEND_API_KEY` in your `.env`.
+Check that `RESEND_API_KEY` and `EMAIL_FROM` are set and that your sending domain is verified at [Resend](https://resend.com), then look for send errors with `docker compose logs api`. Also check that the address has an account or an invitation: on an invitation-only server no email is sent to anyone else. If email is broken and an account already exists, an operator can print a one-time sign-in link from the server: `docker compose exec api node packages/api/dist/bin/admin.js login-link you@example.com`. With `NODE_ENV=development` the link is printed to the API container log instead of being emailed.
 
 **How do I run Hisaabo on a local machine for testing?**
 Use the development `docker-compose.yml` that ships with the source code, which exposes PostgreSQL on port 5432 and does not require HTTPS. Run `docker compose up -d` from the repository root to start only PostgreSQL, then run `pnpm dev` to start the API and web servers locally.

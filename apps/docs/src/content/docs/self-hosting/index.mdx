@@ -38,14 +38,20 @@ The native mobile app (Android/iOS) and desktop app (macOS/Windows/Linux) are **
 | `CORS_ORIGINS` | Yes | — | Comma-separated allowed origins |
 | `NODE_ENV` | Yes | — | `production` or `development` |
 | `APP_URL` | Yes | — | Public URL of the app (used in magic link emails) |
+| `API_PUBLIC_URL` | Recommended | — | Public URL of the API, used for absolute links (UPI pay links in PDFs, store share metadata). If unset the API starts with a warning and falls back to the request origin or `APP_URL`; in production a value that is not a valid `http(s)` URL stops the API from starting |
+| `ALLOW_OPEN_SIGNUP` | No | `false` | Self-hosted only. By default only the first user can sign up and everyone else needs an invitation; `true` allows open sign-up |
 | `ENCRYPTION_KEY` | Yes | — | AES-256-GCM key (64-char hex) for field-level encryption. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ENCRYPTION_KEY_PREVIOUS` | No | — | Previous key for rotation — set temporarily, remove after all fields are re-encrypted |
-| `RESEND_API_KEY` | No | — | Resend API key for transactional email |
+| `RESEND_API_KEY` | Yes (production) | — | Resend API key for transactional email (sign-in links, invitations). The API refuses to start in production without it; in development links are printed to the console |
 | `EMAIL_FROM` | No | — | Sender name and address for emails |
 | `MULTI_TENANT` | No | `false` | Set `true` for cloud SaaS mode |
 | `CONTROL_DATABASE_URL` | No | — | Required only when `MULTI_TENANT=true` |
 | `TURNSTILE_SECRET_KEY` | No | — | Cloudflare Turnstile secret key for bot protection |
 | `VITE_TURNSTILE_SITE_KEY` | No | — | Cloudflare Turnstile site key (frontend) |
+
+This table lists the variables most installs set. The operator reference, with every variable and its default (notifications, push, storage, e-way bill credentials, the job queue and more), is [docs/DEPLOYMENT.md](https://github.com/hisaabo/hisaabo/blob/main/docs/DEPLOYMENT.md#environment-variables) in the repository.
+
+`NOTIFICATIONS_WORKER` deserves a note: on a single-tenant install the notification dispatcher runs by default, but when `MULTI_TENANT=true` it is off unless you set `NOTIFICATIONS_WORKER=true`.
 
 ## Database migrations
 
@@ -102,6 +108,8 @@ docker compose up -d
 ```
 
 Check the container logs after update to confirm migrations succeeded.
+
+Some releases need configuration changes as well as a new image. Upgrading from v0.9.0 to v0.10.0 does: read the [upgrade guide](https://github.com/hisaabo/hisaabo/blob/main/docs/UPGRADING.md) and back up first.
 
 ## Multi-tenancy (cloud SaaS mode)
 
@@ -173,7 +181,7 @@ Ensure `CORS_ORIGINS` includes the exact origin (scheme + domain + port) that yo
 
 ### Magic links are not being sent
 
-If `RESEND_API_KEY` is not set, magic links are logged to the console. Check `docker compose logs api | grep "magic"` to find the link.
+In production the API needs a working `RESEND_API_KEY` (it refuses to start without one) and a verified sending domain; check `docker compose logs api` for send errors. On an invitation-only server no link is sent to an address that has no account or invitation. If `NODE_ENV` is `development` and no key is set, links are logged to the console instead (`docker compose logs api | grep "magic"`).
 
 ### Database is running out of disk space
 
