@@ -6,7 +6,7 @@ Thanks for your interest in contributing. Hisaabo is an open-source invoicing ap
 
 ### Prerequisites
 
-- Node.js >= 20
+- Node.js >= 22.12
 - pnpm >= 9
 - Docker (for local PostgreSQL)
 - Git

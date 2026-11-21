@@ -8,8 +8,8 @@
 [![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-5628_passing-brightgreen)]()
-[![Node.js](https://img.shields.io/badge/Node.js-22_LTS-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Tests](https://img.shields.io/badge/tests-6567_passing-brightgreen)]()
+[![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Expo](https://img.shields.io/badge/Expo-55-000020?logo=expo&logoColor=white)](https://expo.dev/)
@@ -195,7 +195,7 @@ Hisaabo replaces this with structured access control:
 | **Business isolation** | Every API query scoped by `x-business-id`. Impossible to access another client's data by accident or intent. |
 | **No credential sharing** | Clients upload their own statements or create their own invoices. CAs access via their own role-based login. |
 | **Full audit trail** | Every write operation logged with user, timestamp, and before/after state. Every invoice, payment, and journal entry traceable to a specific person. |
-| **Session security** | HttpOnly + Secure + SameSite=Lax cookies. Argon2id password hashing. 30-day expiry. No JWTs. |
+| **Session security** | HttpOnly + Secure + SameSite=Lax cookies. Passwordless magic-link sign-in; legacy password sign-in (Argon2id hashes) is deprecated in 0.10.0 and removed in 0.11.0. 30-day expiry. No JWTs. |
 | **Team invitations** | Add articled clerks, managers, or clients with plan-based limits. Revoke access instantly. |
 
 This is what gets CAs to adopt. Not a better spreadsheet -- a system where access is controlled, actions are auditable, and no one needs to share a bank password ever again.
@@ -242,7 +242,7 @@ CSV import with pre-built templates for SBI, HDFC, ICICI, Axis, Kotak, PNB, BOB,
 
 ### Parties, Items, and Payments
 
-Customer and supplier management with GSTIN validation, per-party ledger, aging buckets, credit period and limit tracking. Real-time stock with low-stock alerts, unit conversion, item variants, HSN/SAC autocomplete, online store pricing. 9 payment modes, multi-invoice allocation, inter-account transfers, payment gateway integration with full charge/settlement/reversal traceability.
+Customer and supplier management with GSTIN validation, per-party ledger, aging buckets, credit period and limit tracking. Real-time stock with low-stock alerts, unit conversion, item variants, HSN/SAC autocomplete, online store pricing. 9 payment modes, multi-invoice allocation, TDS on customer receipts (the customer's withholding settles the invoice and posts to a TDS Receivable account), inter-account transfers, payment gateway integration with full charge/settlement/reversal traceability.
 
 ### Reports
 
@@ -316,9 +316,9 @@ Hisaabo is not a side project. It is production-hardened financial software.
 
 | Dimension | What is in place |
 |---|---|
-| **Testing** | 1,844 automated tests (unit + integration against real PostgreSQL) |
+| **Testing** | 6,500+ automated unit and integration tests (the integration tests run against real PostgreSQL), plus a Playwright end-to-end suite. See the Tests badge above for the current count |
 | **Logging** | Structured JSON logging (pino) with request-ID correlation across the full request lifecycle |
-| **Security** | CSRF protection, rate limiting (general + PDF-specific), session cookies with HttpOnly/Secure/SameSite=Lax, Argon2id password hashing |
+| **Security** | CSRF protection, rate limiting (general + PDF-specific), session cookies with HttpOnly/Secure/SameSite=Lax, Argon2id-hashed legacy passwords (password sign-in is deprecated in 0.10.0 and removed in 0.11.0; magic links are the sign-in path) |
 | **Data Integrity** | All money as NUMERIC(15,2), `FOR UPDATE` row locking on payment allocation, PostgreSQL NUMERIC arithmetic for stock (no JS floats) |
 | **Concurrency** | Semaphore-based PDF worker pool, atomic invoice number generation, bank balance updates inside transactions |
 | **Performance** | Partial indexes on soft-delete columns, composite indexes for dashboard aggregates, session cache with 60s TTL |
@@ -416,7 +416,7 @@ Three paths depending on what you want to do.
 
 ### 1. Self-host and own your data
 
-**Prerequisites:** Node.js 20.19+ (22 LTS recommended), pnpm 9+, Docker
+**Prerequisites:** Node.js 22.12+, pnpm 9+, Docker
 
 ```bash
 git clone https://github.com/hisaabo/hisaabo.git
@@ -442,15 +442,18 @@ pnpm dev
 | API | http://localhost:3000 |
 | Online store | http://localhost:5174 |
 
-The first account created on a fresh self-hosted server becomes the owner; after that sign-up is by invitation only unless you set `ALLOW_OPEN_SIGNUP=true`. The setup wizard creates your first business with a seeded Chart of Accounts.
+Open the web app, enter your email address and press **Send magic link**. There is no password to choose: the link signs you in, and the first sign-in with a new address creates the account. Without `RESEND_API_KEY` in development the API prints the link in its console (in production the API refuses to start without an email provider). The first account created on a fresh self-hosted server becomes the owner; after that sign-up is by invitation only unless you set `ALLOW_OPEN_SIGNUP=true`. The setup wizard creates your first business with a seeded Chart of Accounts.
 
 ### 2. Try the API immediately
 
+Sign in at the web app with your email address (you get a one-click link; there is no password), then create an API key under **Settings > API Keys** (API keys need a paid plan; on a self-hosted server the operator can [issue one from the server shell](docs/DEPLOYMENT.md#operator-issued-api-keys)). Call the API with it:
+
 ```bash
-curl -X POST https://api.hisaabo.in/api/trpc/auth.register \
-  -H "Content-Type: application/json" \
-  -d '{"json":{"email":"you@yourshop.in","name":"Your Name","password":"strongpass123","confirmPassword":"strongpass123"}}'
+curl "https://api.hisaabo.in/api/trpc/business.list" \
+  -H "Authorization: Bearer hisaabo_key_..."
 ```
+
+Business-scoped procedures also need an `x-business-id` header with a business id from that list.
 
 ### 3. Connect AI to your Hisaabo instance
 
@@ -497,7 +500,7 @@ hisaabo/
 
 | Tool | Version | Install |
 |---|---|---|
-| Node.js | >= 20.19 (22 LTS recommended) | [nodejs.org](https://nodejs.org/) |
+| Node.js | >= 22.12 | [nodejs.org](https://nodejs.org/) |
 | pnpm | >= 9 | `npm install -g pnpm` |
 | Docker | any | [docker.com](https://www.docker.com/) |
 | Rust + Cargo | stable | Required only for desktop builds |
@@ -551,8 +554,12 @@ pnpm --filter @hisaabo/store dev    # Online store only
 ### Testing
 
 ```bash
-# Run all tests (1,844 tests)
+# Run the API tests
 pnpm --filter @hisaabo/api test
+
+# Run every package's tests (CI runs this plus the Playwright suite: pnpm test:e2e).
+# The integration tests need PostgreSQL with the schema pushed (pnpm db:push), as in the setup above.
+pnpm test
 
 # Watch mode during development
 pnpm --filter @hisaabo/api test:watch
@@ -572,8 +579,8 @@ pnpm dev:mobile:android
 ### Docker Compose (production)
 
 ```bash
-cp .env.example .env  # Edit with production values
-docker compose -f docker-compose.prod.yml up -d
+cp .env.prod.example .env.prod  # Edit with production values
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 ```
 
 ### ONCE (all-in-one container)
@@ -618,10 +625,14 @@ Copy `.env.example` to `.env`. Key variables:
 | `PORT` | API server port | `3000` |
 | `CORS_ORIGINS` | Allowed origins (comma-separated) | `https://app.hisaabo.in` |
 | `APP_URL` | Frontend URL (for magic link emails) | `https://app.hisaabo.in` |
+| `API_PUBLIC_URL` | Public URL of the API, used for absolute links (recommended in production; the API starts with a warning if unset) | `https://api.hisaabo.in` |
 | `NODE_ENV` | Environment | `production` |
-| `RESEND_API_KEY` | Email sending (optional in dev) | |
+| `ENCRYPTION_KEY` | 64 hex characters; required in production and multi-tenant mode. Keep it unchanged across upgrades | |
+| `RESEND_API_KEY` | Email sending (optional in dev, required in production) | |
 | `MULTI_TENANT` | Enable multi-tenant cloud mode | `false` |
 | `LOG_LEVEL` | Logging level (debug/info/warn/error) | `info` |
+
+The full operator reference, with every variable and its default, is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables).
 
 ---
 
@@ -635,7 +646,7 @@ Everything listed in Features above is shipped and tested. The full accounting l
 
 - **PDF invoice OCR** -- Photograph a purchase bill, auto-extract line items, HSN codes, and amounts
 - **Account Aggregator integration** -- Consent-based automatic bank data pull (replacing CSV import)
-- **TDS management** -- TDS deduction tracking, Form 26AS reconciliation
+- **TDS management** -- Customer-receipt TDS shipped in 0.10.0; supplier-side TDS (payable) and Form 26AS reconciliation are next
 
 ### Future
 
@@ -668,7 +679,7 @@ Contributions are welcome. Before opening a PR:
 pnpm typecheck   # Must pass
 pnpm lint        # Must pass (oxlint --deny-warnings)
 pnpm build       # Must pass
-pnpm --filter @hisaabo/api test  # 1,844 tests must pass
+pnpm --filter @hisaabo/api test  # must pass
 ```
 
 Key guidelines:

@@ -4,7 +4,7 @@ The Hisaabo backend. A [Hono](https://hono.dev/) HTTP server with a [tRPC v11](h
 
 [![Hono](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
 [![tRPC](https://img.shields.io/badge/tRPC-v11-2596BE?logo=trpc&logoColor=white)](https://trpc.io/)
-[![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 
 ---
 
@@ -97,7 +97,7 @@ In cloud/SaaS mode (`MULTI_TENANT=true`), each tenant has its own database. The 
 
 ### Web app (cookie-based sessions)
 
-1. User logs in via password or magic link.
+1. User signs in with a magic link. (Password sign-in, `auth.login` / `auth.register`, still works but is deprecated in 0.10.0 and will be removed in 0.11.0.)
 2. API creates a session record in the control database with a 30-day expiry.
 3. API sets a `session_id` HttpOnly, Secure, SameSite=Lax cookie.
 4. Every request reads the `session_id` cookie, validates the session in the database (with in-memory LRU cache), and resolves the user.
@@ -170,8 +170,10 @@ Every mutation (create, update, delete) is logged via `logAudit()` in `src/lib/a
 | `PORT` | No | Server port (default: 3000) |
 | `CORS_ORIGINS` | Yes | Comma-separated allowed origins |
 | `APP_URL` | Yes | Frontend URL (for magic link emails) |
+| `API_PUBLIC_URL` | Recommended in production | Public URL of the API, used for absolute links. If unset the API starts with a warning and falls back to the request origin / `APP_URL` |
 | `NODE_ENV` | No | `development` or `production` |
-| `RESEND_API_KEY` | No | Resend API key for transactional email |
+| `ENCRYPTION_KEY` | Production and multi-tenant | 64 hex characters (AES-256-GCM key for sensitive fields). Keep it unchanged across upgrades |
+| `RESEND_API_KEY` | Production | Resend API key for transactional email (required in production; in development links print to the console) |
 | `EMAIL_FROM` | No | Sender address for emails |
 | `MULTI_TENANT` | No | Enable multi-tenant mode (default: `false`) |
 | `CONTROL_DATABASE_URL` | Multi-tenant only | Separate control database URL |
