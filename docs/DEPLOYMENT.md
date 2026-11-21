@@ -278,7 +278,16 @@ The Infra screen compares each database's migration tracking table (`drizzle.__d
 
 All personally identifiable data (tenant names and slugs, database names, user emails and names, connection hosts) is masked by default so output can be shared freely; add `--reveal` or press `p` in the live view to see real values.
 
-In multi-tenant deployments it queries each tenant database once (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+In multi-tenant deployments it queries each tenant database once per refresh (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+
+**Large multi-tenant installs (hundreds of tenants).** The dashboard shares Postgres' `max_connections` (100 by default) with the live API, so it is built never to hold a connection per tenant:
+
+- `--concurrency <n>` is the bound. At most `n` tenant connections plus one control connection are open at any moment (default `4 + 1`, hard cap 16). Each tenant connection is a single-connection pool that is closed as soon as that tenant has been read, so a refresh over 228 tenants peaks at 5 connections, not 229. Keep `n` well below `max_connections` minus what the API and workers use. The connections identify themselves as `application_name = 'hisaabo-admin'` in `pg_stat_activity`.
+- Every query has a server-side `statement_timeout` (15 s) and every connect a timeout (8 s); `--query-timeout <seconds>` changes the first. A tenant database that hangs or is unreachable is shown as unreachable and the refresh carries on instead of stalling.
+- Quitting (`q`, Ctrl-C), a crash or a signal closes every connection before the process exits.
+- Prefer `--via direct` (the default inside the API container). `--via docker` starts a `docker exec ... psql` process for every query, defaults to `--concurrency 2`, and is much slower on many tenants; it is bounded the same way (one short-lived connection per process, each with the same `statement_timeout`) but is meant for small installs. Run the dashboard inside the API container for a large cloud database.
+
+The refresh interval is counted from the end of the previous refresh and refreshes never overlap. If a pass over many tenants is long, raise `--interval` (or use `--interval 0` and press `r` when you need fresh numbers) rather than `--concurrency`.
 
 ### Break-glass sign-in (when email is not working)
 

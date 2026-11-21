@@ -25,8 +25,14 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { collectPlatformStats, type PlatformStats, type SqlRunner } from "../lib/admin/stats.js";
-import { DockerPsqlRunner, DirectRunner, parseEnvFile, defaultEnvFile } from "../lib/admin/runners.js";
+import {
+  collectPlatformStats, resolveConcurrency, MAX_CONCURRENCY,
+  type PlatformStats, type SqlRunner,
+} from "../lib/admin/stats.js";
+import {
+  DockerPsqlRunner, DirectRunner, parseEnvFile, defaultEnvFile,
+  DEFAULT_STATEMENT_TIMEOUT_MS, QUERY_TIMEOUT_GRACE_MS,
+} from "../lib/admin/runners.js";
 import { renderFrame, frameToString, type ViewState, type View } from "../lib/admin/screens.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { setColorEnabled, c } from "../lib/admin/tui.js";
@@ -54,7 +60,10 @@ interface Args {
   user: string | null;
   database: string | null;
   command: string[] | null;
-  concurrency: number;
+  /** null = pick the default for the transport (4 direct, 2 docker). */
+  concurrency: number | null;
+  /** Seconds a single query may run before its database is reported unreachable. */
+  queryTimeout: number;
   migrationsDir: string | null;
   help: boolean;
 }
@@ -79,7 +88,11 @@ OPTIONS
   --database <name>                Control database (default: POSTGRES_DB from env file, else hisaabo)
   --command "<prefix>"             Replace the docker compose prefix, e.g. "docker exec -i hisaabo-db"
   --interval <seconds>             Auto-refresh period (default: 30, 0 = manual only)
-  --concurrency <n>                Tenant databases queried in parallel (default: 4)
+  --concurrency <n>                Tenant databases queried in parallel (default: 4 direct, 2 docker; max ${MAX_CONCURRENCY}).
+                                   This is the connection bound: the dashboard holds at most <n> tenant
+                                   connections plus 1 control connection, never one per tenant.
+  --query-timeout <seconds>        Give up on a database that has not answered a query after this long
+                                   (default: ${DEFAULT_STATEMENT_TIMEOUT_MS / 1000}). It is shown as unreachable; the refresh carries on.
   --migrations-dir <dir>           Folder holding drizzle/, drizzle-control/, drizzle-tenant/ for drift
                                    detection (default: next to this build, then ./packages/db;
                                    HISAABO_MIGRATIONS_DIR is honoured too)
@@ -95,6 +108,13 @@ OPTIONS
   --color                          Force ANSI colours even when piping (FORCE_COLOR too)
   -h, --help                       Show this help
 
+LARGE MULTI-TENANT INSTALLS
+  Each refresh visits every tenant database. Use --via direct (run it inside hisaabo-api): it opens one
+  connection per tenant at a time, closes it straight away, and so never exceeds --concurrency + 1
+  connections however many tenants there are. --via docker starts a docker exec + psql process per query;
+  it is bounded the same way but is much slower on hundreds of tenants. Keep --concurrency well below
+  max_connections minus what the live API uses (default 100 on stock Postgres).
+
 KEYS (interactive)
   1 2 3 4 5   Overview / Tenants / Ops / Infra / Queues
   r           refresh now
@@ -107,7 +127,7 @@ function parseArgs(argv: string[]): Args {
   const a: Args = {
     via: "auto", once: false, json: false, interval: 30, width: null, color: true, forceColor: false, reveal: false, view: "overview",
     databaseUrl: null, envFile: null, composeFiles: [], service: "postgres", user: null, database: null,
-    command: null, concurrency: 4, migrationsDir: null, help: false,
+    command: null, concurrency: null, queryTimeout: DEFAULT_STATEMENT_TIMEOUT_MS / 1000, migrationsDir: null, help: false,
   };
   const next = (i: number, flag: string): string => {
     const v = argv[i + 1];
@@ -138,7 +158,13 @@ function parseArgs(argv: string[]): Args {
       case "--user": case "-U": a.user = next(i++, arg); break;
       case "--database": case "-d": a.database = next(i++, arg); break;
       case "--command": a.command = next(i++, arg).split(/\s+/).filter(Boolean); break;
-      case "--concurrency": a.concurrency = Math.max(1, Number(next(i++, arg)) || 1); break;
+      case "--concurrency": {
+        const n = Math.max(1, Math.floor(Number(next(i++, arg)) || 1));
+        if (n > MAX_CONCURRENCY) process.stderr.write(`hisaabo admin: --concurrency capped at ${MAX_CONCURRENCY} (each one is a database connection)\n`);
+        a.concurrency = Math.min(MAX_CONCURRENCY, n);
+        break;
+      }
+      case "--query-timeout": a.queryTimeout = Math.max(1, Number(next(i++, arg)) || DEFAULT_STATEMENT_TIMEOUT_MS / 1000); break;
       case "--migrations-dir": a.migrationsDir = next(i++, arg); break;
       case "-h": case "--help": a.help = true; break;
       default:
@@ -151,12 +177,22 @@ function parseArgs(argv: string[]): Args {
 
 // ── Wiring ──────────────────────────────────────────────────────
 
-function buildRunner(a: Args): SqlRunner {
+interface Built {
+  runner: SqlRunner;
+  /** Tenant databases queried in parallel: --concurrency, else the transport's default. */
+  concurrency: number;
+  /** Client-side per-query deadline (statement_timeout + grace). */
+  queryTimeoutMs: number;
+}
+
+function buildRunner(a: Args): Built {
   const url = a.databaseUrl ?? process.env.CONTROL_DATABASE_URL ?? process.env.DATABASE_URL ?? null;
   const via = a.via === "auto" ? (url ? "direct" : "docker") : a.via;
+  const statementTimeoutMs = Math.round(a.queryTimeout * 1000);
+  const queryTimeoutMs = statementTimeoutMs + QUERY_TIMEOUT_GRACE_MS;
   if (via === "direct") {
     if (!url) throw new Error("--via direct needs DATABASE_URL (or --database-url)");
-    return new DirectRunner(url);
+    return { runner: new DirectRunner(url, { statementTimeoutMs }), concurrency: resolveConcurrency(a.concurrency, "direct"), queryTimeoutMs };
   }
   const cwd = process.cwd();
   const envFile = a.envFile ?? defaultEnvFile(cwd);
@@ -168,14 +204,44 @@ function buildRunner(a: Args): SqlRunner {
       throw new Error(`cannot read env file ${envFile}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return new DockerPsqlRunner({
+  const runner = new DockerPsqlRunner({
     composeFiles: a.composeFiles.length ? a.composeFiles : ["docker-compose.yml"],
     envFile,
     service: a.service,
     user: a.user ?? process.env.PGUSER ?? fileEnv.POSTGRES_USER ?? "hisaabo",
     database: a.database ?? process.env.PGDATABASE ?? fileEnv.POSTGRES_DB ?? "hisaabo",
     command: a.command ?? undefined,
+    statementTimeoutMs,
+    timeoutMs: queryTimeoutMs,
   });
+  return { runner, concurrency: resolveConcurrency(a.concurrency, "docker"), queryTimeoutMs };
+}
+
+// ── Shutdown ────────────────────────────────────────────────────
+
+let activeRunner: SqlRunner | null = null;
+/** Interactive mode registers this to leave the alternate screen if we die abnormally. */
+let restoreTerminal: (() => void) | null = null;
+
+/** Close the runner's connections; bounded so quitting can never hang on a dead database. */
+async function closeActiveRunner(): Promise<void> {
+  const r = activeRunner;
+  activeRunner = null;
+  if (!r) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    r.close().catch(() => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, 8_000); }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
+/** Last-resort exit: put the terminal back, say why, close every pool, exit non-zero. */
+async function fatal(e: unknown): Promise<never> {
+  try { restoreTerminal?.(); } catch { /* ignore */ }
+  process.stderr.write(`hisaabo admin: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
+  await closeActiveRunner();
+  process.exit(1);
 }
 
 // ── Interactive loop ────────────────────────────────────────────
@@ -298,8 +364,13 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
   out.on("resize", draw);
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
+  process.on("SIGHUP", () => void shutdown()); // terminal window closed
 
   out.write(ALT_ON + CURSOR_HIDE + CLEAR);
+  restoreTerminal = () => {
+    try { if (inp.isTTY) inp.setRawMode(false); } catch { /* ignore */ }
+    out.write(CURSOR_SHOW + ALT_OFF);
+  };
   const tick = setInterval(draw, 1000);
   draw();
   await refresh();
@@ -335,26 +406,36 @@ async function main(): Promise<void> {
   else setColorEnabled(Boolean(process.stdout.isTTY));
 
   const { version, commit } = buildInfo;
-  let runner: SqlRunner | null = null;
   let collect: () => Promise<PlatformStats>;
   let runnerLabel: (masked: boolean) => string;
   if (a.via === "demo") {
     collect = async () => buildDemoStats(new Date());
     runnerLabel = () => "demo data";
   } else {
-    runner = buildRunner(a);
-    const r = runner;
+    const built = buildRunner(a);
+    const r = built.runner;
+    activeRunner = r;
     const journals = loadJournals({
       here: path.dirname(fileURLToPath(import.meta.url)),
       cwd: process.cwd(),
       override: a.migrationsDir ?? process.env.HISAABO_MIGRATIONS_DIR ?? null,
     });
-    collect = () => collectPlatformStats({ runner: r, concurrency: a.concurrency, journals });
+    collect = () => collectPlatformStats({ runner: r, concurrency: built.concurrency, queryTimeoutMs: built.queryTimeoutMs, journals });
     runnerLabel = (masked) => r.describe(!masked);
   }
-  const close = async () => { if (runner) await runner.close(); };
+  const close = closeActiveRunner;
+
+  // Every exit path closes the pools: errors and signals here, `q`/Ctrl-C in runInteractive's shutdown().
+  process.on("uncaughtException", (e) => void fatal(e));
+  process.on("unhandledRejection", (e) => void fatal(e));
 
   const interactive = !a.once && !a.json && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
+  if (!interactive) {
+    const stop = (code: number) => () => { void closeActiveRunner().finally(() => process.exit(code)); };
+    process.once("SIGINT", stop(130));
+    process.once("SIGTERM", stop(143));
+    process.once("SIGHUP", stop(129));
+  }
   if (interactive) {
     await runInteractive(collect, close, a, runnerLabel, version, commit);
     return;
@@ -381,7 +462,4 @@ async function main(): Promise<void> {
   await close();
 }
 
-main().catch((e) => {
-  process.stderr.write(`hisaabo admin: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
-  process.exit(1);
-});
+main().catch((e) => void fatal(e));
