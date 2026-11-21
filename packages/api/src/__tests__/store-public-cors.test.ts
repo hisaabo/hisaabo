@@ -11,6 +11,8 @@
  * NO database, NO tRPC.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { createApiCors, createApiSecureHeaders, isPublicStoreReadRequest } from "../lib/cors.js";
 import { LOGO_SAFE_HEADERS, PUBLIC_IMAGE_SAFE_HEADERS } from "../lib/logo-response.js";
@@ -124,7 +126,22 @@ describe("public store reads: Access-Control-Allow-Origin * and no credentials",
     expect(res.headers.get("access-control-allow-credentials")).toBeNull();
     expect(res.headers.get("access-control-allow-methods")).toBe("GET,HEAD,OPTIONS");
     expect(res.headers.get("access-control-allow-methods")).not.toMatch(/POST/);
+    expect(res.headers.get("access-control-allow-headers")).toBe("Content-Type,If-None-Match");
     expect(varyTokens(res)).not.toContain("origin");
+  });
+
+  it("preflight never echoes requested headers: Authorization / x-business-id are not granted", async () => {
+    const res = await req(buildApp(), "OPTIONS", "/store/acme/catalog.json", EVIL, {
+      "Access-Control-Request-Method": "GET",
+      "Access-Control-Request-Headers": "authorization,x-business-id",
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    const allowed = (res.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+    expect(allowed).not.toContain("authorization");
+    expect(allowed).not.toContain("x-business-id");
+    expect(allowed).toBe("content-type,if-none-match");
+    expect(res.headers.get("access-control-allow-credentials")).toBeNull();
   });
 
   it("a listed origin gets the wildcard here, never an echoed origin", async () => {
@@ -239,6 +256,15 @@ describe("Cross-Origin-Resource-Policy on the wire", () => {
 });
 
 describe("isPublicStoreReadRequest", () => {
+  it("compares the method exactly: a lower-case method is not a public read (falls to the credentialed policy)", () => {
+    // Hono's cors() tests `=== "OPTIONS"` exactly; folding case here could make
+    // the two disagree. (Request normalises standard methods, so this only
+    // matters for direct callers.)
+    for (const m of ["get", "head", "options", "Get", "Options"]) {
+      expect(isPublicStoreReadRequest(m, "/store/acme/catalog.json"), m).toBe(false);
+    }
+  });
+
   it("matches exactly the five public read endpoints, on safe methods", () => {
     for (const p of [
       "/store/acme/catalog.json",
@@ -284,6 +310,66 @@ describe("isPublicStoreReadRequest", () => {
       "/acme/catalog.json",
     ]) {
       expect(isPublicStoreReadRequest("GET", p), p).toBe(false);
+    }
+  });
+});
+
+/**
+ * Route-drift guard. server.ts starts listening on import, so the route table
+ * cannot be inspected at run time; instead scan its source for the routes
+ * registered under /store/ and check them against the matcher. A new GET
+ * endpoint under /store/ must NOT silently become (or stay out of) the public
+ * cross-origin policy: this fails until the allow-list in lib/cors.ts and the
+ * list below are updated together, on purpose.
+ */
+describe("route drift guard (static scan of server.ts)", () => {
+  const source = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
+
+  // The only GET endpoints that may be public + cross-origin readable.
+  const EXPECTED_PUBLIC_GETS = [
+    "/store/:slug/catalog.json",
+    "/store/:slug/items/:itemId/images/:imageId",
+    "/store/:slug/logo",
+    "/store/:slug/meta.json",
+    "/store/:slug/og.png",
+  ];
+
+  const SAMPLES: Record<string, string> = { slug: "acme", itemId: "item1", imageId: "img1" };
+  const sample = (routePath: string) =>
+    routePath.replace(/:([A-Za-z]\w*)/g, (_, name: string) => SAMPLES[name] ?? "x1").replace(/\*/g, "x1");
+
+  const storeRoutes = [
+    ...source.matchAll(/\bapp\.(get|post|put|patch|delete|all)\(\s*"(\/store(?:\/[^"]*)?)"/g),
+  ].map((m) => ({ method: m[1]!, path: m[2]! }));
+
+  it("the scan understands how server.ts registers routes (else this guard is blind)", () => {
+    // Forms the regex cannot see: dynamic paths, app.on(), sub-apps via route()/mount().
+    expect(source).not.toMatch(/\bapp\.(get|post|put|patch|delete|all)\(\s*(?!["\s])/);
+    expect(source).not.toMatch(/\bapp\.(on|route|mount|basePath)\(/);
+    // Sanity: it finds known routes of each kind.
+    const found = storeRoutes.map((r) => `${r.method} ${r.path}`);
+    expect(found).toContain("get /store/:slug");
+    expect(found).toContain("post /store/:slug/order");
+    for (const p of EXPECTED_PUBLIC_GETS) expect(found, p).toContain(`get ${p}`);
+  });
+
+  it("exactly the five expected GET routes under /store/ get the public policy", () => {
+    const getLike = storeRoutes.filter((r) => r.method === "get" || r.method === "all");
+    const isPublic = (path: string) => isPublicStoreReadRequest("GET", sample(path));
+    expect(getLike.filter((r) => isPublic(r.path)).map((r) => r.path).sort()).toEqual(
+      [...EXPECTED_PUBLIC_GETS].sort(),
+    );
+    // Every other registered GET (e.g. the /store/:slug HTML shell) is credentialed.
+    for (const r of getLike.filter((r) => !EXPECTED_PUBLIC_GETS.includes(r.path))) {
+      expect(isPublic(r.path), r.path).toBe(false);
+    }
+  });
+
+  it("no state-changing store route is ever matched, whatever its path", () => {
+    const writes = storeRoutes.filter((r) => r.method !== "get");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const r of writes) {
+      expect(isPublicStoreReadRequest(r.method.toUpperCase(), sample(r.path)), `${r.method} ${r.path}`).toBe(false);
     }
   });
 });

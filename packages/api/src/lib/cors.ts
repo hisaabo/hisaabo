@@ -44,16 +44,25 @@ import { secureHeaders } from "hono/secure-headers";
 const PUBLIC_STORE_READ_PATH =
   /^\/store\/[^/]+\/(?:catalog\.json|meta\.json|logo|og\.png|items\/[^/]+\/images\/[^/]+)$/;
 
-/** Safe methods only; a POST/PUT/etc. to these paths never gets the public policy. */
+/**
+ * Safe methods only; a POST/PUT/etc. to these paths never gets the public
+ * policy. The comparison is exact (no case folding), like Hono's own
+ * `=== "OPTIONS"` preflight check inside `cors()`, so the two can never
+ * disagree about whether a request is a preflight. (The Fetch API already
+ * normalises GET/HEAD/OPTIONS to upper case.)
+ */
 export function isPublicStoreReadRequest(method: string, path: string): boolean {
-  const m = method.toUpperCase();
-  return (m === "GET" || m === "HEAD" || m === "OPTIONS") && PUBLIC_STORE_READ_PATH.test(path);
+  return (method === "GET" || method === "HEAD" || method === "OPTIONS") && PUBLIC_STORE_READ_PATH.test(path);
 }
 
 const publicStoreCors = cors({
   origin: "*",
   // No `credentials`: `*` plus credentials is invalid and would be unsafe.
   allowMethods: ["GET", "HEAD", "OPTIONS"],
+  // Pinned, not reflected from Access-Control-Request-Headers: a preflight must
+  // not be able to ask for (and be granted) Authorization, x-business-id, etc.
+  // These are the only non-safelisted headers a read-only client needs.
+  allowHeaders: ["Content-Type", "If-None-Match"],
   maxAge: 86400,
 });
 

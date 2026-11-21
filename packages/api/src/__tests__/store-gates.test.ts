@@ -117,7 +117,7 @@ describe("serveBusinessLogo Cross-Origin-Resource-Policy", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const corp = (r: Response) => r.headers.get("cross-origin-resource-policy");
 
-  it("the authenticated default stays same-site; only the public store call opts into cross-origin", async () => {
+  it("the helper's default stays same-site; only the public store call opts into cross-origin", async () => {
     const logoUpdatedAt = new Date();
     await db()
       .update(businesses)
@@ -125,7 +125,10 @@ describe("serveBusinessLogo Cross-Origin-Resource-Policy", () => {
       .where(where());
     const etag = `"${logoUpdatedAt.getTime()}"`;
 
-    // Default (authenticated /api/businesses/:id/logo): unchanged.
+    // Handler-level values only. On the wire CORP is decided by the
+    // secureHeaders middleware (createApiSecureHeaders), which overwrites it;
+    // store-public-cors.test.ts covers that. This pins that the shared default
+    // used by the authenticated /api/businesses/:id/logo route was not flipped.
     expect(corp(await serveBusinessLogo(db(), where(), undefined, "private"))).toBe("same-site");
     expect(corp(await serveBusinessLogo(db(), where(), etag, "private"))).toBe("same-site");
 

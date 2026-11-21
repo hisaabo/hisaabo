@@ -22,6 +22,14 @@ export const EMPTY_PNG = Buffer.from(
 
 // `nosniff` + strict CSP so a browser never sniffs the bytes as HTML/JS even if
 // something slipped past the magic-byte check at upload time.
+//
+// NOTE on `Cross-Origin-Resource-Policy`: the value set here is NOT what clients
+// see. Hono's `secureHeaders()` writes CORP after the handler returns and
+// overwrites it, so the secure-headers middleware (`createApiSecureHeaders` in
+// lib/cors.ts) is authoritative for CORP on the wire: `same-origin` for the
+// authenticated /api routes, `cross-origin` for the public store reads. The
+// value here only documents the handler's intent and keeps the helper's output
+// consistent when it is used without that middleware.
 export const LOGO_SAFE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'none'",
@@ -32,7 +40,9 @@ export const LOGO_SAFE_HEADERS = {
  * Same as LOGO_SAFE_HEADERS but embeddable from any site. Only for the public
  * storefront routes (/store/:slug/logo, /store/:slug/items/.../images/...),
  * whose bytes are public by design. The authenticated /api routes keep
- * LOGO_SAFE_HEADERS.
+ * LOGO_SAFE_HEADERS. As with LOGO_SAFE_HEADERS, the CORP on the wire is decided
+ * by `createApiSecureHeaders` (lib/cors.ts), which overwrites this value; keep
+ * the two in agreement.
  */
 export const PUBLIC_IMAGE_SAFE_HEADERS = {
   ...LOGO_SAFE_HEADERS,

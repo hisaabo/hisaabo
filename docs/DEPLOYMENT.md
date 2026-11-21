@@ -148,6 +148,8 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `HISAABO_LOG_STDERR` | No | `1` sends log lines to stderr instead of stdout. The `admin api-key` command sets it itself so that stdout carries only the key block; set it when you capture the stdout of another operator command in a script. Not needed for the API or the worker | `1` |
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
+When the online store is enabled for a business, its public catalog (including the business phone, email and address) can be read by any website a visitor's browser loads, so an intranet-only self-hosted install must not treat network position as protection for store data.
+
 ### GitHub Actions Secrets
 
 | Secret | Used by | Description |
