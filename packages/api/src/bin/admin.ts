@@ -37,7 +37,7 @@ import { renderFrame, frameToString, type ViewState, type View } from "../lib/ad
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { setColorEnabled, c } from "../lib/admin/tui.js";
 import { splitKeys } from "../lib/admin/keys.js";
-import { maskStats } from "../lib/admin/privacy.js";
+import { maskStats, maskErrorText } from "../lib/admin/privacy.js";
 import { loadJournals } from "../lib/admin/migrations.js";
 import { buildInfo } from "../lib/build-info.js";
 
@@ -98,9 +98,10 @@ OPTIONS
                                    HISAABO_MIGRATIONS_DIR is honoured too)
   --view <overview|tenants|ops|infra|queues>
                                    Initial view (default: overview)
-  --reveal                         Show real tenant names, slugs, emails and hosts. By default all
-                                   PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
-                                   and --json output are safe to share.
+  --reveal                         Show real tenant names, slugs, emails and database hosts/ports. By
+                                   default all of it is masked (Tenant 3f9a2c, pr•••@sh••••.in,
+                                   db-host-3f9a2c:•••), including inside error messages, so
+                                   screenshots and --json output are safe to share.
   --once                           Print one snapshot and exit (implied when stdout is not a TTY)
   --json                           Print the raw statistics as JSON and exit
   --width <cols>                   Column width for --once output (default: terminal width or 120)
@@ -220,6 +221,10 @@ function buildRunner(a: Args): Built {
 // ── Shutdown ────────────────────────────────────────────────────
 
 let activeRunner: SqlRunner | null = null;
+/** --reveal: show real hosts in errors written to stderr. Off by default, like everywhere else. */
+let revealErrors = false;
+/** An error message safe to print: connection details (host, port, db user) stripped unless --reveal. */
+const shown = (msg: string): string => (revealErrors ? msg : maskErrorText(msg));
 /** Interactive mode registers this to leave the alternate screen if we die abnormally. */
 let restoreTerminal: (() => void) | null = null;
 
@@ -239,7 +244,10 @@ async function closeActiveRunner(): Promise<void> {
 /** Last-resort exit: put the terminal back, say why, close every pool, exit non-zero. */
 async function fatal(e: unknown): Promise<never> {
   try { restoreTerminal?.(); } catch { /* ignore */ }
-  process.stderr.write(`hisaabo admin: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
+  // A stack trace's file:line:col frames are not connection details, but the message can be:
+  // mask the message and drop the trace unless the operator asked to --reveal.
+  const text = revealErrors ? (e instanceof Error ? e.stack ?? e.message : String(e)) : shown(e instanceof Error ? e.message : String(e));
+  process.stderr.write(`hisaabo admin: ${text}\n`);
   await closeActiveRunner();
   process.exit(1);
 }
@@ -262,9 +270,18 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
     masked: !a.reveal,
   };
   let raw: PlatformStats | null = null;
+  // The footer shows the refresh failure if the last refresh threw (e.g. the control
+  // database is unreachable), else the first per-database error. Both are scrubbed
+  // while masked: a connection error carries the real host and port.
+  let refreshFailure: string | null = null;
+  const syncError = () => {
+    if (refreshFailure !== null) state.error = state.masked ? maskErrorText(refreshFailure) : refreshFailure;
+    else state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
+  };
   const applyMask = () => {
     state.stats = raw ? (state.masked ? maskStats(raw) : raw) : null;
     state.runnerLabel = runnerLabel(state.masked);
+    syncError();
   };
   let lastSize = `${out.columns}x${out.rows}`;
   let exiting = false;
@@ -297,10 +314,11 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
     draw();
     try {
       raw = await collect();
+      refreshFailure = null;
       applyMask();
-      state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
     } catch (e) {
-      state.error = e instanceof Error ? e.message : String(e);
+      refreshFailure = e instanceof Error ? e.message : String(e);
+      syncError();
     } finally {
       inFlight = false;
       state.loading = false;
@@ -344,7 +362,7 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "3": state.view = "ops"; break;
         case "4": state.view = "infra"; break;
         case "5": state.view = "queues"; break;
-        case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
+        case "p": case "P": state.masked = !state.masked; applyMask(); break;
         case "\t": {
           const order: View[] = ["overview", "tenants", "ops", "infra", "queues"];
           state.view = order[(order.indexOf(state.view) + 1) % order.length];
@@ -399,6 +417,7 @@ async function main(): Promise<void> {
     process.stdout.write(HELP.trimStart());
     return;
   }
+  revealErrors = a.reveal;
   // Colour: --no-color / NO_COLOR win; --color / FORCE_COLOR force it on
   // (e.g. piping a snapshot into a file); otherwise follow the TTY.
   if (!a.color || "NO_COLOR" in process.env) setColorEnabled(false);
@@ -455,7 +474,7 @@ async function main(): Promise<void> {
       process.stdout.write(frameToString(renderFrame(state, cols)));
     }
   } catch (e) {
-    process.stderr.write(c.bad("hisaabo admin: ") + (e instanceof Error ? e.message : String(e)) + "\n");
+    process.stderr.write(c.bad("hisaabo admin: ") + shown(e instanceof Error ? e.message : String(e)) + "\n");
     await close();
     process.exit(1);
   }

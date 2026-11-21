@@ -166,7 +166,7 @@ export function buildDemoStats(now: Date = new Date()): PlatformStats {
       dbPort: "5432",
       members: 1 + Math.round(rnd() * 6),
       createdAt: iso(createdAt),
-      dbKey: `postgres:5432/tenant_${slug}`,
+      dbKey: `postgres:5432/tenant_${slug.replace(/-/g, "_")}`,
       sharedDb: false,
       metrics,
       error: null,
