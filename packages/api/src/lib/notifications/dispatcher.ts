@@ -56,6 +56,14 @@ import { drainKickedTenants } from "./kick.js";
 
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 5;
+/**
+ * A pending event this old is expired, not delivered: a push or email about a
+ * payment from days ago is noise, and it would arrive as a burst when a worker
+ * is enabled after a long off period (multi-tenant default, or a stopped
+ * replica). The retry ladder (5 attempts, backoff capped at 1 h) finishes well
+ * inside this window.
+ */
+const MAX_EVENT_AGE_HOURS = 72;
 const STALE_PROCESSING_MS = 5 * 60 * 1000;
 const OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const INBOX_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -91,6 +99,22 @@ async function claimBatch(db: TenantDatabase): Promise<OutboxRow[]> {
     .where(and(
       eq(notificationOutbox.status, "processing"),
       sql`${notificationOutbox.availableAt} < now() - make_interval(secs => ${STALE_PROCESSING_MS / 1000})`,
+    ));
+
+  // Expire events nobody dispatched in time (database clock, like everything
+  // else here). Runs after the recovery above so a row stranded in
+  // 'processing' by a dead dispatcher is judged too. Only 'pending' rows are
+  // touched: a row another replica is processing keeps its lease.
+  await db
+    .update(notificationOutbox)
+    .set({
+      status: "expired",
+      lastError: `stale: not dispatched within ${MAX_EVENT_AGE_HOURS}h`,
+      dispatchedAt: sql`now()`,
+    })
+    .where(and(
+      eq(notificationOutbox.status, "pending"),
+      sql`${notificationOutbox.createdAt} < now() - make_interval(hours => ${MAX_EVENT_AGE_HOURS})`,
     ));
 
   const rows = await db.execute(sql`
@@ -468,8 +492,9 @@ const MIN_FULL_SWEEP_SECONDS = 5;
 /**
  * How often multi-tenant mode scans EVERY active tenant for pending events
  * (kicked tenants are served on every tick regardless). Each scan touches every
- * tenant database, so large deployments can stretch it, or turn the worker off
- * (NOTIFICATIONS_WORKER=false) until the queue-backed dispatcher lands.
+ * tenant database, so large deployments can stretch it. (The worker itself is
+ * off by default in multi-tenant mode: see notificationWorkersEnabled in
+ * index.ts; NOTIFICATIONS_WORKER=true opts in until the queue-backed dispatcher lands.)
  */
 export function fullSweepMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = Number(env.NOTIFICATIONS_FULL_SWEEP_SECONDS);

@@ -206,7 +206,17 @@ Desktop (Tauri) uses web push in its webview where supported. Otherwise `tauri-p
 
 **Clock rule**: due-ness, the claim lease and retry backoff are all evaluated on the database clock (`now()` in SQL), never compared with a JS timestamp. `available_at` is stamped by Postgres at microsecond precision; comparing it with a millisecond-truncated JS time can leave a just-inserted row "not yet due".
 
-**Operating the workers**: the dispatcher (every 3 s) and the hourly collections sweep run in-process and are controlled by `NOTIFICATIONS_WORKER` (default on; `false` on replicas that should only serve requests; claiming is safe across replicas). In multi-tenant mode the dispatcher serves tenants that just emitted an event on every tick and, every `NOTIFICATIONS_FULL_SWEEP_SECONDS` (default 60, minimum 5), scans *every* active tenant database for events emitted by other replicas. With more active tenants than `TENANT_POOL_MAX` (default 50) that scan churns the tenant connection pool. **Cloud/multi-tenant deployments with many tenants should set `NOTIFICATIONS_WORKER=false` until the queue-backed dispatcher lands**, or at least raise the full-sweep interval. Caveat: if no replica runs the worker, events keep queuing in `notification_outbox` and are all delivered when a worker is enabled later; enable the worker before accepting traffic you care about, not after a long pause. Self-hosted single-tenant installs are unaffected (one database, two cheap queries every 3 s).
+**Operating the workers**: the dispatcher (every 3 s) and the hourly collections sweep run in-process and are controlled by `NOTIFICATIONS_WORKER`, decided in one place (`notificationWorkersEnabled` in `lib/notifications/index.ts`, used by `server.ts`; the separate queue worker process, `worker.ts`, does not run them):
+
+| `NOTIFICATIONS_WORKER` | single-tenant (self-hosted) | `MULTI_TENANT=true` |
+|---|---|---|
+| unset or empty | **on** | **off** (one info line at startup) |
+| `true` | on | on |
+| `false` | off | off |
+
+Values are case-insensitive and trimmed; anything else is ignored with a warning and the default for the mode applies. `false` is for replicas that should only serve requests; claiming is safe across replicas, so `true` can run on several.
+
+In multi-tenant mode the dispatcher serves tenants that just emitted an event on every tick and, every `NOTIFICATIONS_FULL_SWEEP_SECONDS` (default 60, minimum 5), scans *every* active tenant database for events emitted by other replicas. With more active tenants than `TENANT_POOL_MAX` (default 50) that scan churns the tenant connection pool. That is why multi-tenant is **off unless you set `NOTIFICATIONS_WORKER=true`**: an upgrade with an untouched environment must not start sweeping every tenant database. Opt in on the replica(s) that should dispatch, and raise the full-sweep interval if the tenant count warrants it, until the queue-backed dispatcher lands. Caveat: while no replica runs the worker, nothing is dispatched (no inbox rows, no pushes, no collections reminders); events keep queuing in `notification_outbox` (small rows, one per event, deduplicated by key) and are delivered when a worker is enabled later, so enable the worker before accepting traffic you care about, not after a long pause: events older than 72 h are expired, not delivered (see Retention). Self-hosted single-tenant installs are unaffected (one database, two cheap queries every 3 s).
 
 **Email copies** need a provider (`RESEND_API_KEY`). Without one, production skips the copy and logs `notification emails disabled: no email provider configured` once per process; the inbox row is still written, and nothing throws. (Magic-link and invitation emails are unchanged: they remain an error without a provider.) The Resend notification request has a 10 s timeout so a hung connection cannot stall the single-flight dispatch tick.
 
@@ -214,7 +224,7 @@ Desktop (Tauri) uses web push in its webview where supported. Otherwise `tauri-p
 
 **Templates** live in `@hisaabo/shared` as `{type → (payload, locale) → {title, body, deepLink}}`. They are rendered at dispatch time (so a later locale change applies) and shared with the CLI/MCP for parity. **Launch locales: English (`en`) and Hindi (`hi`).** Every template must exist in both before an event type ships, enforced by a unit test. Amounts use Indian digit grouping (₹1,20,000) in both locales. The recipient's locale comes from the user's app language setting, falling back to `en`. Other Indian languages come later.
 
-**Retention**: inbox rows kept for 90 days, outbox rows deleted 7 days after dispatch. Both handled by the existing cleanup timers in `server.ts`.
+**Retention**: inbox rows kept for 90 days; dispatched, expired and failed outbox rows are deleted once they are 7 days old (by `created_at`). Both prunes run in the dispatcher's hourly tick. **Staleness**: a pending event not dispatched within 72 h is marked `expired` (`last_error` "stale: not dispatched within 72h") at the start of the next claim, on the database clock, and never delivered. This stops a burst of stale pushes and emails when a worker is enabled after a long off period (the multi-tenant default, a stopped replica); the retry ladder (5 attempts, backoff capped at 1 h) finishes well inside the window.
 
 ---
 
@@ -576,5 +586,5 @@ CLI: `hisaabo notifications list|read|prefs|set`. MCP: `notification_list`, `not
 4. Digest (daily/weekly summary), grouping of bursts, holding pushes through quiet hours.
 5. Remaining event types: sales activity, inventory, banking, payables due dates, GST return due dates, ITC ageing, targets, general announcements tooling.
 6. Explicit inbox purge on user deletion (rows currently expire after 90 days).
-7. Queue-backed dispatcher for large multi-tenant deployments (today's full-tenant scan, §6 "Operating the workers"). Until then, cloud sets `NOTIFICATIONS_WORKER=false` or raises `NOTIFICATIONS_FULL_SWEEP_SECONDS`.
+7. Queue-backed dispatcher for large multi-tenant deployments (today's full-tenant scan, §6 "Operating the workers"). Until then the worker is off by default in multi-tenant mode; cloud sets `NOTIFICATIONS_WORKER=true` to opt in (and may raise `NOTIFICATIONS_FULL_SWEEP_SECONDS`).
 
