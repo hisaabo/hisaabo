@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { StoreConfig, CartItem, OrderResult, StoreItem } from "./types";
 import { cartItemKey } from "./types";
-import { fetchCatalog, assetUrl } from "./api";
-import { loadCart, saveCart } from "./cartStorage";
+import { fetchCatalog, fetchItemsByIds, assetUrl } from "./api";
+import { loadCart, saveCart, migrateLegacyCart, mergeLegacyLines } from "./cartStorage";
 import {
   parseCartLink,
   parseItemParam,
@@ -149,6 +149,17 @@ export function App() {
     saveCart(slug, cart);
   }, [slug, cart]);
 
+  // Carts used to live in one list shared by every store. Claim the lines of
+  // that list that belong to this store (a failed lookup leaves it untouched).
+  const legacyCartChecked = useRef(false);
+  useEffect(() => {
+    if (!slug || legacyCartChecked.current) return;
+    legacyCartChecked.current = true;
+    migrateLegacyCart(slug, (ids) => fetchItemsByIds(slug, ids)).then((moved) => {
+      if (moved.length > 0) setCart((prev) => mergeLegacyLines(prev, moved));
+    });
+  }, [slug]);
+
   // A website can send shoppers here with a prefilled cart in the URL fragment
   // (`#cart=...`) and/or open one item (`?item=<id>`); see cartLink.ts.
   const [cartLinkNotice, setCartLinkNotice] = useState<CartLinkNoticeData | null>(null);
@@ -170,9 +181,9 @@ export function App() {
       // Resolve against the live catalog: only ids, quantities, units and
       // variants come from the link; names, prices and stock come from the store.
       const ids = [...new Set(parsed.lines.map((l) => l.id))];
-      fetchCatalog(slug, { ids })
-        .then((data) => {
-          const { entries, dropped } = resolveCartLink(parsed.lines, data.items);
+      fetchItemsByIds(slug, ids)
+        .then((items) => {
+          const { entries, dropped } = resolveCartLink(parsed.lines, items);
           if (entries.length > 0) {
             setCart((prev) => mergeCartLink(prev, entries));
             // Show the cart, but never pull a shopper out of checkout.
@@ -201,9 +212,9 @@ export function App() {
   useEffect(() => {
     if (!slug || !deepLinkItemId) return;
     let cancelled = false;
-    fetchCatalog(slug, { ids: [deepLinkItemId] })
-      .then((data) => {
-        const item = data.items.find((i) => i.id.toLowerCase() === deepLinkItemId);
+    fetchItemsByIds(slug, [deepLinkItemId])
+      .then((items) => {
+        const item = items.find((i) => i.id.toLowerCase() === deepLinkItemId);
         if (!cancelled && item) setDetailItem(item);
       })
       .catch(() => {

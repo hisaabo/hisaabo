@@ -31,7 +31,7 @@ Browsers can call this from any website with no CORS setup, and item images can 
 |---|---|
 | `page` | Page number, starting at 1. |
 | `limit` | Items per page. Default 24, maximum 100. |
-| `search` | Only items whose name contains this text (case-insensitive). |
+| `search` | Only items whose name contains this text (case-insensitive). Only the first 100 characters are used; longer text is cut short, not rejected. |
 | `category` | Only items in this store category. |
 | `ids` | Only these items: a comma-separated list of item ids, at most 50. An id that is not a valid UUID, an empty list, or more than 50 ids gives `400`. Items that are not in the store are left out of the result, not reported as errors. When `ids` is set, `limit` defaults to the number of ids, so one request returns them all. |
 

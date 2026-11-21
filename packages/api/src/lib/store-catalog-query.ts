@@ -10,6 +10,9 @@ import { escapeLike } from "./escape-like.js";
 /** Most item ids one `?ids=` request may name (a cart link carries at most 50 lines). */
 export const MAX_CATALOG_IDS = 50;
 
+/** Longest `search` the catalog honours; anything past it is silently ignored. */
+export const MAX_SEARCH_LENGTH = 100;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ParsedCatalogIds = { ok: true; ids: string[] | null } | { ok: false; error: string };
@@ -37,12 +40,24 @@ export function parseCatalogIds(raw: string | undefined): ParsedCatalogIds {
 }
 
 /**
+ * Truncate a search term to MAX_SEARCH_LENGTH (no error: the first 100
+ * characters still narrow the list), without leaving half an emoji behind.
+ */
+export function capSearch(search: string): string {
+  if (search.length <= MAX_SEARCH_LENGTH) return search;
+  const cut = search.slice(0, MAX_SEARCH_LENGTH);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/**
  * WHERE conditions for a catalog read.
  *
  * `baseConditions` is the store-wide set (the business' store-enabled,
  * non-deleted items) that the category chips are built from; `conditions`
  * additionally applies the caller's category / search / ids filters. An `ids`
  * filter only narrows: it can never reveal an item the store does not publish.
+ * `search` is capped at MAX_SEARCH_LENGTH characters; `category` is matched
+ * whole, because item categories are unbounded text and must keep matching.
  */
 export function storeCatalogConditions(
   businessId: string,
@@ -57,7 +72,7 @@ export function storeCatalogConditions(
   ];
   const conditions = [...baseConditions];
   if (filters.category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, filters.category));
-  if (filters.search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(filters.search) + "%"}`);
+  if (filters.search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(capSearch(filters.search)) + "%"}`);
   if (filters.ids) conditions.push(inArray(items.id, filters.ids));
   return { baseConditions, conditions };
 }

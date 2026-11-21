@@ -15,7 +15,13 @@ import { and, eq } from "drizzle-orm";
 import { items, type TenantDatabase } from "@hisaabo/db";
 import { createTestWorld, createItem, type TestWorld } from "./helpers/fixtures.js";
 import { getTenantTestDb, truncateAllTables, closeTestDb } from "./helpers/test-db.js";
-import { MAX_CATALOG_IDS, parseCatalogIds, storeCatalogConditions } from "../lib/store-catalog-query.js";
+import {
+  MAX_CATALOG_IDS,
+  MAX_SEARCH_LENGTH,
+  capSearch,
+  parseCatalogIds,
+  storeCatalogConditions,
+} from "../lib/store-catalog-query.js";
 
 describe("parseCatalogIds", () => {
   it("returns no filter when the parameter is absent", () => {
@@ -64,6 +70,25 @@ describe("parseCatalogIds", () => {
     const res = parseCatalogIds(raw);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/UUID/);
+  });
+});
+
+describe("capSearch", () => {
+  it("leaves terms up to the limit alone", () => {
+    expect(capSearch("")).toBe("");
+    expect(capSearch("rice")).toBe("rice");
+    expect(capSearch("a".repeat(MAX_SEARCH_LENGTH))).toBe("a".repeat(MAX_SEARCH_LENGTH));
+  });
+
+  it("truncates longer terms to the limit", () => {
+    expect(capSearch("a".repeat(MAX_SEARCH_LENGTH + 1))).toBe("a".repeat(MAX_SEARCH_LENGTH));
+    expect(capSearch("a".repeat(100) + "b".repeat(100))).toBe("a".repeat(100));
+  });
+
+  it("does not leave half a surrogate pair at the cut", () => {
+    const capped = capSearch("a".repeat(MAX_SEARCH_LENGTH - 1) + "\u{1F35A}" + "tail");
+    expect(capped).toBe("a".repeat(MAX_SEARCH_LENGTH - 1));
+    expect(capped).not.toMatch(/[\uD800-\uDBFF]$/);
   });
 });
 
@@ -128,6 +153,25 @@ describe("storeCatalogConditions — ids filter against the database", () => {
 
   it("combines with the search filter", async () => {
     expect(await select({ ids: [enabledA, enabledB], search: "beta" })).toEqual([enabledB]);
+  });
+
+  it("honours the first 100 characters of an over-long search", async () => {
+    const name = `${"q".repeat(MAX_SEARCH_LENGTH)} long-named item`;
+    const longNamed = (await createItem(getTenantTestDb(), world.business1.id, { name, storeEnabled: true })).id;
+    // 200 characters: the first 100 match the item, the rest would match nothing.
+    expect(await select({ search: "q".repeat(MAX_SEARCH_LENGTH) + "z".repeat(MAX_SEARCH_LENGTH) })).toEqual([longNamed]);
+    // Still a plain substring match within the cap.
+    expect(await select({ search: "Catalog Ids Alp" })).toEqual([enabledA]);
+  });
+
+  it("does not truncate category: a long category still matches whole", async () => {
+    const category = "c".repeat(150);
+    const inCategory = (
+      await createItem(getTenantTestDb(), world.business1.id, { name: "Long Category Item", storeEnabled: true, storeCategory: category })
+    ).id;
+    expect(await select({ category })).toEqual([inCategory]);
+    // A prefix is a different category, not a match.
+    expect(await select({ category: category.slice(0, 100) })).toEqual([]);
   });
 
   it("keeps the category-chip base conditions free of the ids/search filters", () => {

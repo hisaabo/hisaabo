@@ -138,7 +138,7 @@ The cart is in the URL fragment, so it never reaches a server or CDN log. On loa
 
 `https://store.hisaabo.in/<slug>?item=<item uuid>` opens that item's detail view (an unknown id shows the store normally).
 
-The cart is persisted in `localStorage` under `hisaabo-store-cart:<slug>`. Every store shares the `store.hisaabo.in` origin, so the key includes the slug and one store's cart is never shown in another. Integrator documentation: `apps/docs/src/content/docs/online-store/own-website.mdx`.
+The cart is persisted in `localStorage` under `hisaabo-store-cart:<slug>`. Every store shares the `store.hisaabo.in` origin, so the key includes the slug and one store's cart is never shown in another. Carts saved by earlier versions under the single key `hisaabo-store-cart` are migrated lazily: when a store loads, it looks those lines' item ids up in itself (`catalog.json?ids=`), moves the lines it sells into its own cart (lines already there win) and removes them from the old list; lines for other stores stay for them to claim, the old key is deleted once empty, and a failed lookup changes nothing. Every `?ids=` lookup (`fetchItemsByIds` in `src/api.ts`) is chunked to 50 ids and filtered client-side to the ids requested, so an API that ignores `ids` and returns its first page cannot add unrelated items. Integrator documentation: `apps/docs/src/content/docs/online-store/own-website.mdx`.
 
 ### Variants and alternate units
 
@@ -155,7 +155,8 @@ apps/store/
 │   ├── App.tsx       # Root component — slug routing, catalog fetch, cart state
 │   ├── api.ts        # fetchCatalog() and placeOrder() REST calls
 │   ├── cartLink.ts   # Pure: parse/resolve/merge #cart= links, ?item= param (unit tested)
-│   ├── cartStorage.ts # Per-store cart persistence in localStorage (unit tested)
+│   ├── cartStorage.ts # Per-store cart persistence + old shared-cart migration (unit tested)
+│   ├── catalogIds.ts # Chunking and client-side filtering for ?ids= lookups (unit tested)
 │   ├── types.ts      # StoreConfig, CartItem, OrderResult types
 │   └── styles.css    # Tailwind v4 base styles + accent color CSS variable
 ├── index.html
