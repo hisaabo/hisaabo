@@ -26,6 +26,12 @@ export async function storeCheckSlugCommand(
       } else {
         process.stdout.write(`\n  OK: "${slug}" is available\n\n`);
       }
+    } else if (result.reserved) {
+      if (hasColor()) {
+        process.stdout.write(chalk.red(`\n  ✗ "${slug}" is reserved\n\n`));
+      } else {
+        process.stdout.write(`\n  RESERVED: "${slug}" is reserved\n\n`);
+      }
     } else {
       if (hasColor()) {
         process.stdout.write(chalk.red(`\n  ✗ "${slug}" is already taken\n\n`));

@@ -5,8 +5,9 @@ import { useCan } from "@/hooks/useCan";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Modal } from "@/components/ui/Modal";
+import { STORE_SLUG_RESERVED_MESSAGE } from "@hisaabo/shared";
 import { PhoneInput } from "./PhoneInput";
-import { isStoreSlugLocked, showAutoAssignedNotice } from "./storeSlugLock";
+import { isStoreSlugLocked, showAutoAssignedNotice, reservedStoreSlugError } from "./storeSlugLock";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,25 +94,34 @@ function StoreSettingsCard() {
   const isSlugLocked = isStoreSlugLocked(settings?.storeSlug, settings?.storeSlugAutoAssigned);
   const slugAutoAssigned = showAutoAssignedNotice(settings?.storeSlug, settings?.storeSlugAutoAssigned);
 
+  // Reserved platform words (admin, login, support, ...) are rejected by the
+  // API; check here too so the error shows before submit. Not applied to the
+  // slug the business already holds.
+  const reservedError = reservedStoreSlugError(effectiveSlug, settings?.storeSlug, isSlugLocked);
+
   // Debounce slug for availability check (only when not locked)
   const debouncedSlug = useDebounce(effectiveSlug, 500);
   const { data: slugCheck, isFetching: slugChecking } = trpc.store.checkSlug.useQuery(
     { slug: debouncedSlug },
     {
-      enabled: !isSlugLocked && debouncedSlug.length >= 3,
+      enabled: !isSlugLocked && !reservedError && debouncedSlug.length >= 3,
     },
   );
 
-  const slugStatus: "idle" | "checking" | "available" | "taken" =
+  const slugStatus: "idle" | "checking" | "available" | "taken" | "reserved" =
     isSlugLocked
       ? "idle"
-      : debouncedSlug.length < 3
-        ? "idle"
-        : slugChecking || slugCheck === undefined
-          ? "checking"
-          : slugCheck.available
-            ? "available"
-            : "taken";
+      : reservedError
+        ? "reserved"
+        : debouncedSlug.length < 3
+          ? "idle"
+          : slugChecking || slugCheck === undefined
+            ? "checking"
+            : slugCheck.available
+              ? "available"
+              : slugCheck.reserved
+                ? "reserved"
+                : "taken";
 
   // Track dirty state — only enable save when something actually changed
   const isDirty =
@@ -191,7 +201,7 @@ function StoreSettingsCard() {
             className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
           >
             Your store link was changed to <span className="font-semibold">{settings?.storeSlug}</span> because the
-            original was already used by another store. You can choose a new link once.
+            original was already used by another store or is reserved. You can choose a new link once.
           </div>
         )}
         <div className="flex items-center gap-0">
@@ -225,7 +235,7 @@ function StoreSettingsCard() {
                     <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                   </svg>
                 )}
-                {slugStatus === "taken" && (
+                {(slugStatus === "taken" || slugStatus === "reserved") && (
                   <svg className="w-4 h-4 text-red-500" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
@@ -244,6 +254,10 @@ function StoreSettingsCard() {
         {isSlugLocked ? (
           <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
             Store URL cannot be changed once set
+          </p>
+        ) : slugStatus === "reserved" ? (
+          <p className="text-[11px] text-red-500 mt-1">
+            {reservedError ?? STORE_SLUG_RESERVED_MESSAGE}
           </p>
         ) : slugStatus === "taken" ? (
           <p className="text-[11px] text-red-500 mt-1">
@@ -342,7 +356,7 @@ function StoreSettingsCard() {
         <button
           className="btn-primary mt-2"
           onClick={handleSave}
-          disabled={!isDirty || updateMutation.isPending || slugStatus === "taken"}
+          disabled={!isDirty || updateMutation.isPending || slugStatus === "taken" || slugStatus === "reserved"}
         >
           {updateMutation.isPending ? "Saving…" : isDirty ? "Save Settings" : "No changes"}
         </button>

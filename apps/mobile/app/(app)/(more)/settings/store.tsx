@@ -238,7 +238,7 @@ function StoreSettingsScreenContent() {
                 <View style={styles.slugNotice}>
                   <Text style={styles.slugNoticeText}>
                     Your store link was changed to {settings?.storeSlug} because the original was
-                    already used by another store. You can choose a new link once.
+                    already used by another store or is reserved. You can choose a new link once.
                   </Text>
                 </View>
               )}
