@@ -122,7 +122,7 @@ const itemCreate: WebMcpToolDefinition = {
       },
       hsn: { type: "string", maxLength: 20, description: "HSN/SAC code for GST reporting, e.g. '2523'." },
       sku: { type: "string", maxLength: 50, description: "Your internal stock-keeping code." },
-      description: { type: "string", maxLength: 1000, description: "Internal description. Not printed on invoices." },
+      description: { type: "string", maxLength: 1000, description: "Internal description. Not printed on invoices. If the item is visible on the online store and has no store description, it is also shown to store customers." },
       category: { type: "string", maxLength: 100, description: "Grouping tag, e.g. 'Cement', 'Electronics'." },
     },
     ["name"],

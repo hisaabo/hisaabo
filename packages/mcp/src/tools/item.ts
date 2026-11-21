@@ -100,7 +100,7 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
       sku: z.string().max(50).optional()
         .describe("SKU (Stock Keeping Unit) — your internal product code."),
       description: z.string().max(1000).optional()
-        .describe("Internal description (not shown on invoices)."),
+        .describe("Internal description (not shown on invoices). If the item is visible on the online store and has no store description, this text is also shown to store customers."),
       category: z.string().max(100).optional()
         .describe("Category for grouping, e.g. 'Electronics', 'Raw Materials'."),
     },
@@ -174,7 +174,7 @@ export function registerItemTools(server: ToolServer, client: HisaaboClient) {
       sku: z.string().max(50).optional()
         .describe("Updated SKU."),
       description: z.string().max(1000).optional()
-        .describe("Updated internal description."),
+        .describe("Updated internal description. If the item is visible on the online store and has no store description, this text is also shown to store customers."),
       category: z.string().max(100).optional()
         .describe("Updated category."),
     },

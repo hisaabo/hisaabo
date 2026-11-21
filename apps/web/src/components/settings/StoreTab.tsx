@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/Modal";
 import { STORE_SLUG_RESERVED_MESSAGE } from "@hisaabo/shared";
 import { PhoneInput } from "./PhoneInput";
 import { isStoreSlugLocked, showAutoAssignedNotice, reservedStoreSlugError } from "./storeSlugLock";
+import { STORE_DESCRIPTION_FALLBACK_NOTE, showsItemDescriptionOnStore } from "./storeItemHints";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -379,6 +380,11 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
   const [search, setSearch] = useState("");
   const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
 
+  // Same query as the settings card (shared cache). The fallback note only
+  // matters while the online store is enabled.
+  const { data: storeSettings } = trpc.store.getSettings.useQuery();
+  const storeIsEnabled = !!storeSettings?.storeEnabled;
+
   const debouncedSearch = useDebounce(search, 300);
 
   // Server-side filtered items — passes search term to API so results aren't capped at 100 items
@@ -507,6 +513,11 @@ function StoreItemsModal({ open, onClose }: StoreItemsModalProps) {
                   <p className="text-xs text-text-tertiary">
                     {item.category || "Uncategorized"} · {formatCurrency(item.salePrice ?? "0")} / {item.unit}
                   </p>
+                  {storeIsEnabled && enabled && showsItemDescriptionOnStore(item) && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
+                      {STORE_DESCRIPTION_FALLBACK_NOTE}
+                    </p>
+                  )}
                 </div>
 
                 {isPending && (
