@@ -151,7 +151,7 @@ Add to Claude Desktop's `claude_desktop_config.json`:
       "args": ["@hisaabo/mcp"],
       "env": {
         "HISAABO_API_URL": "https://your-hisaabo-instance.com",
-        "HISAABO_API_KEY": "sess_...",
+        "HISAABO_API_KEY": "hisaabo_key_...",
         "HISAABO_TENANT_ID": "tenant-uuid",
         "HISAABO_BUSINESS_ID": "business-uuid"
       }
@@ -463,7 +463,7 @@ hisaabo login --api-url https://your-hisaabo-instance.com   # browser sign-in
 hisaabo whoami --json  # confirm the active business and tenant
 ```
 
-For the MCP server, create a dedicated API key in Settings > API Keys and use it as `HISAABO_TOKEN`. Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
+For the MCP server, create a dedicated API key in Settings > API Keys and use it as `HISAABO_API_KEY`. Then add to `claude_desktop_config.json` -- see the [MCP Server guide](https://docs.hisaabo.in/ai/mcp-server/).
 
 ---
 

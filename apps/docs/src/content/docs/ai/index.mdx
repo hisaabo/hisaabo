@@ -1,6 +1,6 @@
 ---
 title: AI & Automation
-description: The only Indian invoicing platform with native AI agent support. ~50 MCP tools covering every business operation. Connect Claude, build automations, and let AI handle your bookkeeping while you run your business.
+description: The only Indian invoicing platform with native AI agent support. 194 MCP tools covering every business operation. Connect Claude, build automations, and let AI handle your bookkeeping while you run your business.
 sidebar:
   order: 1
 ---
@@ -24,7 +24,7 @@ The problem with most accounting software is that it was designed for humans cli
 Hisaabo is different. The entire product is API-first. The web dashboard, mobile app, and desktop app are all thin clients over the same tRPC API. That means:
 
 - Any AI agent that can make HTTP requests can do anything a human can do in the dashboard
-- The [MCP server](/ai/mcp-server/) gives AI assistants like Claude structured, typed access without writing API code — ~50 tools covering invoicing, parties, inventory, payments, expenses, GST, shipping, banking, reports, store, targets, and bulk import
+- The [MCP server](/ai/mcp-server/) gives AI assistants like Claude structured, typed access without writing API code — 194 tools covering invoicing, parties, inventory, payments (including TDS), expenses, GST, e-invoicing, shipping, banking, accounting reports, store, targets, and bulk import
 - [Browser AI agents (WebMCP)](/ai/webmcp/) get the same treatment without any setup — Gemini in Chrome and Copilot in Edge discover Hisaabo's tools in the tab you already have open, running on your own browser AI subscription
 - The [CLI tool](/ai/cli/) is built with Ink 5 (React for the terminal) and lets you pipe business data into shell scripts and automation workflows
 - Responses are paginated and bounded, keeping AI context windows from being flooded with data
@@ -44,7 +44,7 @@ You could build an invoicing API from scratch, wire up a GST calculation engine,
 | **GST compliance** | Study CGST/SGST/IGST rules, HSN codes, filing formats | Built in — GSTR-1, GSTR-3B, state-wise tax splits, HSN summaries |
 | **Multi-tenant isolation** | Design and implement from scratch | Every request is business-scoped via `x-business-id` |
 | **Type safety** | Manual schema maintenance | End-to-end TypeScript types from `AppRouter` — no codegen |
-| **MCP integration** | Build your own MCP server | Zero-config MCP server with ~50 tools, works with Claude Desktop today |
+| **MCP integration** | Build your own MCP server | Zero-config MCP server with 194 tools (103 read-only by default), works with Claude Desktop today |
 | **Indian business context** | Learn the rules (April FY, UPI, HSN, GSTIN) | All of it works out of the box |
 | **Audit trail** | Design and implement | Every API call logged, every MCP tool call recorded |
 | **Time to first AI agent** | 3–6 months | 5 minutes |
