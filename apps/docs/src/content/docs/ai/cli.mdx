@@ -515,31 +515,34 @@ hisaabo item rename-unit item_xxxxxxxxxx --from pcs --to pieces
 
 ```bash
 hisaabo payment list
-hisaabo payment list --party "Sharma Traders"
+hisaabo payment list --party-id party_xxxxxxxxxx
 hisaabo payment list --from 2026-03-01 --to 2026-03-31
-hisaabo payment list --mode upi
 hisaabo payment list --json
 ```
+
+Options: `--party-id`, `--from`, `--to`, `--page`, `--limit`, `--json`, `--format <table|tsv|csv|ids>`.
 
 #### `hisaabo payment create`
 
 ```bash
-# Payment received from customer
+# Payment received from a customer, applied to one invoice
 hisaabo payment create \
-  --party "Sharma Traders" \
+  --party-id party_xxxxxxxxxx \
   --amount 25000 \
   --mode upi \
   --date 2026-03-26 \
   --reference "UTR123456789" \
-  --allocate BB-12800 BB-12801
+  --invoice-id inv_xxxxxxxxxx
 
-# Bulk payment (no specific invoice allocation)
+# Payment with no specific invoice (advance or bulk payment)
 hisaabo payment create \
-  --party "Gupta Enterprises" \
+  --party-id party_yyyyyyyyyy \
   --amount 50000 \
   --mode bank \
   --reference "NEFT20260326"
 ```
+
+Options: `--party-id` (required when not prompting interactively; find it with `hisaabo party list`), `--amount`, `--mode` (`cash`, `bank`, `upi`, `cheque`, `other`; `cash` if you pass nothing and are not prompted), `--invoice-id`, `--reference`, `--date` (default today), `--notes`, the `--tds-*` flags below, `-y, --yes` and `--json`. In a terminal, anything you leave out is asked for interactively. The CLI applies a payment to at most one invoice; to split one payment across several invoices use the web app or the MCP server's `allocations`.
 
 #### Recording TDS on a customer receipt
 
@@ -548,7 +551,7 @@ When a customer pays an invoice and withholds TDS, `--amount` is the **net cash 
 ```bash
 # Invoice of ₹10,000, customer withheld ₹1,000 and paid ₹9,000
 hisaabo payment create \
-  --party "Sharma Traders" \
+  --party-id party_xxxxxxxxxx \
   --amount 9000.00 \
   --mode bank \
   --invoice-id inv_xxxxxxxxxx \
@@ -565,6 +568,24 @@ hisaabo payment create \
 
 `--tds-section` and `--tds-rate` are rejected without `--tds-amount`. Hisaabo does not decide whether TDS applies or at what rate: check the [Income Tax Department rates](https://wm.incometaxindia.gov.in/w/tds-rates-1). See [TDS on payments](/payments/tds/).
 
+#### `hisaabo payment get`
+
+```bash
+hisaabo payment get pay_xxxxxxxxxx
+hisaabo payment get pay_xxxxxxxxxx --json
+```
+
+#### `hisaabo payment update`
+
+Change only the fields you pass:
+
+```bash
+hisaabo payment update pay_xxxxxxxxxx --reference "UTR987654321"
+hisaabo payment update pay_xxxxxxxxxx --mode bank --date 2026-03-27 --notes "Corrected mode"
+```
+
+Options: `--amount`, `--mode`, `--date`, `--reference` and `--notes` (an empty string clears the last two), `--json`. At least one is required. The CLI cannot re-split a payment across invoices, so for a receipt that carries TDS or is split across invoices, change the amount in the web app.
+
 #### `hisaabo payment delete`
 
 ```bash
@@ -573,36 +594,31 @@ hisaabo payment delete pay_xxxxxxxxxx
 
 #### `hisaabo payment unpaid-invoices`
 
-List invoices that still have an outstanding balance — useful before recording a payment to see what to allocate:
+List the invoices of one party that still have an outstanding balance — useful before recording a payment to see what it can be applied to. The argument is the party id:
 
 ```bash
-hisaabo payment unpaid-invoices
-hisaabo payment unpaid-invoices --party "Sharma Traders" --json
+hisaabo payment unpaid-invoices party_xxxxxxxxxx
+hisaabo payment unpaid-invoices party_xxxxxxxxxx --json
 ```
 
 #### `hisaabo payment untracked`
 
-Payments that were recorded but have not been linked to any invoice:
+List payments that are not linked to a bank account:
 
 ```bash
 hisaabo payment untracked
 hisaabo payment untracked --json
 ```
 
+Options: `--page`, `--limit`, `--json`, `--format <table|tsv|csv>`.
+
 #### `hisaabo payment default-account`
 
-Show the bank account that is currently set as the default for incoming payments:
+Show the bank account recommended for a new payment, optionally scoped to a party:
 
 ```bash
 hisaabo payment default-account
-```
-
-#### `hisaabo payment assign-account`
-
-Assign a bank account to an existing payment record:
-
-```bash
-hisaabo payment assign-account --payment pay_xxxxxxxxxx --account account_xxxxxxxxxx
+hisaabo payment default-account --party-id party_xxxxxxxxxx
 ```
 
 ---
@@ -1554,7 +1570,7 @@ export const hisaaboCLI = {
     "invoice list/get/create/update/pdf/delete, " +
     "party list/get/create/delete/ledger/ledger-report/stats/top-items/merge, " +
     "item list/get/create/delete/stock/stock-history/stock-movements/low-stock-count/price-history/sales-stats/variants/merge/switch-base-unit/rename-unit, " +
-    "payment list/create/delete/unpaid-invoices/untracked/default-account/assign-account, " +
+    "payment list/get/create/update/delete/unpaid-invoices/untracked/default-account, " +
     "expense list/create/delete, " +
     "gst r1/r3b, shipment list/get/create/update, " +
     "bank list/get/create/transfer/transactions, " +
