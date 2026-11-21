@@ -516,6 +516,8 @@ Options: `--party-id`, `--from`, `--to`, `--page`, `--limit`, `--json`, `--forma
 
 #### `hisaabo payment create`
 
+Identify the party with either `--party-id <uuid>` or `--party <name>` (not both). `--party` matches the name exactly, ignoring case and surrounding spaces. It fails if no party has that name, and if several do it lists their names and IDs so you can re-run with `--party-id`. In a terminal, omitting both starts an interactive prompt.
+
 ```bash
 # Payment received from a customer, applied to one invoice
 hisaabo payment create \
@@ -534,7 +536,7 @@ hisaabo payment create \
   --reference "NEFT20260326"
 ```
 
-Options: `--party-id` (required when not prompting interactively; find it with `hisaabo party list`), `--amount`, `--mode` (`cash`, `bank`, `upi`, `cheque`, `other`; `cash` if you pass nothing and are not prompted), `--invoice-id`, `--reference`, `--date` (default today), `--notes`, the `--tds-*` flags below, `-y, --yes` and `--json`. In a terminal, anything you leave out is asked for interactively. The CLI applies a payment to at most one invoice; to split one payment across several invoices use the web app or the MCP server's `allocations`.
+Options: `--party-id` or `--party <name>` (one is required when not prompting interactively; find IDs with `hisaabo party list`), `--amount`, `--mode` (`cash`, `bank`, `upi`, `cheque`, `other`; `cash` if you pass nothing and are not prompted), `--invoice-id`, `--reference`, `--date` (default today), `--notes`, the `--tds-*` flags below, `-y, --yes` and `--json`. In a terminal, anything you leave out is asked for interactively. The CLI applies a payment to at most one invoice; to split one payment across several invoices use the web app or the MCP server's `allocations`.
 
 #### Recording TDS on a customer receipt
 
