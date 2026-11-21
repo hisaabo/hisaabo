@@ -143,6 +143,9 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
 | `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
 | `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
+| `MIGRATION_LOCK_TIMEOUT` | No | Migrations set a Postgres `lock_timeout` so DDL that cannot get its table lock gives up instead of queueing every other query behind it (a full outage of that table). A number with an optional `ms`, `s` or `min` suffix (a bare number is milliseconds); `0` disables the timeout. Default `5s`; an invalid value logs a warning and uses the default | `5s` |
+| `MIGRATION_LOCK_RETRIES` | No | How many times a migration that hit that lock timeout is retried, with exponential backoff (1 s, 2 s, 4 s, ... capped at 30 s, plus jitter), after the first attempt. Default 5; an invalid value logs a warning and uses the default. Raise both on a busy database if an upgrade logs `lock timeout - retrying` and finally `could not acquire a lock` | `5` |
+| `HISAABO_LOG_STDERR` | No | `1` sends log lines to stderr instead of stdout. The `admin api-key` command sets it itself so that stdout carries only the key block; set it when you capture the stdout of another operator command in a script. Not needed for the API or the worker | `1` |
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
 ### GitHub Actions Secrets
@@ -218,7 +221,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api worker
 ```
 
-The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
+The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). A migration that cannot get a table lock within `MIGRATION_LOCK_TIMEOUT` rolls back and is retried (`MIGRATION_LOCK_RETRIES`), so live queries are not left queued behind a long-running transaction. Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
 
 ### Background job worker
 
