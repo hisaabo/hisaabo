@@ -88,7 +88,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `DATABASE_URL` | Yes | PostgreSQL connection string | `postgresql://user:pass@host:5432/hisaabo` |
 | `PORT` | No | API port (default 3000) | `3000` |
 | `NODE_ENV` | Yes | Environment | `production` |
-| `CORS_ORIGINS` | Yes | Comma-separated allowed origins | `https://app.hisaabo.in,https://store.hisaabo.in` |
+| `CORS_ORIGINS` | Yes | Comma-separated allowed origins, which get credentialed access to the whole API, so list only your own app origins. The public read-only store endpoints (`catalog.json`, `meta.json`, `logo`, `og.png` and item images under `/store/<slug>/`) are served with `Access-Control-Allow-Origin: *` and no credentials, so a website that reads a catalog or shows its images needs no `CORS_ORIGINS` entry | `https://app.hisaabo.in,https://store.hisaabo.in` |
 | `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
 | `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). In production a set value that is not a valid `http(s)` URL fails startup (outside production it is ignored with a warning) | `https://api.hisaabo.in` |
 | `LEGACY_V09_CLIENT_COMPAT` | No | Default on; set to `false` to disable every v0.9.x client compatibility path at once: the Turnstile exemption for installed v0.9.x mobile/desktop apps on `sendMagicLink`, the bearer-token sign-in signature, and the `source=` app handoff. Deprecated, removed in 0.11.0 | `false` |

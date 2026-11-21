@@ -4,7 +4,8 @@
  * The metadata query never reads the bytea column (only `IS NOT NULL`), so a
  * conditional-GET hit (If-None-Match === ETag) answers 304 without loading the
  * logo bytes. Bytes are fetched only when the client's validator is stale.
- * Headers are identical to the previous inline implementation.
+ * Headers are identical to the previous inline implementation, except that the
+ * public storefront route opts into a cross-origin CORP (see PUBLIC_IMAGE_SAFE_HEADERS).
  */
 import { sql, type SQL } from "drizzle-orm";
 import { businesses } from "@hisaabo/db";
@@ -27,11 +28,22 @@ export const LOGO_SAFE_HEADERS = {
   "Cross-Origin-Resource-Policy": "same-site",
 };
 
-function emptyPng(scope: "private" | "public"): Response {
+/**
+ * Same as LOGO_SAFE_HEADERS but embeddable from any site. Only for the public
+ * storefront routes (/store/:slug/logo, /store/:slug/items/.../images/...),
+ * whose bytes are public by design. The authenticated /api routes keep
+ * LOGO_SAFE_HEADERS.
+ */
+export const PUBLIC_IMAGE_SAFE_HEADERS = {
+  ...LOGO_SAFE_HEADERS,
+  "Cross-Origin-Resource-Policy": "cross-origin",
+};
+
+function emptyPng(scope: "private" | "public", safeHeaders: Record<string, string>): Response {
   return new Response(new Uint8Array(EMPTY_PNG), {
     status: 200,
     headers: {
-      ...LOGO_SAFE_HEADERS,
+      ...safeHeaders,
       "Content-Type": "image/png",
       "Cache-Control": `${scope}, max-age=60`,
     },
@@ -43,6 +55,7 @@ export async function serveBusinessLogo(
   where: SQL | undefined,
   ifNoneMatch: string | undefined,
   scope: "private" | "public",
+  safeHeaders: Record<string, string> = LOGO_SAFE_HEADERS,
 ): Promise<Response> {
   const [meta] = await db.select({
     hasLogo: sql<boolean>`${businesses.logoData} IS NOT NULL`,
@@ -50,21 +63,21 @@ export async function serveBusinessLogo(
     logoUpdatedAt: businesses.logoUpdatedAt,
   }).from(businesses).where(where).limit(1);
 
-  if (!meta || !meta.hasLogo || !meta.logoMimeType) return emptyPng(scope);
+  if (!meta || !meta.hasLogo || !meta.logoMimeType) return emptyPng(scope, safeHeaders);
 
   const etag = `"${meta.logoUpdatedAt?.getTime() ?? 0}"`;
   if (ifNoneMatch === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+    return new Response(null, { status: 304, headers: { ETag: etag, ...safeHeaders } });
   }
 
   const [bytes] = await db.select({ logoData: businesses.logoData })
     .from(businesses).where(where).limit(1);
-  if (!bytes?.logoData) return emptyPng(scope);
+  if (!bytes?.logoData) return emptyPng(scope, safeHeaders);
 
   return new Response(new Uint8Array(bytes.logoData), {
     status: 200,
     headers: {
-      ...LOGO_SAFE_HEADERS,
+      ...safeHeaders,
       "Content-Type": meta.logoMimeType,
       "Cache-Control": `${scope}, max-age=${scope === "private" ? 300 : 3600}`,
       ETag: etag,
