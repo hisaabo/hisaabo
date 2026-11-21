@@ -273,6 +273,94 @@ describe("dispatcher claiming", () => {
   });
 });
 
+describe("stale events", () => {
+  // payment.made is inbox-only for owners, so these stay clear of push quotas.
+  async function emitMade(n: number): Promise<string> {
+    const id = await emitNotificationEvent(db, {
+      tenantId: world.tenant1.id, businessId: world.business1.id, type: "payment.made",
+      payload: { paymentId: `00000000-0000-4000-8000-${String(300 + n).padStart(12, "0")}`, paymentNumber: `PAY-S${n}`, amount: "100", partyName: "Shree Traders" },
+      actorKind: "system", dedupeKey: `payment.made:stale-${n}`,
+    });
+    if (!id) throw new Error("expected a new outbox row");
+    return id;
+  }
+
+  /** Backdate created_at on the database clock, the clock the dispatcher judges age on. */
+  async function ageBy(id: string, hours: number) {
+    await db.update(notificationOutbox)
+      .set({ createdAt: sql`now() - make_interval(hours => ${hours})` })
+      .where(eq(notificationOutbox.id, id));
+  }
+
+  async function outboxRow(id: string) {
+    const [row] = await db.select().from(notificationOutbox).where(eq(notificationOutbox.id, id));
+    return row;
+  }
+
+  const madeInbox = async () => (await inboxOf(world.ramesh.id)).filter((r) => r.eventType === "payment.made");
+
+  it("expires a pending event older than 72 h instead of delivering it", async () => {
+    const id = await emitMade(1);
+    await ageBy(id, 4 * 24);
+
+    const stats = await dispatchPending(db, provider);
+
+    expect(stats.processed).toBe(0);
+    const row = await outboxRow(id);
+    expect(row).toMatchObject({ status: "expired", lastError: "stale: not dispatched within 72h", attempts: 0 });
+    expect(row.dispatchedAt).not.toBeNull();
+    expect(await madeInbox()).toHaveLength(0);
+    expect(provider.sent).toHaveLength(0);
+    expect(emailSpy).not.toHaveBeenCalled();
+  });
+
+  it("still dispatches a recent event in the same pass that expires an old one", async () => {
+    const stale = await emitMade(2);
+    const recent = await emitMade(3);
+    const almostStale = await emitMade(4);
+    await ageBy(stale, 4 * 24);
+    await ageBy(recent, 24);
+    await ageBy(almostStale, 71);
+
+    const stats = await dispatchPending(db, provider);
+
+    expect(stats.processed).toBe(2);
+    expect((await outboxRow(stale)).status).toBe("expired");
+    expect((await outboxRow(recent)).status).toBe("dispatched");
+    expect((await outboxRow(almostStale)).status).toBe("dispatched");
+    expect(await madeInbox()).toHaveLength(2);
+  });
+
+  it("leaves a row another dispatcher is processing alone, however old the event", async () => {
+    const id = await emitMade(5);
+    await ageBy(id, 4 * 24);
+    // A live claim: status processing with a fresh lease (available_at = now()).
+    await db.update(notificationOutbox)
+      .set({ status: "processing", attempts: 1, availableAt: sql`now()` })
+      .where(eq(notificationOutbox.id, id));
+
+    const stats = await dispatchPending(db, provider);
+
+    expect(stats.processed).toBe(0);
+    expect(await outboxRow(id)).toMatchObject({ status: "processing", attempts: 1, lastError: null, dispatchedAt: null });
+    expect(await madeInbox()).toHaveLength(0);
+  });
+
+  it("expires an old row stranded in processing by a dead dispatcher once its lease is stale", async () => {
+    const id = await emitMade(6);
+    await ageBy(id, 4 * 24);
+    await db.update(notificationOutbox)
+      .set({ status: "processing", attempts: 1, availableAt: sql`now() - make_interval(mins => 10)` })
+      .where(eq(notificationOutbox.id, id));
+
+    const stats = await dispatchPending(db, provider);
+
+    expect(stats.processed).toBe(0);
+    expect(await outboxRow(id)).toMatchObject({ status: "expired", lastError: "stale: not dispatched within 72h" });
+    expect(await madeInbox()).toHaveLength(0);
+  });
+});
+
 describe("hot-path isolation", () => {
   const dropOutboxFault = async () => {
     await db.execute(sql.raw("DROP TRIGGER IF EXISTS test_outbox_fault ON notification_outbox"));
