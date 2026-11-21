@@ -16,14 +16,17 @@
  * Playwright waits for http://<web 0>/__e2e_ready, which is 200 only after the
  * builds finished and every API answered /health. On SIGTERM/SIGINT (Playwright
  * sends SIGTERM when the run ends or is interrupted) everything started here is
- * stopped and the per-worker databases are dropped (E2E_KEEP_DB=1 keeps them).
- * harness/teardown.ts drops them again as a safety net. `E2E_DEV=1` bypasses
+ * stopped and the per-worker databases are dropped (E2E_KEEP_DB=1 keeps them);
+ * the same happens if the Playwright runner disappears without saying so (see
+ * E2E_RUNNER_PID below). harness/teardown.ts drops them again as a safety net
+ * for the case where this process itself was killed outright. `E2E_DEV=1` bypasses
  * this file entirely (see playwright.config.ts).
  *
  * `tsc -b` is deliberately not part of the web build: typechecking is its own
  * CI job (`typecheck-lint`) that the e2e job already depends on.
  */
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
 import { startWebServer } from "./web-server.mjs";
@@ -153,10 +156,29 @@ async function stop(code) {
       console.error(`[e2e-stack] could not drop worker databases: ${err.message}`);
     }
   }
+  // Session cookies / seed ids of stacks that no longer exist.
+  if (!KEEP_DB) fs.rmSync(path.join(REPO, "e2e/.auth"), { recursive: true, force: true });
   process.exit(code);
 }
 process.on("SIGTERM", () => void stop(0));
 process.on("SIGINT", () => void stop(0));
+
+// Playwright stops this process with SIGTERM, but if the runner itself dies
+// without cleaning up (a second Ctrl+C: the terminal and `pnpm exec` both signal
+// it, which makes Playwright exit at once; SIGKILL; out of memory) nothing would
+// stop the servers or drop the databases. The config passes the runner's pid so
+// we notice and clean up ourselves.
+const RUNNER_PID = Number(process.env.E2E_RUNNER_PID);
+if (RUNNER_PID) {
+  setInterval(() => {
+    try {
+      process.kill(RUNNER_PID, 0);
+    } catch {
+      log(`Playwright runner (pid ${RUNNER_PID}) is gone: shutting down`);
+      void stop(1);
+    }
+  }, 1_000).unref();
+}
 
 async function main() {
   if (process.env.E2E_SKIP_BUILD !== "1") {

@@ -31,6 +31,10 @@ export default defineConfig({
     video: "retain-on-failure",
   },
 
+  // Drops leftover per-worker databases and the generated auth state; the stack
+  // supervisor does the same on SIGTERM/SIGINT, this covers it having been killed.
+  globalTeardown: "./harness/teardown.ts",
+
   projects: [
     { name: "setup", testMatch: /global-setup\.ts/ },
     {
@@ -63,7 +67,8 @@ function prodStack() {
     stdout: "pipe" as const,
     stderr: "pipe" as const,
     gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
-    env: { E2E_WORKERS: String(WORKERS), BASE_URL, API_URL },
+    // E2E_RUNNER_PID: lets the stack clean up if this process dies without doing so.
+    env: { E2E_WORKERS: String(WORKERS), BASE_URL, API_URL, E2E_RUNNER_PID: String(process.pid) },
   };
 }
 
