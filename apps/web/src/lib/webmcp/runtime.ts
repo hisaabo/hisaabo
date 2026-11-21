@@ -199,6 +199,15 @@ export async function confirmWrite(
   }
 }
 
+/**
+ * Anything that is not explicitly marked read-only is treated as a write: it
+ * asks the user for confirmation, refreshes the UI afterwards, and is withheld
+ * until the signed-in role is known (see selectToolsForRole).
+ */
+export function isWriteTool(def: WebMcpToolDefinition): boolean {
+  return !def.annotations?.readOnlyHint;
+}
+
 /** Adapt one Hisaabo definition into the shape `registerTool` expects. */
 export function buildBrowserTool(
   def: WebMcpToolDefinition,
@@ -212,7 +221,7 @@ export function buildBrowserTool(
     annotations: def.annotations,
     execute: async (input, options) => {
       try {
-        const isWrite = !def.annotations?.readOnlyHint;
+        const isWrite = isWriteTool(def);
         if (isWrite && !(await confirmWrite(def, input ?? {}, options))) {
           return {
             content: [{ type: "text", text: "The user declined this action. Nothing was changed. Do not retry unless the user asks." }],
@@ -231,14 +240,20 @@ export function buildBrowserTool(
 
 // ── Registration ───────────────────────────────────────────────
 
-/** Drop tools the signed-in role cannot use, so the agent never offers a guaranteed 403. */
+/**
+ * Drop tools the signed-in role cannot use, so the agent never offers a guaranteed 403.
+ *
+ * Fails closed while the role is unknown (session still loading, or a user
+ * with no membership): only read-only tools are offered, because `requires`
+ * cannot be checked without a role and a write tool must never be exposed on
+ * a guess. useWebMcp re-registers when the role resolves, which adds the
+ * write tools that role is allowed. The API enforces permissions either way.
+ */
 export function selectToolsForRole(
   defs: readonly WebMcpToolDefinition[],
   role: string | null | undefined,
 ): WebMcpToolDefinition[] {
-  // Same rule as the sidebar's canAccess in __root.tsx: no role yet (session
-  // still loading) passes through; the API is the enforcer of record.
-  if (!role) return [...defs];
+  if (!role) return defs.filter((def) => !isWriteTool(def));
   const ability = defineAbilityFor(role);
   return defs.filter((def) => !def.requires || ability.can(def.requires.action, def.requires.resource));
 }
