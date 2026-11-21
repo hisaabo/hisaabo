@@ -246,17 +246,9 @@ hisaabo invoice pdf BB-12948 --output /tmp/invoices/
 hisaabo invoice pdf BB-12948 --format thermal
 ```
 
-#### `hisaabo invoice update`
+#### Editing an invoice
 
-Update fields on an existing invoice. Only draft invoices can be fully edited; sent or paid invoices accept a limited set of changes.
-
-```bash
-hisaabo invoice update BB-12948 \
-  --notes "Updated payment terms: 30 days net" \
-  --due-date 2026-04-30
-```
-
-Pass `--from-file invoice.json` to replace the full invoice body from a JSON file (same format as `invoice create`).
+The CLI has no `invoice update` command. To change the line items, dates or notes of an invoice, edit it in the web app or use the MCP server's `invoice_update` tool. From the CLI you can change its status with `hisaabo invoice status`.
 
 #### `hisaabo invoice delete`
 
@@ -1058,24 +1050,42 @@ hisaabo store settings --json
 ```bash
 hisaabo store orders
 hisaabo store orders --status pending
-hisaabo store orders --from 2026-03-01 --json
+hisaabo store orders --status pending --page 2 --json
 ```
 
-#### `hisaabo store order confirm`
+`hisaabo store orders` also takes `--page` and `--limit`.
+
+#### `hisaabo store order-get`
+
+```bash
+hisaabo store order-get order_xxxxxxxxxx
+```
+
+#### `hisaabo store order-confirm`
 
 Mark a pending store order as confirmed and begin fulfillment:
 
 ```bash
-hisaabo store order confirm order_xxxxxxxxxx
+hisaabo store order-confirm order_xxxxxxxxxx
 ```
 
-#### `hisaabo store order cancel`
+#### `hisaabo store order-cancel`
 
 Cancel a store order:
 
 ```bash
-hisaabo store order cancel order_xxxxxxxxxx --reason "Out of stock"
+hisaabo store order-cancel order_xxxxxxxxxx --reason "Out of stock"
 ```
+
+#### `hisaabo store order-update`
+
+Move an order along: `--status` is one of `preparing`, `ready` or `delivered`:
+
+```bash
+hisaabo store order-update order_xxxxxxxxxx --status ready
+```
+
+`order-confirm` and `order-cancel` ask for confirmation unless you pass `-y, --yes`.
 
 #### `hisaabo store check-slug`
 
@@ -1117,14 +1127,6 @@ Manage the tenant (organisation) that owns your businesses. Most users operate w
 ```bash
 hisaabo tenant list
 hisaabo tenant list --json
-```
-
-#### `hisaabo tenant select`
-
-Switch the active tenant. All subsequent commands operate in the context of the selected tenant.
-
-```bash
-hisaabo tenant select tenant_xxxxxxxxxx
 ```
 
 #### `hisaabo tenant members`
