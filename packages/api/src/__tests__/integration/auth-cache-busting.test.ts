@@ -395,9 +395,11 @@ describe("API key cache", () => {
       for (let i = 0; i < 6; i++) await (await as({ bearer: created.key })).tenant.list();
     });
     expect(run.updates.filter((t) => t === "api_keys")).toHaveLength(1);
-    await new Promise((r) => setTimeout(r, 50)); // let the fire-and-forget UPDATE land
-    const [row] = await getControlDb().select({ at: apiKeys.lastUsedAt }).from(apiKeys).where(eq(apiKeys.id, created.id));
-    expect(row!.at).not.toBeNull();
+    // the fire-and-forget UPDATE lands asynchronously: wait for it instead of sleeping
+    await vi.waitFor(async () => {
+      const [row] = await getControlDb().select({ at: apiKeys.lastUsedAt }).from(apiKeys).where(eq(apiKeys.id, created.id));
+      expect(row!.at).not.toBeNull();
+    }, { timeout: 5_000, interval: 5 });
   });
 });
 
@@ -653,8 +655,8 @@ describe("no-resurrection races", () => {
     const slow = delayNextControlSelect();
 
     const inflight = getMembership(tenant.id, user.id); // reads role=admin, then is held
-    await new Promise((r) => setTimeout(r, 150)); // let its SQL run before the write
-    expect(slow.delayed()).toBe(true); // the read finished with the OLD row and is parked
+    // the read finished with the OLD row and is parked (waited for, not slept for)
+    await vi.waitFor(() => expect(slow.delayed()).toBe(true), { timeout: 5_000, interval: 5 });
 
     await (await as({ cookie: ownerSession })).tenant.updateMemberRole({ userId: user.id, role: "accountant" });
     slow.release();
@@ -670,8 +672,7 @@ describe("no-resurrection races", () => {
     const { user, session } = await newMember("admin");
     const slow = delayNextControlSelect();
     const racing = createContext({ req: buildReq({ cookie: session }), resHeaders: new Headers(), info: {} as never });
-    await new Promise((r) => setTimeout(r, 150));
-    expect(slow.delayed()).toBe(true);
+    await vi.waitFor(() => expect(slow.delayed()).toBe(true), { timeout: 5_000, interval: 5 });
 
     // revoke from a second session of the same user while the first load is parked
     const other = await insertSession(user.id, tenant.id);
@@ -686,8 +687,7 @@ describe("no-resurrection races", () => {
     const created = await (await as({ cookie: ownerSession })).apiKey.create({ name: "race" });
     const slow = delayNextControlSelect();
     const racing = createContext({ req: buildReq({ bearer: created.key }), resHeaders: new Headers(), info: {} as never });
-    await new Promise((r) => setTimeout(r, 150));
-    expect(slow.delayed()).toBe(true);
+    await vi.waitFor(() => expect(slow.delayed()).toBe(true), { timeout: 5_000, interval: 5 });
     await (await as({ cookie: ownerSession })).apiKey.revoke({ id: created.id });
     slow.release();
     await racing;

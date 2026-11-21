@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi, type MockInstance } from "vitest";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { users, sessions, tenants, tenantMembers, magicLinkTokens, invitations, apiKeys, nativeAuthRequests } from "@hisaabo/db";
 import { isNull } from "drizzle-orm";
@@ -1062,6 +1062,7 @@ describe("auth.requestEmailChange / auth.confirmEmailChange", () => {
     const { caller } = await signedInUser(false);
     await caller.auth.requestEmailChange({ newEmail: newAddress() });
     await caller.auth.confirmEmailChange({ token: tokenFromLastMail() });
+    // "Nothing arrives": the notice is fire-and-forget, so give a wrongly-sent one time to show up.
     await new Promise((r) => setTimeout(r, 100));
     expect(noticeSpy).not.toHaveBeenCalled();
   });
@@ -1415,6 +1416,7 @@ describe("auth.verifyMagicLink — first verification of an unverified account",
       const [row] = await db.select().from(users).where(eq(users.id, f.userId));
       expect(row!.emailVerified).toBe(true);
       expect(row!.passwordHash).not.toBeNull();
+      // "Nothing arrives": the notice is fire-and-forget, so give a wrongly-sent one time to show up.
       await new Promise((r) => setTimeout(r, 100));
       expect(noticeSpy).not.toHaveBeenCalled();
       expect(claimEvent()).toBeUndefined();
@@ -1488,7 +1490,15 @@ describe("auth.verifyMagicLink — first verification of an unverified account",
     const login = unauthCaller().auth.login({ email, password: PASSWORD });
     const settled = vi.fn();
     login.then(settled, settled);
-    await new Promise((r) => setTimeout(r, 1500));
+    // Wait for Postgres to report a backend of this database parked on a lock: the wipe holds the
+    // row lock and is not waiting, so that backend is the login, past its (slow) argon2 verify and
+    // blocked exactly where the test says it must be. A fixed sleep could only hope it got there.
+    await vi.waitFor(async () => {
+      const waiting = await db.execute(sql`
+        select 1 from pg_stat_activity
+        where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'`);
+      expect(waiting.length).toBeGreaterThan(0);
+    }, { timeout: 10_000, interval: 25 });
     expect(settled).not.toHaveBeenCalled(); // blocked on the lock
 
     releaseWipe();
