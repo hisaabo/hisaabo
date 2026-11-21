@@ -138,6 +138,8 @@ This means:
 - Client-side hydration for cart interactivity.
 - Bundle target under 50KB gzipped (no TanStack Router, no tRPC client -- just fetch + React).
 
+`GET /store/:slug/catalog.json` takes `page`, `limit` (default 24, max 100), `category`, `search` and `ids`. `search` is truncated to 100 characters (no error); `category` is matched whole. `ids` is a comma-separated list of at most 50 distinct item UUIDs (anything else answers 400) that narrows the result to those items, still only store-enabled, non-deleted items of the store-enabled business; with `ids` the default `limit` is the number of ids. The cart hand-off links (`#cart=`) and `?item=` links in `apps/store` resolve their items through `ids`; integrator documentation is in `apps/docs/src/content/docs/online-store/own-website.mdx`.
+
 The store app is a separate Vite entry (`apps/store`) in the monorepo. It shares `@hisaabo/shared` for validators and types but has no dependency on `@hisaabo/api` or `@tanstack/react-query`.
 
 For Phase 2, this can be upgraded to full SSR (Hono + React server components or a prerender step) without changing the API contract.

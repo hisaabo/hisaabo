@@ -47,7 +47,7 @@ The Hono app handles:
 - Rate limiting: 120 requests/minute per IP
 - Health check: `GET /health`
 - tRPC endpoint: `POST /trpc/*` and `GET /trpc/*`
-- Public store REST endpoints: `GET /store/:slug/catalog.json`, `POST /store/:slug/order`
+- Public store REST endpoints: `GET /store/:slug/catalog.json` (query: `page`, `limit`, `category`, `search` truncated to 100 characters, and `ids`, up to 50 comma-separated item UUIDs that narrow the result to those items; anything else is a 400), `POST /store/:slug/order`
 - Invoice PDF endpoint: `GET /invoice/:id/pdf`
 
 ### tRPC procedure hierarchy

@@ -1,4 +1,5 @@
-import type { CatalogPage, OrderResult } from "./types";
+import type { CatalogPage, OrderResult, StoreItem } from "./types";
+import { chunkIds, onlyRequestedItems } from "./catalogIds";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
 
@@ -28,12 +29,15 @@ export function assetUrl(path: string | null | undefined): string | undefined {
 
 export async function fetchCatalog(
   slug: string,
-  opts: { page?: number; search?: string; category?: string } = {}
+  opts: { page?: number; search?: string; category?: string; ids?: string[] } = {}
 ): Promise<CatalogPage> {
   const params = new URLSearchParams();
   if (opts.page && opts.page > 1) params.set("page", String(opts.page));
   if (opts.search) params.set("search", opts.search);
   if (opts.category) params.set("category", opts.category);
+  // Narrow to specific items (max 50) — used to resolve cart links and ?item= links.
+  // Sorted so the same set of ids is always the same URL (and CDN cache key).
+  if (opts.ids?.length) params.set("ids", [...opts.ids].sort().join(","));
   const query = params.toString();
 
   // `credentials: "omit"` — the store is fully public. Never attach the
@@ -45,6 +49,19 @@ export async function fetchCatalog(
   });
   if (!res.ok) throw new Error("Store not found");
   return res.json();
+}
+
+/**
+ * Look up specific items of a store (cart links, `?item=` links, the old-cart
+ * migration). Requests are chunked to the API's 50-id limit, and the result is
+ * filtered to the ids asked for: an API that predates `?ids=` ignores it and
+ * returns the first catalog page, which must not be mistaken for the answer.
+ * Ids the store does not publish are simply absent. Rejects if any request fails.
+ */
+export async function fetchItemsByIds(slug: string, ids: string[]): Promise<StoreItem[]> {
+  const chunks = chunkIds(ids);
+  const pages = await Promise.all(chunks.map((chunk) => fetchCatalog(slug, { ids: chunk })));
+  return pages.flatMap((page, i) => onlyRequestedItems(page.items, chunks[i]));
 }
 
 export async function placeOrder(

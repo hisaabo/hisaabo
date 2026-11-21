@@ -20,6 +20,7 @@ When a customer places an order, the API creates an unfulfilled invoice in the b
 - Cart with quantity controls and real-time total calculation in INR
 - Phone-number-verified checkout with Cloudflare Turnstile bot protection
 - Minimum order amount enforcement
+- Cart hand-off links: a business's own website can send shoppers here with a prefilled cart (`#cart=...`), and link to a single item (`?item=<id>`)
 - WhatsApp notification to the business owner on new orders
 - Business-defined accent color, tagline, and delivery notes
 - Auto-generated Privacy Policy, Terms of Service, and Refund Policy pages
@@ -40,6 +41,16 @@ pnpm dev
 The store dev server starts at `http://localhost:5174`. To test with a real business, you need a running API and a business with the store enabled and a `storeSlug` set. Navigate to `http://localhost:5174/<your-store-slug>`.
 
 To enable a business's store, go to **Settings > Online Store** in the web dashboard and toggle it on.
+
+---
+
+## Testing
+
+```bash
+pnpm --filter @hisaabo/store test
+```
+
+Vitest covers the pure logic (cart link parsing and merging, cart persistence). There are no component tests.
 
 ---
 
@@ -109,6 +120,26 @@ The checkout form collects the customer's name, phone, optional email, and deliv
 
 The API validates the token, creates an unfulfilled invoice in the business database, and (if configured) sends a WhatsApp message to the business's `storeWhatsappNumber`.
 
+### Cart links and item links
+
+A business's own website can list items from the public `GET /store/<slug>/catalog.json` and hand the shopper's cart to the store:
+
+```
+https://store.hisaabo.in/<slug>#cart=<encodeURIComponent(JSON)>
+JSON = { "v": 1, "items": [{ "id": "<item uuid>", "qty": 2, "variantId"?: "<variant uuid>", "unit"?: "<alternate unit name>" }] }
+```
+
+The cart is in the URL fragment, so it never reaches a server or CDN log. On load the app (`src/cartLink.ts`, wired up in `App.tsx`):
+
+1. Parses the fragment. Anything malformed or over a limit (8 KB, 50 lines, non-UUID ids, `qty` not a whole number 1 or more, `v` other than 1) ignores the whole link and shows "This cart link couldn't be read". `qty` above 9999 is clamped; lines for the same item, variant and unit are summed.
+2. Fetches those items from the live catalog with `catalog.json?ids=<comma-separated ids>` (max 50) and builds the cart lines from it. Only the ids, quantity, unit and variant come from the link; name, price, tax, unit conversion and stock come from the catalog. Lines whose item, variant or unit is missing or out of stock are dropped and listed in a dismissible notice.
+3. Merges into the persisted cart: a line for the same item+variant+unit has its quantity **set** (not added), so reopening the link is idempotent; other lines are appended and existing lines are kept.
+4. Opens the cart, shows "N items added from a link", and removes the fragment with `history.replaceState`.
+
+`https://store.hisaabo.in/<slug>?item=<item uuid>` opens that item's detail view (an unknown id shows the store normally).
+
+The cart is persisted in `localStorage` under `hisaabo-store-cart:<slug>`. Every store shares the `store.hisaabo.in` origin, so the key includes the slug and one store's cart is never shown in another. Carts saved by earlier versions under the single key `hisaabo-store-cart` are migrated lazily: when a store loads, it looks those lines' item ids up in itself (`catalog.json?ids=`), moves the lines it sells into its own cart (lines already there win) and removes them from the old list; lines for other stores stay for them to claim, the old key is deleted once empty, and a failed lookup changes nothing. Every `?ids=` lookup (`fetchItemsByIds` in `src/api.ts`) is chunked to 50 ids and filtered client-side to the ids requested, so an API that ignores `ids` and returns its first page cannot add unrelated items. Integrator documentation: `apps/docs/src/content/docs/online-store/own-website.mdx`.
+
 ### Variants and alternate units
 
 Items with `itemMode: "variants"` display a variant selector (e.g., size, colour). Items with `itemMode: "alt_units"` let customers choose between measurement units — the price and quantity are converted automatically using the item's `conversionFactor`.
@@ -123,6 +154,9 @@ apps/store/
 │   ├── components/   # Header, ItemCard, CartDrawer, Checkout, PolicyPage, etc.
 │   ├── App.tsx       # Root component — slug routing, catalog fetch, cart state
 │   ├── api.ts        # fetchCatalog() and placeOrder() REST calls
+│   ├── cartLink.ts   # Pure: parse/resolve/merge #cart= links, ?item= param (unit tested)
+│   ├── cartStorage.ts # Per-store cart persistence + old shared-cart migration (unit tested)
+│   ├── catalogIds.ts # Chunking and client-side filtering for ?ids= lookups (unit tested)
 │   ├── types.ts      # StoreConfig, CartItem, OrderResult types
 │   └── styles.css    # Tailwind v4 base styles + accent color CSS variable
 ├── index.html

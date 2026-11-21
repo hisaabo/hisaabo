@@ -83,7 +83,13 @@ export default defineConfig({
             { label: "Backup & Restore", slug: "settings/backup-restore" },
             { label: "Team & Roles", slug: "team" },
             { label: "Invitations", slug: "team/invitations" },
-            { label: "Online Store", slug: "online-store" },
+            {
+              label: "Online Store",
+              items: [
+                { label: "Overview", slug: "online-store" },
+                { label: "Selling from your own website", slug: "online-store/own-website" },
+              ],
+            },
           ],
         },
         {
