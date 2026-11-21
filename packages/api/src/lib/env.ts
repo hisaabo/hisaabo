@@ -1,5 +1,6 @@
 import { logger } from "./logger.js";
 import { opsConfig } from "../ops/config.js";
+import { describeApiPublicUrlFallback, isValidHttpUrl } from "./public-url.js";
 
 interface EnvCheck {
   key: string;
@@ -13,12 +14,6 @@ const checks: EnvCheck[] = [
   { key: "DATABASE_URL", required: true, hint: "PostgreSQL connection string" },
   { key: "CORS_ORIGINS", required: true, apiOnly: true, hint: "Comma-separated allowed origins (e.g. https://app.hisaabo.in)" },
   { key: "APP_URL", required: false, hint: "Frontend URL for magic link emails" },
-  {
-    key: "API_PUBLIC_URL",
-    required: false,
-    condition: () => process.env.NODE_ENV === "production",
-    hint: "Public base URL of this API (http:// or https://), used for absolute links and webhooks. Required in production",
-  },
   { key: "ALLOW_OPEN_SIGNUP", required: false, hint: "Set to \"true\" to let anyone register on a self-hosted server (default: invite-only after the first owner)" },
   {
     key: "ENCRYPTION_KEY",
@@ -38,15 +33,6 @@ const checks: EnvCheck[] = [
 
 export function isValidEncryptionKey(key: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(key);
-}
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -71,14 +57,30 @@ export function validateEnv(opts: { role?: "api" | "worker" } = {}): void {
   }
 
   const encKey = process.env.ENCRYPTION_KEY;
-  // Multi-tenant stores per-tenant DB passwords; without a valid key they would
-  // be written in plaintext (crypto.ts encryptField falls back to plaintext).
-  const needsStrictKey = process.env.NODE_ENV === "production" || process.env.MULTI_TENANT === "true";
-  if (encKey && needsStrictKey && !isValidEncryptionKey(encKey)) {
-    errors.push("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes) in production and multi-tenant mode.");
+  const isProd = process.env.NODE_ENV === "production";
+  const isMultiTenant = process.env.MULTI_TENANT === "true";
+  if (encKey && (isProd || isMultiTenant) && !isValidEncryptionKey(encKey)) {
+    if (isMultiTenant) {
+      // Multi-tenant stores per-tenant database passwords encrypted with this
+      // key; provisioning and every tenant connection depend on it being valid.
+      errors.push("ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes) in multi-tenant mode.");
+    } else {
+      // Single-tenant: do NOT refuse to boot. v0.9.0 accepted any value here and
+      // only failed when a credential was actually encrypted/decrypted, so
+      // existing installs may carry a malformed key and must keep starting.
+      // Nothing can have been encrypted under such a key (crypto.ts throws on a
+      // key that is not 64 hex chars — it never falls back to plaintext), so the
+      // only consequence is that encrypting/decrypting e-invoice and carrier
+      // credentials fails until the key is fixed.
+      logger.warn(
+        "ENCRYPTION_KEY is not exactly 64 hex characters (32 bytes). The server will start, but saving or reading " +
+          "encrypted credentials (e-invoice, carrier API keys) will fail until you set a valid key. " +
+          "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+      );
+    }
   }
   if (
-    process.env.NODE_ENV === "production" &&
+    isProd &&
     !process.env.ENCRYPTION_KEY &&
     !process.env.SESSION_SECRET &&
     !process.env.EXPORT_SECRET
@@ -103,9 +105,18 @@ export function validateEnv(opts: { role?: "api" | "worker" } = {}): void {
     }
   }
 
-  const publicUrl = process.env.API_PUBLIC_URL;
-  if (publicUrl && process.env.NODE_ENV === "production" && !isValidHttpUrl(publicUrl)) {
-    errors.push("API_PUBLIC_URL must be a valid http:// or https:// URL.");
+  // API_PUBLIC_URL is optional: it did not exist in v0.9.0, so an upgrade that
+  // keeps the old env file must still boot. A SET value must be a valid URL;
+  // an unset one falls back (see lib/public-url.ts) with a loud warning.
+  const publicUrl = process.env.API_PUBLIC_URL?.trim();
+  if (publicUrl) {
+    if (!isValidHttpUrl(publicUrl)) {
+      if (isProd) errors.push("API_PUBLIC_URL must be a valid http:// or https:// URL.");
+      else logger.warn("API_PUBLIC_URL is not a valid http(s) URL and will be ignored.");
+    }
+  } else if (isProd) {
+    const fallbackWarning = describeApiPublicUrlFallback();
+    if (fallbackWarning) logger.warn(fallbackWarning);
   }
 
   if (errors.length > 0) {

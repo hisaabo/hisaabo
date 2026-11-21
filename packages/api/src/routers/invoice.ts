@@ -1,7 +1,7 @@
 import { eq, and, sql, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { invoices, invoiceItems, items, itemVariants, businesses, parties, shipments, itcLedgerEntries, eInvoiceConfigs } from "@hisaabo/db";
-import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
+import { createInvoiceSchema, updateInvoiceStatusSchema, paginationSchema, documentTypes, invoiceChargeSchema, invoiceLineItemSchema, calcLineItem, calcInvoiceTotals, validateInvoiceTotals, isRoundOffWithinBound, MAX_ROUND_OFF, checkInvoiceStatusTransition, checkInvoiceDeleteAllowed, canCreateDocumentType, SELLER_PURCHASE_DENIED_MESSAGE, money } from "@hisaabo/shared";
 import { router, viewerProcedure, memberProcedure, adminProcedure, type TenantDatabase } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
@@ -834,8 +834,14 @@ export const invoiceRouter = router({
             ? money.sum(mergedCharges.map((c) => c.amount))
             : "0.00";
         }
+        // Only a CHANGED round-off is held to the +/- MAX_ROUND_OFF bound. Documents
+        // saved by v0.9.0 (no bound) may carry a larger stored value; re-submitting
+        // that same value (the web editor always sends it back) must not lock the
+        // document out of editing.
+        const roundOffUnchanged = (value: string | undefined) =>
+          value === undefined || money.compare(value, existing.roundOff ?? "0") === 0;
         if (input.roundOff !== undefined) {
-          if (money.compare(input.roundOff, MAX_ROUND_OFF) > 0 || money.compare(input.roundOff, `-${MAX_ROUND_OFF}`) < 0) {
+          if (!roundOffUnchanged(input.roundOff) && !isRoundOffWithinBound(input.roundOff)) {
             throw new TRPCError({ code: "BAD_REQUEST", message: `Round off cannot exceed ${MAX_ROUND_OFF} in either direction` });
           }
           updates.roundOff = input.roundOff;
@@ -863,7 +869,9 @@ export const invoiceRouter = router({
             invoiceDiscountType: input.invoiceDiscountType || "amount",
             roundOff: roundOffStr,
           };
-          const totalsError = validateInvoiceTotals(totalsInput);
+          const totalsError = validateInvoiceTotals(totalsInput, {
+            skipRoundOffBound: roundOffUnchanged(roundOffStr),
+          });
           if (totalsError) throw new TRPCError({ code: "BAD_REQUEST", message: totalsError });
           const totals = calcInvoiceTotals(totalsInput);
           if (money.compare(totals.total, existing.amountPaid) < 0) {

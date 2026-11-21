@@ -68,7 +68,7 @@ export const ALLOWED_WRITERS: Record<string, string[]> = {
     "server.ts", // hourly expired-session sweep (cache-guard)
   ],
   access_tokens: ["routers/auth.ts"],
-  users: ["routers/auth.ts"],
+  users: ["routers/auth.ts", "routers/tenant.ts"], // tenant.ts: self-hosted invitation acceptance marks the email verified (user event)
   tenant_members: ["routers/auth.ts", "routers/tenant.ts"],
   tenants: [
     "routers/auth.ts",

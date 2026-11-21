@@ -209,8 +209,16 @@ STEP 1: Atomic token consumption
 STEP 2: User upsert (inside transaction)
   BEGIN TRANSACTION
     STEP 2a: SELECT user by email
-      BRANCH: user exists
-        -> SET emailVerified=true
+      BRANCH: user exists (row locked FOR UPDATE)
+        -> operator login-link token (token.userId == user.id): sign in only; no verify, no revocation
+        -> emailVerified=false and (cloud, OR self-hosted with no membership / only the legacy
+           "member" role): first proof of the mailbox, so in the same transaction DELETE the
+           user's sessions, API keys, pending email-change tokens, authorised native sign-in
+           codes and the invitations it issued, SET password_hash=NULL, emailVerified=true;
+           after commit log unverified_account_claimed and, if it owns an org with other
+           members, send them in a best-effort notice (details: SECURITY.md)
+        -> otherwise (already verified, or an established self-hosted member:
+           owner/superadmin/admin/seller_manager/seller/accountant): SET emailVerified=true only
         -> isNewUser=false
       BRANCH: user does not exist
         -> INSERT user (email, emailVerified=true, name=null)
@@ -243,20 +251,34 @@ OUTPUT: { success: true }
 
 ### WORKFLOW 1F: Email Change
 
-**Trigger**: `auth.requestEmailChange` (protectedProcedure) then `auth.confirmEmailChange` (publicProcedure)
+**Trigger**: `auth.requestEmailChange` then `auth.confirmEmailChange` (both protectedProcedure: the change only takes effect for the requesting account's own session)
 
 ```
 REQUEST PHASE:
   STEP 1: Check new email not taken -> CONFLICT if exists
-  STEP 2: Generate token with userId bound to token row (prevents substitution attack)
-  STEP 3: Send verification email to NEW address
+  STEP 2: Rate limit: 3 email-change requests per account per hour -> TOO_MANY_REQUESTS
+          (counts user-bound magic_link_tokens whose email is not the account's own;
+           operator login-link tokens carry the account's own email and are excluded)
+  STEP 3: Supersede (mark used) the account's earlier unused email-change tokens
+  STEP 4: Generate token with userId bound to token row (prevents substitution attack)
+  STEP 5: Send "Confirm your new Hisaabo email address" (not a sign-in email) to the NEW
+          address with ${APP_URL}/auth/confirm-email-change?token=...; it names the
+          requesting account's current email
 
-CONFIRM PHASE:
-  STEP 1: Atomic token consumption (same as magic link verify)
-  STEP 2: Verify tokenRow.userId exists (must be an email-change token, not a magic link)
-  STEP 3: UPDATE users SET email=tokenRow.email WHERE id=tokenRow.userId
-    NOTE: userId comes from server-side token, NEVER from client input
+CONFIRM PHASE (one transaction, user cache invalidated after):
+  STEP 1: SELECT the live token (unexpired, unused) without writing.
+          Missing, or no bound userId (a plain magic-link token) -> BAD_REQUEST, nothing burned
+  STEP 2: tokenRow.userId != ctx.user.id -> FORBIDDEN "different Hisaabo account"; token NOT consumed;
+          security event email_change_wrong_account
+  STEP 3: tokenRow.email == the account's own email (operator link) -> BAD_REQUEST
+  STEP 4: Atomic claim (UPDATE ... usedAt IS NULL ... RETURNING); no row -> BAD_REQUEST
+  STEP 5: Another account already holds the address -> CONFLICT (rolls the claim back)
+  STEP 6: UPDATE users SET email, email_verified=true; delete the account's other unused user-bound tokens
+    NOTE: userId comes from the server-side token AND must equal the signed-in user, NEVER client input
+  AFTER COMMIT: if the old address was verified, best-effort notice to it
 ```
+
+The web page `/auth/confirm-email-change` never submits by itself: signed out it asks the user to sign in to the account that requested the change and reopen the link; signed in it asks "Change sign-in email for <email>?" and submits on Confirm.
 
 ---
 

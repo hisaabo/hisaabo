@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { validateEnv } from "../lib/env";
+import { logger } from "../lib/logger";
 
-const KEYS = ["NODE_ENV", "API_PUBLIC_URL", "DATABASE_URL", "CORS_ORIGINS", "ENCRYPTION_KEY", "RESEND_API_KEY", "MULTI_TENANT"] as const;
+const KEYS = ["NODE_ENV", "API_PUBLIC_URL", "APP_URL", "DATABASE_URL", "CORS_ORIGINS", "ENCRYPTION_KEY", "RESEND_API_KEY", "MULTI_TENANT"] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
 
@@ -23,13 +24,35 @@ function setProd(apiPublicUrl?: string) {
   else process.env.API_PUBLIC_URL = apiPublicUrl;
 }
 
+function warnMessages(warn: { mock: { calls: unknown[][] } }): string[] {
+  return warn.mock.calls.map((c) => String(c[c.length - 1]));
+}
+
 describe("validateEnv — API_PUBLIC_URL", () => {
-  it("is required in production", () => {
+  it("is NOT required in production (v0.9.0 env files have no API_PUBLIC_URL)", () => {
     setProd();
-    expect(() => validateEnv()).toThrow(/API_PUBLIC_URL/);
+    expect(() => validateEnv()).not.toThrow();
   });
 
-  it("must be a valid http(s) URL in production", () => {
+  it("logs a loud WARN naming the fallback when unset in production", () => {
+    setProd();
+    process.env.APP_URL = "https://app.example.com";
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    validateEnv();
+    const hit = warnMessages(warn).find((m) => m.includes("API_PUBLIC_URL is not set"));
+    expect(hit).toBeDefined();
+    expect(hit).toContain("https://app.example.com");
+    expect(hit).toContain("APP_URL");
+  });
+
+  it("does not warn about the fallback when API_PUBLIC_URL is set", () => {
+    setProd("https://api.example.com");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    validateEnv();
+    expect(warnMessages(warn).some((m) => m.includes("API_PUBLIC_URL is not set"))).toBe(false);
+  });
+
+  it("must be a valid http(s) URL in production when SET", () => {
     setProd("not a url");
     expect(() => validateEnv()).toThrow(/API_PUBLIC_URL/);
     setProd("ftp://api.example.com");
@@ -47,6 +70,44 @@ describe("validateEnv — API_PUBLIC_URL", () => {
     setProd();
     process.env.NODE_ENV = "development";
     expect(() => validateEnv()).not.toThrow();
+  });
+});
+
+describe("validateEnv — ENCRYPTION_KEY format (single-tenant production)", () => {
+  it("boots with a malformed key and warns (v0.9.0 only failed at use)", () => {
+    setProd("https://api.example.com");
+    process.env.ENCRYPTION_KEY = "not-a-64-char-hex-key";
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    expect(() => validateEnv()).not.toThrow();
+    expect(warnMessages(warn).some((m) => m.includes("ENCRYPTION_KEY is not exactly 64 hex"))).toBe(true);
+  });
+
+  it("boots with a 64-char non-hex key and warns", () => {
+    setProd("https://api.example.com");
+    process.env.ENCRYPTION_KEY = "z".repeat(64);
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    expect(() => validateEnv()).not.toThrow();
+    expect(warnMessages(warn).some((m) => m.includes("ENCRYPTION_KEY is not exactly 64 hex"))).toBe(true);
+  });
+
+  it("does not warn for a valid key", () => {
+    setProd("https://api.example.com");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    validateEnv();
+    expect(warnMessages(warn).some((m) => m.includes("ENCRYPTION_KEY is not exactly 64 hex"))).toBe(false);
+  });
+
+  it("stays fatal for a malformed key in multi-tenant production", () => {
+    setProd("https://api.example.com");
+    process.env.MULTI_TENANT = "true";
+    process.env.ENCRYPTION_KEY = "short";
+    expect(() => validateEnv()).toThrow(/64 hex/);
+  });
+
+  it("still requires ENCRYPTION_KEY (signing secret) in production", () => {
+    setProd("https://api.example.com");
+    delete process.env.ENCRYPTION_KEY;
+    expect(() => validateEnv()).toThrow(/ENCRYPTION_KEY is required/);
   });
 });
 

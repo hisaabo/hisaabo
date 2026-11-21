@@ -1,4 +1,4 @@
-import { eq, and, gt, lte, isNull, desc } from "drizzle-orm";
+import { eq, ne, and, gt, lte, isNull, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
@@ -12,10 +12,13 @@ import { getSessionIdFromRequest } from "../context.js";
 import { cacheBus, type CacheEvent } from "../lib/cache/bus.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { enforceSessionLimit } from "../lib/plan-limits.js";
-import { logSecurityEvent } from "../lib/logger.js";
+import { logSecurityEvent, logger } from "../lib/logger.js";
 import { warnPasswordSignInDeprecated } from "../lib/deprecations.js";
 import { getTrustedClientIp } from "../lib/client-ip.js";
 import { buildInfo } from "../lib/build-info.js";
+import { isBearerClient } from "../lib/bearer-client.js";
+import { isLegacyCaptchaExempt, isTauriDesktopRequest, legacyHandoffSource } from "../lib/legacy-v09-compat.js";
+import { MAGIC_LINK_TTL_MS, generateMagicLinkToken, buildMagicLinkUrl } from "../lib/magic-link.js";
 import { normalizeEmail, emailEq } from "../lib/normalize-email.js";
 import { isMultiTenant, isOpenSignupEnabled, hasPendingInvitation, enforceSelfHostedSignup } from "../lib/signup-policy.js";
 import {
@@ -27,6 +30,22 @@ import {
   verifyPkceS256,
   buildNativeRedirectUrl,
 } from "../lib/native-auth.js";
+
+// Email-change requests per account per hour (superseded ones still count).
+const EMAIL_CHANGE_MAX_PER_WINDOW = 3;
+const EMAIL_CHANGE_WINDOW_MS = 60 * 60 * 1000;
+
+// Cap on emailed links per address per 24h for Turnstile-exempt v0.9.x clients.
+const LEGACY_EXEMPT_MAX_LINKS_PER_DAY = 10;
+
+// Self-hosted only (see verifyMagicLink): membership roles that prove an account is
+// an established member of the server rather than a stranger's password sign-up.
+// On a self-hosted server these roles only come from trusted paths: the first owner,
+// accepting an invitation (token path, or in-app after email verification), or an
+// admin's role change. The legacy "member" role is deliberately excluded: it is what
+// `tenant.create` hands to anyone with a pending invitation and what the default
+// tenant hands to later registrants, so it proves nothing.
+const SELF_HOSTED_ESTABLISHED_ROLES = ["owner", "superadmin", "admin", "seller_manager", "seller", "accountant"] as const;
 
 // TTL for short-lived access tokens (15 minutes)
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -79,19 +98,6 @@ function getClientIpFromRequest(req: Request): string | null {
   return getTrustedClientIp(req.headers);
 }
 
-/**
- * Returns true when the session being minted will be consumed as a Bearer
- * token rather than a cookie. Desktop, mobile and CLI clients carry
- * `X-Hisaabo-Client: desktop | mobile | cli`; they never rely on Set-Cookie.
- *
- * The header only selects the session type (and whether `sessionToken` is
- * returned in the body). It never relaxes any other check, Turnstile included.
- */
-function isBearerClient(req: Request): boolean {
-  const client = req.headers.get("x-hisaabo-client");
-  return client === "desktop" || client === "mobile" || client === "cli";
-}
-
 // ── Shared helper: self-hosted default tenant assignment ───────
 // Wrapped in a serializable transaction to prevent TOCTOU race on owner role
 type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
@@ -102,7 +108,7 @@ type ControlTx = Parameters<Parameters<typeof controlDb.transaction>[0]>[0];
 // harmlessly). Emitting inside the tx would let a concurrent read re-cache the
 // pre-commit state. `session{userId}` also covers sessions evicted by
 // enforceSessionLimit(…, tx) and `user` the emailVerified flip.
-interface SignInTouched { userId?: string; tenantId?: string }
+interface SignInTouched { userId?: string; tenantId?: string; credentialsRevoked?: boolean }
 
 async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise<T> {
   try {
@@ -112,6 +118,8 @@ async function settleSignIn<T>(touched: SignInTouched, run: Promise<T>): Promise
     if (touched.userId) {
       events.push({ kind: "user", userId: touched.userId }, { kind: "session", userId: touched.userId });
     }
+    // First verification of an unverified account deletes its API keys too.
+    if (touched.userId && touched.credentialsRevoked) events.push({ kind: "apiKey", userId: touched.userId });
     if (touched.tenantId) events.push({ kind: "membership", tenantId: touched.tenantId, userId: touched.userId });
     if (events.length) cacheBus.invalidate(events);
   }
@@ -152,12 +160,18 @@ async function getOrCreateDefaultTenant(userId: string, parentTx?: ControlTx): P
 }
 
 // ── Shared helper: create session + resolve tenant ─────────────
+//
+// With `tx` the memberships read, eviction and insert run inside the caller's
+// transaction and the cookie is NOT set here: the caller sets it after COMMIT and
+// emits `session{userId}` once the transaction settled (see settleSignIn).
 async function createSessionForUser(
   userId: string,
   ctx: { req: Request; resHeaders: Headers },
   authMethod: "cookie" | "bearer" = "cookie",
+  tx?: ControlTx,
 ): Promise<string> {
-  const memberships = await controlDb
+  const db = tx ?? controlDb;
+  const memberships = await db
     .select({ tenantId: tenantMembers.tenantId })
     .from(tenantMembers)
     .where(eq(tenantMembers.userId, userId));
@@ -165,7 +179,7 @@ async function createSessionForUser(
   const resolvedTenantId = memberships.length === 1 ? memberships[0].tenantId : null;
 
   // Evict oldest sessions if at plan limit (FIFO, never blocks login)
-  await enforceSessionLimit(userId);
+  await enforceSessionLimit(userId, tx);
 
   const previousSessionId = getSessionIdFromRequest(ctx.req);
   if (previousSessionId && !previousSessionId.startsWith("hisaabo_key_")) {
@@ -185,7 +199,7 @@ async function createSessionForUser(
   const expiresAt = new Date(now + (authMethod === "bearer" ? BEARER_SESSION_DURATION_MS : SESSION_DURATION_MS));
   const maxExpiresAt = authMethod === "bearer" ? new Date(now + BEARER_MAX_SESSION_DURATION_MS) : null;
 
-  await controlDb.insert(sessions).values({
+  await db.insert(sessions).values({
     id: sessionId,
     userId,
     tenantId: resolvedTenantId,
@@ -197,7 +211,7 @@ async function createSessionForUser(
   });
 
   // Cookie clients always get Set-Cookie; Bearer clients hold the token in-app.
-  if (authMethod === "cookie") {
+  if (authMethod === "cookie" && !tx) {
     setSessionCookie(ctx.resHeaders, sessionId);
   }
   return sessionId;
@@ -312,7 +326,15 @@ export const authRouter = router({
     // Self-hosted / dev without the key can skip verification.
     const registerAuthMethod: "cookie" | "bearer" = isBearerClient(ctx.req) ? "bearer" : "cookie";
     if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
+      // Turnstile stays mandatory for account creation, including for v0.9.x apps
+      // (their sendMagicLink exemption never covers sign-up). The v0.9.0 desktop
+      // webview cannot solve a challenge, so tell it what to do instead.
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: isTauriDesktopRequest(ctx.req)
+          ? "Update the Hisaabo desktop app to create an account, or sign up in your browser."
+          : "Turnstile verification required",
+      });
     }
     if (input.turnstileToken) {
       const ip = getClientIpFromRequest(ctx.req);
@@ -506,7 +528,30 @@ export const authRouter = router({
     }
 
     const bearer = isBearerClient(ctx.req);
-    const sessionToken = await createSessionForUser(user.id, ctx, bearer ? "bearer" : "cookie");
+    const authMethod = bearer ? "bearer" : "cookie";
+
+    // The argon2 verification above takes long enough for verifyMagicLink's
+    // first-verification credential wipe (which nulls password_hash and deletes
+    // sessions under a row lock on this user) to commit in between. Take the same
+    // row lock and require the hash we verified to still be the stored one, so a
+    // login that was in flight cannot mint a session after the wipe.
+    const touched: SignInTouched = { userId: user.id };
+    const sessionToken = await settleSignIn(touched, controlDb.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .for("update")
+        .limit(1);
+      if (!locked?.passwordHash || locked.passwordHash !== user.passwordHash) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+      }
+      return createSessionForUser(user.id, ctx, authMethod, tx);
+    }));
+    // Set-Cookie only after COMMIT (a rolled-back session must never reach the client).
+    if (authMethod === "cookie") {
+      setSessionCookie(ctx.resHeaders, sessionToken);
+    }
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
@@ -516,9 +561,15 @@ export const authRouter = router({
 
   // ── Magic link: request ──────────────────────────────────────
   sendMagicLink: publicProcedure.input(magicLinkRequestSchema).mutation(async ({ input, ctx }) => {
-    // Turnstile is required whenever a secret key is configured; no client
-    // header can skip it. Dev / self-hosted without the key can omit it.
-    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken) {
+    // Turnstile is required whenever a secret key is configured. Dev / self-hosted
+    // without the key can omit it. The only exception is the DEPRECATED v0.9.x
+    // native-client exemption (lib/legacy-v09-compat.ts, kill switch
+    // LEGACY_V09_CLIENT_COMPAT=false): those apps cannot solve a challenge and
+    // never needed to, so a tokenless request with their exact header signature is
+    // let through, then bounded below (existing/invited users only, 10 links per
+    // address per 24h). A request that carries a token is always verified.
+    const exempt = !input.turnstileToken && isLegacyCaptchaExempt(ctx.req);
+    if (process.env.TURNSTILE_SECRET_KEY && !input.turnstileToken && !exempt) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Turnstile verification required" });
     }
     if (input.turnstileToken) {
@@ -534,6 +585,31 @@ export const authRouter = router({
     // Check if user already exists to send welcome vs sign-in variant
     // (API response is always { success: true } regardless — no enumeration risk)
     const [existingUser] = await controlDb.select({ id: users.id }).from(users).where(emailEq(users.email, email)).limit(1);
+
+    // Legacy (Turnstile-exempt) callers can only trigger mail to people who already
+    // have, or are invited to have, an account, and only a bounded number per
+    // address per day. Same response either way, so nothing is revealed.
+    const legacyExemptGated = exempt && !!process.env.TURNSTILE_SECRET_KEY;
+    if (legacyExemptGated) {
+      if (!existingUser && !(await hasPendingInvitation(controlDb, email))) {
+        return { success: true };
+      }
+      const dayTokens = await controlDb
+        .select({ id: magicLinkTokens.id })
+        .from(magicLinkTokens)
+        .where(and(
+          eq(magicLinkTokens.email, email),
+          gt(magicLinkTokens.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+        ));
+      if (dayTokens.length >= LEGACY_EXEMPT_MAX_LINKS_PER_DAY) {
+        return { success: true };
+      }
+      logSecurityEvent("turnstile_legacy_exempt", {
+        ip: getClientIpFromRequest(ctx.req),
+        path: "/api/trpc/auth.sendMagicLink",
+        reason: isTauriDesktopRequest(ctx.req) ? "desktop" : "mobile",
+      });
+    }
 
     // Closed self-hosted server: unknown, uninvited emails get no link. The
     // response is identical so this reveals nothing.
@@ -558,29 +634,35 @@ export const authRouter = router({
       return { success: true };
     }
 
-    const rawToken = crypto.randomUUID() + "-" + nanoid(32);
-    const tokenH = hashToken(rawToken);
+    const { rawToken, tokenHash: tokenH } = generateMagicLinkToken();
 
     await controlDb.insert(magicLinkTokens).values({
       email,
       tokenHash: tokenH,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS),
       ipAddress: getClientIpFromRequest(ctx.req),
     });
 
     const baseUrl = process.env.APP_URL || "http://localhost:5173";
-    const tokenParam = `token=${encodeURIComponent(rawToken)}`;
 
     // The email CTA is always the HTTPS link: email clients refuse to render
-    // custom URL schemes. `source` is still threaded through for older native
-    // clients whose /auth/verify page hands off to the app.
-    const sourceSuffix =
-      input.source === "desktop" || input.source === "mobile"
-        ? `&source=${input.source}`
-        : "";
-    const webUrl = `${baseUrl}/auth/verify?${tokenParam}${sourceSuffix}`;
+    // custom URL schemes. For v0.9.x native clients the link carries
+    // `source=mobile|desktop` so /auth/verify can offer to open the app
+    // (legacyHandoffSource is null — no suffix — when the compat switch is off).
+    const webUrl = buildMagicLinkUrl(baseUrl, rawToken, legacyHandoffSource(ctx.req, input.source) ?? undefined);
 
-    await emailService.sendMagicLink(email, webUrl, !existingUser);
+    if (legacyExemptGated) {
+      // Turnstile-exempt callers are answered before the mail provider has
+      // replied: otherwise the response time separates "known address" (a send
+      // happened) from "unknown / over the daily cap" (returned early), an
+      // enumeration oracle for a caller that carries no Turnstile token. A send
+      // failure is logged, never surfaced.
+      void emailService.sendMagicLink(email, webUrl, !existingUser).catch((err) => {
+        logger.warn({ err }, "Failed to send magic link to a Turnstile-exempt (legacy) client");
+      });
+    } else {
+      await emailService.sendMagicLink(email, webUrl, !existingUser);
+    }
 
     return { success: true }; // Always success — no email enumeration
   }),
@@ -645,6 +727,21 @@ export const authRouter = router({
 
     // ── Phase 3 (tx) + Phase 4 (compensate on failure or unused) ─────
     const touched: SignInTouched = {};
+    // Set inside the tx when this token is the first proof of mailbox ownership
+    // for an unverified account; logged after COMMIT.
+    // (A holder object: TypeScript does not track assignments made inside the closure.)
+    const claim: {
+      counts: {
+        sessions: number;
+        apiKeys: number;
+        pendingEmailChanges: number;
+        nativeRequests: number;
+        pendingInvitations: number;
+        otherMembers: number;
+        hadPassword: boolean;
+      } | null;
+      orgs: Array<{ orgName: string; members: Array<{ email: string; role: string }> }>;
+    } = { counts: null, orgs: [] };
     const { user, sessionToken, isNewUser, email } = await withProvisionedTenantCleanup(
       provisioned,
       async (markUsed) =>
@@ -673,11 +770,29 @@ export const authRouter = router({
           let isNew = false;
 
           // Find or create user
+          // FOR UPDATE: an existing account's credentials may be revoked below, and
+          // password login takes the same lock before it mints a session.
           let [user] = await tx
-            .select({ id: users.id, email: users.email, name: users.name })
+            .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified, passwordHash: users.passwordHash })
             .from(users)
             .where(emailEq(users.email, emailLocal))
+            .for("update")
             .limit(1);
+
+          // Self-hosted compatibility (never queried on the cloud): in v0.9.0 every
+          // password account was "never verified", the owner included. An account
+          // that already holds an established membership is a member of this server,
+          // not a stranger's pre-registration, so its first email-link sign-in must
+          // not wipe it.
+          let establishedSelfHosted = false;
+          if (user && !user.emailVerified && process.env.MULTI_TENANT !== "true") {
+            const [established] = await tx
+              .select({ id: tenantMembers.id })
+              .from(tenantMembers)
+              .where(and(eq(tenantMembers.userId, user.id), inArray(tenantMembers.role, SELF_HOSTED_ESTABLISHED_ROLES)))
+              .limit(1);
+            establishedSelfHosted = !!established;
+          }
 
           if (!user) {
             await enforceSelfHostedSignup(tx, emailLocal);
@@ -685,7 +800,7 @@ export const authRouter = router({
             const [newUser] = await tx.insert(users).values({
               email: emailLocal,
               emailVerified: true,
-            }).returning({ id: users.id, email: users.email, name: users.name });
+            }).returning({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified, passwordHash: users.passwordHash });
             user = newUser;
 
             // Re-check invitation using tx state (not the peek)
@@ -717,8 +832,81 @@ export const authRouter = router({
             } else {
               touched.tenantId = await getOrCreateDefaultTenant(user.id, tx);
             }
+          } else if (tokenRow.userId !== null && tokenRow.userId === user.id) {
+            // Operator break-glass link (`admin login-link`): the only way a token
+            // can carry the user id of the very account it signs into, because
+            // sendMagicLink never binds a user and requestEmailChange refuses an
+            // address that already has an account. It proves nothing about the
+            // mailbox, so it neither marks the email verified nor revokes anything.
+          } else if (!user.emailVerified && !establishedSelfHosted) {
+            // First proof of mailbox ownership for an account that existed before
+            // the email was verified (password sign-up: anyone could register an
+            // address they do not own). Every credential issued before this point
+            // was not issued to the mailbox owner, so all of it dies now: sessions,
+            // API keys, the password, and anything that could mint a new credential
+            // later (a pending email change, an authorised native sign-in code).
+            // Deleting sessions cascades to their access tokens.
+            //
+            // Which accounts: on the cloud, every unverified account. On a
+            // self-hosted server only accounts WITHOUT an established membership
+            // (SELF_HOSTED_ESTABLISHED_ROLES: no membership at all, e.g. registered
+            // against a pending invitation, or only the legacy "member" role). Role is
+            // the trust anchor there because it can only be obtained through trusted
+            // paths, so an owner/admin/invited-role member who registered with a
+            // password under v0.9.0 is simply marked verified (next branch) and keeps
+            // their password, sessions, API keys and invitations.
+            const revokedSessions = await tx.delete(sessions).where(eq(sessions.userId, user.id)).returning({ id: sessions.id });
+            const revokedKeys = await tx.delete(apiKeys).where(eq(apiKeys.userId, user.id)).returning({ id: apiKeys.id });
+            const revokedEmailChanges = await tx.delete(magicLinkTokens)
+              .where(and(eq(magicLinkTokens.userId, user.id), isNull(magicLinkTokens.usedAt)))
+              .returning({ id: magicLinkTokens.id });
+            const revokedNativeRequests = await tx.delete(nativeAuthRequests)
+              .where(eq(nativeAuthRequests.userId, user.id))
+              .returning({ id: nativeAuthRequests.id });
+            // Invitations this account issued before the proof were not issued by the
+            // mailbox owner either: a pending one is a ready-made way into the
+            // organisation for whoever holds its link.
+            const revokedInvitations = await tx.delete(invitations)
+              .where(and(eq(invitations.invitedBy, user.id), isNull(invitations.acceptedAt)))
+              .returning({ id: invitations.id });
+            // People who already have access to an organisation this account owns were
+            // added before the proof. They are NOT removed automatically (they may be
+            // legitimate); the owner is told who they are after the sign-in.
+            const owned = await tx
+              .select({ tenantId: tenantMembers.tenantId })
+              .from(tenantMembers)
+              .where(and(eq(tenantMembers.userId, user.id), inArray(tenantMembers.role, ["owner", "superadmin"])));
+            const others = owned.length === 0 ? [] : await tx
+              .select({ tenantId: tenantMembers.tenantId, tenantName: tenants.name, email: users.email, role: tenantMembers.role })
+              .from(tenantMembers)
+              .innerJoin(tenants, eq(tenants.id, tenantMembers.tenantId))
+              .innerJoin(users, eq(users.id, tenantMembers.userId))
+              .where(and(inArray(tenantMembers.tenantId, owned.map((o) => o.tenantId)), ne(tenantMembers.userId, user.id)));
+            const byOrg = new Map<string, { orgName: string; members: Array<{ email: string; role: string }> }>();
+            for (const m of others) {
+              const org = byOrg.get(m.tenantId) ?? { orgName: m.tenantName, members: [] };
+              org.members.push({ email: m.email, role: m.role });
+              byOrg.set(m.tenantId, org);
+            }
+            claim.orgs = [...byOrg.values()];
+            await tx.update(users)
+              .set({ emailVerified: true, passwordHash: null, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
+            touched.credentialsRevoked = true;
+            claim.counts = {
+              sessions: revokedSessions.length,
+              apiKeys: revokedKeys.length,
+              pendingEmailChanges: revokedEmailChanges.length,
+              nativeRequests: revokedNativeRequests.length,
+              pendingInvitations: revokedInvitations.length,
+              otherMembers: others.length,
+              hadPassword: user.passwordHash !== null,
+            };
           } else {
-            // Existing user path — mark email verified
+            // Existing, already-verified user (or an established self-hosted member
+            // signing in for the first time): a normal sign-in leaves every
+            // credential (password, other sessions, API keys, invitations) untouched
+            // and only records that the email is now verified.
             await tx.update(users)
               .set({ emailVerified: true, updatedAt: new Date() })
               .where(eq(users.id, user.id));
@@ -761,6 +949,23 @@ export const authRouter = router({
     }
     // `email` is captured to keep parity with the old log surface if needed later.
     void email;
+
+    if (claim.counts) {
+      // Ids and counts only: no email, no token. Informational for operators.
+      logSecurityEvent("unverified_account_claimed", {
+        ip: getClientIpFromRequest(ctx.req),
+        path: "/api/trpc/auth.verifyMagicLink",
+        reason: "first_magic_link_verification",
+        extra: { userId: user.id, ...claim.counts },
+      });
+      // Tell the owner who already had access. Best effort: a mail failure (or no
+      // email service) must never fail the sign-in that just succeeded.
+      if (claim.counts.otherMembers > 0) {
+        void emailService.sendSecurityNotice(user.email, claim.orgs).catch((err) => {
+          logger.warn({ err }, "Failed to send security notice after first email verification");
+        });
+      }
+    }
 
     return {
       user: { id: user.id, email: user.email, name: user.name },
@@ -911,10 +1116,18 @@ export const authRouter = router({
     }),
 
   // ── Request email change ─────────────────────────────────────
+  // The confirmation goes to the NEW address, but it only takes effect for THIS
+  // account, while it is signed in (see confirmEmailChange): the mailbox owner
+  // alone cannot be tricked into hijacking an account by clicking a link.
   requestEmailChange: protectedProcedure
     .input(z.object({ newEmail: z.string().email().max(255) }))
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
       const email = normalizeEmail(input.newEmail);
+
+      const [me] = await controlDb.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!me) throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
+      const currentEmail = normalizeEmail(me.email);
 
       // Check if new email is already taken
       const [existing] = await controlDb.select({ id: users.id })
@@ -922,6 +1135,28 @@ export const authRouter = router({
       if (existing) {
         throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
       }
+
+      // Email-change tokens are the user-bound rows whose email is not the account's
+      // own email (operator login-link tokens carry the account's own email, and
+      // are neither counted nor touched). The rows are kept when superseded, so
+      // they keep counting against the hourly limit; `ip_address` is not used to
+      // tell them apart because a client can influence it.
+      const emailChangeTokens = and(
+        eq(magicLinkTokens.userId, userId),
+        sql`lower(${magicLinkTokens.email}) <> ${currentEmail}`,
+      );
+      const recent = await controlDb
+        .select({ id: magicLinkTokens.id })
+        .from(magicLinkTokens)
+        .where(and(emailChangeTokens, gt(magicLinkTokens.createdAt, new Date(Date.now() - EMAIL_CHANGE_WINDOW_MS))));
+      if (recent.length >= EMAIL_CHANGE_MAX_PER_WINDOW) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many email change requests. Please try again later." });
+      }
+
+      // A new request supersedes every earlier unused one.
+      await controlDb.update(magicLinkTokens)
+        .set({ usedAt: new Date() })
+        .where(and(emailChangeTokens, isNull(magicLinkTokens.usedAt)));
 
       // Generate a token for email change verification
       const rawToken = crypto.randomUUID() + "-" + nanoid(32);
@@ -931,58 +1166,111 @@ export const authRouter = router({
         email: email, // Store the NEW email
         tokenHash,
         // Store the requesting user's ID so confirmEmailChange doesn't trust client-supplied userId
-        userId: ctx.user!.id,
+        userId,
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         ipAddress: getClientIpFromRequest(ctx.req),
       });
 
-      // Send verification to new email — no userId in URL; it is bound to the token server-side
-      const baseUrl = process.env.APP_URL || "http://localhost:5173";
-      const verifyUrl = `${baseUrl}/auth/verify-email-change?token=${encodeURIComponent(rawToken)}`;
+      // Deliberately NOT under /auth/verify (installed apps intercept that path) and
+      // NOT a sign-in email: it names the requesting account and says what it does.
+      const baseUrl = (process.env.APP_URL || "http://localhost:5173").replace(/\/+$/, "");
+      const confirmUrl = `${baseUrl}/auth/confirm-email-change?token=${encodeURIComponent(rawToken)}`;
 
-      await emailService.sendMagicLink(email, verifyUrl, false);
+      await emailService.sendEmailChangeConfirmation(email, confirmUrl, currentEmail);
 
       return { success: true };
     }),
 
   // ── Confirm email change ─────────────────────────────────────
-  // userId is intentionally NOT accepted from client input — it is read from the
-  // server-side token record to prevent account takeover via token substitution.
-  confirmEmailChange: publicProcedure
+  // Requires the SESSION of the account that requested the change: possession of
+  // the emailed token alone is not enough. Otherwise anyone could request a change
+  // to a victim's address from an account they control, and the victim opening
+  // the mail would hand that account the victim's email (and a later sign-in by
+  // email link would land in the attacker's account). userId is read from the
+  // token record, never from client input.
+  confirmEmailChange: protectedProcedure
     .input(z.object({ token: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user!.id;
       const tokenH = hashToken(input.token);
+      const invalid = () => new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
+      let changed: { oldEmail: string; newEmail: string; oldWasVerified: boolean } | null = null;
 
-      // Atomic: find + mark-used
-      const [tokenRow] = await controlDb.update(magicLinkTokens)
-        .set({ usedAt: new Date() })
-        .where(and(
-          eq(magicLinkTokens.tokenHash, tokenH),
-          gt(magicLinkTokens.expiresAt, new Date()),
-          isNull(magicLinkTokens.usedAt),
-        ))
-        .returning();
+      // The email is embedded in every cached session / access token / API key of
+      // the user: invalidate by user once the transaction settled.
+      const newEmail = await cacheBus.afterWrite([{ kind: "user", userId }], () =>
+        controlDb.transaction(async (tx) => {
+          const now = new Date();
+          const live = and(
+            eq(magicLinkTokens.tokenHash, tokenH),
+            gt(magicLinkTokens.expiresAt, now),
+            isNull(magicLinkTokens.usedAt),
+          );
 
-      if (!tokenRow) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
-      }
+          // Read first, write nothing: a plain magic-link token (no bound user) must
+          // not be burnable here, and another account's token must stay usable by it.
+          const [peek] = await tx.select().from(magicLinkTokens).where(live).limit(1);
+          if (!peek || !peek.userId) throw invalid();
+          if (peek.userId !== userId) {
+            logSecurityEvent("email_change_wrong_account", {
+              ip: getClientIpFromRequest(ctx.req),
+              path: "/api/trpc/auth.confirmEmailChange",
+              reason: "token_bound_to_other_account",
+            });
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "This link confirms an email change for a different Hisaabo account. Sign in to that account, then open the link again.",
+            });
+          }
 
-      // Require that this token was issued for an email-change request (has a bound userId)
-      if (!tokenRow.userId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid or expired link" });
-      }
+          const [me] = await tx
+            .select({ email: users.email, emailVerified: users.emailVerified })
+            .from(users)
+            .where(eq(users.id, userId))
+            .for("update")
+            .limit(1);
+          if (!me) throw invalid();
+          // An operator login-link token carries the account's own email: not an email change.
+          if (normalizeEmail(peek.email) === normalizeEmail(me.email)) throw invalid();
 
-      // Update the user's email using the userId stored in the token — never from client input
-      // The email is embedded in every cached session / access token / API key
-      // of the user: invalidate by user once the write settled.
-      const changedUserId = tokenRow.userId;
-      await cacheBus.afterWrite([{ kind: "user", userId: changedUserId }], () =>
-        controlDb.update(users)
-          .set({ email: tokenRow.email, emailVerified: true, updatedAt: new Date() })
-          .where(eq(users.id, changedUserId)),
+          // Claim atomically (single use, concurrent confirms serialise on the row).
+          const [claimed] = await tx.update(magicLinkTokens)
+            .set({ usedAt: now })
+            .where(live)
+            .returning();
+          if (!claimed) throw invalid();
+
+          // Someone may have registered the address since it was requested. Throwing
+          // rolls the claim back, so the token is not burned.
+          const [taken] = await tx.select({ id: users.id })
+            .from(users)
+            .where(and(emailEq(users.email, claimed.email), ne(users.id, userId)))
+            .limit(1);
+          if (taken) throw new TRPCError({ code: "CONFLICT", message: "Email already in use" });
+
+          await tx.update(users)
+            .set({ email: claimed.email, emailVerified: true, updatedAt: now })
+            .where(eq(users.id, userId));
+
+          // Any other unused user-bound token (older change requests, operator links
+          // for the old address) must not outlive the change.
+          await tx.delete(magicLinkTokens).where(and(eq(magicLinkTokens.userId, userId), isNull(magicLinkTokens.usedAt)));
+
+          changed = { oldEmail: me.email, newEmail: claimed.email, oldWasVerified: me.emailVerified };
+          return claimed.email;
+        }),
       );
 
-      return { success: true, newEmail: tokenRow.email };
+      // Tell the OLD address, but only if it had been proven to be the owner's. Best
+      // effort: a mail failure must never undo or fail the change.
+      const done = changed as { oldEmail: string; newEmail: string; oldWasVerified: boolean } | null;
+      if (done?.oldWasVerified) {
+        void emailService.sendEmailChangedNotice(done.oldEmail, done.newEmail).catch((err) => {
+          logger.warn({ err }, "Failed to send email-changed notice");
+        });
+      }
+
+      return { success: true, newEmail };
     }),
 
   // ── Logout ───────────────────────────────────────────────────

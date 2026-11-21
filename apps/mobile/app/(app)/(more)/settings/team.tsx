@@ -103,6 +103,11 @@ function TeamScreenContent() {
   const { data: me } = trpc.auth.me.useQuery(undefined);
   const myRole = me?.role ?? "";
   const canManage = ["owner", "superadmin", "admin"].includes(myRole);
+  // Cloud only: an account whose email was never verified may not invite members or
+  // change roles; hide those controls instead of letting them fail.
+  const { data: invitePermission } = trpc.tenant.canInviteMembers.useQuery(undefined);
+  const inviteBlocked = canManage && invitePermission?.allowed === false;
+  const canInvite = canManage && !inviteBlocked;
 
   const inviteMutation = trpc.tenant.inviteMember.useMutation({
     onSuccess: () => {
@@ -211,7 +216,7 @@ function TeamScreenContent() {
           <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.title}>Team</Text>
-        {canManage ? (
+        {canInvite ? (
           <TouchableOpacity
             style={styles.inviteBtn}
             onPress={() => setShowInviteModal(true)}
@@ -272,7 +277,7 @@ function TeamScreenContent() {
                       {m.userEmail}
                     </Text>
                     <View style={styles.memberRoleRow}>
-                      {canManage && !isOwner && !isMe ? (
+                      {canInvite && !isOwner && !isMe ? (
                         <TouchableOpacity
                           onPress={() => handleOpenRoleModal(m.userId, m.role, displayName)}
                           activeOpacity={0.7}
@@ -369,7 +374,14 @@ function TeamScreenContent() {
           </View>
         )}
 
-        {canManage && (
+        {inviteBlocked && (
+          <Text style={{ color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 12 }}>
+            Verify your email address before inviting or changing team members: sign out and sign in with an email link.
+            After that, your password and API keys stop working and you sign in by email link.
+          </Text>
+        )}
+
+        {canInvite && (
           <TouchableOpacity
             style={styles.inviteLargeBtn}
             onPress={() => setShowInviteModal(true)}

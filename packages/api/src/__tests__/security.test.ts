@@ -145,7 +145,11 @@ describe("SECURITY — confirmEmailChange reads userId from token, not from clie
    *
    * This test verifies the intent by checking that requestEmailChange stores the
    * userId in the token record (server-side binding), which confirmEmailChange
-   * then reads rather than accepting from the URL/body.
+   * then reads rather than accepting from the URL/body. confirmEmailChange is
+   * also a protected procedure: the signed-in user must BE the bound user, so a
+   * token that reaches someone else (e.g. the mailbox owner being tricked into
+   * clicking) cannot move that address onto the requester's account. The real
+   * flow is covered end to end in integration/auth.test.ts.
    */
 
   it("documents that the email-change token stores userId server-side (not in client URL)", () => {
@@ -154,29 +158,38 @@ describe("SECURITY — confirmEmailChange reads userId from token, not from clie
     // And confirmEmailChange: if (!tokenRow.userId) throw FORBIDDEN
     //
     // We model this as a pure function test to avoid needing a real DB.
-    function simulateConfirmEmailChange(tokenRow: { userId: string | null; email: string }) {
+    function simulateConfirmEmailChange(tokenRow: { userId: string | null; email: string }, sessionUserId: string) {
       if (!tokenRow.userId) {
         throw new Error("Invalid or expired link");
+      }
+      // The signed-in user must be the account the token was issued to
+      if (tokenRow.userId !== sessionUserId) {
+        throw new Error("This link confirms an email change for a different Hisaabo account");
       }
       // Use the STORED userId, not one from the client
       return { updatedUserId: tokenRow.userId, newEmail: tokenRow.email };
     }
 
-    // Happy path: token has the correct userId stored server-side
-    const result = simulateConfirmEmailChange({ userId: "user-abc", email: "new@example.com" });
+    // Happy path: token has the correct userId stored server-side and the requester is signed in
+    const result = simulateConfirmEmailChange({ userId: "user-abc", email: "new@example.com" }, "user-abc");
     expect(result.updatedUserId).toBe("user-abc");
     expect(result.newEmail).toBe("new@example.com");
+
+    // Someone else's session (the mailbox owner who was tricked into clicking) is refused
+    expect(() => simulateConfirmEmailChange({ userId: "user-abc", email: "victim@example.com" }, "victim-id"))
+      .toThrow("different Hisaabo account");
   });
 
   it("rejects tokens that do not have a bound userId (e.g. regular magic link used for email-change)", () => {
-    function simulateConfirmEmailChange(tokenRow: { userId: string | null; email: string }) {
+    function simulateConfirmEmailChange(tokenRow: { userId: string | null; email: string }, sessionUserId: string) {
       if (!tokenRow.userId) throw new Error("Invalid or expired link");
+      if (tokenRow.userId !== sessionUserId) throw new Error("different Hisaabo account");
       return { updatedUserId: tokenRow.userId, newEmail: tokenRow.email };
     }
 
     // A magic link token (no userId bound) cannot be reused for email change
     expect(() =>
-      simulateConfirmEmailChange({ userId: null, email: "attacker@evil.com" })
+      simulateConfirmEmailChange({ userId: null, email: "attacker@evil.com" }, "user-abc")
     ).toThrow("Invalid or expired link");
   });
 });

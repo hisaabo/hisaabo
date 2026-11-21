@@ -36,6 +36,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ShipmentsRouteImport } from './routes/shipments'
 import { Route as StoreOrdersRouteImport } from './routes/store-orders'
 import { Route as AuthCompleteProfileRouteImport } from './routes/auth/complete-profile'
+import { Route as AuthConfirmEmailChangeRouteImport } from './routes/auth/confirm-email-change'
 import { Route as AuthNativeRouteImport } from './routes/auth/native'
 import { Route as AuthVerifyRouteImport } from './routes/auth/verify'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
@@ -175,6 +176,11 @@ const AuthCompleteProfileRoute = AuthCompleteProfileRouteImport.update({
   path: '/auth/complete-profile',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthConfirmEmailChangeRoute = AuthConfirmEmailChangeRouteImport.update({
+  id: '/auth/confirm-email-change',
+  path: '/auth/confirm-email-change',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthNativeRoute = AuthNativeRouteImport.update({
   id: '/auth/native',
   path: '/auth/native',
@@ -219,6 +225,7 @@ export interface FileRoutesByFullPath {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/confirm-email-change': typeof AuthConfirmEmailChangeRoute
   '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -251,6 +258,7 @@ export interface FileRoutesByTo {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/confirm-email-change': typeof AuthConfirmEmailChangeRoute
   '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -284,6 +292,7 @@ export interface FileRoutesById {
   '/shipments': typeof ShipmentsRoute
   '/store-orders': typeof StoreOrdersRoute
   '/auth/complete-profile': typeof AuthCompleteProfileRoute
+  '/auth/confirm-email-change': typeof AuthConfirmEmailChangeRoute
   '/auth/native': typeof AuthNativeRoute
   '/auth/verify': typeof AuthVerifyRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -318,6 +327,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/confirm-email-change'
     | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
@@ -350,6 +360,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/confirm-email-change'
     | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
@@ -382,6 +393,7 @@ export interface FileRouteTypes {
     | '/shipments'
     | '/store-orders'
     | '/auth/complete-profile'
+    | '/auth/confirm-email-change'
     | '/auth/native'
     | '/auth/verify'
     | '/invite/$token'
@@ -415,6 +427,7 @@ export interface RootRouteChildren {
   ShipmentsRoute: typeof ShipmentsRoute
   StoreOrdersRoute: typeof StoreOrdersRoute
   AuthCompleteProfileRoute: typeof AuthCompleteProfileRoute
+  AuthConfirmEmailChangeRoute: typeof AuthConfirmEmailChangeRoute
   AuthNativeRoute: typeof AuthNativeRoute
   AuthVerifyRoute: typeof AuthVerifyRoute
   InviteTokenRoute: typeof InviteTokenRoute
@@ -611,6 +624,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthCompleteProfileRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/confirm-email-change': {
+      id: '/auth/confirm-email-change'
+      path: '/auth/confirm-email-change'
+      fullPath: '/auth/confirm-email-change'
+      preLoaderRoute: typeof AuthConfirmEmailChangeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/native': {
       id: '/auth/native'
       path: '/auth/native'
@@ -663,6 +683,7 @@ const rootRouteChildren: RootRouteChildren = {
   ShipmentsRoute: ShipmentsRoute,
   StoreOrdersRoute: StoreOrdersRoute,
   AuthCompleteProfileRoute: AuthCompleteProfileRoute,
+  AuthConfirmEmailChangeRoute: AuthConfirmEmailChangeRoute,
   AuthNativeRoute: AuthNativeRoute,
   AuthVerifyRoute: AuthVerifyRoute,
   InviteTokenRoute: InviteTokenRoute,

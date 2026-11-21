@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateInvoiceTotals, calcInvoiceTotals } from "../calc.js";
+import { validateInvoiceTotals, calcInvoiceTotals, isRoundOffWithinBound } from "../calc.js";
 import { checkInvoiceStatusTransition } from "../invoice-status.js";
 import { checkInvoiceDeleteAllowed, INVOICE_DELETE_WINDOW_MS } from "../permissions.js";
 import { createInvoiceSchema, createBusinessSchema, loginSchema, registerSchema } from "../validators.js";
@@ -54,6 +54,34 @@ describe("validateInvoiceTotals", () => {
 
   it("does not change calcInvoiceTotals output", () => {
     expect(calcInvoiceTotals({ lineItems: [line], roundOff: "-0.50" }).total).toBe("1179.50");
+  });
+});
+
+describe("validateInvoiceTotals — stored round-off on update (v0.9.0 documents)", () => {
+  it("skipRoundOffBound lets an unchanged out-of-bound round-off through", () => {
+    expect(validateInvoiceTotals({ lineItems: [line], roundOff: "2.50" })).toMatch(/Round off/);
+    expect(validateInvoiceTotals({ lineItems: [line], roundOff: "2.50" }, { skipRoundOffBound: true })).toBeNull();
+    expect(validateInvoiceTotals({ lineItems: [line], roundOff: "-7" }, { skipRoundOffBound: true })).toBeNull();
+  });
+
+  it("skipRoundOffBound only skips the bound — every other totals rule still applies", () => {
+    expect(
+      validateInvoiceTotals({ lineItems: [line], roundOff: "2.50", invoiceDiscount: "101", invoiceDiscountType: "percent" }, { skipRoundOffBound: true }),
+    ).toMatch(/100%/);
+    expect(
+      validateInvoiceTotals({ lineItems: [line], roundOff: "2.50", invoiceDiscount: "-5" }, { skipRoundOffBound: true }),
+    ).toMatch(/negative/);
+    const zero = { quantity: "1", unitPrice: "0.00", taxPercent: "0", discountPercent: "0" };
+    expect(validateInvoiceTotals({ lineItems: [zero], roundOff: "-3" }, { skipRoundOffBound: true })).toMatch(/negative/);
+  });
+
+  it("isRoundOffWithinBound is inclusive of +/-1.00", () => {
+    expect(isRoundOffWithinBound("1.00")).toBe(true);
+    expect(isRoundOffWithinBound("-1.00")).toBe(true);
+    expect(isRoundOffWithinBound("0")).toBe(true);
+    expect(isRoundOffWithinBound(null)).toBe(true);
+    expect(isRoundOffWithinBound("1.01")).toBe(false);
+    expect(isRoundOffWithinBound("-2.50")).toBe(false);
   });
 });
 

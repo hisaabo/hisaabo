@@ -489,3 +489,36 @@ describe("Field encryption helpers", () => {
     });
   });
 });
+
+// ── Malformed ENCRYPTION_KEY (safe to boot with, never writes plaintext) ────
+//
+// validateEnv() only WARNs for a malformed key in single-tenant production
+// (v0.9.0 compatibility). That is only safe because encryption itself fails
+// closed: a bad key must make encryptField throw, never fall back to plaintext.
+
+describe("malformed ENCRYPTION_KEY fails closed", () => {
+  afterEach(() => clearKeys());
+
+  const BAD_KEYS: Array<[string, string]> = [
+    ["too short", "short"],
+    ["base64 (44 chars)", "q3Hk1Zr8m0wYb4xN2pLd9sVtUe7GfAaCjIoKnMhXy5E="],
+    ["63 hex chars", "a".repeat(63)],
+    ["65 hex chars", "a".repeat(65)],
+    ["64 non-hex chars", "z".repeat(64)],
+    ["64 chars with one non-hex char", "a".repeat(63) + "g"],
+  ];
+
+  for (const [label, key] of BAD_KEYS) {
+    it(`encryptField throws (no plaintext fallback) for a key that is ${label}`, () => {
+      setKeys(key);
+      expect(() => encryptField("super-secret")).toThrow();
+    });
+
+    it(`decryptField of real ciphertext throws for a key that is ${label}`, () => {
+      setKeys(TEST_KEY_A);
+      const ciphertext = encryptField("super-secret");
+      setKeys(key);
+      expect(() => decryptField(ciphertext)).toThrow();
+    });
+  }
+});

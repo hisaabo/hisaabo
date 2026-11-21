@@ -583,7 +583,8 @@ describe("name / email changes reach every session of the user", () => {
       userId: user.id,
       expiresAt: new Date(Date.now() + 15 * 60_000),
     });
-    await (await as({}, null)).auth.confirmEmailChange({ token: rawToken });
+    // confirmEmailChange requires the requester's own session (the other sessions keep working).
+    await (await as({ cookie: session }, null)).auth.confirmEmailChange({ token: rawToken });
 
     expect((await (await as({ cookie: other })).auth.me()).user?.email).toBe(newEmail);
     expect((await (await as({ cookie: session })).auth.me()).user?.email).toBe(newEmail);
