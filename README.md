@@ -565,6 +565,27 @@ pnpm test
 pnpm --filter @hisaabo/api test:watch
 ```
 
+#### How the tests stay fast
+
+The suites are fast because test files run in parallel, and parallel is only safe because each worker gets its own state. Keep it that way:
+
+- **API: one database per worker.** Before the run, `src/__tests__/helpers/global-setup.ts` clones `TEST_DATABASE_URL` (`CREATE DATABASE … TEMPLATE`) into one database per worker and drops them afterwards. `db/worker-db-clone.test.ts` checks the clone against the template, catalog row for row. The role needs `CREATEDB`, and no other session may hold a connection to the template DB while the run starts. Never point two workers at one database or reintroduce cross-database queries (scope `pg_stat_activity` and the like to `current_database()`).
+- **Web: parallel jsdom forks.** These are capped by free memory, because jsdom forks are heavy (about 0.45 GB each).
+- **E2E: one isolated stack per Playwright worker.** Worker *k* gets its own database clone, API on `:3000+k`, web on `:5173+k` and seeded owner (`e2e/harness/`). Everything runs against one production build, not dev servers. Specs must create the data they read and must not touch other users' data.
+- **No fixed sleeps.** The web app sets `<html data-busy>` while a query, mutation or debounce is pending. E2E specs wait with `settle(page)` (`e2e/helpers/settle.ts`). API tests wait for the real event (`vi.waitFor`, a marker NOTIFY, a lock wait in `pg_stat_activity`). A sleep is allowed only to prove that *nothing* arrives within N ms, with a comment saying so.
+- **Pages never wait on the internet in e2e.** Google Fonts and Turnstile are answered empty.
+
+Worker counts default to `min(4, free memory / 1.5 GB)`. Override them, or debug serially, with:
+
+| Variable | Effect |
+|---|---|
+| `API_TEST_WORKERS=n` | API vitest workers; `1` = serial against `TEST_DATABASE_URL` itself, no clones |
+| `WEB_TEST_WORKERS=n` | Web vitest workers |
+| `E2E_WORKERS=n` | Playwright workers / isolated stacks |
+| `E2E_DEV=1` | Run e2e against the Vite and `tsx watch` dev servers (1 worker) |
+| `E2E_ALLOW_EXTERNAL=1` | Let e2e pages load Google Fonts and Turnstile |
+| `E2E_KEEP_DB=1` | Keep the per-worker e2e databases and auth state after the run |
+
 ### Mobile on WSL + Windows
 
 ```bash
