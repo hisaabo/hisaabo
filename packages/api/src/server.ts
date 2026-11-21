@@ -5,7 +5,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { eq, and, lt, inArray, isNull, sql } from "drizzle-orm";
-import { escapeLike } from "./lib/escape-like.js";
+import { parseCatalogIds, storeCatalogConditions } from "./lib/store-catalog-query.js";
 import { buildPartyLedgerStatement } from "./lib/party-ledger.js";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -1239,6 +1239,11 @@ app.get("/store/:slug/catalog.json", async (c) => {
     logSecurityEvent("rate_limit_store", { ip: catalogIp, path: c.req.path });
     return c.json({ error: "Too many requests" }, 429);
   }
+  // `?ids=` narrows the catalog to specific items (cart-link / item-link
+  // resolution). Validated before any DB work; absent = no id filter.
+  const parsedIds = parseCatalogIds(c.req.query("ids"));
+  if (!parsedIds.ok) return c.json({ error: parsedIds.error }, 400);
+  const ids = parsedIds.ids;
   const resolved = await resolveStoreSlug(slug);
   if (!resolved) return c.json({ error: "Store not found" }, 404);
 
@@ -1269,22 +1274,15 @@ app.get("/store/:slug/catalog.json", async (c) => {
   if (!biz) return c.json({ error: "Store not found" }, 404);
 
   const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "24", 10) || 24));
+  // With `ids`, default the page size to the id count so one request returns them all.
+  const defaultLimit = ids ? ids.length : 24;
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || String(defaultLimit), 10) || defaultLimit));
   const category = c.req.query("category");
   const search = c.req.query("search");
   const offset = (page - 1) * limit;
 
-  const conditions = [
-    eq(items.businessId, resolved.businessId),
-    eq(items.storeEnabled, true),
-    // Active catalog read — soft-deleted items must never appear in the
-    // public store, even if `store_enabled` was not cleared before deletion.
-    isNull(items.deletedAt),
-  ];
-  // Category chips cover the whole store, not just the filtered page.
-  const baseConditions = [...conditions];
-  if (category) conditions.push(eq(sql`COALESCE(${items.storeCategory}, ${items.category})`, category));
-  if (search) conditions.push(sql`${items.name} ILIKE ${"%" + escapeLike(search) + "%"}`);
+  // Category chips (baseConditions) cover the whole store, not just the filtered page.
+  const { baseConditions, conditions } = storeCatalogConditions(resolved.businessId, { category, search, ids });
 
   // NEVER expose: purchasePrice, exact stockQuantity, hsn, sku, or internal business fields
   const [catalog, [{ total }], categoryRows] = await Promise.all([
