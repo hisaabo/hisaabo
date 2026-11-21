@@ -50,6 +50,9 @@ hisaabo whoami
 | `hisaabo logout` | Clear saved credentials |
 | `hisaabo whoami` | Show current user and active business |
 | `hisaabo switch` | Switch active business |
+| `hisaabo profile update-name <name>` | Update your display name |
+| `hisaabo session list` / `revoke <sessionId>` / `revoke-all` | List, revoke or sign out all active sessions |
+| `hisaabo api-key list` / `create` / `revoke <id>` | Manage API keys (alias: `key`) |
 
 ### Business
 
@@ -57,13 +60,27 @@ hisaabo whoami
 |---|---|
 | `hisaabo business list` | List all businesses under your account |
 | `hisaabo business switch` | Switch active business |
+| `hisaabo business get` | Show current business details |
+| `hisaabo business update` | Update business settings |
 | `hisaabo business sequence --type <type> --next-number <n>` | Set the next document number (invoice, payment, quotation, credit_note, delivery_challan, proforma; cannot go backwards) |
+| `hisaabo business audit-trail` | View the audit log for this business |
+| `hisaabo business export` | Export all business data |
 
 ### Dashboard
 
 | Command | Description |
 |---|---|
 | `hisaabo dashboard` | Financial summary with box-drawing UI (alias: `dash`) |
+| `hisaabo dashboard summary` | Financial summary overview (FY to date) |
+| `hisaabo dashboard sales-trend` | Sales trend over time |
+| `hisaabo dashboard top-outstanding` / `top-customers` / `top-items` | Highest outstanding balances, top customers by revenue, top-selling items |
+| `hisaabo dashboard expenses` | Expenses by category (alias: `expenses-by-category`) |
+| `hisaabo dashboard invoice-breakdown` | Invoice count and amounts by status |
+| `hisaabo dashboard profit-loss` | Profit & Loss statement (alias: `pl`) |
+| `hisaabo dashboard receivables-aging` | Receivables aging buckets |
+| `hisaabo dashboard payment-modes` | Payment mode breakdown |
+| `hisaabo dashboard collection-efficiency` | Collection rate, DSO and aging breakdown |
+| `hisaabo dashboard monthly-comparison` | Month-over-month sales, expenses, profit and collections |
 
 ### Invoices
 
@@ -121,8 +138,19 @@ hisaabo whoami
 | Command | Description |
 |---|---|
 | `payment list` | List payments (filterable by party, date range) |
-| `payment create` | Record a payment (cash, bank, UPI, cheque) |
+| `payment create` | Record a payment (cash, bank, UPI, cheque). For a customer receipt where TDS was withheld, add `--tds-amount`, `--tds-section` and `--tds-rate` (needs `--invoice-id`; `--amount` is then the net cash received) |
+| `payment get <id>` | Get payment details |
+| `payment update <id>` | Update a payment |
 | `payment delete <id>` | Delete a payment |
+| `payment unpaid-invoices <partyId>` | List unpaid invoices for a party |
+| `payment untracked` | List payments not linked to a bank account |
+| `payment default-account` | Show the recommended bank account for payments |
+
+### TDS Sections
+
+| Command | Description |
+|---|---|
+| `tds-section list` | List the TDS section codes available when recording customer receipts (use one with `payment create --tds-section <code>`). `--include-inactive` also shows inactive sections |
 
 ### Expenses
 
@@ -130,7 +158,9 @@ hisaabo whoami
 |---|---|
 | `expense list` | List expenses (filterable by category, date range) |
 | `expense create` | Record a business expense |
+| `expense update <id>` | Update an expense |
 | `expense delete <id>` | Delete an expense |
+| `expense categories` | List all expense categories |
 
 ### Bank Accounts
 
@@ -141,6 +171,16 @@ hisaabo whoami
 | `bank create` | Add a new bank account |
 | `bank transfer` | Transfer between accounts |
 | `bank transactions <id>` | List transactions for an account |
+| `bank gateway-config <accountId>` | Show a payment gateway account's charge rates and settlement account |
+| `bank update-gateway <accountId>` | Update gateway charge configuration |
+
+### Bank Reconciliation
+
+| Command | Description |
+|---|---|
+| `bank-recon imports` | List bank statement imports |
+| `bank-recon summary <importId>` | Reconciliation summary for an import |
+| `bank-recon rules` | List auto-matching rules |
 
 ### GST
 
@@ -149,6 +189,17 @@ hisaabo whoami
 | `gst r1` | GSTR-1 report (by quarter or month) |
 | `gst r3b` | GSTR-3B report (by quarter or month) |
 | `gst r1-csv` | Download GSTR-1 as GSTN-compatible CSV for filing |
+| `gst gstr9 <fy>` | GSTR-9 annual return (for example `2023-24`) |
+| `gst gstr2b-uploads` | List GSTR-2B uploaded periods |
+
+### E-Invoice, E-Way Bill and ITC
+
+| Command | Description |
+|---|---|
+| `einvoice dashboard` / `generate <invoiceId>` / `cancel <invoiceId>` / `retry <invoiceId>` | E-invoice (IRP) summary, generation, cancellation and retry |
+| `ewb dashboard` / `generate <invoiceId>` / `expiring` | E-way bill summary, generation and bills expiring in 24 hours |
+| `itc dashboard` / `ledger` / `aging` | Input Tax Credit summary, ledger and credits at risk of reversal |
+| `itc block <invoiceId>` / `unblock <invoiceId>` | Mark ITC for an invoice as blocked or eligible |
 
 ### Reports
 
@@ -159,6 +210,21 @@ hisaabo whoami
 | `report tax-summary` | Tax collected and paid, grouped by rate |
 | `report item-sales` | Item-wise sales breakdown |
 | `report stock` | Current stock summary |
+| `report sales-register` / `purchase-register` | Sales or purchase invoice listing |
+| `report party-statement <partyId>` | Party transaction statement |
+| `report payment-summary` | Payment summary by mode |
+| `report cash-flow` | Cash flow forecast |
+| `report collection-efficiency` | Collection efficiency metrics |
+| `report trial-balance` / `balance-sheet` / `cash-flow-statement` | Trial balance, balance sheet, cash flow statement |
+| `report general-ledger <accountId>` | General ledger for one account |
+
+### Journal Entries
+
+| Command | Description |
+|---|---|
+| `journal list` / `get <id>` | List journal entries or show one |
+| `journal void <id>` | Void a journal entry |
+| `journal templates` | List journal entry templates |
 
 ### Shipments
 
@@ -188,13 +254,21 @@ hisaabo whoami
 | `automated-invoice resume <id>` | Resume a paused template |
 | `automated-invoice run-now <id>` | Manually trigger invoice generation |
 | `automated-invoice delete <id>` | Delete a template |
+| `automated-invoice update <id>` | Update a template |
+| `automated-invoice history <templateId>` | Execution history for a template |
+| `automated-invoice usage` | Plan usage for recurring invoices |
+| `automated-invoice suggestions` | Suggested templates based on invoice history |
 
 ### Store
 
 | Command | Description |
 |---|---|
 | `store settings` | Show online store settings |
+| `store update-settings` | Update store settings |
+| `store items` / `items-toggle` | List store items, or bulk enable / disable them |
 | `store orders` | List store orders |
+| `store order-get <id>` / `order-confirm <id>` / `order-cancel <id>` / `order-update <id>` | Show, confirm, cancel or update an order |
+| `store check-slug <slug>` | Check store slug availability |
 
 ### Import
 
@@ -202,8 +276,42 @@ hisaabo whoami
 |---|---|
 | `import parties <file>` | Bulk import parties from JSON or CSV |
 | `import items <file>` | Bulk import items from JSON or CSV |
+| `import invoices <file>` | Bulk import invoices from JSON or CSV |
+| `import payments <file>` | Bulk import payments from JSON or CSV |
 
 `--source` defaults to `hisaabo` (the Hisaabo export format); use `--source mybillbook` for myBillBook files.
+
+### Other Documents
+
+Each of `quotation`, `credit-note`, `debit-note`, `delivery-challan`, `proforma`, `sales-return` and `purchase-return` has the same subcommands:
+
+| Command | Description |
+|---|---|
+| `<type> list` / `get <id>` | List documents or show one |
+| `<type> create` | Create a document |
+| `<type> update-status <id> <status>` | Change status (the valid statuses are listed in `hisaabo <type> update-status --help`) |
+| `<type> delete <id>` | Delete a document |
+| `document convert` | Convert one document type to another (for example quotation to invoice) |
+
+### Team (Tenant)
+
+| Command | Description |
+|---|---|
+| `tenant list` | List organizations you belong to |
+| `tenant members` | List members of the current tenant |
+| `tenant invite <email>` | Invite a user |
+| `tenant remove <userId>` | Remove a member |
+| `tenant update-role <userId> <role>` | Change a member's role (admin, seller_manager, seller, accountant) |
+| `tenant invitations` / `revoke-invitation <invitationId>` | List or revoke pending invitations |
+
+### Notifications
+
+| Command | Description |
+|---|---|
+| `notifications list` | List notifications for the active business |
+| `notifications read` | Mark notifications as read |
+| `notifications prefs` | Show your notification preferences per channel |
+| `notifications set` | Change your preference for one channel |
 
 ### Backup & Restore
 
@@ -326,7 +434,7 @@ An unknown zone name is rejected with an error.
 
 ```bash
 hisaabo --tz Asia/Kolkata invoice list --from 2025-04-01 --to 2025-04-30
-HISAABO_TZ=America/New_York hisaabo report profit-loss --this-month
+HISAABO_TZ=America/New_York hisaabo dashboard profit-loss --this-month
 ```
 
 ---

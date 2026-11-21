@@ -541,6 +541,30 @@ hisaabo payment create \
   --reference "NEFT20260326"
 ```
 
+#### Recording TDS on a customer receipt
+
+When a customer pays an invoice and withholds TDS, `--amount` is the **net cash you received** and the three `--tds-*` flags describe the deduction. The invoice is credited with the gross (net cash plus TDS) and the TDS posts to the **TDS Receivable** account. `--invoice-id` is required.
+
+```bash
+# Invoice of ₹10,000, customer withheld ₹1,000 and paid ₹9,000
+hisaabo payment create \
+  --party "Sharma Traders" \
+  --amount 9000.00 \
+  --mode bank \
+  --invoice-id inv_xxxxxxxxxx \
+  --tds-amount 1000.00 \
+  --tds-section 1027 \
+  --tds-rate 10
+```
+
+| Flag | Description |
+|---|---|
+| `--tds-amount <amount>` | The TDS the customer withheld, a positive amount with at most 2 decimals |
+| `--tds-section <code>` | A section code from `hisaabo tds-section list` (required with `--tds-amount`) |
+| `--tds-rate <rate>` | The rate in percent, up to 2 decimals (required with `--tds-amount`). Stored as metadata; the amount is what you record |
+
+`--tds-section` and `--tds-rate` are rejected without `--tds-amount`. Hisaabo does not decide whether TDS applies or at what rate: check the [Income Tax Department rates](https://wm.incometaxindia.gov.in/w/tds-rates-1). See [TDS on payments](/payments/tds/).
+
 #### `hisaabo payment delete`
 
 ```bash
@@ -580,6 +604,23 @@ Assign a bank account to an existing payment record:
 ```bash
 hisaabo payment assign-account --payment pay_xxxxxxxxxx --account account_xxxxxxxxxx
 ```
+
+---
+
+### `hisaabo tds-section`
+
+#### `hisaabo tds-section list`
+
+List the TDS sections you can use when recording a customer receipt. Read-only.
+
+```bash
+hisaabo tds-section list
+hisaabo tds-section list --include-inactive
+hisaabo tds-section list --json
+hisaabo tds-section list --format csv
+```
+
+Columns: code, section name, effective-from date, status and version. Pass the code to `hisaabo payment create --tds-section`. A business that has no stored sections yet shows the default list. Labels are reference data, not tax advice.
 
 ---
 
