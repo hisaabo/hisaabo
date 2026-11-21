@@ -1,0 +1,156 @@
+---
+title: Selling from your own website
+description: Show your Hisaabo store's items on your own website, let shoppers build a cart there, and hand the cart to your store for checkout with a cart link. Includes the public catalog API, the link format, limits, and what the store validates.
+sidebar:
+  order: 2
+---
+
+If you already have a website on your own domain, you do not have to move it to the Hisaabo store page. Your site can list items straight from your store, let shoppers fill a cart on your pages, and then send them to your store with the cart already filled in. The shopper checks out on the store, and the order lands in Hisaabo as usual.
+
+There are three pieces:
+
+1. **Read your items** from the public catalog (`catalog.json`).
+2. **Build a cart link** when the shopper is ready to buy.
+3. **Link to single items** if you want a "view in store" button on a product.
+
+Nothing here needs an API key or a login. Everything your site reads is already public on your store page.
+
+## 1. Read the catalog
+
+```
+GET https://api.hisaabo.in/store/<slug>/catalog.json
+```
+
+Replace `<slug>` with your store slug (the `myshop` in `store.hisaabo.in/myshop`). If you self-host, use your own API address instead of `api.hisaabo.in`.
+
+Browsers can call this from any website with no CORS setup, and item images can be embedded on other domains. You can fetch the catalog directly from your pages' JavaScript or from your own server.
+
+### Query parameters
+
+| Parameter | Meaning |
+|---|---|
+| `page` | Page number, starting at 1. |
+| `limit` | Items per page. Default 24, maximum 100. |
+| `search` | Only items whose name contains this text (case-insensitive). |
+| `category` | Only items in this store category. |
+| `ids` | Only these items: a comma-separated list of item ids, at most 50. An id that is not a valid UUID, an empty list, or more than 50 ids gives `400`. Items that are not in the store are left out of the result, not reported as errors. When `ids` is set, `limit` defaults to the number of ids, so one request returns them all. |
+
+### Response
+
+```json
+{
+  "business": { "name": "My Shop", "currency": "INR", "minOrderAmount": "500.00", "logoUrl": "/store/myshop/logo?v=1" },
+  "items": [ { "id": "3f2a7c1e-…", "name": "Toor Dal", "price": "100.00", "unit": "kg", "inStock": true, "itemMode": "alt_units", "…": "…" } ],
+  "categories": ["Pulses", "Rice"],
+  "total": 142,
+  "page": 1,
+  "limit": 24
+}
+```
+
+`total` counts every item matching your filters, so you have more pages while `page * limit < total`.
+
+Each entry in `items` has these fields:
+
+| Field | Meaning |
+|---|---|
+| `id` | The item's id (a UUID). This is what you put in a cart link. |
+| `name`, `description`, `category` | Customer-facing text and store category. |
+| `price` | Price per `unit` as a string in the business currency, for example `"120.00"`. Treat it as text; do not do money arithmetic with floating point. |
+| `unit` | The item's base unit, for example `kg`. |
+| `taxPercent`, `taxInclusive` | Tax rate, and whether `price` already includes it. |
+| `inStock` | `false` means sold out. If the owner allows negative stock, sold-out items still report `inStock: true` (with `lowStock: true`) because the store keeps taking orders for them. |
+| `sortOrder` | The order the owner chose; items already arrive sorted by it. |
+| `itemMode` | `"simple"`, `"alt_units"` or `"variants"`. |
+| `unitVariants` | For `alt_units` items: the other units, each with `unit`, `price` and `conversionFactor`. |
+| `variantAttributes`, `variants` | For `variants` items: the attribute names (for example `["Size"]`) and each variant's `id`, `attributes`, `price` and `inStock`. |
+| `images`, `primaryImageUrl` | Photos. The paths start with `/store/…`; put your API address in front of them to get a full URL. |
+
+### Caching and rate limits
+
+Responses are cached for up to 60 seconds, so a price or stock change can take about a minute to show up. The catalog allows 120 requests per minute from one IP address; beyond that you get `429`. If your site is busy, fetch the catalog on your server and cache it rather than calling it on every page view.
+
+## 2. Build a cart link
+
+A cart link is your store's address with the cart in the URL fragment (the part after `#`):
+
+```
+https://store.hisaabo.in/<slug>#cart=<payload>
+```
+
+`payload` is `encodeURIComponent` of this JSON:
+
+```json
+{ "v": 1, "items": [ { "id": "…", "qty": 2, "variantId": "…", "unit": "…" } ] }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `v` | Yes | Always `1`. |
+| `items[].id` | Yes | The catalog item `id`. |
+| `items[].qty` | Yes | Whole number from 1 to 9999. Larger numbers are lowered to 9999. |
+| `items[].variantId` | For `variants` items | The `id` of the chosen entry in the item's `variants`. |
+| `items[].unit` | Only for a non-base unit | One of the item's `unitVariants[].unit` names, copied exactly. Leave it out to buy the base `unit`. |
+
+Because the cart sits after the `#`, browsers never send it to any server, so it does not appear in anyone's logs.
+
+Here is a complete example for a cart with a plain item, a variant, and an alternate unit:
+
+```
+https://store.hisaabo.in/my-shop#cart=%7B%22v%22%3A1%2C%22items%22%3A%5B%7B%22id%22%3A%223f2a7c1e-9b4d-4e0a-8c55-1d2e6a7b9f01%22%2C%22qty%22%3A2%7D%2C%7B%22id%22%3A%22a81c5d20-6e3f-4b97-9d14-72c0be5f3a68%22%2C%22qty%22%3A1%2C%22variantId%22%3A%220c9e44b7-52a1-4f3d-b6e8-9a17d3c25f40%22%7D%2C%7B%22id%22%3A%22e5b19f3a-07c2-4d68-a3b4-c8d6f1927e05%22%2C%22qty%22%3A3%2C%22unit%22%3A%22packet%22%7D%5D%7D
+```
+
+In JavaScript:
+
+```js
+const STORE = "https://store.hisaabo.in/my-shop";
+
+// lines: [{ item, qty, variant?, unit? }] where item/variant come from catalog.json
+function cartLink(lines) {
+  const items = lines.map(({ item, qty, variant, unit }) => ({
+    id: item.id,
+    qty,
+    ...(variant && { variantId: variant.id }),
+    ...(unit && { unit }),
+  }));
+  return `${STORE}#cart=${encodeURIComponent(JSON.stringify({ v: 1, items }))}`;
+}
+
+checkoutButton.onclick = () => { window.location.href = cartLink(myCart); };
+```
+
+### Limits
+
+| Limit | Value |
+|---|---|
+| Whole fragment | 8 KB |
+| Lines per link | 50 |
+| `id` and `variantId` | Must be UUIDs, as the catalog gives them |
+| `qty` | Whole number, 1 to 9999 |
+| `unit` | At most 64 characters |
+
+Two lines for the same item, variant and unit are added together. A link that breaks any rule above is ignored as a whole: the shopper sees "This cart link couldn't be read" and nothing is added. A link carries at most 50 lines; for a larger cart, split it across several links. Each one adds to the shopper's cart.
+
+## 3. What the store does with a cart link
+
+When the shopper opens the link, the store:
+
+1. Reads the link and checks it against the limits above.
+2. Looks up every line in your **live** catalog. From the link it uses only the ids, quantities, unit and variant. Names, prices, tax, conversion factors and stock all come from the store, so a link can never set or change a price.
+3. Drops any line whose item is no longer in the store, is out of stock, or names a variant or unit the item does not have. The shopper sees what was dropped.
+4. Adds the rest to the shopper's cart **for that store**. If the cart already holds the same item, variant and unit, its quantity is **set** to the link's quantity (not added), so opening the same link twice changes nothing. Other items already in the cart stay.
+5. Opens the cart, shows "N items added from a link", and removes the `#cart=…` part from the address bar so a reload does not apply it again.
+
+Carts are kept per store in the shopper's browser, so a cart for one Hisaabo store never shows up in another.
+
+## 4. Link to a single item
+
+```
+https://store.hisaabo.in/<slug>?item=<item id>
+```
+
+The store opens with that item's detail view in front. If the id is not a valid item of that store, the store simply opens normally. Closing the item removes `?item=…` from the address.
+
+## 5. Orders are placed on the store
+
+Your website never places orders. Checkout always happens on the store page, where the shopper enters their phone number, verifies it with an SMS code if your store requires that, and passes the Cloudflare Turnstile bot check before the order is created. A cart link only fills the cart; it skips none of these steps. The store also checks the minimum order amount and re-checks stock at the moment the order is placed.
