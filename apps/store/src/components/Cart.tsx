@@ -103,7 +103,7 @@ export function Cart({
 
       {/* Drawer */}
       <div
-        className="fixed z-40 flex flex-col
+        className="fixed z-[52] flex flex-col
           bottom-0 left-0 right-0 rounded-t-2xl max-h-[85dvh]
           sm:top-0 sm:right-0 sm:bottom-0 sm:left-auto sm:w-[400px] sm:rounded-none sm:rounded-l-2xl sm:max-h-full
           animate-slide-up sm:animate-slide-in-right"
