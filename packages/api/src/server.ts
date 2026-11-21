@@ -1,6 +1,5 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { Context, Next } from "hono";
@@ -45,7 +44,8 @@ import { hasPlausibleCredential, countStrictProcedures, trpcProcedures, pickRate
 import { exceedsArrayLimits, ARRAY_SCAN_MIN_BYTES, MAX_ARRAY_ITEMS } from "./lib/json-limits.js";
 import { resolveStoreSlug } from "./lib/store-slug-cache.js";
 import { serveStoreItemImage, isStoreEnabled } from "./lib/store-gates.js";
-import { serveBusinessLogo, LOGO_SAFE_HEADERS } from "./lib/logo-response.js";
+import { serveBusinessLogo, LOGO_SAFE_HEADERS, PUBLIC_IMAGE_SAFE_HEADERS } from "./lib/logo-response.js";
+import { createApiCors, createApiSecureHeaders } from "./lib/cors.js";
 import { validateOrderItemsShape, normalizeIndianMobile, aggregateStockDemand, findInsufficientStock } from "./lib/store-order-validation.js";
 import { verifyShippingWebhook, parseWebhookTime, WEBHOOK_TOLERANCE_MS } from "./lib/shipping-webhook.js";
 import { getOrRenderStoreOg, storeMetaSummary, injectStoreMeta, jsonLdScriptSafe } from "./lib/og/index.js";
@@ -86,7 +86,8 @@ const app = new Hono();
 
 // ── Security headers ───────────────────────────────────────────
 // Hono's defaults include X-Content-Type-Options: nosniff on every response.
-const defaultSecureHeaders = secureHeaders();
+// Public store reads get a cross-origin CORP instead (lib/cors.ts).
+const defaultSecureHeaders = createApiSecureHeaders();
 // /ops (operator dashboard) is never framed and never leaks a referrer.
 const opsSecureHeaders = secureHeaders({ xFrameOptions: "DENY", referrerPolicy: "no-referrer" });
 app.use("*", (c, next) => (isOpsPath(c.req.path) ? opsSecureHeaders(c, next) : defaultSecureHeaders(c, next)));
@@ -134,13 +135,14 @@ const allowedOrigins = [
   ...TAURI_DESKTOP_ORIGINS,
 ];
 
-const corsMiddleware = cors({
-  origin: allowedOrigins,
-  credentials: true,
-  allowHeaders: ["Content-Type", "x-business-id", "Authorization", "X-Requested-With", "X-Hisaabo-Client"],
-  allowMethods: ["GET", "POST", "OPTIONS"],
-  maxAge: 86400,
-});
+// `allowedOrigins` get credentialed CORS everywhere EXCEPT the public,
+// read-only store endpoints (catalog.json, meta.json, logo, og.png, item
+// images). Those are served with `Access-Control-Allow-Origin: *` and no
+// credentials instead, so a third-party site can read the catalog without its
+// origin ever being added to CORS_ORIGINS. See lib/cors.ts: the credentialed
+// middleware does not run at all on those paths, so it cannot echo an origin
+// or set Allow-Credentials / Vary: Origin there.
+const corsMiddleware = createApiCors(allowedOrigins);
 // /ops (operator dashboard) is same-origin only: it never sends CORS headers.
 app.use("*", (c, next) => (isOpsPath(c.req.path) ? next() : corsMiddleware(c, next)));
 
@@ -948,6 +950,7 @@ app.get("/store/:slug/logo", async (c) => {
     and(eq(businesses.id, resolved.businessId), eq(businesses.storeEnabled, true)),
     c.req.header("if-none-match"),
     "public",
+    PUBLIC_IMAGE_SAFE_HEADERS, // embeddable cross-origin (CORP: cross-origin)
   );
 });
 

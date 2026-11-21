@@ -88,7 +88,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `DATABASE_URL` | Yes | PostgreSQL connection string | `postgresql://user:pass@host:5432/hisaabo` |
 | `PORT` | No | API port (default 3000) | `3000` |
 | `NODE_ENV` | Yes | Environment | `production` |
-| `CORS_ORIGINS` | Yes | Comma-separated allowed origins | `https://app.hisaabo.in,https://store.hisaabo.in` |
+| `CORS_ORIGINS` | Yes | Comma-separated allowed origins, which get credentialed access to the whole API, so list only your own app origins. The public read-only store endpoints (`catalog.json`, `meta.json`, `logo`, `og.png` and item images under `/store/<slug>/`) are served with `Access-Control-Allow-Origin: *` and no credentials, so a website that reads a catalog or shows its images needs no `CORS_ORIGINS` entry | `https://app.hisaabo.in,https://store.hisaabo.in` |
 | `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
 | `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). In production a set value that is not a valid `http(s)` URL fails startup (outside production it is ignored with a warning) | `https://api.hisaabo.in` |
 | `LEGACY_V09_CLIENT_COMPAT` | No | Default on; set to `false` to disable every v0.9.x client compatibility path at once: the Turnstile exemption for installed v0.9.x mobile/desktop apps on `sendMagicLink`, the bearer-token sign-in signature, and the `source=` app handoff. Deprecated, removed in 0.11.0 | `false` |
@@ -147,6 +147,8 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `MIGRATION_LOCK_RETRIES` | No | How many times a migration that hit that lock timeout is retried, with exponential backoff (1 s, 2 s, 4 s, ... capped at 30 s, plus jitter), after the first attempt. Default 5; an invalid value logs a warning and uses the default. Raise both on a busy database if an upgrade logs `lock timeout - retrying` and finally `could not acquire a lock` | `5` |
 | `HISAABO_LOG_STDERR` | No | `1` sends log lines to stderr instead of stdout. The `admin api-key` command sets it itself so that stdout carries only the key block; set it when you capture the stdout of another operator command in a script. Not needed for the API or the worker | `1` |
 | `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
+
+When the online store is enabled for a business, its public catalog (including the business phone, email and address) can be read by any website a visitor's browser loads, so an intranet-only self-hosted install must not treat network position as protection for store data.
 
 ### GitHub Actions Secrets
 

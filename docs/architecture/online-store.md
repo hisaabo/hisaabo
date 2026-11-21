@@ -1039,6 +1039,8 @@ However, if a business uses a custom domain (Phase 2), the store SPA at `custom.
 
 For Phase 1: no additional CORS configuration needed since the store SPA and API share the same origin.
 
+Implemented behaviour (`packages/api/src/lib/cors.ts`): the public read-only routes (`GET`/`HEAD` `/store/:slug/catalog.json`, `meta.json`, `logo`, `og.png`, `items/:itemId/images/:imageId`) are served with `Access-Control-Allow-Origin: *`, no `Access-Control-Allow-Credentials` and `Cross-Origin-Resource-Policy: cross-origin`, whatever the `Origin`. Any website, including a business's own site on another domain, can therefore read the catalog and embed the images without being added to `CORS_ORIGINS`. The POST routes (`identify`, `otp/*`, `order`) and the HTML shell keep the credentialed `CORS_ORIGINS` policy.
+
 ---
 
 ## 9. Order Flow

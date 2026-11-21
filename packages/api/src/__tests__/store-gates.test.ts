@@ -17,6 +17,7 @@ const storageGet = vi.hoisted(() => vi.fn());
 vi.mock("../lib/storage/index.js", () => ({ getStorage: () => ({ get: storageGet }) }));
 
 import { isStoreEnabled, serveStoreItemImage } from "../lib/store-gates.js";
+import { serveBusinessLogo, PUBLIC_IMAGE_SAFE_HEADERS } from "../lib/logo-response.js";
 
 let world: TestWorld;
 let itemId: string;
@@ -68,6 +69,8 @@ describe("serveStoreItemImage", () => {
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("etag")).toBe(`"${updatedAt.getTime()}"`);
+    // Public storefront bytes are embeddable from other sites.
+    expect(res.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
   });
 
   it("304 on matching ETag without reading storage", async () => {
@@ -75,6 +78,7 @@ describe("serveStoreItemImage", () => {
     const res = await serveStoreItemImage(db(), args(), `"${updatedAt.getTime()}"`);
     expect(res.status).toBe(304);
     expect(storageGet).not.toHaveBeenCalled();
+    expect(res.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
   });
 
   it("404 and no storage read when the business store is disabled", async () => {
@@ -105,5 +109,42 @@ describe("serveStoreItemImage", () => {
   it("404 when storage has no bytes", async () => {
     storageGet.mockResolvedValue(null);
     expect((await serveStoreItemImage(db(), args(), undefined)).status).toBe(404);
+  });
+});
+
+describe("serveBusinessLogo Cross-Origin-Resource-Policy", () => {
+  const where = () => eq(businesses.id, world.business1.id);
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const corp = (r: Response) => r.headers.get("cross-origin-resource-policy");
+
+  it("the helper's default stays same-site; only the public store call opts into cross-origin", async () => {
+    const logoUpdatedAt = new Date();
+    await db()
+      .update(businesses)
+      .set({ logoData: PNG, logoMimeType: "image/png", logoUpdatedAt })
+      .where(where());
+    const etag = `"${logoUpdatedAt.getTime()}"`;
+
+    // Handler-level values only. On the wire CORP is decided by the
+    // secureHeaders middleware (createApiSecureHeaders), which overwrites it;
+    // store-public-cors.test.ts covers that. This pins that the shared default
+    // used by the authenticated /api/businesses/:id/logo route was not flipped.
+    expect(corp(await serveBusinessLogo(db(), where(), undefined, "private"))).toBe("same-site");
+    expect(corp(await serveBusinessLogo(db(), where(), etag, "private"))).toBe("same-site");
+
+    // Public /store/:slug/logo: 200, 304 and the empty-PNG fallback.
+    const pub = (inm: string | undefined) =>
+      serveBusinessLogo(db(), where(), inm, "public", PUBLIC_IMAGE_SAFE_HEADERS);
+    const ok = await pub(undefined);
+    expect(ok.status).toBe(200);
+    expect(corp(ok)).toBe("cross-origin");
+    expect(ok.headers.get("x-content-type-options")).toBe("nosniff");
+    const notModified = await pub(etag);
+    expect(notModified.status).toBe(304);
+    expect(corp(notModified)).toBe("cross-origin");
+
+    await db().update(businesses).set({ logoData: null, logoMimeType: null }).where(where());
+    expect(corp(await pub(undefined))).toBe("cross-origin");
+    expect(corp(await serveBusinessLogo(db(), where(), undefined, "private"))).toBe("same-site");
   });
 });

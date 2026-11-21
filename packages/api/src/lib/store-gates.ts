@@ -11,7 +11,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { businesses, items, itemImages } from "@hisaabo/db";
 import type { getTenantDb } from "@hisaabo/db";
 import { getStorage } from "./storage/index.js";
-import { LOGO_SAFE_HEADERS } from "./logo-response.js";
+import { PUBLIC_IMAGE_SAFE_HEADERS } from "./logo-response.js";
 
 type Db = Awaited<ReturnType<typeof getTenantDb>>;
 
@@ -28,7 +28,8 @@ export async function isStoreEnabled(db: Db, businessId: string): Promise<boolea
 /**
  * Public item-image response. Only images of store-enabled, non-deleted items
  * on a store-enabled business are served (404 otherwise); ETag is checked
- * before the storage read.
+ * before the storage read. Public by design, so the response is embeddable
+ * from other sites (`Cross-Origin-Resource-Policy: cross-origin`).
  */
 export async function serveStoreItemImage(
   db: Db,
@@ -67,7 +68,7 @@ export async function serveStoreItemImage(
 
   const etag = `"${row.updatedAt?.getTime() ?? 0}"`;
   if (ifNoneMatch === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag, ...LOGO_SAFE_HEADERS } });
+    return new Response(null, { status: 304, headers: { ETag: etag, ...PUBLIC_IMAGE_SAFE_HEADERS } });
   }
 
   const bytes = await getStorage().get(row.storageKey);
@@ -76,7 +77,7 @@ export async function serveStoreItemImage(
   return new Response(new Uint8Array(bytes), {
     status: 200,
     headers: {
-      ...LOGO_SAFE_HEADERS,
+      ...PUBLIC_IMAGE_SAFE_HEADERS,
       "Content-Type": row.mimeType,
       "Cache-Control": "public, max-age=3600",
       ETag: etag,
