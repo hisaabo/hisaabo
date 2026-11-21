@@ -119,6 +119,31 @@ describe("useWebMcp", () => {
     expect(firstSignal.aborted).toBe(true);
   });
 
+  it("registers only read-only tools while the role is unknown, then adds the writes once it resolves", async () => {
+    const { rerender, result } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
+      initialProps: makeInput({ role: null }),
+    });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.registeredCount).toBe(1));
+    expect(registerTool.mock.calls.map((c) => c[0].name)).toEqual(["fake_list"]);
+    const readOnlySignal = registerTool.mock.calls[0][1]?.signal as AbortSignal;
+    expect(readOnlySignal.aborted).toBe(false);
+
+    // The session resolves: the role changes null -> "owner", which tears the read-only
+    // registration down and registers the full permitted set.
+    rerender(makeInput({ role: "owner" }));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.registeredCount).toBe(2));
+    expect(readOnlySignal.aborted).toBe(true);
+    expect(registerTool.mock.calls.slice(1).map((c) => c[0].name)).toEqual(["fake_list", "fake_create"]);
+  });
+
+  it("never registers a write tool for a signed-in user whose role stays unknown", async () => {
+    const { result } = renderHook(() => useWebMcp(makeInput({ role: null })));
+    await waitFor(() => expect(result.current.registeredCount).toBe(1));
+    expect(registerTool.mock.calls.map((c) => c[0].name)).not.toContain("fake_create");
+  });
+
   it("does not re-register when only the route changes", async () => {
     const { rerender } = renderHook((props: UseWebMcpInput) => useWebMcp(props), {
       initialProps: makeInput({ pathname: "/invoices" }),

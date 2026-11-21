@@ -83,6 +83,13 @@ jobs:
           # .well-known app-link files; placeholders are emitted until they are set.
           VITE_ANDROID_APP_CERT_SHA256: ${{ vars.VITE_ANDROID_APP_CERT_SHA256 }}
           VITE_APPLE_TEAM_ID: ${{ vars.VITE_APPLE_TEAM_ID }}
+          # Chrome/Edge origin-trial token that enables WebMCP (document.modelContext)
+          # on the deployed origin. Public by design (it ships in the page HTML), so a
+          # repository variable, not a secret. Unset or empty keeps today's behaviour:
+          # vite.config.ts then emits no origin-trial meta tag. Tokens are bound to one
+          # origin: to avoid shipping the production token to the preview alias, define
+          # the variable on the `production` environment instead of the repository.
+          VITE_WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ vars.VITE_WEBMCP_ORIGIN_TRIAL_TOKEN }}
 
       # --branch picks the Pages environment: the project's production branch
       # (CF_PAGES_PRODUCTION_BRANCH, default main) is production, anything

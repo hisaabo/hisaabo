@@ -15,6 +15,7 @@ import {
   buildBrowserTool,
   getModelContext,
   isWebMcpAvailable,
+  isWriteTool,
   registerHisaaboTools,
   selectToolsForRole,
   toToolResult,
@@ -288,8 +289,52 @@ describe("selectToolsForRole", () => {
     expect(selectToolsForRole(defs, "owner")).toHaveLength(3);
   });
 
-  it("passes everything through while the role is still loading", () => {
-    expect(selectToolsForRole(defs, null)).toHaveLength(3);
+  describe("while the role is unknown", () => {
+    const mixed = [
+      makeDef({ name: "invoice_list", requires: { resource: "Invoice", action: "read" } }),
+      makeDef({ name: "whoami" }),
+      makeDef({
+        name: "invoice_create",
+        annotations: { consequentialHint: true },
+        requires: { resource: "Invoice", action: "create" },
+      }),
+      makeDef({ name: "no_annotations_at_all", annotations: undefined }),
+      makeDef({ name: "explicitly_not_read_only", annotations: { readOnlyHint: false } }),
+      makeDef({ name: "ungated_write", annotations: { consequentialHint: true } }),
+    ];
+
+    it("offers only read-only tools: no write tool is exposed on a guess", () => {
+      const expected = ["invoice_list", "whoami"];
+      expect(selectToolsForRole(mixed, null).map((d) => d.name)).toEqual(expected);
+      expect(selectToolsForRole(mixed, undefined).map((d) => d.name)).toEqual(expected);
+      expect(selectToolsForRole(mixed, "").map((d) => d.name)).toEqual(expected);
+    });
+
+    it("treats a tool with no read-only annotation as a write (same rule as the confirmation prompt)", () => {
+      expect(isWriteTool(makeDef({ annotations: undefined }))).toBe(true);
+      expect(isWriteTool(makeDef({ annotations: {} }))).toBe(true);
+      expect(isWriteTool(makeDef({ annotations: { readOnlyHint: false } }))).toBe(true);
+      expect(isWriteTool(makeDef({ annotations: { consequentialHint: true } }))).toBe(true);
+      expect(isWriteTool(makeDef({ annotations: { readOnlyHint: true } }))).toBe(false);
+    });
+
+    it("adds the write tools once the role resolves, still filtered by what the role may do", () => {
+      expect(selectToolsForRole(mixed, "owner").map((d) => d.name)).toEqual(mixed.map((d) => d.name));
+      expect(selectToolsForRole(mixed, "seller").map((d) => d.name)).toEqual([
+        "invoice_list",
+        "whoami",
+        "invoice_create", // sellers may create invoices
+        "no_annotations_at_all",
+        "explicitly_not_read_only",
+        "ungated_write",
+      ]);
+    });
+
+    it("never returns a write tool for an unknown role even when every tool in the catalog is a write", () => {
+      const writes = mixed.filter(isWriteTool);
+      expect(writes.length).toBeGreaterThan(0);
+      expect(selectToolsForRole(writes, null)).toEqual([]);
+    });
   });
 });
 
@@ -342,6 +387,23 @@ describe("registerHisaaboTools", () => {
 
     expect(result).toEqual({ registered: [], skipped: ["expense_create"] });
     expect(registerTool).not.toHaveBeenCalled();
+  });
+
+  it("registers only read-only tools while the role is unknown, and reports the writes as skipped", async () => {
+    const { modelContext, registerTool } = fakeModelContext();
+    installModelContext(document, modelContext);
+
+    const result = await registerHisaaboTools(
+      [
+        makeDef({ name: "invoice_list" }),
+        makeDef({ name: "invoice_create", annotations: { consequentialHint: true } }),
+      ],
+      makeCtx({ role: null }),
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toEqual({ registered: ["invoice_list"], skipped: ["invoice_create"] });
+    expect(registerTool.mock.calls.map((c) => c[0].name)).toEqual(["invoice_list"]);
   });
 
   it("reports everything skipped when the browser has no model context", async () => {
