@@ -6,7 +6,7 @@
  * footer row "Create <entity> 'query'" that opens a Modal dialog
  * for quick creation. On success the new entity is auto-selected.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, settle } from "../helpers/fixtures";
 import { loadSeed, SeedApi, createParty } from "../helpers/seed";
 import { InvoicesPage } from "../helpers/page-objects/invoices.page";
 
@@ -66,7 +66,7 @@ test.describe("Quick Party Create", () => {
     await partyInput.fill(uniqueName);
 
     // Wait for the debounced search to resolve
-    await page.waitForTimeout(500);
+    await settle(page);
 
     // The Combobox should show a "Create customer" footer row
     const createRow = page.getByRole("option").filter({
@@ -114,7 +114,7 @@ test.describe("Quick Party Create", () => {
     const partyInput = getCreatorPanel(page).getByRole("combobox").first();
     await partyInput.click();
     await partyInput.fill(uniqueName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     const createRow = page.getByRole("option").filter({
       hasText: /Create customer/i,
@@ -165,7 +165,7 @@ test.describe("Quick Item Create", () => {
     const partyInput = getCreatorPanel(page).getByRole("combobox").first();
     await partyInput.click();
     await partyInput.fill(seededPartyName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     // Select the seeded party from the dropdown
     const partyOption = page.getByRole("option").filter({
@@ -184,7 +184,7 @@ test.describe("Quick Item Create", () => {
     const itemInput = creator.getByPlaceholder(/select product or custom item/i).first();
     await itemInput.click();
     await itemInput.fill(uniqueItemName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     // Look for the "Create item" footer row
     const createItemRow = page.getByRole("option").filter({
@@ -234,7 +234,7 @@ test.describe("Quick Item Create", () => {
     const partyInput = getCreatorPanel(page).getByRole("combobox").first();
     await partyInput.click();
     await partyInput.fill(seededPartyName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     const partyOption = page.getByRole("option").filter({
       hasText: new RegExp(seededPartyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
@@ -248,7 +248,7 @@ test.describe("Quick Item Create", () => {
     const itemInput = creator.getByPlaceholder(/select product or custom item/i).first();
     await itemInput.click();
     await itemInput.fill(uniqueItemName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     const createItemRow = page.getByRole("option").filter({
       hasText: /Create item/i,
@@ -293,7 +293,7 @@ test.describe("Escape key layering", () => {
     const partyInput = getCreatorPanel(page).getByRole("combobox").first();
     await partyInput.click();
     await partyInput.fill(uniqueName);
-    await page.waitForTimeout(500);
+    await settle(page);
 
     const createRow = page.getByRole("option").filter({
       hasText: /Create customer/i,

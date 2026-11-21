@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "../helpers/fixtures";
+import { test, expect, settle, type Page } from "../helpers/fixtures";
 import {
   loadSeed,
   SeedApi,
@@ -150,7 +150,7 @@ test.describe("TDS payment allocation", () => {
 
     await page.goto("/payments");
     await page.getByPlaceholder(/search/i).fill(saved!.paymentNumber);
-    await page.waitForTimeout(400);
+    await settle(page);
     await page.locator("tbody tr").first().click();
     const detail = page.locator('[role="dialog"]').first();
     await detail.getByRole("button", { name: /edit payment/i }).click();
@@ -176,7 +176,7 @@ test.describe("TDS payment allocation", () => {
 
     await page.goto("/payments");
     await page.getByPlaceholder(/search/i).fill(saved!.paymentNumber);
-    await page.waitForTimeout(400);
+    await settle(page);
     await page.locator("tbody tr").first().click();
     await page.locator('[role="dialog"]').first().getByRole("button", { name: /edit payment/i }).click();
     const clearPanel = page.locator('[role="dialog"]').first();

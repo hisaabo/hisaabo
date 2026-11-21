@@ -79,7 +79,7 @@ export class ItemsPage extends BasePage {
 
   async searchItems(query: string) {
     await this.searchInput.fill(query);
-    await this.waitForTrpcResponse();
+    await this.settle();
   }
 
   async clickItemRow(index = 0) {

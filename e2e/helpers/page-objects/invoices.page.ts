@@ -130,7 +130,7 @@ export class InvoicesPage extends BasePage {
 
   async searchInvoices(query: string) {
     await this.searchInput.fill(query);
-    await this.waitForTrpcResponse();
+    await this.settle();
   }
 
   async clickInvoiceRow(index = 0) {

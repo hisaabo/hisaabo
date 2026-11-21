@@ -11,7 +11,7 @@
  * Only tests seller + accountant (the two most different permission sets)
  * because the free plan limits to 3 team members total.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, settle } from "../helpers/fixtures";
 import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
@@ -144,6 +144,7 @@ test.describe("Role: Seller", () => {
   test("seller sees expected nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -157,6 +158,7 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see restricted nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -196,6 +198,7 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
@@ -211,11 +214,13 @@ test.describe("Role: Seller", () => {
   test("seller does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
+      await settle(rolePage);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {
@@ -270,6 +275,7 @@ test.describe("Role: Accountant", () => {
   test("accountant sees expected nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -283,6 +289,7 @@ test.describe("Role: Accountant", () => {
   test("accountant does NOT see restricted nav items", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const sidebar = rolePage.locator("nav, aside").first();
 
@@ -316,6 +323,7 @@ test.describe("Role: Accountant", () => {
   test("accountant does NOT see delete button on invoice rows", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
@@ -329,11 +337,13 @@ test.describe("Role: Accountant", () => {
   test("accountant does NOT see delete button in invoice detail panel", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
+    await settle(rolePage);
 
     const rows = rolePage.locator("tbody tr");
     const count = await rows.count();
     if (count > 0) {
       await rows.first().click();
+      await settle(rolePage);
       const panel = rolePage.locator('[role="dialog"]').first();
       const panelVisible = await panel.isVisible().catch(() => false);
       if (panelVisible) {

@@ -9,7 +9,7 @@
  *
  * Also verifies that CN/SR buttons disappear once invoice is fully adjusted.
  */
-import { test, expect, ApiHelper } from "../helpers/fixtures";
+import { test, expect, ApiHelper, settle } from "../helpers/fixtures";
 import {
   loadSeed,
   SeedApi,
@@ -73,6 +73,8 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     // Issue CN should NOT be visible for drafts
     await expect(
@@ -89,6 +91,8 @@ test.describe("Issue Credit Note from Invoice", () => {
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     await expect(
       panel.getByRole("button", { name: /issue.*credit.*note/i }),
@@ -128,6 +132,8 @@ test.describe("Create Sales Return from Invoice", () => {
 
     const panel = page.locator('[role="dialog"]').first();
     await expect(panel).toBeVisible({ timeout: 10_000 });
+    // Panel is open; let its data finish loading before asserting a button is absent
+    await settle(page);
 
     await expect(
       panel.getByRole("button", { name: /create.*sales.*return/i }),

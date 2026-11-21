@@ -67,7 +67,7 @@ export class PartiesPage extends BasePage {
 
   async searchParties(query: string) {
     await this.searchInput.fill(query);
-    await this.waitForTrpcResponse();
+    await this.settle();
   }
 
   async clickPartyRow(index = 0) {

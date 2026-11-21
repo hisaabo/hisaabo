@@ -8,7 +8,7 @@
  *   - Payment appears in payments list
  *   - Payment detail panel shows linked invoice
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, waitForPageReady } from "../helpers/fixtures";
 import { ApiHelper } from "../helpers/fixtures";
 import {
   loadSeed,
@@ -78,6 +78,7 @@ test.describe("Payments — Record Payment Panel", () => {
 
   test("Record Payment button on payments page opens panel", async ({ page }) => {
     await page.goto("/payments");
+    await waitForPageReady(page);
 
     // Click "Record Payment" in header
     await page.getByRole("button", { name: /record payment/i }).first().click();
@@ -96,6 +97,7 @@ test.describe("Payments — Record Payment Panel", () => {
 test.describe("Payments — Payment Detail", () => {
   test("payment detail panel shows payment info and linked invoice", async ({ page }) => {
     await page.goto("/payments");
+    await waitForPageReady(page);
 
     const rows = page.locator("tbody tr");
     const count = await rows.count();

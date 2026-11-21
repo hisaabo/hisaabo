@@ -5,7 +5,7 @@
  * unauthenticated redirects. These tests use fresh browser contexts
  * WITHOUT storageState to simulate unauthenticated users.
  */
-import { test, expect } from "../helpers/fixtures";
+import { test, expect, settle } from "../helpers/fixtures";
 
 test.describe("Login Negative Paths", () => {
   test("login page renders magic link sign-in with no password option", async ({ browser }) => {
@@ -24,7 +24,9 @@ test.describe("Login Negative Paths", () => {
     // Should show "Send magic link" button
     await expect(page.getByRole("button", { name: /send magic link|sign in/i }).first()).toBeVisible();
 
-    // Password sign-in was removed: no password link or field
+    // Password sign-in was removed: no password link or field. Settle first so
+    // these absence checks run on the finished page, not before it has rendered.
+    await settle(page);
     await expect(page.getByText(/use password instead/i)).toHaveCount(0);
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
 
@@ -42,6 +44,8 @@ test.describe("Login Negative Paths", () => {
 
     await email.fill("not-an-email");
     await page.getByRole("button", { name: /send magic link|sign in|continue/i }).first().click();
+    // Let any request the click started finish before asserting that nothing was sent
+    await settle(page);
 
     // Stays on the login page; no "check your email" confirmation appears
     await expect(page).toHaveURL(/\/login/);

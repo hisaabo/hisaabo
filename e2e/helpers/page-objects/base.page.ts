@@ -5,6 +5,7 @@
  * sidebar navigation, page header pattern, loading states, etc.
  */
 import { type Page, type Locator, expect } from "@playwright/test";
+import { settle } from "../settle";
 
 export class BasePage {
   readonly page: Page;
@@ -25,36 +26,16 @@ export class BasePage {
     await this.waitForReady();
   }
 
-  /** Wait for loading indicators to disappear */
+  /** Wait until the route has rendered and the app has finished loading its data */
   async waitForReady() {
-    // Wait for positive signal: h1 from PageHeader means the route rendered
+    // Positive signal: h1 from PageHeader means the route rendered
     await this.page.locator("h1").first().waitFor({ state: "visible", timeout: 15_000 });
-
-    // Now wait for skeleton rows to disappear (used across list pages)
-    await this.page
-      .locator(".animate-pulse")
-      .first()
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {
-        /* no skeleton — fine */
-      });
-
-    // Also wait for any loading spinners
-    await this.page
-      .locator('[role="status"]')
-      .first()
-      .waitFor({ state: "hidden", timeout: 5_000 })
-      .catch(() => {
-        /* no spinner — fine */
-      });
+    await settle(this.page);
   }
 
-  /** Wait for a tRPC network response after a debounced action (e.g. search) */
-  protected async waitForTrpcResponse(timeout = 5_000) {
-    await this.page.waitForResponse(
-      (resp) => resp.url().includes("/api/trpc/") && resp.status() === 200,
-      { timeout },
-    ).catch(() => {});
+  /** Wait for a debounced action (e.g. search) to finish: debounce, request and re-render */
+  protected async settle() {
+    await settle(this.page);
   }
 
   /** Assert the page title matches expected text */
@@ -73,7 +54,7 @@ export class BasePage {
   async search(query: string) {
     const input = this.page.getByPlaceholder(/search/i).first();
     await input.fill(query);
-    await this.waitForTrpcResponse();
+    await this.settle();
   }
 
   /** Click a status/filter tab by label text */

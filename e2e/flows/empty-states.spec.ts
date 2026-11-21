@@ -105,6 +105,8 @@ test.describe("Empty States", () => {
       .or(page.getByText("Cancelled"))
       .first()
       .click();
+    // Count rows only once the filtered list has loaded, not the pre-click one
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -123,6 +125,8 @@ test.describe("Empty States", () => {
     // Quotations uses DocumentListPage which has no search input.
     // Use the "Cancelled" status tab to find an empty state instead.
     await page.getByRole("button", { name: /^cancelled$/i }).click();
+    // Count rows only once the filtered list has loaded, not the pre-click one
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {
@@ -145,6 +149,8 @@ test.describe("Empty States", () => {
     // Proforma invoices uses DocumentListPage which has no search input.
     // Use the "Cancelled" status tab to find an empty state instead.
     await page.getByRole("button", { name: /^cancelled$/i }).click();
+    // Count rows only once the filtered list has loaded, not the pre-click one
+    await waitForSearchResults(page);
 
     const rows = await page.locator("tbody tr").count();
     if (rows === 0) {

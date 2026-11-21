@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { trpc, createTRPCClient, queryClient } from "@/lib/trpc";
+import { installBusyMarker } from "@/lib/busy-marker";
 import { ToastContainer } from "@/components/ui/Toast";
 import { routeTree } from "./routeTree.gen";
 import { hydrateDesktopSession } from "@/lib/desktop-session";
@@ -54,5 +55,9 @@ async function boot() {
     </StrictMode>
   );
 }
+
+// `<html data-busy>` while a query/mutation is in flight or a debounce is
+// pending — the ready signal end-to-end tests wait on (e2e/helpers/settle.ts).
+installBusyMarker(queryClient);
 
 void boot();
