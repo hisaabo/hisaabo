@@ -16,7 +16,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { controlDb, apiKeys } from "@hisaabo/db";
-import { emitTenantEvent } from "./notifications/index.js";
+// emit.js directly (not the notifications barrel): the barrel also loads the dispatcher and the
+// email service, which the operator CLI has no use for.
+import { emitTenantEvent } from "./notifications/emit.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const API_KEY_DEFAULT_TTL_MS = 90 * DAY_MS;
