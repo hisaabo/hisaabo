@@ -104,12 +104,14 @@ The design goal is that an agent can do nothing through WebMCP that you could no
 
 ## Which Agents Work Today
 
+As of November 2026, based on what the vendors have reported. Hisaabo does not control any of these agents and this list changes quickly, so check each vendor's documentation for its current status.
+
 | Agent | Status |
 |---|---|
-| **Gemini in Chrome** | Works — Chrome 149+ with the origin trial or the testing flag |
-| **Copilot in Edge** | Works — Edge 150+ with the origin trial |
-| **ChatGPT Desktop** | Consumes WebMCP tools from the browser |
-| **Claude in Chrome** | Does not consume WebMCP today ([claude-code#30645](https://github.com/anthropics/claude-code/issues/30645), closed as not planned) |
+| **Gemini in Chrome** | Reported to work with Chrome 149+, using the origin trial or the testing flag |
+| **Copilot in Edge** | Reported to work with Edge 150+, using the origin trial |
+| **ChatGPT Desktop** | Reported to consume WebMCP tools from the browser |
+| **Claude in Chrome** | Reported not to consume WebMCP at this time ([claude-code#30645](https://github.com/anthropics/claude-code/issues/30645), closed as not planned) |
 
 If you use Claude, nothing changes: keep using the [MCP server](/ai/mcp-server/) with `@hisaabo/mcp`. It covers considerably more ground than the browser tools — 194 tools including GST reports, e-invoicing, banking, accounting statements, shipments and bulk import (103 of them read-only and registered by default) — and it works from Claude Desktop without a browser tab open at all.
 
