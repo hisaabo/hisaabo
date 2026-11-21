@@ -29,6 +29,17 @@ export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
  * server's own "canceling statement" error wins whenever it can answer at all.
  */
 export const QUERY_TIMEOUT_GRACE_MS = 5_000;
+export const MIN_QUERY_TIMEOUT_SEC = 1;
+export const MAX_QUERY_TIMEOUT_SEC = 600;
+
+/** Parse `--query-timeout`: a finite number of seconds, clamped to 1-600. Anything else throws. */
+export function parseQueryTimeout(raw: string): number {
+  const n = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(n)) {
+    throw new Error(`--query-timeout needs a number of seconds between ${MIN_QUERY_TIMEOUT_SEC} and ${MAX_QUERY_TIMEOUT_SEC}`);
+  }
+  return Math.min(MAX_QUERY_TIMEOUT_SEC, Math.max(MIN_QUERY_TIMEOUT_SEC, n));
+}
 
 /**
  * Tenant rows come from the database; refuse anything that psql would parse as
@@ -238,6 +249,11 @@ export class DirectRunner implements SqlRunner {
       if (target.port) u.port = target.port;
     }
     return u.toString();
+  }
+
+  /** The control database's host name, for masking it out of error text. */
+  knownHosts(): string[] {
+    return this.control.hostname ? [this.control.hostname] : [];
   }
 
   /** Number of pools currently open (diagnostics and tests). */

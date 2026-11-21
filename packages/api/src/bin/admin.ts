@@ -33,7 +33,7 @@ import {
 } from "../lib/admin/stats.js";
 import {
   DockerPsqlRunner, DirectRunner, parseEnvFile, defaultEnvFile,
-  DEFAULT_STATEMENT_TIMEOUT_MS, QUERY_TIMEOUT_GRACE_MS,
+  DEFAULT_STATEMENT_TIMEOUT_MS, QUERY_TIMEOUT_GRACE_MS, MIN_QUERY_TIMEOUT_SEC, MAX_QUERY_TIMEOUT_SEC, parseQueryTimeout,
 } from "../lib/admin/runners.js";
 import { renderFrame, frameToString, type ViewState, type View } from "../lib/admin/screens.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
@@ -97,7 +97,7 @@ OPTIONS
                                    This is the connection bound: the dashboard holds at most <n> tenant
                                    connections plus 1 control connection, never one per tenant.
   --query-timeout <seconds>        Give up on a database that has not answered a query after this long
-                                   (default: ${DEFAULT_STATEMENT_TIMEOUT_MS / 1000}). It is shown as unreachable; the refresh carries on.
+                                   (default: ${DEFAULT_STATEMENT_TIMEOUT_MS / 1000}, ${MIN_QUERY_TIMEOUT_SEC}-${MAX_QUERY_TIMEOUT_SEC}). It is shown as unreachable; the refresh carries on.
   --migrations-dir <dir>           Folder holding drizzle/, drizzle-control/, drizzle-tenant/ for drift
                                    detection (default: next to this build, then ./packages/db;
                                    HISAABO_MIGRATIONS_DIR is honoured too)
@@ -170,7 +170,12 @@ function parseArgs(argv: string[]): Args {
         a.concurrency = Math.min(MAX_CONCURRENCY, n);
         break;
       }
-      case "--query-timeout": a.queryTimeout = Math.max(1, Number(next(i++, arg)) || DEFAULT_STATEMENT_TIMEOUT_MS / 1000); break;
+      case "--query-timeout": {
+        const raw = next(i++, arg);
+        a.queryTimeout = parseQueryTimeout(raw);
+        if (a.queryTimeout !== Number(raw)) process.stderr.write(`hisaabo admin: --query-timeout clamped to ${a.queryTimeout}s (allowed: ${MIN_QUERY_TIMEOUT_SEC}-${MAX_QUERY_TIMEOUT_SEC})\n`);
+        break;
+      }
       case "--migrations-dir": a.migrationsDir = next(i++, arg); break;
       case "-h": case "--help": a.help = true; break;
       default:
@@ -228,8 +233,10 @@ function buildRunner(a: Args): Built {
 let activeRunner: SqlRunner | null = null;
 /** --reveal: show real hosts in errors written to stderr. Off by default, like everywhere else. */
 let revealErrors = false;
+/** Host names the runner itself connects to (the control database), masked out of error text. */
+let maskHosts: string[] = [];
 /** An error message safe to print: connection details (host, port, db user) stripped unless --reveal. */
-const shown = (msg: string): string => (revealErrors ? msg : maskErrorText(msg));
+const shown = (msg: string): string => (revealErrors ? msg : maskErrorText(msg, maskHosts));
 /** Interactive mode registers this to leave the alternate screen if we die abnormally. */
 let restoreTerminal: (() => void) | null = null;
 
@@ -280,11 +287,11 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
   // while masked: a connection error carries the real host and port.
   let refreshFailure: string | null = null;
   const syncError = () => {
-    if (refreshFailure !== null) state.error = state.masked ? maskErrorText(refreshFailure) : refreshFailure;
+    if (refreshFailure !== null) state.error = state.masked ? maskErrorText(refreshFailure, maskHosts) : refreshFailure;
     else state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
   };
   const applyMask = () => {
-    state.stats = raw ? (state.masked ? maskStats(raw) : raw) : null;
+    state.stats = raw ? (state.masked ? maskStats(raw, { hosts: maskHosts }) : raw) : null;
     state.runnerLabel = runnerLabel(state.masked);
     syncError();
   };
@@ -444,6 +451,7 @@ async function main(): Promise<void> {
     const built = buildRunner(a);
     const r = built.runner;
     activeRunner = r;
+    maskHosts = r.knownHosts?.() ?? [];
     const journals = loadJournals({
       here: path.dirname(fileURLToPath(import.meta.url)),
       cwd: process.cwd(),
@@ -471,7 +479,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    const stats = a.reveal ? await collect() : maskStats(await collect());
+    const stats = a.reveal ? await collect() : maskStats(await collect(), { hosts: maskHosts });
     if (a.json) {
       process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
     } else {

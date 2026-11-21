@@ -9,13 +9,18 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   collectPlatformStats, clampConcurrency, resolveConcurrency, withQueryTimeout,
   CONTROL_SQL, MAX_CONCURRENCY, DEFAULT_CONCURRENCY, DOCKER_CONCURRENCY,
   type SqlRunner, type DbTarget,
 } from "../lib/admin/stats.js";
 import { QUEUE_PROBE_SQL } from "../lib/admin/queues.js";
-import { DirectRunner, DockerPsqlRunner, DEFAULT_STATEMENT_TIMEOUT_MS, type PgConnect } from "../lib/admin/runners.js";
+import {
+  DirectRunner, DockerPsqlRunner, DEFAULT_STATEMENT_TIMEOUT_MS, parseQueryTimeout, MIN_QUERY_TIMEOUT_SEC, MAX_QUERY_TIMEOUT_SEC, type PgConnect,
+} from "../lib/admin/runners.js";
 
 const NOW = new Date("2026-09-12T10:00:00Z");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -314,5 +319,42 @@ describe("DockerPsqlRunner", () => {
     expect(cs).toEqual(["SET statement_timeout = 12000", "select 1"]);
     expect(args).toContain("-q");
     expect(args[args.indexOf("-d") + 1]).toBe("tenant_x");
+  });
+});
+
+// ── B1: --query-timeout ─────────────────────────────────────────
+
+describe("B1: --query-timeout bounds", () => {
+  it("clamps to 1-600 seconds and rejects non-finite values", () => {
+    expect(MIN_QUERY_TIMEOUT_SEC).toBe(1);
+    expect(MAX_QUERY_TIMEOUT_SEC).toBe(600);
+    expect(parseQueryTimeout("30")).toBe(30);
+    expect(parseQueryTimeout("2.5")).toBe(2.5);
+    expect(parseQueryTimeout("0")).toBe(1);
+    expect(parseQueryTimeout("0.2")).toBe(1);
+    expect(parseQueryTimeout("-7")).toBe(1);
+    expect(parseQueryTimeout("601")).toBe(600);
+    expect(parseQueryTimeout("999999999")).toBe(600);
+    for (const bad of ["", "  ", "abc", "NaN", "Infinity", "-Infinity", "1e999"]) {
+      expect(() => parseQueryTimeout(bad), JSON.stringify(bad)).toThrow(/needs a number of seconds between 1 and 600/);
+    }
+  });
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkgRoot = resolve(here, "..", "..");
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/bin/admin.ts", ...args], { cwd: pkgRoot, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" }, timeout: 30_000 });
+
+  it("the CLI rejects a non-number, and clamps (with a notice) an out-of-range value", () => {
+    const bad = run("--via", "demo", "--once", "--query-timeout", "soon");
+    expect(bad.status).toBe(2);
+    expect(bad.stderr).toMatch(/--query-timeout needs a number of seconds between 1 and 600/);
+
+    const inf = run("--via", "demo", "--once", "--query-timeout", "Infinity");
+    expect(inf.status).toBe(2);
+
+    const clamped = run("--via", "demo", "--once", "--query-timeout", "99999", "--view", "overview");
+    expect(clamped.status).toBe(0);
+    expect(clamped.stderr).toContain("--query-timeout clamped to 600s");
   });
 });

@@ -42,6 +42,11 @@ export interface SqlRunner {
    * correctness; stateless runners (docker/psql) simply omit it.
    */
   release?(target: DbTarget, opts?: { force?: boolean }): Promise<void>;
+  /**
+   * Host names this runner itself connects to (the control database), so error
+   * text that echoes them can be masked. Deliberately not part of PlatformStats.
+   */
+  knownHosts?(): string[];
   close(): Promise<void>;
 }
 
@@ -762,6 +767,7 @@ export function withQueryTimeout(runner: SqlRunner, timeoutMs: number): SqlRunne
     describe: (reveal) => runner.describe(reveal),
     close: () => runner.close(),
     release: runner.release ? (target, opts) => runner.release!(target, opts) : undefined,
+    knownHosts: runner.knownHosts ? () => runner.knownHosts!() : undefined,
     queryJson(target, sql) {
       return new Promise<unknown>((resolve, reject) => {
         const timer = setTimeout(() => {

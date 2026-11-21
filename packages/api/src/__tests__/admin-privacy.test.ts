@@ -195,7 +195,7 @@ describe("connection-detail scrubbing", () => {
       ["connect ETIMEDOUT postgres:5432", "connect ETIMEDOUT •••"],
       ["getaddrinfo ENOTFOUND db.internal", "getaddrinfo ENOTFOUND •••"],
       ["getaddrinfo EAI_AGAIN postgres", "getaddrinfo EAI_AGAIN •••"],
-      ["postgresql://hisaabo:s3cret@db.internal:5432/hisaabo failed", "postgres://••• failed"],
+      ["postgresql://hisaabo:s3cret@db.internal:5432/hisaabo failed", "db://••• failed"],
       ['password authentication failed for user "hisaabo"', 'password authentication failed for user "•••"'],
       ['role "hisaabo" does not exist', 'role "•••" does not exist'],
       ['connection to server at "db.internal" (10.0.0.5), port 5432 failed', "connection to server at ••• failed"],
