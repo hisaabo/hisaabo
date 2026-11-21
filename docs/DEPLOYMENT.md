@@ -289,6 +289,27 @@ In multi-tenant deployments it queries each tenant database once per refresh (fo
 
 The refresh interval is counted from the end of the previous refresh and refreshes never overlap. If a pass over many tenants is long, raise `--interval` (or use `--interval 0` and press `r` when you need fresh numbers) rather than `--concurrency`.
 
+### Operator-issued API keys
+
+API access is a paid feature (and most customers use the WebMCP integration instead), so an operator may need to hand a specific customer a key without signing in as them. From the API container:
+
+```bash
+# Issue a key (the key is printed once; store it now, it cannot be shown again)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+  node packages/api/dist/bin/admin.js api-key create owner@example.com --tenant acme --name "MCP server" --expires-days 90
+
+# List a user's keys (id, name, prefix, tenant, created, last used, expiry; never the key or hash)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js api-key list owner@example.com [--tenant acme] [--reveal]
+
+# Revoke by id (takes effect at once; running API processes are notified through the database)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js api-key revoke <key-id>
+```
+
+- **Keys act with the user's role.** A key has no scopes: it can do whatever that user can in that organisation. So `create` only works for an existing user who is an owner, superadmin or admin of the tenant (`--tenant` takes the slug or the id) and refuses everyone else with a message naming their role. It never creates users or tenants, and refuses a suspended organisation. Treat the printed key like that user's password.
+- **Plan limits apply** (the free plan has no API keys; Pro allows 3). `--override-plan` issues the key anyway; the command warns on stderr and records the override in its audit line and the `api_key_operator_issued` event (`planOverride: true`).
+- `--expires-days <n>` (1-365, default 90) sets the lifetime. `list` masks the tenant name and email like the dashboard does unless you add `--reveal`.
+- **Audit.** The tenant's owners and admins receive the same locked "API key created" security alert as for a web-created key, naming "Hisaabo operator" as the creator (the command only queues it; a running notification dispatcher delivers it, on the multi-tenant cloud at its next full sweep, about a minute later). The command also prints an `[audit]` line on stderr and emits structured `api_key_operator_issued` / `api_key_operator_revoked` security events carrying ids only (never the key or its hash). There is no platform-level audit table. Like `login-link`, it is shell-only: there is no HTTP route to it, and on the ONCE image it derives the database URL the same way.
+
 ### Break-glass sign-in (when email is not working)
 
 Sign-in is by emailed magic link. In production the API refuses to send mail without `RESEND_API_KEY`, so a misconfigured install can lock everyone out, including the owner who needs to fix it. With shell access to the API container, print a one-time sign-in link for an existing user:

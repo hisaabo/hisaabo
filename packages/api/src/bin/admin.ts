@@ -16,10 +16,12 @@
  *     pnpm --filter @hisaabo/api admin
  *
  * Run with --help for all flags. The dashboard is read-only: it never writes to
- * the database. The one write path is the explicit break-glass subcommand
+ * the database. The write paths are the explicit, shell-only subcommands
  *   node packages/api/dist/bin/admin.js login-link <email>
  * (see lib/admin/login-link.ts), which prints a one-time sign-in URL for an
- * existing user when email delivery is not working.
+ * existing user when email delivery is not working, and
+ *   node packages/api/dist/bin/admin.js api-key create|list|revoke …
+ * (see lib/admin/api-key.ts), which issues, lists and revokes API keys.
  */
 
 import { readFileSync } from "node:fs";
@@ -74,6 +76,9 @@ hisaabo admin — live platform dashboard for Hisaabo operators
 USAGE
   node packages/api/dist/bin/admin.js [options]
   node packages/api/dist/bin/admin.js login-link <email> [options]   (break-glass sign-in; see login-link --help)
+  node packages/api/dist/bin/admin.js api-key create <email> --tenant <slug|id> --name "<label>" [--expires-days N] [--override-plan]
+  node packages/api/dist/bin/admin.js api-key list <email> [--tenant <slug|id>]
+  node packages/api/dist/bin/admin.js api-key revoke <key-id>        (operator API keys; see api-key --help)
 
 OPTIONS
   --via <auto|direct|docker|demo>  How to reach Postgres (default: auto)
@@ -404,6 +409,11 @@ async function main(): Promise<void> {
   if (process.argv[2] === "login-link") {
     const { runLoginLink } = await import("../lib/admin/login-link.js");
     process.exit(await runLoginLink(process.argv.slice(3)));
+  }
+  // Subcommand: operator-issued API keys (create / list / revoke). Shell-only, same posture.
+  if (process.argv[2] === "api-key") {
+    const { runApiKey } = await import("../lib/admin/api-key.js");
+    process.exit(await runApiKey(process.argv.slice(3)));
   }
 
   let a: Args;

@@ -34,7 +34,10 @@ export type SecurityEvent =
   | "ops_auth_fail"
   | "turnstile_legacy_exempt"
   | "unverified_account_claimed"
-  | "email_change_wrong_account";
+  | "email_change_wrong_account"
+  // `admin api-key create|revoke` (shell-only operator path). Ids and flags only, never the key.
+  | "api_key_operator_issued"
+  | "api_key_operator_revoked";
 
 export function logSecurityEvent(
   event: SecurityEvent,
