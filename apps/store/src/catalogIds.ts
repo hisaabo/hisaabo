@@ -7,9 +7,13 @@ import type { StoreItem } from "./types";
 /** Most ids the API accepts in one `?ids=` request. */
 export const MAX_IDS_PER_REQUEST = 50;
 
-/** Split ids into requests of at most MAX_IDS_PER_REQUEST, dropping duplicates. */
+/**
+ * Split ids into requests of at most MAX_IDS_PER_REQUEST, lower-cased,
+ * de-duplicated and sorted so the same set of ids always produces the same
+ * requests (and so the same CDN cache keys).
+ */
 export function chunkIds(ids: string[], size = MAX_IDS_PER_REQUEST): string[][] {
-  const unique = [...new Set(ids.map((id) => id.toLowerCase()))];
+  const unique = [...new Set(ids.map((id) => id.toLowerCase()))].sort();
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += size) chunks.push(unique.slice(i, i + size));
   return chunks;

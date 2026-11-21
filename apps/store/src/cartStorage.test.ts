@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   LEGACY_CART_KEY,
+  LEGACY_SEEN_KEY,
+  LEGACY_MAX_AGE_MS,
   cartStorageKey,
+  isLegacyLine,
+  legacyItemIds,
   loadCart,
   saveCart,
   readLegacyCart,
@@ -74,6 +78,20 @@ describe("cart storage", () => {
     expect(loadCart("shop-a", fakeStorage({ [key]: '{"a":1}' }))).toEqual([]);
   });
 
+  it("keeps lines whose price is null or missing, as the old store did", () => {
+    const key = cartStorageKey("shop-a");
+    const noPrice = [
+      lineFor(ID_RICE, "Rice", 2, { effectivePrice: null as unknown as string }),
+      { ...lineFor(ID_DAL, "Dal", 1), effectivePrice: undefined },
+    ];
+    const loaded = loadCart("shop-a", fakeStorage({ [key]: JSON.stringify(noPrice) }));
+    expect(loaded.map((l) => [l.item.id, l.quantity])).toEqual([
+      [ID_RICE, 2],
+      [ID_DAL, 1],
+    ]);
+    expect(loaded[0]!.effectivePrice).toBeNull();
+  });
+
   it("filters out malformed lines", () => {
     const key = cartStorageKey("shop-a");
     const bad = [line(), { item: null, quantity: 1, effectivePrice: "1" }, { ...line(), quantity: 0 }, 7];
@@ -98,7 +116,7 @@ describe("cart storage", () => {
 });
 
 describe("readLegacyCart", () => {
-  it("returns null when there is no old cart or it is unreadable", () => {
+  it("returns null when there is no old cart or it is not a JSON array", () => {
     expect(readLegacyCart(fakeStorage())).toBeNull();
     expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: "" }))).toBeNull();
     expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: "not json" }))).toBeNull();
@@ -106,22 +124,44 @@ describe("readLegacyCart", () => {
     expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: "null" }))).toBeNull();
   });
 
-  it("keeps well-formed lines and drops malformed ones, including non-UUID item ids", () => {
-    const junk = [
-      line(),
+  it("returns every entry exactly as stored, valid or not", () => {
+    const junk = [line(), { item: { id: "rice" }, quantity: 1, effectivePrice: "1" }, "x", null, 7];
+    expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: legacyJson(junk) }))).toEqual(junk);
+  });
+
+  it("returns an empty list for an empty array", () => {
+    expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: "[]" }))).toEqual([]);
+  });
+});
+
+describe("isLegacyLine / legacyItemIds", () => {
+  it("accepts well-formed lines, including ones with a null or missing price", () => {
+    expect(isLegacyLine(line())).toBe(true);
+    expect(isLegacyLine(line({ effectivePrice: null as unknown as string }))).toBe(true);
+    expect(isLegacyLine({ ...line(), effectivePrice: undefined })).toBe(true);
+  });
+
+  it("rejects malformed lines and non-UUID item ids", () => {
+    for (const bad of [
       { item: { id: "rice" }, quantity: 1, effectivePrice: "1" },
       { item: null, quantity: 1, effectivePrice: "1" },
       { item: { id: ID_DAL }, quantity: -2, effectivePrice: "1" },
       { item: { id: ID_DAL }, quantity: 1, effectivePrice: 5 },
       "x",
       null,
-    ];
-    const res = readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: legacyJson(junk) }));
-    expect(res).toEqual([line()]);
+    ]) {
+      expect(isLegacyLine(bad)).toBe(false);
+    }
   });
 
-  it("returns an empty list for an empty array", () => {
-    expect(readLegacyCart(fakeStorage({ [LEGACY_CART_KEY]: "[]" }))).toEqual([]);
+  it("lists the distinct, lower-cased ids of the usable lines only", () => {
+    const ids = legacyItemIds([
+      lineFor(ID_RICE, "Rice"),
+      lineFor(ID_RICE.toUpperCase(), "Rice", 2, { selectedUnit: "sack" }),
+      { item: { id: "nope" }, quantity: 1, effectivePrice: "1" },
+      "x",
+    ]);
+    expect(ids).toEqual([ID_RICE]);
   });
 });
 
@@ -131,7 +171,23 @@ describe("partitionLegacyCart", () => {
   it("splits lines by whether this store sells the item, keeping order", () => {
     const { mine, rest } = partitionLegacyCart(legacy, [mkItem(ID_DAL, "Dal"), mkItem(ID_RICE, "Rice")]);
     expect(mine.map((l) => l.item.id)).toEqual([ID_RICE, ID_DAL]);
-    expect(rest.map((l) => l.item.id)).toEqual([ID_OIL]);
+    expect(rest).toEqual([lineFor(ID_OIL, "Oil", 1)]);
+  });
+
+  it("leaves entries that fail validation in rest, in place, even if their id looks claimed", () => {
+    const bad1 = { item: { id: "rice" }, quantity: 1, effectivePrice: "1" };
+    const bad2 = { item: { id: ID_RICE }, quantity: "many", effectivePrice: "1" };
+    const { mine, rest } = partitionLegacyCart(
+      [bad1, lineFor(ID_RICE, "Rice", 2), bad2, "x", lineFor(ID_OIL, "Oil", 1)],
+      [mkItem(ID_RICE, "Rice")],
+    );
+    expect(mine.map((l) => l.item.id)).toEqual([ID_RICE]);
+    expect(rest).toEqual([bad1, bad2, "x", lineFor(ID_OIL, "Oil", 1)]);
+  });
+
+  it("claims lines with a null price like any other", () => {
+    const nullPrice = lineFor(ID_RICE, "Rice", 2, { effectivePrice: null as unknown as string });
+    expect(partitionLegacyCart([nullPrice], [mkItem(ID_RICE, "Rice")]).mine).toEqual([nullPrice]);
   });
 
   it("matches ids case-insensitively", () => {
@@ -195,6 +251,9 @@ describe("mergeLegacyLines", () => {
     expect(JSON.stringify(cart)).toBe(snapshot);
   });
 });
+
+const NOW = Date.UTC(2026, 5, 1);
+const DAY = 24 * 60 * 60 * 1000;
 
 describe("migrateLegacyCart", () => {
   const sells = (...items: StoreItem[]) => vi.fn(async (ids: string[]) => items.filter((i) => ids.includes(i.id)));
@@ -292,12 +351,43 @@ describe("migrateLegacyCart", () => {
     expect(garbled.data.get(LEGACY_CART_KEY)).toBe("{oops");
   });
 
-  it("removes an old cart that holds no usable lines", async () => {
-    const storage = fakeStorage({ [LEGACY_CART_KEY]: legacyJson([{ item: { id: "x" }, quantity: 1, effectivePrice: "1" }]) });
+  it("removes an old cart that is an empty list", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: "[]", [LEGACY_SEEN_KEY]: String(NOW - 1000) });
     const fetchItems = sells();
-    await migrateLegacyCart("shop-a", fetchItems, storage);
+    await migrateLegacyCart("shop-a", fetchItems, storage, NOW);
     expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
     expect(fetchItems).not.toHaveBeenCalled();
+  });
+
+  it("keeps an old cart that holds only unusable entries, without any lookup", async () => {
+    const original = legacyJson([{ item: { id: "x" }, quantity: 1, effectivePrice: "1" }]);
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: original });
+    const fetchItems = sells();
+    await migrateLegacyCart("shop-a", fetchItems, storage, NOW);
+    expect(storage.data.get(LEGACY_CART_KEY)).toBe(original);
+    expect(fetchItems).not.toHaveBeenCalled();
+  });
+
+  it("never deletes entries that fail validation: they stay in the old cart", async () => {
+    const bad = { item: { id: ID_RICE }, quantity: "many", effectivePrice: "1" };
+    const storage = fakeStorage({
+      [LEGACY_CART_KEY]: legacyJson([bad, lineFor(ID_RICE, "Rice", 2), "junk"]),
+    });
+    await migrateLegacyCart("shop-a", sells(mkItem(ID_RICE, "Rice")), storage, NOW);
+    expect(stored(storage, slugKey)!.map((l) => l.item.id)).toEqual([ID_RICE]);
+    expect(JSON.parse(storage.data.get(LEGACY_CART_KEY)!)).toEqual([bad, "junk"]);
+  });
+
+  it("migrates a line whose price is null with its null price intact", async () => {
+    const storage = fakeStorage({
+      [LEGACY_CART_KEY]: legacyJson([lineFor(ID_RICE, "Rice", 2, { effectivePrice: null as unknown as string })]),
+    });
+    await migrateLegacyCart("shop-a", sells(mkItem(ID_RICE, "Rice")), storage, NOW);
+    const moved = stored(storage, slugKey)!;
+    expect(moved).toHaveLength(1);
+    expect(moved[0]!.effectivePrice).toBeNull();
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
   });
 
   it("re-reads the old cart after the lookup, so a concurrent migration is not undone", async () => {
@@ -328,5 +418,104 @@ describe("migrateLegacyCart", () => {
       },
     };
     await expect(migrateLegacyCart("shop-a", sells(), hostile)).resolves.toEqual([]);
+  });
+});
+
+describe("migrateLegacyCart: giving up on lines nobody claims", () => {
+  const sells = (...items: StoreItem[]) => vi.fn(async (ids: string[]) => items.filter((i) => ids.includes(i.id)));
+  const slugKey = cartStorageKey("shop-a");
+  const orphan = () => legacyJson([lineFor(ID_RICE, "Rice", 2), lineFor(ID_OIL, "Oil", 1)]);
+
+  it("records when the old cart was first seen, and only the first time", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan() });
+    await migrateLegacyCart("shop-a", sells(), storage, NOW);
+    expect(storage.data.get(LEGACY_SEEN_KEY)).toBe(String(NOW));
+    await migrateLegacyCart("shop-a", sells(), storage, NOW + 5 * DAY);
+    expect(storage.data.get(LEGACY_SEEN_KEY)).toBe(String(NOW));
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(true);
+  });
+
+  it("keeps looking up unclaimed lines until the old cart is 30 days old", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan(), [LEGACY_SEEN_KEY]: String(NOW) });
+    const fetchItems = sells();
+    await migrateLegacyCart("shop-a", fetchItems, storage, NOW + LEGACY_MAX_AGE_MS);
+    expect(fetchItems).toHaveBeenCalledTimes(1);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(true);
+  });
+
+  it("deletes the old cart and its stamp once it is older than 30 days", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan(), [LEGACY_SEEN_KEY]: String(NOW) });
+    await migrateLegacyCart("shop-a", sells(), storage, NOW + LEGACY_MAX_AGE_MS + 1);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
+  });
+
+  it("lets the store claim its own lines one last time before deleting the rest", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan(), [LEGACY_SEEN_KEY]: String(NOW) });
+    const moved = await migrateLegacyCart("shop-a", sells(mkItem(ID_RICE, "Rice")), storage, NOW + 40 * DAY);
+    expect(moved.map((l) => l.item.id)).toEqual([ID_RICE]);
+    expect(stored(storage, slugKey)!.map((l) => l.item.id)).toEqual([ID_RICE]);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
+  });
+
+  it("deletes an expired old cart with only unusable or unreadable data, without a lookup", async () => {
+    for (const raw of ["{oops", legacyJson([{ item: { id: "x" }, quantity: 1, effectivePrice: "1" }])]) {
+      const storage = fakeStorage({ [LEGACY_CART_KEY]: raw, [LEGACY_SEEN_KEY]: String(NOW) });
+      const fetchItems = sells();
+      await migrateLegacyCart("shop-a", fetchItems, storage, NOW + 31 * DAY);
+      expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+      expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
+      expect(fetchItems).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not delete anything if the lookup fails, even when expired", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan(), [LEGACY_SEEN_KEY]: String(NOW) });
+    const failing = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    await migrateLegacyCart("shop-a", failing, storage, NOW + 60 * DAY);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(true);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(true);
+  });
+
+  it("removes a leftover stamp when the old cart is gone", async () => {
+    const storage = fakeStorage({ [LEGACY_SEEN_KEY]: String(NOW) });
+    await migrateLegacyCart("shop-a", sells(), storage, NOW + DAY);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
+  });
+
+  it("removes the stamp together with the old cart when a store claims everything", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: legacyJson([lineFor(ID_RICE, "Rice", 2)]) });
+    await migrateLegacyCart("shop-a", sells(mkItem(ID_RICE, "Rice")), storage, NOW);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+    expect(storage.data.has(LEGACY_SEEN_KEY)).toBe(false);
+  });
+
+  it("treats a garbled stamp as first seen now", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: orphan(), [LEGACY_SEEN_KEY]: "yesterday" });
+    await migrateLegacyCart("shop-a", sells(), storage, NOW);
+    expect(storage.data.get(LEGACY_SEEN_KEY)).toBe(String(NOW));
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(true);
+  });
+
+  it("still migrates when the stamp cannot be written", async () => {
+    const storage = fakeStorage({ [LEGACY_CART_KEY]: legacyJson([lineFor(ID_RICE, "Rice", 2)]) });
+    const noStampWrites = {
+      ...storage,
+      setItem: (k: string, v: string) => {
+        if (k === LEGACY_SEEN_KEY) throw new Error("quota");
+        storage.setItem(k, v);
+      },
+    };
+    const moved = await migrateLegacyCart("shop-a", sells(mkItem(ID_RICE, "Rice")), noStampWrites, NOW);
+    expect(moved).toHaveLength(1);
+    expect(storage.data.has(LEGACY_CART_KEY)).toBe(false);
+  });
+
+  it("uses a stamp key that cannot be a store's cart key", () => {
+    expect(LEGACY_SEEN_KEY.startsWith(`${LEGACY_CART_KEY}:`)).toBe(false);
+    expect(cartStorageKey("legacy-seen")).not.toBe(LEGACY_SEEN_KEY);
   });
 });

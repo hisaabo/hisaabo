@@ -36,7 +36,8 @@ export async function fetchCatalog(
   if (opts.search) params.set("search", opts.search);
   if (opts.category) params.set("category", opts.category);
   // Narrow to specific items (max 50) — used to resolve cart links and ?item= links.
-  if (opts.ids?.length) params.set("ids", opts.ids.join(","));
+  // Sorted so the same set of ids is always the same URL (and CDN cache key).
+  if (opts.ids?.length) params.set("ids", [...opts.ids].sort().join(","));
   const query = params.toString();
 
   // `credentials: "omit"` — the store is fully public. Never attach the

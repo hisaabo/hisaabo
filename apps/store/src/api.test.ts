@@ -35,6 +35,15 @@ describe("fetchItemsByIds", () => {
     expect(url.searchParams.get("ids")).toBe(`${uuid(1)},${uuid(2)}`);
   });
 
+  it("sorts the ids in the URL, so the same set is the same cache key", async () => {
+    const fetchMock = stubFetch((url) => jsonResponse(page(requestedIds(url).map(mkItem))));
+    await fetchItemsByIds("shop", [uuid(9), uuid(2), uuid(5)]);
+    await fetchItemsByIds("shop", [uuid(5), uuid(9), uuid(2)]);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls[0]).toBe(urls[1]);
+    expect(new URL(urls[0]!, "http://store.test").searchParams.get("ids")).toBe([uuid(2), uuid(5), uuid(9)].join(","));
+  });
+
   it("filters to the requested ids when the API ignores ids and returns its first page", async () => {
     const firstPage = Array.from({ length: 24 }, (_, i) => mkItem(uuid(i + 100)));
     stubFetch(() => jsonResponse(page(firstPage)));

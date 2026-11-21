@@ -268,14 +268,37 @@ export const UNREACHABLE_LINK_NOTICE: CartLinkNotice = {
   details: [],
 };
 
-export function describeCartLinkResult(applied: number, dropped: DroppedLine[]): CartLinkNotice {
+/**
+ * How many of `entries` already have a line in `cart`, i.e. will have their
+ * quantity set by the link instead of being added as a new line.
+ */
+export function countExistingLines(cart: CartItem[], entries: CartItem[]): number {
+  const keys = new Set(cart.map(cartItemKey));
+  return entries.filter((entry) => keys.has(cartItemKey(entry))).length;
+}
+
+/**
+ * `applied` lines went into the cart; `updated` of them replaced a line the cart
+ * already had (the link's quantity wins), which the wording must admit to.
+ */
+export function describeCartLinkResult(applied: number, dropped: DroppedLine[], updated = 0): CartLinkNotice {
   const details = dropped.map((d) => `${d.name ?? "An item"}: ${DROP_TEXT[d.reason]}`);
   if (applied === 0) {
     return { kind: "warning", message: "None of the items in this link are available.", details };
   }
   return {
     kind: details.length > 0 ? "warning" : "success",
-    message: `${applied} ${applied === 1 ? "item" : "items"} added from a link`,
+    message: `${applied} ${applied === 1 ? "item" : "items"} ${updated > 0 ? "added or updated" : "added"} from a link`,
     details,
   };
+}
+
+/**
+ * Cart links only change the cart while the shopper is browsing or looking at
+ * the cart. Mid-checkout (or on the confirmation page) the cart is not shown
+ * and the notice would be invisible, so the link is ignored rather than
+ * silently changing what is about to be ordered.
+ */
+export function cartLinkAppliesInView(view: string): boolean {
+  return view === "browse" || view === "cart";
 }

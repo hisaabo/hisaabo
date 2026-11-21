@@ -9,6 +9,8 @@ import {
   resolveCartLink,
   mergeCartLink,
   describeCartLinkResult,
+  countExistingLines,
+  cartLinkAppliesInView,
   INVALID_LINK_NOTICE,
   UNREACHABLE_LINK_NOTICE,
   type CartLinkNotice as CartLinkNoticeData,
@@ -144,8 +146,17 @@ export function App() {
   // Item the customer is viewing in the detail modal (null = grid only).
   const [detailItem, setDetailItem] = useState<StoreItem | null>(null);
 
+  // Latest cart and view for handlers that outlive a render (hash changes and
+  // the fetches they start).
+  const cartRef = useRef(cart);
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
   // Persist cart (per store: every store shares one origin and so one localStorage)
   useEffect(() => {
+    cartRef.current = cart;
     saveCart(slug, cart);
   }, [slug, cart]);
 
@@ -172,6 +183,12 @@ export function App() {
     const applyHash = () => {
       const parsed = parseCartLink(window.location.hash);
       if (parsed.status === "none") return;
+      // Mid-checkout the cart is not on screen: ignore the link rather than
+      // silently changing what is about to be ordered.
+      if (!cartLinkAppliesInView(viewRef.current)) {
+        stripCartFragment();
+        return;
+      }
       if (parsed.status === "invalid") {
         stripCartFragment();
         setCartLinkNotice(INVALID_LINK_NOTICE);
@@ -183,18 +200,20 @@ export function App() {
       const ids = [...new Set(parsed.lines.map((l) => l.id))];
       fetchItemsByIds(slug, ids)
         .then((items) => {
+          stripCartFragment();
+          // The shopper may have started checkout while the lookup ran.
+          if (!cartLinkAppliesInView(viewRef.current)) return;
           const { entries, dropped } = resolveCartLink(parsed.lines, items);
+          const updated = countExistingLines(cartRef.current, entries);
           if (entries.length > 0) {
             setCart((prev) => mergeCartLink(prev, entries));
-            // Show the cart, but never pull a shopper out of checkout.
-            setView((v) => (v === "browse" ? "cart" : v));
+            setView("cart");
           }
-          setCartLinkNotice(describeCartLinkResult(entries.length, dropped));
-          stripCartFragment();
+          setCartLinkNotice(describeCartLinkResult(entries.length, dropped, updated));
         })
         .catch(() => {
           // Keep the fragment so reloading retries the link.
-          setCartLinkNotice(UNREACHABLE_LINK_NOTICE);
+          if (cartLinkAppliesInView(viewRef.current)) setCartLinkNotice(UNREACHABLE_LINK_NOTICE);
         });
     };
 
@@ -227,7 +246,7 @@ export function App() {
 
   // The notice belongs to the browsing screens; drop it once checkout starts.
   useEffect(() => {
-    if (view !== "browse" && view !== "cart") setCartLinkNotice(null);
+    if (!cartLinkAppliesInView(view)) setCartLinkNotice(null);
   }, [view]);
 
   // Debounce search so the server is queried once typing pauses

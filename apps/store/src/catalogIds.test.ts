@@ -52,6 +52,14 @@ describe("chunkIds", () => {
     ]);
   });
 
+  it("sorts ids so the same set always gives the same requests", () => {
+    const shuffled = [uuid(5), uuid(1), uuid(9), uuid(3)];
+    expect(chunkIds(shuffled)).toEqual([[uuid(1), uuid(3), uuid(5), uuid(9)]]);
+    expect(chunkIds([...shuffled].reverse())).toEqual(chunkIds(shuffled));
+    const many = Array.from({ length: 70 }, (_, i) => uuid(i));
+    expect(chunkIds([...many].reverse())).toEqual(chunkIds(many));
+  });
+
   it("returns no requests for no ids", () => {
     expect(chunkIds([])).toEqual([]);
   });

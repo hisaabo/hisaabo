@@ -5,6 +5,8 @@ import {
   resolveCartLink,
   mergeCartLink,
   describeCartLinkResult,
+  countExistingLines,
+  cartLinkAppliesInView,
   MAX_FRAGMENT_LENGTH,
   MAX_LINES,
   MAX_QTY,
@@ -460,10 +462,55 @@ describe("describeCartLinkResult", () => {
     ]);
   });
 
+  it("admits when the link overwrote quantities of lines already in the cart", () => {
+    expect(describeCartLinkResult(3, [], 1)).toEqual({
+      kind: "success",
+      message: "3 items added or updated from a link",
+      details: [],
+    });
+    expect(describeCartLinkResult(1, [], 1).message).toBe("1 item added or updated from a link");
+    expect(describeCartLinkResult(2, [], 0).message).toBe("2 items added from a link");
+  });
+
   it("says so when nothing could be added", () => {
     const notice = describeCartLinkResult(0, [{ line: { id: GONE, qty: 1 }, reason: "not_found" }]);
     expect(notice.kind).toBe("warning");
     expect(notice.message).toBe("None of the items in this link are available.");
     expect(notice.details).toHaveLength(1);
+  });
+});
+
+describe("countExistingLines", () => {
+  const inCart = (): CartItem[] => [
+    { item: simpleItem(), quantity: 5, effectivePrice: "120.00" },
+    { item: altItem(), quantity: 1, selectedUnit: "packet", conversionFactor: 0.5, effectivePrice: "55.00" },
+  ];
+
+  it("counts entries that already have a line (same item, variant and unit)", () => {
+    const entries: CartItem[] = [
+      { item: simpleItem(), quantity: 2, effectivePrice: "120.00" },
+      { item: altItem(), quantity: 3, selectedUnit: "packet", conversionFactor: 0.5, effectivePrice: "55.00" },
+      { item: altItem(), quantity: 1, selectedUnit: "sack", conversionFactor: 25, effectivePrice: "2400.00" },
+      { item: variantItem(), quantity: 1, selectedVariantId: VAR_S, effectivePrice: "499.00" },
+    ];
+    expect(countExistingLines(inCart(), entries)).toBe(2);
+  });
+
+  it("is zero for an empty cart or no entries", () => {
+    expect(countExistingLines([], [{ item: simpleItem(), quantity: 1, effectivePrice: "120.00" }])).toBe(0);
+    expect(countExistingLines(inCart(), [])).toBe(0);
+  });
+});
+
+describe("cartLinkAppliesInView", () => {
+  it("applies only while browsing or looking at the cart", () => {
+    expect(cartLinkAppliesInView("browse")).toBe(true);
+    expect(cartLinkAppliesInView("cart")).toBe(true);
+  });
+
+  it("is ignored during checkout and on the confirmation page", () => {
+    expect(cartLinkAppliesInView("phone-verify")).toBe(false);
+    expect(cartLinkAppliesInView("checkout")).toBe(false);
+    expect(cartLinkAppliesInView("confirmed")).toBe(false);
   });
 });

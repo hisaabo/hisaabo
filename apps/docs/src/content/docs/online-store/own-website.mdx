@@ -68,7 +68,7 @@ Each entry in `items` has these fields:
 
 ### Caching and rate limits
 
-Responses are cached for up to 60 seconds, so a price or stock change can take about a minute to show up. The catalog allows 120 requests per minute from one IP address; beyond that you get `429`. If your site is busy, fetch the catalog on your server and cache it rather than calling it on every page view.
+Responses are cached for 60 seconds and may then be served for up to 5 more minutes while the cache refreshes in the background, so a price or stock change can take up to about 6 minutes to show up. The catalog allows 120 requests per minute from one IP address; beyond that you get `429`. If your site is busy, fetch the catalog on your server and cache it rather than calling it on every page view.
 
 ## 2. Build a cart link
 
@@ -129,7 +129,9 @@ checkoutButton.onclick = () => { window.location.href = cartLink(myCart); };
 | `qty` | Whole number, 1 to 9999 |
 | `unit` | At most 64 characters |
 
-Two lines for the same item, variant and unit are added together. A link that breaks any rule above is ignored as a whole: the shopper sees "This cart link couldn't be read" and nothing is added. A link carries at most 50 lines; for a larger cart, split it across several links. Each one adds to the shopper's cart.
+Fifty lines do not always fit in 8 KB. Once encoded, a plain line takes about 75 characters and a line with a variant id about 140, so 50 variant lines come to about 7 KB; long `unit` names push it higher, and every non-Latin letter (for example in Hindi) takes about 9 characters. If a cart does not fit, split it across several links; each one adds to the shopper's cart.
+
+Two lines for the same item, variant and unit are added together. A link that breaks any rule above is ignored as a whole: the shopper sees "This cart link couldn't be read" and nothing is added.
 
 ## 3. What the store does with a cart link
 
@@ -137,11 +139,11 @@ When the shopper opens the link, the store:
 
 1. Reads the link and checks it against the limits above.
 2. Looks up every line in your **live** catalog. From the link it uses only the ids, quantities, unit and variant. Names, prices, tax, conversion factors and stock all come from the store, so a link can never set or change a price.
-3. Drops any line whose item is no longer in the store, is out of stock, or names a variant or unit the item does not have. The shopper sees what was dropped.
+3. Drops any line whose item is no longer in the store, is out of stock, names a variant or unit the item does not have, or is a `variants` item sent without a `variantId`. The shopper sees what was dropped.
 4. Adds the rest to the shopper's cart **for that store**. If the cart already holds the same item, variant and unit, its quantity is **set** to the link's quantity (not added), so opening the same link twice changes nothing. Other items already in the cart stay.
-5. Opens the cart, shows "N items added from a link", and removes the `#cart=…` part from the address bar so a reload does not apply it again.
+5. Opens the cart, shows "N items added from a link" (or "added or updated" when the link replaced the quantity of a line already in the cart), and removes the `#cart=…` part from the address bar so a reload does not apply it again.
 
-Carts are kept per store in the shopper's browser, so a cart for one Hisaabo store never shows up in another.
+Carts are kept per store in the shopper's browser, so a cart for one Hisaabo store never shows up in another. The lookup in step 2 uses the same cached catalog as the rest of your store, so stock shown or checked there can be a few minutes old; the order itself re-checks stock. A cart link opened while the shopper is already in checkout is ignored, so it can never change an order that is being placed.
 
 ## 4. Link to a single item
 
