@@ -1,33 +1,17 @@
 import { TRPCError } from "@trpc/server";
-import { createHash, randomBytes } from "crypto";
 import { eq, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../trpc.js";
 import { controlDb, apiKeys } from "@hisaabo/db";
 import { createApiKeySchema, revokeApiKeySchema } from "@hisaabo/shared";
 import { enforceApiKeyLimit } from "../lib/plan-limits.js";
 import { requireTenantRole, ADMIN_ROLES } from "../lib/tenant-access.js";
-import { emitTenantEvent } from "../lib/notifications/index.js";
+import { createApiKeyRecord } from "../lib/api-keys.js";
 import { cacheBus } from "../lib/cache/bus.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-export const API_KEY_DEFAULT_TTL_MS = 90 * DAY_MS;
-export const API_KEY_MAX_TTL_MS = 365 * DAY_MS;
+// Key generation, hashing and the expiry rule live in lib/api-keys.ts (shared with the
+// operator CLI); re-exported here for the callers that always imported them from the router.
+export { resolveApiKeyExpiry, API_KEY_DEFAULT_TTL_MS, API_KEY_MAX_TTL_MS } from "../lib/api-keys.js";
 
-/** Resolves the key expiry: 90 days when omitted, never more than 365 days out. */
-export function resolveApiKeyExpiry(requested: string | Date | null | undefined, now = Date.now()): Date {
-  if (!requested) return new Date(now + API_KEY_DEFAULT_TTL_MS);
-  const at = new Date(requested).getTime();
-  if (Number.isNaN(at) || at <= now) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Expiry must be in the future" });
-  }
-  if (at > now + API_KEY_MAX_TTL_MS) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "API keys can be valid for at most 365 days" });
-  }
-  return new Date(at);
-}
-
-// A key (or any non-interactive credential) must never be able to mint or
-// revoke keys: only an interactive session can manage them.
 function rejectApiKeyAuth(ctx: { viaApiKey?: boolean }) {
   if (ctx.viaApiKey) {
     throw new TRPCError({ code: "FORBIDDEN", message: "API keys cannot manage API keys" });
@@ -76,48 +60,20 @@ export const apiKeyRouter = router({
     // Plan check — enforces both plan access and key count limit
     await enforceApiKeyLimit(ctx.tenantId);
 
-    // Generate a high-entropy raw key
-    const rawKey = `hisaabo_key_${randomBytes(32).toString("base64url")}`;
-
-    // SHA-256 hash — API keys are high-entropy so slow hashing (argon2) is unnecessary
-    const keyHash = createHash("sha256").update(rawKey).digest("hex");
-
-    // First 20 chars for display identification
-    const keyPrefix = rawKey.slice(0, 20);
-
-    const expiresAt = resolveApiKeyExpiry(input.expiresAt);
-
-    const [created] = await controlDb
-      .insert(apiKeys)
-      .values({
-        userId: ctx.user.id,
-        tenantId: ctx.tenantId,
-        keyHash,
-        keyPrefix,
-        name: input.name,
-        expiresAt,
-      })
-      .returning({
-        id: apiKeys.id,
-        name: apiKeys.name,
-        keyPrefix: apiKeys.keyPrefix,
-        expiresAt: apiKeys.expiresAt,
-      });
-
-    // Tell the creator (and the other admins) — a key is a standing credential.
-    await emitTenantEvent(ctx.tenantId, {
-      type: "api_key.created",
-      payload: { keyName: created.name, keyPrefix: created.keyPrefix, createdByName: ctx.user.name || ctx.user.email },
+    // Key generation, hashing, insert and the "API key created" alert: lib/api-keys.ts
+    const created = await createApiKeyRecord({
+      userId: ctx.user.id,
+      tenantId: ctx.tenantId,
+      name: input.name,
+      expiresAt: input.expiresAt,
+      createdByName: ctx.user.name || ctx.user.email,
       actorUserId: ctx.user.id,
-      subjectUserId: ctx.user.id,
-      dedupeKey: `api_key.created:${created.id}`,
     });
 
-    // Return the raw key ONCE — it will never be accessible again
     return {
       id: created.id,
       name: created.name,
-      key: rawKey,
+      key: created.key,
       keyPrefix: created.keyPrefix,
       expiresAt: created.expiresAt,
     };
