@@ -28,12 +28,14 @@ export function assetUrl(path: string | null | undefined): string | undefined {
 
 export async function fetchCatalog(
   slug: string,
-  opts: { page?: number; search?: string; category?: string } = {}
+  opts: { page?: number; search?: string; category?: string; ids?: string[] } = {}
 ): Promise<CatalogPage> {
   const params = new URLSearchParams();
   if (opts.page && opts.page > 1) params.set("page", String(opts.page));
   if (opts.search) params.set("search", opts.search);
   if (opts.category) params.set("category", opts.category);
+  // Narrow to specific items (max 50) — used to resolve cart links and ?item= links.
+  if (opts.ids?.length) params.set("ids", opts.ids.join(","));
   const query = params.toString();
 
   // `credentials: "omit"` — the store is fully public. Never attach the

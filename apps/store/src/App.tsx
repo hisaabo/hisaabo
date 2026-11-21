@@ -2,6 +2,17 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { StoreConfig, CartItem, OrderResult, StoreItem } from "./types";
 import { cartItemKey } from "./types";
 import { fetchCatalog, assetUrl } from "./api";
+import { loadCart, saveCart } from "./cartStorage";
+import {
+  parseCartLink,
+  parseItemParam,
+  resolveCartLink,
+  mergeCartLink,
+  describeCartLinkResult,
+  INVALID_LINK_NOTICE,
+  UNREACHABLE_LINK_NOTICE,
+  type CartLinkNotice as CartLinkNoticeData,
+} from "./cartLink";
 import { Header } from "./components/Header";
 import { ItemGrid } from "./components/ItemGrid";
 import { ItemDetail } from "./components/ItemDetail";
@@ -10,25 +21,26 @@ import { Checkout } from "./components/Checkout";
 import { PhoneVerify } from "./components/PhoneVerify";
 import { OrderConfirmation } from "./components/OrderConfirmation";
 import { Footer } from "./components/Footer";
+import { CartLinkNotice } from "./components/CartLinkNotice";
 
-// Cart persistence key
-const CART_KEY = "hisaabo-store-cart";
-
-function loadCart(): CartItem[] {
+// Drop the `#cart=...` fragment so a reload does not apply the link again.
+function stripCartFragment() {
   try {
-    const raw = localStorage.getItem(CART_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as CartItem[];
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
   } catch {
-    return [];
+    // Sandboxed frames can refuse history changes; the merge is idempotent anyway.
   }
 }
 
-function saveCart(cart: CartItem[]) {
+// Remove the `?item=` deep-link param once the item view is closed.
+function stripItemParam() {
   try {
-    localStorage.setItem(CART_KEY, JSON.stringify(cart));
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("item")) return;
+    url.searchParams.delete("item");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
   } catch {
-    // ignore storage errors
+    // Ignore: the param only affects what a reload opens.
   }
 }
 
@@ -115,7 +127,7 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [cart, setCart] = useState<CartItem[]>(loadCart);
+  const [cart, setCart] = useState<CartItem[]>(() => loadCart(slug));
   const [view, setView] = useState<View>("browse");
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
 
@@ -132,10 +144,80 @@ export function App() {
   // Item the customer is viewing in the detail modal (null = grid only).
   const [detailItem, setDetailItem] = useState<StoreItem | null>(null);
 
-  // Persist cart
+  // Persist cart (per store: every store shares one origin and so one localStorage)
   useEffect(() => {
-    saveCart(cart);
-  }, [cart]);
+    saveCart(slug, cart);
+  }, [slug, cart]);
+
+  // A website can send shoppers here with a prefilled cart in the URL fragment
+  // (`#cart=...`) and/or open one item (`?item=<id>`); see cartLink.ts.
+  const [cartLinkNotice, setCartLinkNotice] = useState<CartLinkNoticeData | null>(null);
+  const cartLinkStarted = useRef(false);
+  const [deepLinkItemId] = useState(() => parseItemParam(window.location.search));
+
+  useEffect(() => {
+    if (!slug) return;
+
+    const applyHash = () => {
+      const parsed = parseCartLink(window.location.hash);
+      if (parsed.status === "none") return;
+      if (parsed.status === "invalid") {
+        stripCartFragment();
+        setCartLinkNotice(INVALID_LINK_NOTICE);
+        return;
+      }
+
+      // Resolve against the live catalog: only ids, quantities, units and
+      // variants come from the link; names, prices and stock come from the store.
+      const ids = [...new Set(parsed.lines.map((l) => l.id))];
+      fetchCatalog(slug, { ids })
+        .then((data) => {
+          const { entries, dropped } = resolveCartLink(parsed.lines, data.items);
+          if (entries.length > 0) {
+            setCart((prev) => mergeCartLink(prev, entries));
+            // Show the cart, but never pull a shopper out of checkout.
+            setView((v) => (v === "browse" ? "cart" : v));
+          }
+          setCartLinkNotice(describeCartLinkResult(entries.length, dropped));
+          stripCartFragment();
+        })
+        .catch(() => {
+          // Keep the fragment so reloading retries the link.
+          setCartLinkNotice(UNREACHABLE_LINK_NOTICE);
+        });
+    };
+
+    // The link in the address bar when the page loads. Once only: StrictMode
+    // runs effects twice in dev, and the fragment is stripped when handled.
+    if (!cartLinkStarted.current) {
+      cartLinkStarted.current = true;
+      applyHash();
+    }
+    // A link pasted into a tab already on the store changes only the fragment.
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, [slug]);
+
+  useEffect(() => {
+    if (!slug || !deepLinkItemId) return;
+    let cancelled = false;
+    fetchCatalog(slug, { ids: [deepLinkItemId] })
+      .then((data) => {
+        const item = data.items.find((i) => i.id.toLowerCase() === deepLinkItemId);
+        if (!cancelled && item) setDetailItem(item);
+      })
+      .catch(() => {
+        // Unknown or unreachable: just show the store normally.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, deepLinkItemId]);
+
+  // The notice belongs to the browsing screens; drop it once checkout starts.
+  useEffect(() => {
+    if (view !== "browse" && view !== "cart") setCartLinkNotice(null);
+  }, [view]);
 
   // Debounce search so the server is queried once typing pauses
   useEffect(() => {
@@ -247,8 +329,8 @@ export function App() {
     setOrderResult(result);
     setView("confirmed");
     setCart([]);
-    saveCart([]);
-  }, []);
+    saveCart(slug, []);
+  }, [slug]);
 
   const handleContinueShopping = useCallback(() => {
     setOrderResult(null);
@@ -595,8 +677,15 @@ export function App() {
           onRemoveFromCart={removeFromCart}
           currency={catalog.business.currency}
           accentColor={catalog.business.accentColor}
-          onClose={() => setDetailItem(null)}
+          onClose={() => {
+            setDetailItem(null);
+            stripItemParam();
+          }}
         />
+      )}
+
+      {cartLinkNotice && (
+        <CartLinkNotice notice={cartLinkNotice} onDismiss={() => setCartLinkNotice(null)} />
       )}
     </div>
   );
