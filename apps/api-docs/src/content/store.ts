@@ -17,7 +17,7 @@ export const storeEndpoints: EndpointGroup = {
         { name: "slug", type: "string", required: true, description: "URL slug to check (3-50 chars, lowercase alphanumeric with hyphens)" },
       ],
       output: {
-        description: "Whether the slug is available for use. A reserved platform word (for example `admin`, `login`, `support`, `hisaabo`) returns `{ available: false, reserved: true }`.",
+        description: "Whether the slug is available for use. A reserved platform word (for example `admin`, `login`, `support`, `hisaabo`, or anything starting with `hisaabo-` or ending in `-hisaabo`) returns `{ available: false, reserved: true }`.",
         example: { available: true },
       },
       codeExamples: {
@@ -160,7 +160,7 @@ resp = httpx.post(
       },
       gotchas: [
         "Returns CONFLICT if the slug is already taken by another business.",
-        "Returns BAD_REQUEST \"This store address is reserved. Please choose a different one.\" when the slug is a reserved platform word (for example `admin`, `login`, `support`, `hisaabo`), on the first choice and on a change. Re-sending a reserved slug the business already holds is allowed, so existing stores keep working.",
+        "Returns BAD_REQUEST \"This store address is reserved. Please choose a different one.\" when the slug is a reserved platform word (for example `admin`, `login`, `support`, `hisaabo`, or anything starting with `hisaabo-` or ending in `-hisaabo`), on the first choice and on a change. Re-sending a reserved slug the business already holds is allowed, so existing stores keep working.",
         "The store slug can only be set once. Setting it the first time is allowed; any later change (or clearing it) returns FORBIDDEN \"Your store link can only be set once.\" Re-sending the same slug, or updating other settings, is always allowed. Exception: when the system had to rename a duplicate slug (`storeSlugAutoAssigned: true` in `store.getSettings`), exactly one change is allowed, after which the flag clears.",
         "The slug must match the pattern `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/` — no uppercase, no leading/trailing hyphens.",
         "Monetary values like `storeMinOrderAmount` must be strings matching `/^\\d+(\\.\\d{1,2})?$/`.",

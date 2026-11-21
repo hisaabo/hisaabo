@@ -16,6 +16,8 @@ const MUST_RESERVE = [
   "www", "mail", "email", "static", "assets", "cdn", "docs", "help", "support", "status", "blog",
   "ops", "dashboard", "settings", "privacy", "terms", "refund", "refunds", "policy", "legal",
   "security", "about", "contact", "billing", "invoice", "invoices",
+  "payment", "payments", "upi", "kyc", "secure", "health", "user", "users", "profile", "home",
+  "search", "pricing", "download", "test", "demo", "null", "undefined", "customer-care",
 ];
 
 describe("RESERVED_STORE_SLUGS", () => {
@@ -45,7 +47,19 @@ describe("isReservedStoreSlug", () => {
   });
 
   it("does not reserve ordinary business slugs or look-alikes", () => {
-    for (const s of ["acme-traders", "hisaab-kitaab", "hisaabo-demo", "login-shop", "my-store", "supports", "teams"]) {
+    for (const s of ["acme-traders", "hisaab-kitaab", "kitaab-hisaab", "hisaab-traders", "login-shop", "my-store", "supports", "teams", "tests", "homes"]) {
+      expect(isReservedStoreSlug(s), s).toBe(false);
+    }
+  });
+
+  it("reserves the brand name as a whole leading or trailing segment (hisaabo-*, *-hisaabo)", () => {
+    for (const s of ["hisaabo-support", "hisaabo-official", "hisaabo-demo", "hisaabo-1", "acme-hisaabo", "official-hisaabo", "HISAABO-Support", " acme-hisaabo "]) {
+      expect(isReservedStoreSlug(s), s).toBe(true);
+    }
+  });
+
+  it("does not extend the brand rule to hisaab-*, other words, or the middle of a slug", () => {
+    for (const s of ["hisaab-support", "support-hisaab", "hisaaboo", "hisaaboo-traders", "nohisaabo", "my-nohisaabo", "acme-hisaabo-traders"]) {
       expect(isReservedStoreSlug(s), s).toBe(false);
     }
   });
@@ -67,8 +81,20 @@ describe("checkStoreSlugReserved", () => {
     expect(checkStoreSlugReserved("support", "acme")).toBe(STORE_SLUG_RESERVED_MESSAGE);
   });
 
+  it("rejects the brand prefix/suffix on first choice and on change", () => {
+    expect(checkStoreSlugReserved("hisaabo-support", null)).toBe(STORE_SLUG_RESERVED_MESSAGE);
+    expect(checkStoreSlugReserved("acme-hisaabo", "ab12-acme")).toBe(STORE_SLUG_RESERVED_MESSAGE);
+  });
+
   it("grandfathers a business that already holds the reserved slug", () => {
     expect(checkStoreSlugReserved("shop", "shop")).toBeNull();
+    expect(checkStoreSlugReserved("hisaabo-demo", "hisaabo-demo")).toBeNull();
+    expect(checkStoreSlugReserved("acme-hisaabo", "acme-hisaabo")).toBeNull();
+  });
+
+  it("does not let a grandfathered brand slug move to a different brand slug", () => {
+    expect(checkStoreSlugReserved("hisaabo-other", "hisaabo-demo")).toBe(STORE_SLUG_RESERVED_MESSAGE);
+    expect(checkStoreSlugReserved("support", "hisaabo-demo")).toBe(STORE_SLUG_RESERVED_MESSAGE);
   });
 
   it("allows non-reserved slugs and clearing the slug", () => {

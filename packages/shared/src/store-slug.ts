@@ -6,8 +6,12 @@
  * claim `login`, `support`, `hisaabo`, ... and impersonate the platform on a
  * hisaabo.in address (including in OTP SMS that carry the store name).
  *
- * Exact-match only: prefixes like `hisaab-` are deliberately NOT reserved, since
- * "hisaab" is an ordinary word and many real businesses use it in their name.
+ * A slug is reserved when it is on the list below, OR when it carries the brand
+ * name as a whole leading/trailing segment (`hisaabo-*`, `*-hisaabo`), which
+ * would otherwise let `hisaabo-support` or `acme-hisaabo` pass as official.
+ * `hisaab-` is deliberately NOT treated that way: "hisaab" is an ordinary word
+ * and many real businesses use it in their name (only the bare slug `hisaab`
+ * is on the list).
  *
  * GRANDFATHERING: only a slug that is being SET or CHANGED is checked. A business
  * that already holds a reserved slug keeps it, keeps saving other settings, and
@@ -46,6 +50,20 @@ export const RESERVED_STORE_SLUGS: readonly string[] = [
   "dashboard",
   "settings",
   "security",
+  "secure",
+  "kyc",
+  "health",
+  "user",
+  "users",
+  "profile",
+  "home",
+  "search",
+  "pricing",
+  "download",
+  "test",
+  "demo",
+  "null",
+  "undefined",
   // Commerce flow
   "pay",
   "checkout",
@@ -55,6 +73,9 @@ export const RESERVED_STORE_SLUGS: readonly string[] = [
   "billing",
   "invoice",
   "invoices",
+  "payment",
+  "payments",
+  "upi",
   // Marketing / support / legal pages
   "store",
   "stores",
@@ -66,6 +87,7 @@ export const RESERVED_STORE_SLUGS: readonly string[] = [
   "blog",
   "about",
   "contact",
+  "customer-care",
   "privacy",
   "terms",
   "refund",
@@ -83,10 +105,19 @@ const RESERVED_SET: ReadonlySet<string> = new Set(RESERVED_STORE_SLUGS);
 export const STORE_SLUG_RESERVED_MESSAGE =
   "This store address is reserved. Please choose a different one.";
 
-/** True when `slug` is on the reserved list (trimmed, case-insensitive). */
+/** Brand name as a whole leading or trailing hyphen-separated segment. */
+const BRAND_PREFIX = "hisaabo-";
+const BRAND_SUFFIX = "-hisaabo";
+
+/**
+ * True when `slug` is reserved (trimmed, case-insensitive): on the list, or
+ * `hisaabo-*` / `*-hisaabo`. Whole-segment only, so `hisaaboo` or `nohisaabo`
+ * are fine.
+ */
 export function isReservedStoreSlug(slug: string | null | undefined): boolean {
   if (!slug) return false;
-  return RESERVED_SET.has(slug.trim().toLowerCase());
+  const s = slug.trim().toLowerCase();
+  return RESERVED_SET.has(s) || s.startsWith(BRAND_PREFIX) || s.endsWith(BRAND_SUFFIX);
 }
 
 /**

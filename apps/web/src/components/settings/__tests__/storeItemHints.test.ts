@@ -17,7 +17,8 @@ describe("showsItemDescriptionOnStore", () => {
     expect(showsItemDescriptionOnStore({ description: "   ", storeDescription: null })).toBe(false);
     expect(showsItemDescriptionOnStore({})).toBe(false);
   });
-  it("has user-facing copy", () => {
-    expect(STORE_DESCRIPTION_FALLBACK_NOTE).toContain("online store");
+  it("has user-facing copy that does not point at a store-description setting no client has", () => {
+    expect(STORE_DESCRIPTION_FALLBACK_NOTE).toBe("This item's description is also shown on your online store.");
+    expect(STORE_DESCRIPTION_FALLBACK_NOTE.toLowerCase()).not.toContain("unless you set");
   });
 });

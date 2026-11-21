@@ -30,6 +30,7 @@ jest.mock("expo-secure-store", () => ({
 }));
 jest.mock("expo-constants", () => ({ default: { expoConfig: null } }));
 
+import { STORE_SLUG_RESERVED_MESSAGE } from "@hisaabo/shared";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { stub, renderScreen } from "../test-utils/trpc-stub";
 import { useBusinessStore } from "../stores/business";
@@ -787,6 +788,37 @@ describe("Store settings — Save and toggles need manage:Store", () => {
     expect(has("Manage")).toBe(true);
     editTagline();
     expect(has("Save")).toBe(false);
+  });
+});
+
+describe("Store settings — slug availability message", () => {
+  beforeEach(() => {
+    // Auto-assigned slug: the field is unlocked, so the availability check runs.
+    stub.data["store.getSettings"] = {
+      storeEnabled: true,
+      storeSlug: "ab12-acme",
+      storeSlugAutoAssigned: true,
+      storeTagline: "",
+      storeWhatsappNumber: "",
+      storeMinOrderAmount: "",
+      storeDeliveryNote: "",
+      storeAllowNegativeStock: false,
+    };
+    stub.data["store.listStoreItems"] = { data: [], total: 0 };
+  });
+
+  it("shows the reserved message, not 'already taken', when checkSlug reports reserved", () => {
+    stub.data["store.checkSlug"] = { available: false, reserved: true };
+    renderAs("admin", StoreSettingsScreen);
+    expect(has(STORE_SLUG_RESERVED_MESSAGE)).toBe(true);
+    expect(has("This URL is already taken. Please choose a different one.")).toBe(false);
+  });
+
+  it("still shows 'already taken' for a slug another business holds", () => {
+    stub.data["store.checkSlug"] = { available: false };
+    renderAs("admin", StoreSettingsScreen);
+    expect(has("This URL is already taken. Please choose a different one.")).toBe(true);
+    expect(has(STORE_SLUG_RESERVED_MESSAGE)).toBe(false);
   });
 });
 

@@ -23,6 +23,7 @@ import { useColors } from "../../../../src/contexts/ThemeContext";
 import { Skeleton } from "../../../../src/components/ui";
 import { PermissionGate } from "../../../../src/components/PermissionGate";
 import { useCan } from "../../../../src/hooks/useCan";
+import { STORE_SLUG_RESERVED_MESSAGE } from "@hisaabo/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,7 +111,7 @@ function StoreSettingsScreenContent() {
     { enabled: !!businessId && !isSlugLocked && debouncedSlug.length >= 3 },
   );
 
-  const slugStatus: "idle" | "checking" | "available" | "taken" =
+  const slugStatus: "idle" | "checking" | "available" | "taken" | "reserved" =
     isSlugLocked
       ? "idle"
       : debouncedSlug.length < 3
@@ -119,7 +120,9 @@ function StoreSettingsScreenContent() {
           ? "checking"
           : slugCheck.available
             ? "available"
-            : "taken";
+            : slugCheck.reserved
+              ? "reserved"
+              : "taken";
 
   // ── Dirty tracking ──────────────────────────────────────────────
   const isDirty =
@@ -180,9 +183,9 @@ function StoreSettingsScreenContent() {
             onPress={handleSave}
             style={[
               styles.saveBtn,
-              (updateMutation.isPending || slugStatus === "taken") && { opacity: 0.5 },
+              (updateMutation.isPending || slugStatus === "taken" || slugStatus === "reserved") && { opacity: 0.5 },
             ]}
-            disabled={updateMutation.isPending || slugStatus === "taken"}
+            disabled={updateMutation.isPending || slugStatus === "taken" || slugStatus === "reserved"}
           >
             {updateMutation.isPending ? (
               <ActivityIndicator size="small" color={colors.textPrimary} />
@@ -280,7 +283,7 @@ function StoreSettingsScreenContent() {
                     style={styles.slugStatusIcon}
                   />
                 )}
-                {!isSlugLocked && slugStatus === "taken" && (
+                {!isSlugLocked && (slugStatus === "taken" || slugStatus === "reserved") && (
                   <Ionicons
                     name="close-circle"
                     size={20}
@@ -301,6 +304,8 @@ function StoreSettingsScreenContent() {
                 <Text style={styles.slugHintLocked}>
                   Store URL cannot be changed once set
                 </Text>
+              ) : slugStatus === "reserved" ? (
+                <Text style={styles.slugHintTaken}>{STORE_SLUG_RESERVED_MESSAGE}</Text>
               ) : slugStatus === "taken" ? (
                 <Text style={styles.slugHintTaken}>
                   This URL is already taken. Please choose a different one.

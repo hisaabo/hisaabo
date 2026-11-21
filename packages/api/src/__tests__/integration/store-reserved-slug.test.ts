@@ -76,7 +76,11 @@ describe("reserved slug: first choice and change are rejected", () => {
     expect(b.storeTagline).toBeNull();
   });
 
-  it.each(["hisaabo", "support", "admin", "checkout", "privacy", "assets"])("rejects %s", async (slug) => {
+  it.each([
+    "hisaabo", "support", "admin", "checkout", "privacy", "assets",
+    "payment", "upi", "customer-care", "undefined",
+    "hisaabo-support", "acme-hisaabo",
+  ])("rejects %s", async (slug) => {
     await expect(callerA().store.updateSettings({ storeSlug: slug }))
       .rejects.toMatchObject({ code: "BAD_REQUEST", message: STORE_SLUG_RESERVED_MESSAGE });
   });
@@ -101,7 +105,7 @@ describe("reserved slug: first choice and change are rejected", () => {
     expect((await biz(world.business1.id)).storeSlug).toBe("acme-traders");
   });
 
-  it("still accepts ordinary and look-alike slugs", async () => {
+  it("still accepts ordinary and look-alike slugs (hisaab-* is not the brand prefix)", async () => {
     await callerA().store.updateSettings({ storeSlug: "hisaab-kitaab-traders", storeEnabled: true });
     expect((await biz(world.business1.id)).storeSlug).toBe("hisaab-kitaab-traders");
   });
@@ -131,6 +135,34 @@ describe("reserved slug: grandfathered stores keep working", () => {
     await expect(callerA().store.updateSettings({ storeSlug: "store" }))
       .rejects.toMatchObject({ code: "FORBIDDEN", message: "Your store link can only be set once." });
     expect((await biz(world.business1.id)).storeSlug).toBe("shop");
+  });
+
+  it("it cannot switch to a hisaabo-* slug either (set-once applies first, slug unchanged)", async () => {
+    await expect(callerA().store.updateSettings({ storeSlug: "hisaabo-shop" }))
+      .rejects.toMatchObject({ code: "FORBIDDEN", message: "Your store link can only be set once." });
+    expect((await biz(world.business1.id)).storeSlug).toBe("shop");
+  });
+});
+
+describe("reserved slug: grandfathered brand-prefixed slug (hisaabo-*)", () => {
+  it("keeps saving other settings and resolving", async () => {
+    await setSlugDirect(world.business1.id, "hisaabo-demo");
+    const out = await callerA().store.updateSettings({ storeEnabled: true, storeSlug: "hisaabo-demo", storeTagline: "Demo store" });
+    expect(out).toMatchObject({ storeSlug: "hisaabo-demo", storeTagline: "Demo store" });
+    expect(await resolveStoreSlug("hisaabo-demo")).toEqual({ tenantId: "single", businessId: world.business1.id });
+    expect(await callerA().store.checkSlug({ slug: "hisaabo-demo" })).toEqual({ available: true });
+  });
+
+  it("with its one auto-assigned change left, it still cannot move to a different hisaabo-* slug", async () => {
+    await setSlugDirect(world.business1.id, "hisaabo-demo", { storeSlugAutoAssigned: true });
+    await expect(callerA().store.updateSettings({ storeSlug: "hisaabo-other" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST", message: STORE_SLUG_RESERVED_MESSAGE });
+    const b = await biz(world.business1.id);
+    expect(b.storeSlug).toBe("hisaabo-demo");
+    expect(b.storeSlugAutoAssigned).toBe(true);
+    // but it may use that change on a legitimate slug
+    await callerA().store.updateSettings({ storeSlug: "demo-traders" });
+    expect((await biz(world.business1.id)).storeSlug).toBe("demo-traders");
   });
 });
 
@@ -185,10 +217,18 @@ describe("reserved slug (multi-tenant registry)", () => {
     expect(await resolveStoreSlug("shop")).toEqual({ tenantId: world.tenant1.id, businessId: world.business1.id });
   });
 
-  it("another tenant cannot take that reserved slug, and checkSlug reports it as reserved", async () => {
+  it("a reserved slug another tenant already holds is reported as reserved, not taken (and stays theirs)", async () => {
+    // Tenant 1 holds "shop" (grandfathered). Without the reserved rule tenant 2
+    // would get CONFLICT / { available: false } here; with it, BAD_REQUEST / reserved.
+    await controlDb.transaction((tx) =>
+      claimSlug(tx, { tenantId: world.tenant1.id, businessId: world.business1.id, slug: "shop", storeEnabled: true }));
+    // Both "tenants" share one physical tenant DB in this harness, so leave the slug
+    // off the tenant row (as in separate tenant DBs) to make the registry the only holder.
     await expect(callerB().store.updateSettings({ storeSlug: "shop" }))
-      .rejects.toMatchObject({ message: STORE_SLUG_RESERVED_MESSAGE });
+      .rejects.toMatchObject({ code: "BAD_REQUEST", message: STORE_SLUG_RESERVED_MESSAGE });
     expect(await callerB().store.checkSlug({ slug: "shop" })).toEqual({ available: false, reserved: true });
+    expect((await registryRows("shop"))[0]).toMatchObject({ tenant_id: world.tenant1.id, business_id: world.business1.id, released_at: null });
+    expect((await biz(world.business2.id)).storeSlug).toBeNull();
   });
 });
 
@@ -206,6 +246,13 @@ describe("reserved slug: self-import (multi-tenant)", () => {
     ]);
     expect(out).toEqual([{ businessId: world.business2.id, slug: "support", status: "conflict", reserved: true }]);
     expect((await registryRows("support")).length).toBe(0);
+  });
+
+  it("a hisaabo-* slug in a backup is treated as reserved too", async () => {
+    const out = await registerImportedSlugs(world.tenant2.id, [
+      { id: world.business2.id, storeSlug: "hisaabo-official", storeEnabled: true },
+    ]);
+    expect(out).toEqual([{ businessId: world.business2.id, slug: "hisaabo-official", status: "conflict", reserved: true }]);
   });
 
   it("restoring a tenant's own backup does not rename a reserved slug it already holds", async () => {

@@ -231,7 +231,7 @@ uniqueIndex("businesses_store_slug_idx").on(t.storeSlug),
 
 Note: In cloud/multi-tenant mode, store slugs must be globally unique across all tenants. This is enforced at the application level by querying the control DB before allowing slug creation. In self-hosted mode, slugs are unique within the single tenant's businesses table, which the unique index handles.
 
-**Reserved slugs (implemented).** Platform and infrastructure words (`hisaabo`, `official`, `admin`, `login`, `support`, `checkout`, `privacy`, `assets`, ... the full list is `RESERVED_STORE_SLUGS` in `packages/shared/src/store-slug.ts`) cannot be claimed, to prevent brand impersonation on `store.hisaabo.in/<slug>` and in OTP SMS. `store.updateSettings` rejects them with "This store address is reserved", both when the slug is first chosen and when it is changed; `store.checkSlug` returns `{ available: false, reserved: true }`; the web settings form checks the same list before submit; a multi-tenant self-import renames a reserved slug like a taken one. Only a slug that is being set or changed is checked: a business that already holds a reserved slug is grandfathered, keeps saving other settings, and its store keeps resolving (slug resolution never consults the list). Matching is exact, so `hisaab-traders` is fine.
+**Reserved slugs (implemented).** Platform and infrastructure words (`hisaabo`, `official`, `admin`, `login`, `support`, `checkout`, `privacy`, `assets`, ... the full list is `RESERVED_STORE_SLUGS` in `packages/shared/src/store-slug.ts`) cannot be claimed, to prevent brand impersonation on `store.hisaabo.in/<slug>` and in OTP SMS. `store.updateSettings` rejects them with "This store address is reserved", both when the slug is first chosen and when it is changed; `store.checkSlug` returns `{ available: false, reserved: true }`; the web settings form checks the same list before submit; a multi-tenant self-import renames a reserved slug like a taken one. Only a slug that is being set or changed is checked: a business that already holds a reserved slug is grandfathered, keeps saving other settings, and its store keeps resolving (slug resolution never consults the list). Matching is exact for the list, plus any slug that starts with `hisaabo-` or ends with `-hisaabo` (so `hisaabo-support` is reserved); `hisaab-traders` is fine.
 
 #### `invoices` table -- no changes needed
 
@@ -1216,7 +1216,7 @@ The public store API must NEVER expose:
 - Business-sensitive fields (GSTIN, PAN, bank details) -- only name, logo, tagline
 - Other businesses' data (even within the same tenant)
 
-One deliberate exception to "internal fields never leak": the catalog publishes `COALESCE(store_description, description)` and `COALESCE(store_category, category)`, so a store-visible item with no store description shows its internal description (and category) on the storefront. This fallback is kept so existing stores do not go blank; the web Manage Store Items list marks items affected by it, and the MCP/WebMCP `description` docs say so. Set a store description (`store.updateItemStoreSettings`) to override it.
+One deliberate exception to "internal fields never leak": the catalog publishes `COALESCE(store_description, description)` and `COALESCE(store_category, category)`, so a store-visible item with no store description shows its internal description (and category) on the storefront. This fallback is kept so existing stores do not go blank; the web Manage Store Items list marks items affected by it (the note appears only when the store and the item are both enabled), and the MCP/WebMCP `description` docs say so. Only the `store.updateItemStoreSettings` API procedure can set a store description today; no first-party client exposes it.
 
 This is enforced by:
 1. The store API handlers explicitly SELECT only safe columns (allowlist, not denylist).
@@ -1236,7 +1236,7 @@ Store routes have their own rate limits, separate from the tRPC rate limiter:
 | `POST /store/:slug/otp/verify` | 10 req/min (5 attempts per code) | IP |
 | logo, item images, OG image, meta, page shell | 20 req/min | IP |
 
-The order placement limit is per phone number to prevent spam. The catalog also bounds its query: `search` and `category` are silently truncated to 100 characters each (never rejected, so existing clients keep working) and `limit` is capped at 100.
+The order placement limit is per phone number to prevent spam. The catalog also bounds its query: `search` is capped at 100 characters (silently truncated, never rejected, so existing clients keep working) and `limit` is capped at 100.
 
 ### 11.3 Input Validation
 
