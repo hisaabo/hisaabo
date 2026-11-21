@@ -29,27 +29,33 @@ const ROLE_NAV_VISIBLE: Record<string, string[]> = {
     "Items",
     "Payments",
   ],
+  // Accountants are read-only on sales (Invoice:read, see role-access.test.ts), so
+  // the sales document pages are in their nav; the reports entry is labelled
+  // "Business Reports" (getVisibleNavItems).
   accountant: [
     "Invoices",
-    "Parties",
-    "Items",
-    "Payments",
-    "Cash & Bank",
-    "Expenses",
-    "Reports",
-  ],
-};
-
-/** Nav items that each role should NOT see */
-const ROLE_NAV_HIDDEN: Record<string, string[]> = {
-  seller: ["Dashboard", "Cash & Bank", "Expenses", "Reports"],
-  accountant: [
     "Quotations",
     "Sales Returns",
     "Credit Notes",
     "Delivery Challans",
     "Proforma Invoices",
+    "Parties",
+    "Items",
+    "Payments",
+    "Cash & Bank",
+    "Expenses",
+    "Business Reports",
   ],
+};
+
+/**
+ * Nav items that each role should NOT see. An accountant can read every
+ * resource the nav is gated on, so nothing is hidden from them: what sets them
+ * apart is that they cannot create sales documents (asserted separately).
+ */
+const ROLE_NAV_HIDDEN: Record<string, string[]> = {
+  seller: ["Dashboard", "Cash & Bank", "Expenses", "Business Reports"],
+  accountant: [],
 };
 
 /**
@@ -234,7 +240,7 @@ test.describe("Role: Seller", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════
-// ACCOUNTANT — sees money/compliance, limited sales
+// ACCOUNTANT — sees money/compliance, read-only on sales
 // ═════════════════════════════════════════════════════════════════
 
 test.describe("Role: Accountant", () => {
@@ -286,17 +292,21 @@ test.describe("Role: Accountant", () => {
     }
   });
 
-  test("accountant does NOT see restricted nav items", async () => {
+  test("accountant has read-only access to sales: no create action", async () => {
     await rolePage.goto("/invoices");
     await rolePage.locator("h1").first().waitFor({ state: "visible", timeout: 10_000 });
     await settle(rolePage);
 
+    // Positive anchor: the page and its sales-document nav rendered for them...
+    await expect(rolePage.locator("h1").first()).toContainText("Invoices");
     const sidebar = rolePage.locator("nav, aside").first();
+    await expect(sidebar.getByText("Quotations", { exact: true }).first()).toBeVisible();
+
+    // ...but they cannot create invoices (Invoice: read only).
+    await expect(rolePage.getByRole("button", { name: /new invoice/i })).toHaveCount(0);
 
     for (const item of ROLE_NAV_HIDDEN.accountant) {
-      await expect(
-        sidebar.getByText(item, { exact: true }),
-      ).not.toBeVisible();
+      await expect(sidebar.getByText(item, { exact: true })).not.toBeVisible();
     }
   });
 
@@ -312,7 +322,9 @@ test.describe("Role: Accountant", () => {
 
   test("accountant can access reports page", async () => {
     await rolePage.goto("/reports");
-    await expect(rolePage.locator("h1").first()).toContainText("Reports", { timeout: 10_000 });
+    // The page header is the active report; the default one is "Daybook" (see reports.spec.ts)
+    await expect(rolePage).toHaveURL(/\/reports/);
+    await expect(rolePage.locator("h1").first()).toContainText("Daybook", { timeout: 10_000 });
   });
 
   test("accountant can access invoices page", async () => {
