@@ -138,7 +138,7 @@ hisaabo whoami
 | Command | Description |
 |---|---|
 | `payment list` | List payments (filterable by party, date range) |
-| `payment create` | Record a payment (cash, bank, UPI, cheque). For a customer receipt where TDS was withheld, add `--tds-amount`, `--tds-section` and `--tds-rate` (needs `--invoice-id`; `--amount` is then the net cash received) |
+| `payment create` | Record a payment (cash, bank, UPI, cheque). Pick the party with `--party-id <id>` or `--party <name>` (exact name, case-insensitive; not both). For a customer receipt where TDS was withheld, add `--tds-amount`, `--tds-section` and `--tds-rate` (needs `--invoice-id`; `--amount` is then the net cash received) |
 | `payment get <id>` | Get payment details |
 | `payment update <id>` | Update a payment |
 | `payment delete <id>` | Delete a payment |

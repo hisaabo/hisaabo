@@ -4,6 +4,7 @@ import { HisaaboClient, HisaaboApiError } from "../../client.js";
 import { requireAuth } from "../../config.js";
 import { fatalError, outputJSON, EXIT, success } from "../../output.js";
 import { formatINR, formatAmount, todayISO } from "../../format.js";
+import { partyOptionError, resolvePartyByName } from "../../resolve-party.js";
 
 interface CreateOpts {
   json?: boolean;
@@ -69,6 +70,9 @@ export function buildTdsAllocations(
 }
 
 export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
+  const partyOptError = partyOptionError(opts);
+  if (partyOptError) fatalError(partyOptError, EXIT.USAGE);
+
   const cfg = requireAuth();
   const client = new HisaaboClient(cfg);
   const isNonInteractive = !process.stdin.isTTY || opts.yes;
@@ -81,6 +85,14 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
   let notes = opts.notes;
 
   try {
+    // --party <name>: resolve to an id up front, so the interactive wizard below only runs
+    // when neither --party-id nor --party was given.
+    if (opts.party !== undefined) {
+      const resolved = await resolvePartyByName(client, opts.party);
+      if (!resolved.ok) fatalError(resolved.message, resolved.reason === "not_found" ? EXIT.NOT_FOUND : EXIT.USAGE);
+      partyId = resolved.party.id;
+    }
+
     if (!isNonInteractive) {
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       console.log("\n  Record Payment\n  " + "─".repeat(30) + "\n");
@@ -145,7 +157,7 @@ export async function paymentCreateCommand(opts: CreateOpts): Promise<void> {
       }
     }
 
-    if (!partyId) fatalError("--party-id is required", EXIT.USAGE);
+    if (!partyId) fatalError("--party-id or --party is required", EXIT.USAGE);
     if (!amount) fatalError("--amount is required", EXIT.USAGE);
     if (!mode) mode = "cash";
 
