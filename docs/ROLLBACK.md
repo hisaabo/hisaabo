@@ -5,7 +5,7 @@ Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle 
 **Last updated**: 2026-10-27
 **Applies to**: self-hosted migrations 0000 through 0019 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0007) and tenant (`drizzle-tenant`, 0000-0006) migration sets; the equivalents for 0014-0019 are listed in section 3.
 
-Downgrading the application from the next release to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
+Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
 
 ---
 
