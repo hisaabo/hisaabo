@@ -17,7 +17,7 @@ export const storeEndpoints: EndpointGroup = {
         { name: "slug", type: "string", required: true, description: "URL slug to check (3-50 chars, lowercase alphanumeric with hyphens)" },
       ],
       output: {
-        description: "Whether the slug is available for use.",
+        description: "Whether the slug is available for use. A reserved platform word (for example `admin`, `login`, `support`, `hisaabo`) returns `{ available: false, reserved: true }`.",
         example: { available: true },
       },
       codeExamples: {
@@ -46,6 +46,7 @@ print("Available:", result["available"])`,
       gotchas: [
         "Slug must be lowercase alphanumeric with hyphens only, starting and ending with an alphanumeric character.",
         "Your own current slug always returns `available: true` — the check excludes the calling business.",
+        "Reserved platform words cannot be chosen and are reported with `reserved: true`. A business that already holds one (set before the list existed) keeps it and still sees `available: true` for it.",
       ],
     },
     {
@@ -159,6 +160,7 @@ resp = httpx.post(
       },
       gotchas: [
         "Returns CONFLICT if the slug is already taken by another business.",
+        "Returns BAD_REQUEST \"This store address is reserved. Please choose a different one.\" when the slug is a reserved platform word (for example `admin`, `login`, `support`, `hisaabo`), on the first choice and on a change. Re-sending a reserved slug the business already holds is allowed, so existing stores keep working.",
         "The store slug can only be set once. Setting it the first time is allowed; any later change (or clearing it) returns FORBIDDEN \"Your store link can only be set once.\" Re-sending the same slug, or updating other settings, is always allowed. Exception: when the system had to rename a duplicate slug (`storeSlugAutoAssigned: true` in `store.getSettings`), exactly one change is allowed, after which the flag clears.",
         "The slug must match the pattern `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/` — no uppercase, no leading/trailing hyphens.",
         "Monetary values like `storeMinOrderAmount` must be strings matching `/^\\d+(\\.\\d{1,2})?$/`.",
@@ -297,7 +299,7 @@ resp = httpx.post(
         { name: "storePrice", type: "string", required: false, description: "Store-specific price override (e.g. '900.00'). Set to null to use the regular sale price." },
         { name: "storeSortOrder", type: "number", required: false, description: "Sort position in the store (0 = first). Set to null to reset to 0." },
         { name: "storeCategory", type: "string", required: false, description: "Store-specific category name (max 100 chars). Can differ from the item's internal category." },
-        { name: "storeDescription", type: "string", required: false, description: "Store-specific description (max 1000 chars). Shown on the storefront instead of the item's internal description." },
+        { name: "storeDescription", type: "string", required: false, description: "Store-specific description (max 1000 chars). Shown on the storefront instead of the item's internal description. While it is null the storefront falls back to the item's internal `description` (and likewise `storeCategory` falls back to `category`)." },
       ],
       output: {
         description: "Updated store-specific fields for the item.",

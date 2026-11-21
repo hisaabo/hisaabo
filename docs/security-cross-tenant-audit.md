@@ -201,6 +201,8 @@ const [inv] = await ctx.db.select().from(invoices)
 #### `store.checkSlug`, `store.getSettings`, `store.updateSettings` — Correct
 Slug uniqueness check correctly excludes the current business only. Settings fetch/update scope by `ctx.businessId`.
 
+**Reserved slugs.** A fixed list of platform words (`RESERVED_STORE_SLUGS` in `packages/shared/src/store-slug.ts`: brand names such as `hisaabo`, auth/infra paths such as `login`, `admin`, `support`, and the storefront's own top-level paths) cannot be chosen, so nobody can impersonate the platform on `store.hisaabo.in/<slug>` or in OTP SMS that carry the store name. `store.updateSettings` rejects them with "This store address is reserved" both on the first choice and on a change, and `store.checkSlug` reports `{ available: false, reserved: true }`. The check runs only when the slug is actually being set or changed (inside the per-business lock, before any registry write), so a business that already holds a reserved slug is grandfathered: it keeps saving its other settings and its store keeps resolving (the public lookup never consults the list). A multi-tenant self-import cannot register a reserved slug either: it is renamed to a unique `<prefix>-<slug>` like any slug that is taken, unless the importing tenant already holds it live.
+
 #### Order management procedures — Correct
 `listOrders`, `getOrder`, `confirmOrder`, `cancelOrder`, `updateOrderStatus` all scope to `ctx.businessId`.
 
@@ -257,22 +259,37 @@ Same auth pattern as invoice PDF. Party validated with `WHERE parties.id = party
 - Business validated: `WHERE businesses.id = resolved.businessId AND store_enabled = true`
 - Items filtered: `WHERE items.business_id = resolved.businessId AND store_enabled = true`
 - Sensitive fields never exposed: `purchasePrice`, raw `stockQuantity`, `hsn`, `sku` are excluded
+- Query bounds: `search` and `category` are silently truncated to 100 characters each (never a 400, so existing storefronts keep working), `limit` is capped at 100, and the endpoint is rate limited to 120 requests/min per IP
+- Description fallback (by design): the catalog publishes `COALESCE(store_description, description)` and `COALESCE(store_category, category)`. An item that is store-visible but has no store description therefore shows its internal description on the public storefront. This is intentionally unchanged (changing it would blank live stores); the web app's Manage Store Items list flags such items, and the MCP/WebMCP `description` field docs say so
 
 **Noted**: `stockQty` is included in the query result but stripped during transformation (only `inStock` boolean is returned). However a code reviewer should confirm that `stockQty` cannot leak via the `...rest` spread or serialisation.
 
 ### `POST /store/:slug/identify` — Correct (Public endpoint, no auth)
 
-- Turnstile verification required
-- Phone lookup scoped: `WHERE business_id = resolved.businessId`
-- Returns only first name — no full PII disclosure
+- Turnstile verification required, per-IP rate limit (20/min), Origin/Referer allow-list (see Store POST protections below)
+- The phone number is validated and the store is checked to exist and be enabled, but **no customer lookup is performed**: the response is always the uniform `{ "known": false }`. It reveals neither whether a number belongs to an existing customer nor the customer's name (an earlier version returned the first name, which allowed enumeration)
+- Returning-customer recognition happens only after phone verification (next entry)
+
+### `POST /store/:slug/otp/send` and `POST /store/:slug/otp/verify` — Correct (Public endpoints, no auth)
+
+- Only available when the business enables "verify customers by SMS code" (and, for `send`, an SMS provider is configured); otherwise 400
+- `send`: Turnstile, Origin allow-list, per-IP rate limit (5/min), and at most 3 codes per phone per 15 minutes
+- `verify`: Origin allow-list, per-IP rate limit (10/min), 6-digit code valid for 10 minutes with 5 attempts per code; no Turnstile on this step (the code itself is the secret and attempts are capped)
+- Only after a successful verification does the response carry the signed order token (bound to business and phone, 30 minutes) and, if the phone has ordered from this business before, `known: true` with the name on that phone's most recent store order. Lookup is scoped to `business_id`
 
 ### `POST /store/:slug/order` — Correct (Public endpoint, no auth)
 
-- Turnstile verification required
-- Rate limited: 5 orders per phone per minute
+- Turnstile verification required, Origin/Referer allow-list (see Store POST protections below)
+- Rate limited: 20 requests/min per IP and 5 orders per phone per minute
+- Prices are computed server-side: the unit price comes from the database (`store_price`, else `sale_price`; per-variant and per-unit prices likewise) and totals from `calcInvoiceTotals`. The handler reads only item ids, quantities, variant/unit selection and customer details from the request; a price or total in the body is ignored
+- When the business requires SMS verification, a valid order token for that phone and business is required
 - Items validated: `WHERE items.business_id = resolved.businessId AND store_enabled = true`
 - Variant cross-check: `variant.itemId !== oi.itemId` prevents variant-item mismatch
 - All inserts force `businessId: resolved.businessId`
+
+### Store POST protections (`identify`, `otp/send`, `otp/verify`, `order`)
+
+The global CSRF middleware skips `/store/*`, so these routes rely on their own layers instead: Turnstile (all but `otp/verify`), the per-IP and per-phone limits above, and an Origin/Referer allow-list (`packages/api/src/lib/store-origin.ts`). The allow-list accepts `CORS_ORIGINS` plus `STORE_ALLOWED_ORIGINS` (exact origins) and any host under a parent domain listed in `STORE_ALLOWED_SUBDOMAINS_OF`; `http://localhost:*` is allowed outside production. A request with a disallowed `Origin`/`Referer` is rejected with 403 and logged. A request carrying neither header is accepted (in-app webviews strip both), so Turnstile and the rate limits remain the backstop for those. See `docs/DEPLOYMENT.md` for the variables.
 
 ---
 
