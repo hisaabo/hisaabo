@@ -468,8 +468,9 @@ const MIN_FULL_SWEEP_SECONDS = 5;
 /**
  * How often multi-tenant mode scans EVERY active tenant for pending events
  * (kicked tenants are served on every tick regardless). Each scan touches every
- * tenant database, so large deployments can stretch it, or turn the worker off
- * (NOTIFICATIONS_WORKER=false) until the queue-backed dispatcher lands.
+ * tenant database, so large deployments can stretch it. (The worker itself is
+ * off by default in multi-tenant mode: see notificationWorkersEnabled in
+ * index.ts; NOTIFICATIONS_WORKER=true opts in until the queue-backed dispatcher lands.)
  */
 export function fullSweepMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = Number(env.NOTIFICATIONS_FULL_SWEEP_SECONDS);
