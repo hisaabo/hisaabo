@@ -21,8 +21,11 @@ async function waitFor(fn: () => boolean | Promise<boolean>, ms = 5000): Promise
 }
 
 const notify = (payload: string) => admin`select pg_notify(${CACHE_NOTIFY_CHANNEL}, ${payload})`;
+// pg_stat_activity is cluster-wide: scope to this worker's database, or listeners owned by files
+// running in other workers (same application_name) would be counted, and terminated.
 const listenerPids = async () =>
-  (await admin`select pid from pg_stat_activity where application_name = ${CACHE_LISTENER_APP_NAME}`).map((r) => r.pid as number);
+  (await admin`select pid from pg_stat_activity
+    where application_name = ${CACHE_LISTENER_APP_NAME} and datname = current_database()`).map((r) => r.pid as number);
 
 beforeAll(() => {
   admin = postgres(url, { max: 2, onnotice: () => {} });
