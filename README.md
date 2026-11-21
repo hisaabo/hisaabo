@@ -655,7 +655,7 @@ Everything listed in Features above is shipped and tested. The full accounting l
 - **IMS integration** -- Invoice Management System support as it matures
 - **Multi-currency support** -- For export-oriented businesses
 
-See [docs/architecture/gst-accounting-roadmap.md](docs/architecture/gst-accounting-roadmap.md) for the full technical specification.
+Related design notes: [TDS](docs/architecture/tds.md) and the [AI features roadmap](docs/architecture/ai-features-roadmap.md).
 
 ---
 
