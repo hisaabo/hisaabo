@@ -37,6 +37,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/bin/hisaabo.ts",
+    "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm build"
   },
