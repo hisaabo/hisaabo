@@ -33,7 +33,41 @@ export interface SqlRunner {
   describe(reveal?: boolean): string;
   /** Execute `sql` (a single SELECT yielding one row/one json column) and return the parsed JSON. */
   queryJson(target: DbTarget, sql: string): Promise<unknown>;
+  /**
+   * Free whatever the runner holds open for one tenant database (the direct
+   * runner's pooled connection). A pass calls this as soon as it has finished
+   * with a tenant, so a refresh over N databases never holds N connections.
+   * `force` means a query hung: drop the connection instead of closing it
+   * politely (and do so for the control database too). Never required for
+   * correctness; stateless runners (docker/psql) simply omit it.
+   */
+  release?(target: DbTarget, opts?: { force?: boolean }): Promise<void>;
+  /**
+   * Host names this runner itself connects to (the control database), so error
+   * text that echoes them can be masked. Deliberately not part of PlatformStats.
+   */
+  knownHosts?(): string[];
   close(): Promise<void>;
+}
+
+/** Tenant databases queried in parallel when nothing else is asked for. */
+export const DEFAULT_CONCURRENCY = 4;
+/** Docker mode forks `docker exec psql` per query; keep its default low. */
+export const DOCKER_CONCURRENCY = 2;
+/** Hard ceiling: a pass never holds more than this many tenant connections (plus one control). */
+export const MAX_CONCURRENCY = 16;
+/** A query with no answer after this long fails its database ("timeout") instead of stalling the pass. */
+export const DEFAULT_QUERY_TIMEOUT_MS = 20_000;
+
+/** Clamp a requested concurrency into 1..MAX_CONCURRENCY. */
+export function clampConcurrency(n: number | undefined | null, fallback = DEFAULT_CONCURRENCY): number {
+  const v = typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+  return Math.min(MAX_CONCURRENCY, Math.max(1, v));
+}
+
+/** The parallelism to use when --concurrency is not given: explicit value wins, else the transport's default. */
+export function resolveConcurrency(requested: number | null | undefined, via: "direct" | "docker"): number {
+  return clampConcurrency(requested, via === "docker" ? DOCKER_CONCURRENCY : DEFAULT_CONCURRENCY);
 }
 
 // ── Result types ────────────────────────────────────────────────
@@ -690,7 +724,10 @@ export function sumMetrics(list: TenantMetrics[], now: Date = new Date()): Tenan
 
 export interface CollectOptions {
   runner: SqlRunner;
+  /** Tenant databases queried in parallel (default 4, capped at MAX_CONCURRENCY). Peak connections = this + 1 control. */
   concurrency?: number;
+  /** Per-query client-side deadline in ms (default 20s). A database that does not answer is marked unreachable. */
+  queryTimeoutMs?: number;
   now?: () => Date;
   /** Migration journals shipped with this build; omit to skip drift detection. */
   journals?: Journals;
@@ -718,6 +755,34 @@ async function readMigrations(runner: SqlRunner, target: DbTarget, infra: DbInfr
 }
 
 const CONTROL_KEY = "control";
+
+/**
+ * Wrap `runner` so no single query can stall a pass. On a deadline the query
+ * rejects with "timeout" and the runner is told to drop that connection (a hung
+ * socket would otherwise keep a backend and, for the control database, block
+ * every later query on the same pooled connection).
+ */
+export function withQueryTimeout(runner: SqlRunner, timeoutMs: number): SqlRunner {
+  return {
+    describe: (reveal) => runner.describe(reveal),
+    close: () => runner.close(),
+    release: runner.release ? (target, opts) => runner.release!(target, opts) : undefined,
+    knownHosts: runner.knownHosts ? () => runner.knownHosts!() : undefined,
+    queryJson(target, sql) {
+      return new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          void runner.release?.(target, { force: true })?.catch(() => undefined);
+          reject(new Error(`timeout: no answer within ${Math.round(timeoutMs / 100) / 10}s`));
+        }, timeoutMs);
+        // Handling both outcomes also means a late rejection after the deadline is never "unhandled".
+        Promise.resolve().then(() => runner.queryJson(target, sql)).then(
+          (v) => { clearTimeout(timer); resolve(v); },
+          (e) => { clearTimeout(timer); reject(e); },
+        );
+      });
+    },
+  };
+}
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = Array.from({ length: items.length });
@@ -759,7 +824,8 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
   const now = opts.now ?? (() => new Date());
   const started = Date.now();
   const journals = opts.journals ?? NO_JOURNALS;
-  const controlRaw = await opts.runner.queryJson({ name: null }, CONTROL_SQL);
+  const runner = withQueryTimeout(opts.runner, opts.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS);
+  const controlRaw = await runner.queryJson({ name: null }, CONTROL_SQL);
   const control = parseControlStats(controlRaw);
   const controlInfra = parseInfra(obj(controlRaw).infra);
 
@@ -776,17 +842,17 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
 
   const keys = [...targets.keys()];
   const mode: PlatformStats["mode"] = keys.some((k) => k !== CONTROL_KEY) ? "multi-db" : "shared-db";
-  const results = await mapLimit(keys, opts.concurrency ?? 4, async (k) => {
+  const results = await mapLimit(keys, clampConcurrency(opts.concurrency), async (k) => {
     const target = targets.get(k)!;
     try {
-      const raw = await opts.runner.queryJson(target, TENANT_SQL);
+      const raw = await runner.queryJson(target, TENANT_SQL);
       const metrics = parseTenantMetrics(raw, now());
       const infra = parseInfra(obj(raw).infra);
       let migrations: MigrationState | null = null;
       let error: string | null = null;
       if (k !== CONTROL_KEY) {
         try {
-          migrations = await readMigrations(opts.runner, target, infra, journalKindFor("tenant", mode), journals);
+          migrations = await readMigrations(runner, target, infra, journalKindFor("tenant", mode), journals);
         } catch (e) {
           error = `migrations: ${errorMessage(e)}`;
         }
@@ -794,6 +860,10 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
       return { key: k, metrics, infra, migrations, error };
     } catch (e) {
       return { key: k, metrics: null, infra: null, migrations: null, error: errorMessage(e) };
+    } finally {
+      // Done with this database: close its connection NOW so a pass never holds more than
+      // `concurrency` tenant connections at once, however many tenants there are.
+      if (k !== CONTROL_KEY) await runner.release?.(target)?.catch(() => undefined);
     }
   });
 
@@ -801,7 +871,7 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
   let controlMigrations: MigrationState | null = null;
   let controlError: string | null = null;
   try {
-    controlMigrations = await readMigrations(opts.runner, { name: null }, controlInfra, journalKindFor("control", mode), journals);
+    controlMigrations = await readMigrations(runner, { name: null }, controlInfra, journalKindFor("control", mode), journals);
   } catch (e) {
     controlError = `migrations: ${errorMessage(e)}`;
   }
@@ -838,7 +908,7 @@ export async function collectPlatformStats(opts: CollectOptions): Promise<Platfo
     };
   });
 
-  const queues = await collectQueueStats(opts.runner, new Map(control.tenants.map((t) => [t.id, t.name])));
+  const queues = await collectQueueStats(runner, new Map(control.tenants.map((t) => [t.id, t.name])));
 
   const allErrors = [...errors, ...(controlError ? [`${CONTROL_KEY}: ${controlError}`] : [])];
   return {

@@ -16,22 +16,30 @@
  *     pnpm --filter @hisaabo/api admin
  *
  * Run with --help for all flags. The dashboard is read-only: it never writes to
- * the database. The one write path is the explicit break-glass subcommand
+ * the database. The write paths are the explicit, shell-only subcommands
  *   node packages/api/dist/bin/admin.js login-link <email>
  * (see lib/admin/login-link.ts), which prints a one-time sign-in URL for an
- * existing user when email delivery is not working.
+ * existing user when email delivery is not working, and
+ *   node packages/api/dist/bin/admin.js api-key create|list|revoke …
+ * (see lib/admin/api-key.ts), which issues, lists and revokes API keys.
  */
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { collectPlatformStats, type PlatformStats, type SqlRunner } from "../lib/admin/stats.js";
-import { DockerPsqlRunner, DirectRunner, parseEnvFile, defaultEnvFile } from "../lib/admin/runners.js";
+import {
+  collectPlatformStats, resolveConcurrency, MAX_CONCURRENCY,
+  type PlatformStats, type SqlRunner,
+} from "../lib/admin/stats.js";
+import {
+  DockerPsqlRunner, DirectRunner, parseEnvFile, defaultEnvFile,
+  DEFAULT_STATEMENT_TIMEOUT_MS, QUERY_TIMEOUT_GRACE_MS, MIN_QUERY_TIMEOUT_SEC, MAX_QUERY_TIMEOUT_SEC, parseQueryTimeout,
+} from "../lib/admin/runners.js";
 import { renderFrame, frameToString, type ViewState, type View } from "../lib/admin/screens.js";
 import { buildDemoStats } from "../lib/admin/demo.js";
 import { setColorEnabled, c } from "../lib/admin/tui.js";
 import { splitKeys } from "../lib/admin/keys.js";
-import { maskStats } from "../lib/admin/privacy.js";
+import { maskStats, maskErrorText } from "../lib/admin/privacy.js";
 import { loadJournals } from "../lib/admin/migrations.js";
 import { buildInfo } from "../lib/build-info.js";
 
@@ -54,7 +62,10 @@ interface Args {
   user: string | null;
   database: string | null;
   command: string[] | null;
-  concurrency: number;
+  /** null = pick the default for the transport (4 direct, 2 docker). */
+  concurrency: number | null;
+  /** Seconds a single query may run before its database is reported unreachable. */
+  queryTimeout: number;
   migrationsDir: string | null;
   help: boolean;
 }
@@ -65,6 +76,9 @@ hisaabo admin — live platform dashboard for Hisaabo operators
 USAGE
   node packages/api/dist/bin/admin.js [options]
   node packages/api/dist/bin/admin.js login-link <email> [options]   (break-glass sign-in; see login-link --help)
+  node packages/api/dist/bin/admin.js api-key create <email> --tenant <slug|id> --name "<label>" [--expires-days N] [--override-plan]
+  node packages/api/dist/bin/admin.js api-key list <email> [--tenant <slug|id>]
+  node packages/api/dist/bin/admin.js api-key revoke <key-id>        (operator API keys; see api-key --help)
 
 OPTIONS
   --via <auto|direct|docker|demo>  How to reach Postgres (default: auto)
@@ -79,21 +93,33 @@ OPTIONS
   --database <name>                Control database (default: POSTGRES_DB from env file, else hisaabo)
   --command "<prefix>"             Replace the docker compose prefix, e.g. "docker exec -i hisaabo-db"
   --interval <seconds>             Auto-refresh period (default: 30, 0 = manual only)
-  --concurrency <n>                Tenant databases queried in parallel (default: 4)
+  --concurrency <n>                Tenant databases queried in parallel (default: 4 direct, 2 docker; max ${MAX_CONCURRENCY}).
+                                   This is the connection bound: the dashboard holds at most <n> tenant
+                                   connections plus 1 control connection, never one per tenant.
+  --query-timeout <seconds>        Give up on a database that has not answered a query after this long
+                                   (default: ${DEFAULT_STATEMENT_TIMEOUT_MS / 1000}, ${MIN_QUERY_TIMEOUT_SEC}-${MAX_QUERY_TIMEOUT_SEC}). It is shown as unreachable; the refresh carries on.
   --migrations-dir <dir>           Folder holding drizzle/, drizzle-control/, drizzle-tenant/ for drift
                                    detection (default: next to this build, then ./packages/db;
                                    HISAABO_MIGRATIONS_DIR is honoured too)
   --view <overview|tenants|ops|infra|queues>
                                    Initial view (default: overview)
-  --reveal                         Show real tenant names, slugs, emails and hosts. By default all
-                                   PII is masked (Tenant 3f9a2c, pr•••@sh••••.in) so screenshots
-                                   and --json output are safe to share.
+  --reveal                         Show real tenant names, slugs, emails and database hosts/ports. By
+                                   default all of it is masked (Tenant 3f9a2c, pr•••@sh••••.in,
+                                   db-host-3f9a2c:•••), including inside error messages, so
+                                   screenshots and --json output are safe to share.
   --once                           Print one snapshot and exit (implied when stdout is not a TTY)
   --json                           Print the raw statistics as JSON and exit
   --width <cols>                   Column width for --once output (default: terminal width or 120)
   --no-color                       Disable ANSI colours (NO_COLOR is also honoured)
   --color                          Force ANSI colours even when piping (FORCE_COLOR too)
   -h, --help                       Show this help
+
+LARGE MULTI-TENANT INSTALLS
+  Each refresh visits every tenant database. Use --via direct (run it inside hisaabo-api): it opens one
+  connection per tenant at a time, closes it straight away, and so never exceeds --concurrency + 1
+  connections however many tenants there are. --via docker starts a docker exec + psql process per query;
+  it is bounded the same way but is much slower on hundreds of tenants. Keep --concurrency well below
+  max_connections minus what the live API uses (default 100 on stock Postgres).
 
 KEYS (interactive)
   1 2 3 4 5   Overview / Tenants / Ops / Infra / Queues
@@ -107,7 +133,7 @@ function parseArgs(argv: string[]): Args {
   const a: Args = {
     via: "auto", once: false, json: false, interval: 30, width: null, color: true, forceColor: false, reveal: false, view: "overview",
     databaseUrl: null, envFile: null, composeFiles: [], service: "postgres", user: null, database: null,
-    command: null, concurrency: 4, migrationsDir: null, help: false,
+    command: null, concurrency: null, queryTimeout: DEFAULT_STATEMENT_TIMEOUT_MS / 1000, migrationsDir: null, help: false,
   };
   const next = (i: number, flag: string): string => {
     const v = argv[i + 1];
@@ -138,7 +164,18 @@ function parseArgs(argv: string[]): Args {
       case "--user": case "-U": a.user = next(i++, arg); break;
       case "--database": case "-d": a.database = next(i++, arg); break;
       case "--command": a.command = next(i++, arg).split(/\s+/).filter(Boolean); break;
-      case "--concurrency": a.concurrency = Math.max(1, Number(next(i++, arg)) || 1); break;
+      case "--concurrency": {
+        const n = Math.max(1, Math.floor(Number(next(i++, arg)) || 1));
+        if (n > MAX_CONCURRENCY) process.stderr.write(`hisaabo admin: --concurrency capped at ${MAX_CONCURRENCY} (each one is a database connection)\n`);
+        a.concurrency = Math.min(MAX_CONCURRENCY, n);
+        break;
+      }
+      case "--query-timeout": {
+        const raw = next(i++, arg);
+        a.queryTimeout = parseQueryTimeout(raw);
+        if (a.queryTimeout !== Number(raw)) process.stderr.write(`hisaabo admin: --query-timeout clamped to ${a.queryTimeout}s (allowed: ${MIN_QUERY_TIMEOUT_SEC}-${MAX_QUERY_TIMEOUT_SEC})\n`);
+        break;
+      }
       case "--migrations-dir": a.migrationsDir = next(i++, arg); break;
       case "-h": case "--help": a.help = true; break;
       default:
@@ -151,12 +188,22 @@ function parseArgs(argv: string[]): Args {
 
 // ── Wiring ──────────────────────────────────────────────────────
 
-function buildRunner(a: Args): SqlRunner {
+interface Built {
+  runner: SqlRunner;
+  /** Tenant databases queried in parallel: --concurrency, else the transport's default. */
+  concurrency: number;
+  /** Client-side per-query deadline (statement_timeout + grace). */
+  queryTimeoutMs: number;
+}
+
+function buildRunner(a: Args): Built {
   const url = a.databaseUrl ?? process.env.CONTROL_DATABASE_URL ?? process.env.DATABASE_URL ?? null;
   const via = a.via === "auto" ? (url ? "direct" : "docker") : a.via;
+  const statementTimeoutMs = Math.round(a.queryTimeout * 1000);
+  const queryTimeoutMs = statementTimeoutMs + QUERY_TIMEOUT_GRACE_MS;
   if (via === "direct") {
     if (!url) throw new Error("--via direct needs DATABASE_URL (or --database-url)");
-    return new DirectRunner(url);
+    return { runner: new DirectRunner(url, { statementTimeoutMs }), concurrency: resolveConcurrency(a.concurrency, "direct"), queryTimeoutMs };
   }
   const cwd = process.cwd();
   const envFile = a.envFile ?? defaultEnvFile(cwd);
@@ -168,14 +215,53 @@ function buildRunner(a: Args): SqlRunner {
       throw new Error(`cannot read env file ${envFile}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return new DockerPsqlRunner({
+  const runner = new DockerPsqlRunner({
     composeFiles: a.composeFiles.length ? a.composeFiles : ["docker-compose.yml"],
     envFile,
     service: a.service,
     user: a.user ?? process.env.PGUSER ?? fileEnv.POSTGRES_USER ?? "hisaabo",
     database: a.database ?? process.env.PGDATABASE ?? fileEnv.POSTGRES_DB ?? "hisaabo",
     command: a.command ?? undefined,
+    statementTimeoutMs,
+    timeoutMs: queryTimeoutMs,
   });
+  return { runner, concurrency: resolveConcurrency(a.concurrency, "docker"), queryTimeoutMs };
+}
+
+// ── Shutdown ────────────────────────────────────────────────────
+
+let activeRunner: SqlRunner | null = null;
+/** --reveal: show real hosts in errors written to stderr. Off by default, like everywhere else. */
+let revealErrors = false;
+/** Host names the runner itself connects to (the control database), masked out of error text. */
+let maskHosts: string[] = [];
+/** An error message safe to print: connection details (host, port, db user) stripped unless --reveal. */
+const shown = (msg: string): string => (revealErrors ? msg : maskErrorText(msg, maskHosts));
+/** Interactive mode registers this to leave the alternate screen if we die abnormally. */
+let restoreTerminal: (() => void) | null = null;
+
+/** Close the runner's connections; bounded so quitting can never hang on a dead database. */
+async function closeActiveRunner(): Promise<void> {
+  const r = activeRunner;
+  activeRunner = null;
+  if (!r) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    r.close().catch(() => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, 8_000); }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
+/** Last-resort exit: put the terminal back, say why, close every pool, exit non-zero. */
+async function fatal(e: unknown): Promise<never> {
+  try { restoreTerminal?.(); } catch { /* ignore */ }
+  // A stack trace's file:line:col frames are not connection details, but the message can be:
+  // mask the message and drop the trace unless the operator asked to --reveal.
+  const text = revealErrors ? (e instanceof Error ? e.stack ?? e.message : String(e)) : shown(e instanceof Error ? e.message : String(e));
+  process.stderr.write(`hisaabo admin: ${text}\n`);
+  await closeActiveRunner();
+  process.exit(1);
 }
 
 // ── Interactive loop ────────────────────────────────────────────
@@ -196,9 +282,18 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
     masked: !a.reveal,
   };
   let raw: PlatformStats | null = null;
+  // The footer shows the refresh failure if the last refresh threw (e.g. the control
+  // database is unreachable), else the first per-database error. Both are scrubbed
+  // while masked: a connection error carries the real host and port.
+  let refreshFailure: string | null = null;
+  const syncError = () => {
+    if (refreshFailure !== null) state.error = state.masked ? maskErrorText(refreshFailure, maskHosts) : refreshFailure;
+    else state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
+  };
   const applyMask = () => {
-    state.stats = raw ? (state.masked ? maskStats(raw) : raw) : null;
+    state.stats = raw ? (state.masked ? maskStats(raw, { hosts: maskHosts }) : raw) : null;
     state.runnerLabel = runnerLabel(state.masked);
+    syncError();
   };
   let lastSize = `${out.columns}x${out.rows}`;
   let exiting = false;
@@ -231,10 +326,11 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
     draw();
     try {
       raw = await collect();
+      refreshFailure = null;
       applyMask();
-      state.error = state.stats?.errors.length ? state.stats.errors[0] : null;
     } catch (e) {
-      state.error = e instanceof Error ? e.message : String(e);
+      refreshFailure = e instanceof Error ? e.message : String(e);
+      syncError();
     } finally {
       inFlight = false;
       state.loading = false;
@@ -278,7 +374,7 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
         case "3": state.view = "ops"; break;
         case "4": state.view = "infra"; break;
         case "5": state.view = "queues"; break;
-        case "p": case "P": state.masked = !state.masked; applyMask(); if (state.stats?.errors.length) state.error = state.stats.errors[0]; break;
+        case "p": case "P": state.masked = !state.masked; applyMask(); break;
         case "\t": {
           const order: View[] = ["overview", "tenants", "ops", "infra", "queues"];
           state.view = order[(order.indexOf(state.view) + 1) % order.length];
@@ -298,8 +394,13 @@ async function runInteractive(collect: () => Promise<PlatformStats>, close: () =
   out.on("resize", draw);
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
+  process.on("SIGHUP", () => void shutdown()); // terminal window closed
 
   out.write(ALT_ON + CURSOR_HIDE + CLEAR);
+  restoreTerminal = () => {
+    try { if (inp.isTTY) inp.setRawMode(false); } catch { /* ignore */ }
+    out.write(CURSOR_SHOW + ALT_OFF);
+  };
   const tick = setInterval(draw, 1000);
   draw();
   await refresh();
@@ -316,6 +417,14 @@ async function main(): Promise<void> {
     const { runLoginLink } = await import("../lib/admin/login-link.js");
     process.exit(await runLoginLink(process.argv.slice(3)));
   }
+  // Subcommand: operator-issued API keys (create / list / revoke). Shell-only, same posture.
+  if (process.argv[2] === "api-key") {
+    // stdout carries only the command's own output (the key block); log lines go to stderr. Must be
+    // set before anything imports the logger.
+    process.env.HISAABO_LOG_STDERR = "1";
+    const { runApiKey } = await import("../lib/admin/api-key.js");
+    process.exit(await runApiKey(process.argv.slice(3)));
+  }
 
   let a: Args;
   try {
@@ -328,6 +437,7 @@ async function main(): Promise<void> {
     process.stdout.write(HELP.trimStart());
     return;
   }
+  revealErrors = a.reveal;
   // Colour: --no-color / NO_COLOR win; --color / FORCE_COLOR force it on
   // (e.g. piping a snapshot into a file); otherwise follow the TTY.
   if (!a.color || "NO_COLOR" in process.env) setColorEnabled(false);
@@ -335,33 +445,44 @@ async function main(): Promise<void> {
   else setColorEnabled(Boolean(process.stdout.isTTY));
 
   const { version, commit } = buildInfo;
-  let runner: SqlRunner | null = null;
   let collect: () => Promise<PlatformStats>;
   let runnerLabel: (masked: boolean) => string;
   if (a.via === "demo") {
     collect = async () => buildDemoStats(new Date());
     runnerLabel = () => "demo data";
   } else {
-    runner = buildRunner(a);
-    const r = runner;
+    const built = buildRunner(a);
+    const r = built.runner;
+    activeRunner = r;
+    maskHosts = r.knownHosts?.() ?? [];
     const journals = loadJournals({
       here: path.dirname(fileURLToPath(import.meta.url)),
       cwd: process.cwd(),
       override: a.migrationsDir ?? process.env.HISAABO_MIGRATIONS_DIR ?? null,
     });
-    collect = () => collectPlatformStats({ runner: r, concurrency: a.concurrency, journals });
+    collect = () => collectPlatformStats({ runner: r, concurrency: built.concurrency, queryTimeoutMs: built.queryTimeoutMs, journals });
     runnerLabel = (masked) => r.describe(!masked);
   }
-  const close = async () => { if (runner) await runner.close(); };
+  const close = closeActiveRunner;
+
+  // Every exit path closes the pools: errors and signals here, `q`/Ctrl-C in runInteractive's shutdown().
+  process.on("uncaughtException", (e) => void fatal(e));
+  process.on("unhandledRejection", (e) => void fatal(e));
 
   const interactive = !a.once && !a.json && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
+  if (!interactive) {
+    const stop = (code: number) => () => { void closeActiveRunner().finally(() => process.exit(code)); };
+    process.once("SIGINT", stop(130));
+    process.once("SIGTERM", stop(143));
+    process.once("SIGHUP", stop(129));
+  }
   if (interactive) {
     await runInteractive(collect, close, a, runnerLabel, version, commit);
     return;
   }
 
   try {
-    const stats = a.reveal ? await collect() : maskStats(await collect());
+    const stats = a.reveal ? await collect() : maskStats(await collect(), { hosts: maskHosts });
     if (a.json) {
       process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
     } else {
@@ -374,14 +495,11 @@ async function main(): Promise<void> {
       process.stdout.write(frameToString(renderFrame(state, cols)));
     }
   } catch (e) {
-    process.stderr.write(c.bad("hisaabo admin: ") + (e instanceof Error ? e.message : String(e)) + "\n");
+    process.stderr.write(c.bad("hisaabo admin: ") + shown(e instanceof Error ? e.message : String(e)) + "\n");
     await close();
     process.exit(1);
   }
   await close();
 }
 
-main().catch((e) => {
-  process.stderr.write(`hisaabo admin: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
-  process.exit(1);
-});
+main().catch((e) => void fatal(e));

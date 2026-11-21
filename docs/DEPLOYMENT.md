@@ -276,9 +276,40 @@ node packages/api/dist/bin/admin.js --via docker --env-file .env.prod -f docker-
 
 The Infra screen compares each database's migration tracking table (`drizzle.__drizzle_tenant_migrations`, `__drizzle_control_migrations`, or `__drizzle_migrations` for self-hosted) against the journals shipped in the image under `packages/db/drizzle*`, so a tenant that was skipped during a deploy, restored from an older backup, or created with `db:push` and never tracked shows up as behind, ahead or untracked, with the exact pending migration tags. When running from the host, the journals are read from the checkout; pass `--migrations-dir` (or set `HISAABO_MIGRATIONS_DIR`) if they live elsewhere.
 
-All personally identifiable data (tenant names and slugs, database names, user emails and names, connection hosts) is masked by default so output can be shared freely; add `--reveal` or press `p` in the live view to see real values.
+All personally identifiable data (tenant names and slugs, database names, user emails and names) and where the databases live (each tenant database's host and port, shown as `db-host-<id>:•••`) is masked by default, in the tables, the tenant detail, the `--json` output and inside error messages and the footer (connection errors, `host:port/db` keys, IP addresses, database user names), so output can be shared freely. Add `--reveal` or press `p` in the live view to see the real values.
 
-In multi-tenant deployments it queries each tenant database once (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+In multi-tenant deployments it queries each tenant database once per refresh (four in parallel by default, `--concurrency` to change) using the control-plane credentials, so the `POSTGRES_USER` must be able to read the `tenant_*` databases. A tenant database that cannot be reached is shown as unreachable and excluded from the totals; nothing else is affected.
+
+**Large multi-tenant installs (hundreds of tenants).** The dashboard shares Postgres' `max_connections` (100 by default) with the live API, so it is built never to hold a connection per tenant:
+
+- `--concurrency <n>` is the bound. At most `n` tenant connections plus one control connection are open at any moment (default `4 + 1`, hard cap 16). Each tenant connection is a single-connection pool that is closed as soon as that tenant has been read, so a refresh over 228 tenants peaks at 5 connections, not 229. Keep `n` well below `max_connections` minus what the API and workers use. The connections identify themselves as `application_name = 'hisaabo-admin'` in `pg_stat_activity`.
+- Every query has a server-side `statement_timeout` (15 s) and every connect a timeout (8 s); `--query-timeout <seconds>` (1-600) changes the first. A tenant database that hangs or is unreachable is shown as unreachable and the refresh carries on instead of stalling. The timeout is sent as a connection startup parameter, so tenant databases behind a transaction-mode PgBouncer need `ignore_startup_parameters = statement_timeout` (or a direct connection URL); otherwise PgBouncer rejects the connection and they show as unreachable.
+- Quitting (`q`, Ctrl-C), a crash or a signal closes every connection before the process exits.
+- Prefer `--via direct` (the default inside the API container). `--via docker` starts a `docker exec ... psql` process for every query, defaults to `--concurrency 2`, and is much slower on many tenants; it is bounded the same way (one short-lived connection per process, each with the same `statement_timeout`) but is meant for small installs. Run the dashboard inside the API container for a large cloud database.
+
+The refresh interval is counted from the end of the previous refresh and refreshes never overlap. If a pass over many tenants is long, raise `--interval` (or use `--interval 0` and press `r` when you need fresh numbers) rather than `--concurrency`.
+
+### Operator-issued API keys
+
+API access is a paid feature (and most customers use the WebMCP integration instead), so an operator may need to hand a specific customer a key without signing in as them. From the API container:
+
+```bash
+# Issue a key (the key is printed once; store it now, it cannot be shown again)
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api \
+  node packages/api/dist/bin/admin.js api-key create owner@example.com --tenant acme --name "MCP server" --expires-days 90
+
+# List a user's keys (id, name, prefix, tenant, created, last used, expiry; never the key or hash)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js api-key list owner@example.com [--tenant acme] [--reveal]
+
+# Revoke by id (takes effect at once; running API processes are notified through the database)
+docker exec hisaabo-api node packages/api/dist/bin/admin.js api-key revoke <key-id>
+```
+
+- **Keys act with the user's role.** A key has no scopes: it can do whatever that user can in that organisation. So `create` only works for an existing user who is an owner, superadmin or admin of the tenant (`--tenant` takes the slug or the id) and refuses everyone else with a message naming their role. It never creates users or tenants, and refuses a suspended organisation. Treat the printed key like that user's password.
+- **Plan limits apply** (the free plan has no API keys; Pro allows 3). `--override-plan` issues the key anyway when the plan would have refused it. The override is recorded durably: the tenant's "API key created" alert then names "Hisaabo operator (plan override)" and its payload carries `planOverride: true`. The command also warns on stderr and notes it in its audit line and the `api_key_operator_issued` event.
+- **Unverified accounts are refused.** If the user has not verified their email address, nobody has proven they own it, and on the multi-tenant cloud a key issued to such an account is revoked at its first email-link sign-in. `create` explains this and refuses unless you add `--allow-unverified` (on a self-hosted install upgraded from 0.9.0 an owner counts as unverified until their first email-link sign-in, so you may need the flag there).
+- `--expires-days <n>` (1-365, default 90) sets the lifetime. `list` masks the tenant name and email like the dashboard does unless you add `--reveal`.
+- **Audit.** The tenant's owners and admins receive the same locked "API key created" security alert as for a web-created key, naming "Hisaabo operator" as the creator (the command only queues it; a running notification dispatcher delivers it, on the multi-tenant cloud at its next full sweep, about a minute later). That alert and the key row (`created_at`, name) are the durable record. The command also prints an `[audit]` line and writes structured `api_key_operator_issued` / `api_key_operator_revoked` security events (ids and flags only, never the key or its hash) to its own stderr, so stdout carries only the key block. They are the output of the command you ran, not entries in the API container's long-running log: keep the session record if you need it. There is no platform-level audit table. Like `login-link`, it is shell-only: there is no HTTP route to it, and on the ONCE image it derives the database URL the same way.
 
 ### Break-glass sign-in (when email is not working)
 

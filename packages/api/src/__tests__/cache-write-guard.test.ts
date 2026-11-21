@@ -76,7 +76,14 @@ export const ALLOWED_WRITERS: Record<string, string[]> = {
     "bin/encrypt-sensitive-fields.ts", // CLI process (cache-guard: DB trigger)
     "bin/rotate-key.ts", // CLI process (cache-guard: DB trigger)
   ],
-  api_keys: ["context.ts", "routers/apiKey.ts", "routers/auth.ts", "routers/tenant.ts"],
+  api_keys: [
+    "context.ts",
+    "routers/apiKey.ts",
+    "routers/auth.ts",
+    "routers/tenant.ts",
+    "lib/api-keys.ts", // the one place a key is minted (router + operator CLI)
+    "lib/admin/api-key.ts", // operator CLI revoke (cacheBus + DB trigger)
+  ],
   system_config: ["bin/maintenance.ts"], // CLI process (cache-guard: DB trigger)
   store_slugs: ["lib/store-slug-registry.ts"],
   businesses: ["routers/business.ts"],

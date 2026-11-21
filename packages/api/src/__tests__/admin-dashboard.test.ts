@@ -574,7 +574,12 @@ describe("privacy masking", () => {
     // Structure and numbers are untouched.
     expect(masked.totals).toEqual(raw.totals);
     expect(masked.tenants).toHaveLength(raw.tenants.length);
-    expect(masked.tenants[0].metrics).toBe(raw.tenants[0].metrics);
+    // Numbers are untouched; only the per-tenant failure texts are masked (a copy: the input is never mutated).
+    const { ops: maskedOps, ...maskedRest } = masked.tenants[0].metrics!;
+    const { ops: rawOps, ...rawRest } = raw.tenants[0].metrics!;
+    expect(maskedRest).toEqual(rawRest);
+    expect({ ...maskedOps, failures: [] }).toEqual({ ...rawOps, failures: [] });
+    expect(masked.tenants[0].metrics).not.toBe(raw.tenants[0].metrics);
     expect(masked.tenants[0].name).toMatch(/^Tenant [0-9a-f]{6}$/);
     expect(masked.control.tenants[0].name).toBe(masked.tenants[0].name);
     // The unreachable tenant's error message is scrubbed too.
