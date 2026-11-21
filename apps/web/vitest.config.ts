@@ -1,6 +1,31 @@
+import os from "node:os";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
+
+/**
+ * Test files are independent (no database, no ports, no files), so they run in
+ * parallel forks, sized by what the machine has free: WEB_TEST_WORKERS=n sets it
+ * explicitly (1 = serial); otherwise min(4, free memory / budget, cpus - 1).
+ */
+const MB_PER_WORKER = 1500;
+const MAX_DEFAULT_WORKERS = 4;
+
+function resolveMaxWorkers(): number {
+  const override = process.env.WEB_TEST_WORKERS?.trim();
+  if (override) {
+    const n = Number.parseInt(override, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      throw new Error(`WEB_TEST_WORKERS must be a positive integer, got "${override}"`);
+    }
+    return n;
+  }
+  const freeMb = os.freemem() / 1024 / 1024;
+  return Math.max(
+    1,
+    Math.min(MAX_DEFAULT_WORKERS, Math.floor(freeMb / MB_PER_WORKER), os.availableParallelism() - 1),
+  );
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -11,10 +36,11 @@ export default defineConfig({
     // Exclude route files — they depend on TanStack Router's file-based
     // route generation which requires the full Vite plugin pipeline.
     exclude: ["**/node_modules/**", "**/routes/**"],
-    // Prevent memory explosion: run test files one at a time in a single fork
-    // instead of spawning parallel jsdom environments.
+    // This used to be one fork (maxWorkers: 1) to prevent a memory explosion from
+    // parallel jsdom environments. Workers are now capped by free memory instead
+    // (~0.45 GB per jsdom fork measured; 4 forks peak ~1.9 GB), see resolveMaxWorkers.
     pool: "forks",
-    maxWorkers: 1,
+    maxWorkers: resolveMaxWorkers(),
     testTimeout: 10000,
     teardownTimeout: 5000,
   },
