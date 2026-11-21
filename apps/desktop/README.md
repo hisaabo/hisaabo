@@ -36,7 +36,7 @@ Feature parity with the web app is complete by design: the desktop app renders t
   - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
   - **Windows:** Microsoft C++ Build Tools or Visual Studio
   - **Linux:** `build-essential`, `libwebkit2gtk-4.1-dev`, `libssl-dev` (see [Tauri Linux prerequisites](https://tauri.app/start/prerequisites/))
-- Node.js 20+ and pnpm 9+ (for the web frontend build)
+- Node.js 22.12+ and pnpm 9+ (for the web frontend build)
 
 ---
 

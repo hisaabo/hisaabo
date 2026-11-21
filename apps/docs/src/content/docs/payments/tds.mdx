@@ -1,0 +1,102 @@
+---
+title: TDS on Payments
+description: Record the tax a customer deducted at source (TDS) when they pay your invoice. How the net cash, TDS and invoice settlement fit together, how to pick a section, and what the TDS Receivable account (1600) holds.
+sidebar:
+  order: 2
+---
+
+import ForDesktop from '../../../components/ForDesktop.astro';
+import ForMobile from '../../../components/ForMobile.astro';
+
+Some customers deduct TDS (Tax Deducted at Source) before they pay you, so the money that reaches your bank is less than the invoice. The deducted amount is not lost: the customer deposits it with the Income Tax Department against your PAN, and it appears as a credit in your Form 26AS and AIS. Hisaabo lets you record the deduction on the receipt, so the invoice is fully settled, your bank balance matches the cash that actually arrived, and the tax credit is tracked in its own account.
+
+This page covers TDS that **your customers deduct from payments to you**. TDS that you deduct from payments to your suppliers is not supported yet: the TDS fields are hidden when you record a payment to a supplier.
+
+:::caution[Hisaabo does not work out TDS for you]
+Hisaabo does not decide whether TDS applies to a transaction, what the rate is, or what it is calculated on. You enter what the customer actually deducted. The section list and labels are reference data, not tax advice. For current provisions and rates, see the [Income Tax Department's TDS rates](https://wm.incometaxindia.gov.in/w/tds-rates-1) or ask your CA.
+:::
+
+## The three amounts
+
+| Amount | What it is |
+|---|---|
+| **Gross settlement** | The amount credited against the invoice |
+| **TDS** | The tax the customer withheld |
+| **Net cash received** | What you were paid: gross settlement minus TDS. This is the payment's **Amount** |
+
+For example, you invoice ₹10,000 and the customer deducts ₹1,000, so they pay ₹9,000:
+
+| Result | Amount |
+|---|---|
+| Invoice credited (gross settlement) | ₹10,000, so the invoice is **Paid** |
+| Added to your bank or cash account | ₹9,000 |
+| Added to **TDS Receivable** | ₹1,000 |
+
+## Recording a receipt with TDS
+
+<ForDesktop>
+1. Open the invoice and click **Record Payment**, or go to **Payments** and click **+ Record Payment**.
+2. Select the **customer**. The TDS fields appear only for customers.
+3. Under **Unpaid Invoices**, tick the invoice. TDS can be recorded against one invoice at a time.
+4. Enter the **TDS Rate (%)** the customer used, and choose the **TDS Section** from the list. Each entry shows the section code and its name. The **Rates (GoI)** link opens the Income Tax Department's rates page.
+5. Hisaabo suggests the **TDS Amount** as the rate applied to the invoice's value **excluding GST**: an invoice of ₹10,000 plus 18% GST at 10% suggests ₹1,000, not ₹1,180. The suggestion is only a starting point. Type the amount the customer actually withheld, or click **Use suggested** to go back to it.
+6. Check the line that reads *Gross settlement: ₹10,000.00 (cash ₹9,000.00) + TDS ₹1,000.00*. The payment **Amount** is filled in as the net cash.
+7. Click **Record**. The button shows the cash amount that will be recorded.
+</ForDesktop>
+
+<ForMobile>
+The mobile app does not have TDS fields yet. Record receipts that carry TDS in the web app, or with the [CLI](/ai/cli/) or the [MCP server](/ai/mcp-server/).
+</ForMobile>
+
+### What Hisaabo checks
+
+- The TDS amount must be above zero and cannot be more than the gross settlement.
+- A TDS amount needs a **section** and a **rate** (above 0 and up to 100, with at most 2 decimals).
+- The section must be active and effective on the payment date. The default sections take effect on 1 April 2026, so a receipt dated earlier needs a back-dated section, which an administrator can add through the API (`tdsSection.create`).
+- The rate is saved with the receipt for reference. Hisaabo does not check it against the amount, because customers often deduct on the value before GST. The amount you enter is what is booked.
+- In the web app, selecting more than one invoice with TDS shows *Multi-invoice payments with TDS are not supported*. Record a separate receipt for each invoice.
+
+### Editing a receipt
+
+Open the payment in the web app and edit it. The panel always sends the invoice allocation together with the amount, so a receipt with TDS can be changed like any other. A script or AI agent that changes the cash amount of a receipt carrying TDS has to send the allocations as well, otherwise the API refuses the change.
+
+## TDS sections
+
+Each business gets a list of TDS sections, shown in the **TDS Section** dropdown with the code and name, for example `1023 - Contract payment - contractor is individual or HUF` and `1027 - Fees for professional services or sum referred to in section 26(2)(h) - specified person`. The list uses the current numeric section codes. Older names such as 194C or 194J are not offered, and Hisaabo does not guess how they map to the current codes.
+
+You can also read the list outside the app: `hisaabo tds-section list` in the [CLI](/ai/cli/), or the `tds_section_list` tool in the [MCP server](/ai/mcp-server/) and the [browser AI agent](/ai/webmcp/).
+
+## What it does to your books
+
+TDS posts to a system account, **1600 - TDS Receivable**, which is an asset: it is tax you have already paid through your customer and will claim as a credit. Recording the receipt above makes these entries:
+
+| Account | Debit | Credit |
+|---|---|---|
+| Bank or cash account | ₹9,000 | |
+| TDS Receivable (1600) | ₹1,000 | |
+| Customer (accounts receivable) | | ₹10,000 |
+
+- **The account is created for you.** 1600 is part of the default chart of accounts, and businesses that existed before TDS support received it when you upgraded. You can rename it but not deactivate it. If you had already created your own account coded `1600`, receipts that carry TDS are refused with a message until that account is recoded.
+- **The customer's balance clears.** The party ledger and statement count the cash plus the TDS as settled, and show the receipt as *Payment received (incl. TDS ₹1,000.00)*.
+- **Cash figures stay on cash.** Bank balances, cash in hand, the payment-mode breakdown and bank reconciliation count only the ₹9,000 that moved. Invoiced-versus-collected figures count the full ₹10,000 settled.
+- **Tally export.** The TDS is exported as a second receipt leg, debiting TDS Receivable and crediting the party.
+- **Cash flow statement.** TDS Receivable is treated as a current asset (working capital).
+
+Hisaabo tracks the amount you can claim. It does not yet reconcile it with your Form 26AS or AIS, so compare the TDS Receivable balance with the credit shown there when you file.
+
+## Frequently asked questions
+
+**My customer paid several invoices in one transfer and deducted TDS. How do I record it?**
+Record one receipt per invoice, each with its own net cash and TDS, so every deduction is tied to the right invoice and section.
+
+**The customer deducted a different amount from the suggestion.**
+Enter what they actually withheld, as shown on their remittance advice or TDS certificate. The suggestion is only the rate applied to the pre-GST value.
+
+**Do I record TDS that I deduct from my suppliers here?**
+No. Supplier-side TDS is not supported, and the TDS fields are not shown for suppliers. Do not record it through a customer receipt or account 1600.
+
+**Can an AI agent or script record TDS?**
+Yes. In the CLI, `hisaabo payment create --tds-amount ... --tds-section ... --tds-rate ...` (see [CLI](/ai/cli/)). The MCP server and the browser agent take `tds_amount`, `tds_section_code` and `tds_rate` on each allocation of `payment_create`. Amount is always the net cash.
+
+**Where do I find the TDS Receivable balance?**
+In **Reports**, open the Trial Balance or Balance Sheet and look for account 1600, or open the General Ledger for it.

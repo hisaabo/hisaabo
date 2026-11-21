@@ -1,6 +1,6 @@
 # @hisaabo/mcp
 
-The Hisaabo MCP server. Connect Hisaabo invoicing data to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 130+ tools covering every business operation.
+The Hisaabo MCP server. Connect Hisaabo invoicing data to Claude Desktop, OpenClaw, or any MCP-compatible AI agent. 194 tools covering every business operation (the default read-only mode exposes the 103 query tools).
 
 [![Model Context Protocol](https://img.shields.io/badge/MCP-compatible-7C3AED)](https://modelcontextprotocol.io/)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -89,7 +89,7 @@ An AI agent reads free text from your books (party names, notes, store orders) t
 
 ## Available Tools
 
-Up to 186 tools across all business domains, depending on the [safety mode](#safety-modes). In the default `readonly` mode only query tools are registered; the tables below list everything.
+194 tools across all business domains, depending on the [safety mode](#safety-modes): 103 query tools in the default `readonly` mode, 183 in `write` mode, and all 194 in `admin` mode with `HISAABO_MCP_ENABLE_ADMIN=1`. The counts come from the tier table in `src/lib/toolMeta.ts`. The tables below list the tools by domain; the last section covers accounting, GST compliance and administration.
 
 ### Invoicing
 
@@ -167,6 +167,9 @@ Up to 186 tools across all business domains, depending on the [safety mode](#saf
 | `payment_unpaid_invoices` | List unpaid invoices for a party (for allocation) |
 | `payment_untracked` | List payments not linked to a bank account |
 | `payment_default_account` | Get recommended bank account for a new payment |
+| `tds_section_list` | List the TDS sections a customer receipt may use (read-only; pass the code as `tds_section_code` to `payment_create` / `payment_update`) |
+
+For a customer receipt where TDS was withheld, `payment_create` takes `amount` as the **net cash received** and, per allocation, the gross `amount` plus `tds_amount`, `tds_section_code` and `tds_rate`. See [TDS on payments](https://docs.hisaabo.in/payments/tds/).
 
 ### Expenses
 
@@ -293,6 +296,30 @@ Up to 186 tools across all business domains, depending on the [safety mode](#saf
 | `api_key_list` | List API keys for the current user |
 | `api_key_create` | Create a new API key (shown exactly once) |
 | `api_key_revoke` | Permanently revoke an API key |
+
+### Accounting, GST Compliance and Administration
+
+| Tool | What it does |
+|---|---|
+| `report_profit_and_loss` / `report_balance_sheet` / `report_trial_balance` / `report_cash_flow_statement` | Financial statements for a period or date |
+| `report_comparative_profit_and_loss` / `report_comparative_balance_sheet` / `report_comparative_trial_balance` | The same statements for two periods or dates side by side |
+| `report_general_ledger` | General ledger for one account |
+| `journal_list` / `journal_get` / `journal_create` / `journal_void` / `journal_templates` | Journal entries and templates (manual accounting adjustments; `journal_void` needs `confirm`) |
+| `gst_gstr9` | GSTR-9 annual return summary for a financial year |
+| `gstr2b_uploads` / `gstr2b_records` / `gstr2b_summary` | GSTR-2B uploads, records and reconciliation summary by return period |
+| `gstr2b_missing_in_2b` / `gstr2b_missing_in_books` | Purchase invoices missing from GSTR-2B, and GSTR-2B invoices missing from your books |
+| `itc_dashboard` / `itc_ledger` / `itc_aging_alerts` / `itc_gstr3b_table4` | Input Tax Credit summary, ledger, reversal-risk alerts and the GSTR-3B Table 4 breakdown |
+| `itc_mark_blocked` / `itc_mark_eligible` | Mark ITC on a purchase invoice as blocked or eligible |
+| `einvoice_status` / `einvoice_dashboard` | E-invoice status for an invoice, and the generation summary |
+| `einvoice_generate` / `einvoice_cancel` / `einvoice_retry` | Generate, cancel or retry an e-invoice on the IRP (destructive, need `confirm`) |
+| `eway_bill_dashboard` / `eway_bill_expiring` | E-way bill summary, and bills expiring within 24 hours |
+| `eway_bill_generate` / `eway_bill_cancel` / `eway_bill_update_vehicle` | Generate, cancel or update the vehicle on an e-way bill (destructive, need `confirm`) |
+| `bank_account_gateway_config` / `bank_account_update_gateway` | Read or change a payment gateway account's charge configuration (the change needs `confirm`) |
+| `bank_recon_imports` / `bank_recon_lines` / `bank_recon_summary` / `bank_recon_rules` | Bank statement imports, their lines and summary, and auto-matching rules |
+| `business_audit_trail` | Query the audit log for the current business |
+| `system_maintenance_status` | Check whether the API is under maintenance |
+| `session_list` / `session_revoke` | List or revoke the caller's sessions (admin tier) |
+| `tenant_pending_invitations` / `tenant_revoke_invitation` | List or revoke pending team invitations (admin tier) |
 
 ## Available Resources
 

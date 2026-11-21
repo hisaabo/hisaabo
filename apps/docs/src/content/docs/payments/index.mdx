@@ -39,13 +39,17 @@ Tap **Payments** in the bottom tab bar, then tap the floating **+** button. A fu
 | Field | Required | Notes |
 |---|---|---|
 | **Party** | Yes | The customer or supplier you are receiving from / paying to |
-| **Amount** | Yes | Total amount of this payment in INR |
+| **Amount** | Yes | Total amount of this payment in INR. For a customer receipt where TDS was deducted, this is the **net cash** you received (see [TDS on Payments](/payments/tds/)) |
 | **Mode** | Yes | How the money moved: Cash, Bank Transfer, UPI, Cheque, or Other |
 | **Payment Date** | Yes | When the payment was received/made. Defaults to today. |
 | **Bank Account** | No | Which of your bank accounts this payment relates to. Automatically creates a transaction in that account's balance. |
 | **Reference Number** | No | UTR for bank transfer, UPI reference ID, cheque number, etc. |
 | **Discount** | No | Any discount given at the time of payment (for example, settling for a round figure). Reduces the invoice outstanding without recording it as income. |
 | **Notes** | No | Free-text note |
+
+## TDS deducted by the customer
+
+If a customer deducted TDS and paid you the rest, record the receipt with the TDS amount, rate and section so the invoice is fully settled and the deducted tax is tracked in the TDS Receivable account. The fields are in the web app's payment panel for customer receipts. See [TDS on Payments](/payments/tds/).
 
 ## Payment modes
 

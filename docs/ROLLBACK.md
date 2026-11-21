@@ -2,10 +2,10 @@
 
 Emergency reference for rolling back Drizzle ORM migrations in Hisaabo. Drizzle does not generate down/rollback migrations. This document provides reverse SQL for each migration and instructions for backup-based recovery.
 
-**Last updated**: 2026-10-27
-**Applies to**: self-hosted migrations 0000 through 0019 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0007) and tenant (`drizzle-tenant`, 0000-0006) migration sets; the equivalents for 0014-0019 are listed in section 3.
+**Last updated**: 2026-11-21
+**Applies to**: self-hosted migrations 0000 through 0022 (`packages/db/drizzle`). Multi-tenant deployments use separate control (`drizzle-control`, 0000-0008) and tenant (`drizzle-tenant`, 0000-0009) migration sets; the equivalents for 0014-0022 are listed in section 3.
 
-Downgrading the application from the next release to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
+Downgrading the application from v0.10.0 to v0.9.0 needs no reverse SQL; see [Downgrading to v0.9.0](#downgrading-to-v090).
 
 ---
 
@@ -13,7 +13,10 @@ Downgrading the application from the next release to v0.9.0 needs no reverse SQL
 
 | Migration | Name | Risk | Data Loss | Recommended Strategy |
 |-----------|------|------|-----------|---------------------|
-| 0019 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
+| 0022 | Notifications (inbox, outbox, preferences, push devices, push quotas) | Low | Notification inbox and outbox rows, preferences, registered push devices | Leave in place (older code ignores them) |
+| 0021 | Job queue controls + operator dashboard tables | Low | Queue controls, operators, ops sessions and audit log | Leave in place (older code ignores them) |
+| 0020 | TDS on payment receipts | Low | TDS section configs, party TANs, TDS amounts on payment allocations | Leave in place (see the TDS note in section 3) |
+| 0019 | `businesses.store_slug_auto_assigned` flag | Low | That flag | Leave in place |
 | 0018 | Cache invalidation NOTIFY triggers | Low | None | Leave in place, or manual reverse SQL |
 | 0017 | Global store slug registry | Low | Registry rows (rebuilt by the backfill) | Leave in place |
 | 0016 | Index swap on `items` / `bank_*` | Low | None | Leave in place |
@@ -880,7 +883,7 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 
 ---
 
-### Migrations 0014-0019: Released after v0.9.0
+### Migrations 0014-0022: Released after v0.9.0
 
 | Self-hosted | Control DB | Tenant DB | Change |
 |---|---|---|---|
@@ -889,7 +892,10 @@ Then delete the matching rows from `drizzle.__drizzle_migrations` (section 2).
 | 0016 | - | 0006 | Rebuilds `bsl_import_idx` and `bank_txn_date_idx`, adds `items_active_updated_idx` |
 | 0017 | 0005 | - | `store_slugs` registry |
 | 0018 | 0006 | - | `hisaabo_cache_notify()` and its triggers |
-| 0019 | 0007 | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
+| 0019 | - | 0007 | `businesses.store_slug_auto_assigned` |
+| 0020 | - | 0008 (`tds`) | `tds_section_configs`, `parties.tan`, `payment_allocations.tds_amount` / `tds_section_code` / `tds_rate`, and a system `1600 TDS Receivable` row in `chart_of_accounts` for every business that did not have one |
+| 0021 | 0007 (`queue_and_ops`) | - | `ops_role`, `ops_operators`, `ops_sessions`, `ops_audit_log`, `queue_controls` |
+| 0022 | 0008 (`notifications`: `notification_preferences`, `push_devices`, `push_quota_usage`, `user_notification_settings`) | 0009 (`notifications`: `notification_inbox`, `notification_outbox`) | The six notification tables (all six in the self-hosted database) |
 
 The migration step also tries to install the `pgboss` job-queue schema in the control database (self-hosted: the only database). It is not a Drizzle migration and is not tracked in `drizzle.__drizzle_migrations`. If the install fails (for example the role lacks `CREATE` on the database) the step logs `job queue schema NOT installed` and continues; nothing in this release depends on the queue yet.
 
@@ -907,16 +913,32 @@ Rehearsed on self-hosted and multi-tenant copies: the v0.9.0 migration step is a
 What does not come back:
 
 - **Store slug losers (multi-tenant).** Ignored by v0.9.0, which resolves slugs per tenant again.
+- **TDS on receipts recorded under 0.10.0.** v0.9.0 does not know the `tds_*` columns, so its party ledger, statement and derived ledger count only the net cash of such a receipt, and a ledger can show the withheld TDS as still unsettled. The data is intact; it is read again once you return to 0.10.0 or later. Do not drop the TDS columns to "clean up" after a downgrade, because that erases the record of what was withheld.
+- **Notification events.** v0.9.0 has no dispatcher, so events queued in `notification_outbox` stay there until a newer version runs again.
 
 #### Removing the new objects (optional)
 
-Only needed if you want a v0.9.0 schema byte-for-byte. The script below is for a self-hosted database; on a multi-tenant deployment run, in each database, only the statements for objects that the control or tenant migrations in the table above created there. Then remove the matching migration rows from `drizzle.__drizzle_migrations` in each database.
+Only needed if you want a v0.9.0 schema byte-for-byte, and it deletes data (marked below). The script below is for a self-hosted database; on a multi-tenant deployment run, in each database, only the statements for objects that the control or tenant migrations in the table above created there. Then remove the matching migration rows from `drizzle.__drizzle_migrations` in each database.
 
 ```sql
 BEGIN;
--- 0019 / control 0007
+-- 0022 / control 0008 (preferences, devices, quotas, settings), tenant 0009 (inbox, outbox)
+-- Destructive: deletes all notifications, preferences and registered push devices.
+DROP TABLE IF EXISTS notification_inbox, notification_outbox, notification_preferences,
+  push_devices, push_quota_usage, user_notification_settings;
+-- 0021 / control 0007
 DROP TABLE IF EXISTS queue_controls, ops_audit_log, ops_sessions, ops_operators;
 DROP TYPE IF EXISTS ops_role;
+-- 0020 / tenant 0008
+-- Destructive: erases the record of TDS withheld on receipts. The 1600 TDS Receivable row
+-- in chart_of_accounts is left in place (v0.9.0 reads it like any other account).
+DROP TABLE IF EXISTS tds_section_configs;
+ALTER TABLE payment_allocations DROP COLUMN IF EXISTS tds_amount;
+ALTER TABLE payment_allocations DROP COLUMN IF EXISTS tds_section_code;
+ALTER TABLE payment_allocations DROP COLUMN IF EXISTS tds_rate;
+ALTER TABLE parties DROP COLUMN IF EXISTS tan;
+-- 0019 / tenant 0007
+ALTER TABLE businesses DROP COLUMN IF EXISTS store_slug_auto_assigned;
 -- 0018 / control 0006
 DROP FUNCTION IF EXISTS hisaabo_cache_notify() CASCADE;  -- also drops its triggers
 -- 0017 / control 0005

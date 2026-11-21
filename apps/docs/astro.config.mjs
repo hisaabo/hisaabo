@@ -57,7 +57,13 @@ export default defineConfig({
                 { label: "Units & Conversions", slug: "items/units-and-conversions" },
               ],
             },
-            { label: "Payments", slug: "payments" },
+            {
+              label: "Payments",
+              items: [
+                { label: "Recording Payments", slug: "payments" },
+                { label: "TDS on Payments", slug: "payments/tds" },
+              ],
+            },
             { label: "Expenses", slug: "expenses" },
             { label: "Banking", slug: "banking" },
           ],

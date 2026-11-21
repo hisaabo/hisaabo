@@ -246,17 +246,9 @@ hisaabo invoice pdf BB-12948 --output /tmp/invoices/
 hisaabo invoice pdf BB-12948 --format thermal
 ```
 
-#### `hisaabo invoice update`
+#### Editing an invoice
 
-Update fields on an existing invoice. Only draft invoices can be fully edited; sent or paid invoices accept a limited set of changes.
-
-```bash
-hisaabo invoice update BB-12948 \
-  --notes "Updated payment terms: 30 days net" \
-  --due-date 2026-04-30
-```
-
-Pass `--from-file invoice.json` to replace the full invoice body from a JSON file (same format as `invoice create`).
+The CLI has no `invoice update` command. To change the line items, dates or notes of an invoice, edit it in the web app or use the MCP server's `invoice_update` tool. From the CLI you can change its status with `hisaabo invoice status`.
 
 #### `hisaabo invoice delete`
 
@@ -515,31 +507,76 @@ hisaabo item rename-unit item_xxxxxxxxxx --from pcs --to pieces
 
 ```bash
 hisaabo payment list
-hisaabo payment list --party "Sharma Traders"
+hisaabo payment list --party-id party_xxxxxxxxxx
 hisaabo payment list --from 2026-03-01 --to 2026-03-31
-hisaabo payment list --mode upi
 hisaabo payment list --json
 ```
+
+Options: `--party-id`, `--from`, `--to`, `--page`, `--limit`, `--json`, `--format <table|tsv|csv|ids>`.
 
 #### `hisaabo payment create`
 
 ```bash
-# Payment received from customer
+# Payment received from a customer, applied to one invoice
 hisaabo payment create \
-  --party "Sharma Traders" \
+  --party-id party_xxxxxxxxxx \
   --amount 25000 \
   --mode upi \
   --date 2026-03-26 \
   --reference "UTR123456789" \
-  --allocate BB-12800 BB-12801
+  --invoice-id inv_xxxxxxxxxx
 
-# Bulk payment (no specific invoice allocation)
+# Payment with no specific invoice (advance or bulk payment)
 hisaabo payment create \
-  --party "Gupta Enterprises" \
+  --party-id party_yyyyyyyyyy \
   --amount 50000 \
   --mode bank \
   --reference "NEFT20260326"
 ```
+
+Options: `--party-id` (required when not prompting interactively; find it with `hisaabo party list`), `--amount`, `--mode` (`cash`, `bank`, `upi`, `cheque`, `other`; `cash` if you pass nothing and are not prompted), `--invoice-id`, `--reference`, `--date` (default today), `--notes`, the `--tds-*` flags below, `-y, --yes` and `--json`. In a terminal, anything you leave out is asked for interactively. The CLI applies a payment to at most one invoice; to split one payment across several invoices use the web app or the MCP server's `allocations`.
+
+#### Recording TDS on a customer receipt
+
+When a customer pays an invoice and withholds TDS, `--amount` is the **net cash you received** and the three `--tds-*` flags describe the deduction. The invoice is credited with the gross (net cash plus TDS) and the TDS posts to the **TDS Receivable** account. `--invoice-id` is required.
+
+```bash
+# Invoice of ₹10,000, customer withheld ₹1,000 and paid ₹9,000
+hisaabo payment create \
+  --party-id party_xxxxxxxxxx \
+  --amount 9000.00 \
+  --mode bank \
+  --invoice-id inv_xxxxxxxxxx \
+  --tds-amount 1000.00 \
+  --tds-section 1027 \
+  --tds-rate 10
+```
+
+| Flag | Description |
+|---|---|
+| `--tds-amount <amount>` | The TDS the customer withheld, a positive amount with at most 2 decimals |
+| `--tds-section <code>` | A section code from `hisaabo tds-section list` (required with `--tds-amount`) |
+| `--tds-rate <rate>` | The rate in percent, up to 2 decimals (required with `--tds-amount`). Stored as metadata; the amount is what you record |
+
+`--tds-section` and `--tds-rate` are rejected without `--tds-amount`. Hisaabo does not decide whether TDS applies or at what rate: check the [Income Tax Department rates](https://wm.incometaxindia.gov.in/w/tds-rates-1). See [TDS on payments](/payments/tds/).
+
+#### `hisaabo payment get`
+
+```bash
+hisaabo payment get pay_xxxxxxxxxx
+hisaabo payment get pay_xxxxxxxxxx --json
+```
+
+#### `hisaabo payment update`
+
+Change only the fields you pass:
+
+```bash
+hisaabo payment update pay_xxxxxxxxxx --reference "UTR987654321"
+hisaabo payment update pay_xxxxxxxxxx --mode bank --date 2026-03-27 --notes "Corrected mode"
+```
+
+Options: `--amount`, `--mode`, `--date`, `--reference` and `--notes` (an empty string clears the last two), `--json`. At least one is required. The CLI cannot re-split a payment across invoices, so for a receipt that carries TDS or is split across invoices, change the amount in the web app.
 
 #### `hisaabo payment delete`
 
@@ -549,37 +586,49 @@ hisaabo payment delete pay_xxxxxxxxxx
 
 #### `hisaabo payment unpaid-invoices`
 
-List invoices that still have an outstanding balance — useful before recording a payment to see what to allocate:
+List the invoices of one party that still have an outstanding balance — useful before recording a payment to see what it can be applied to. The argument is the party id:
 
 ```bash
-hisaabo payment unpaid-invoices
-hisaabo payment unpaid-invoices --party "Sharma Traders" --json
+hisaabo payment unpaid-invoices party_xxxxxxxxxx
+hisaabo payment unpaid-invoices party_xxxxxxxxxx --json
 ```
 
 #### `hisaabo payment untracked`
 
-Payments that were recorded but have not been linked to any invoice:
+List payments that are not linked to a bank account:
 
 ```bash
 hisaabo payment untracked
 hisaabo payment untracked --json
 ```
 
+Options: `--page`, `--limit`, `--json`, `--format <table|tsv|csv>`.
+
 #### `hisaabo payment default-account`
 
-Show the bank account that is currently set as the default for incoming payments:
+Show the bank account recommended for a new payment, optionally scoped to a party:
 
 ```bash
 hisaabo payment default-account
+hisaabo payment default-account --party-id party_xxxxxxxxxx
 ```
 
-#### `hisaabo payment assign-account`
+---
 
-Assign a bank account to an existing payment record:
+### `hisaabo tds-section`
+
+#### `hisaabo tds-section list`
+
+List the TDS sections you can use when recording a customer receipt. Read-only.
 
 ```bash
-hisaabo payment assign-account --payment pay_xxxxxxxxxx --account account_xxxxxxxxxx
+hisaabo tds-section list
+hisaabo tds-section list --include-inactive
+hisaabo tds-section list --json
+hisaabo tds-section list --format csv
 ```
+
+Columns: code, section name, effective-from date, status and version. Pass the code to `hisaabo payment create --tds-section`. A business that has no stored sections yet shows the default list. Labels are reference data, not tax advice.
 
 ---
 
@@ -1001,24 +1050,42 @@ hisaabo store settings --json
 ```bash
 hisaabo store orders
 hisaabo store orders --status pending
-hisaabo store orders --from 2026-03-01 --json
+hisaabo store orders --status pending --page 2 --json
 ```
 
-#### `hisaabo store order confirm`
+`hisaabo store orders` also takes `--page` and `--limit`.
+
+#### `hisaabo store order-get`
+
+```bash
+hisaabo store order-get order_xxxxxxxxxx
+```
+
+#### `hisaabo store order-confirm`
 
 Mark a pending store order as confirmed and begin fulfillment:
 
 ```bash
-hisaabo store order confirm order_xxxxxxxxxx
+hisaabo store order-confirm order_xxxxxxxxxx
 ```
 
-#### `hisaabo store order cancel`
+#### `hisaabo store order-cancel`
 
 Cancel a store order:
 
 ```bash
-hisaabo store order cancel order_xxxxxxxxxx --reason "Out of stock"
+hisaabo store order-cancel order_xxxxxxxxxx --reason "Out of stock"
 ```
+
+#### `hisaabo store order-update`
+
+Move an order along: `--status` is one of `preparing`, `ready` or `delivered`:
+
+```bash
+hisaabo store order-update order_xxxxxxxxxx --status ready
+```
+
+`order-confirm` and `order-cancel` ask for confirmation unless you pass `-y, --yes`.
 
 #### `hisaabo store check-slug`
 
@@ -1060,14 +1127,6 @@ Manage the tenant (organisation) that owns your businesses. Most users operate w
 ```bash
 hisaabo tenant list
 hisaabo tenant list --json
-```
-
-#### `hisaabo tenant select`
-
-Switch the active tenant. All subsequent commands operate in the context of the selected tenant.
-
-```bash
-hisaabo tenant select tenant_xxxxxxxxxx
 ```
 
 #### `hisaabo tenant members`
@@ -1513,7 +1572,7 @@ export const hisaaboCLI = {
     "invoice list/get/create/update/pdf/delete, " +
     "party list/get/create/delete/ledger/ledger-report/stats/top-items/merge, " +
     "item list/get/create/delete/stock/stock-history/stock-movements/low-stock-count/price-history/sales-stats/variants/merge/switch-base-unit/rename-unit, " +
-    "payment list/create/delete/unpaid-invoices/untracked/default-account/assign-account, " +
+    "payment list/get/create/update/delete/unpaid-invoices/untracked/default-account, " +
     "expense list/create/delete, " +
     "gst r1/r3b, shipment list/get/create/update, " +
     "bank list/get/create/transfer/transactions, " +

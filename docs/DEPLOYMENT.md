@@ -72,6 +72,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `VITE_API_URL` | API server URL (build-time) | `https://api.hisaabo.in` |
 | `VITE_ANDROID_APP_CERT_SHA256` | Comma-separated SHA-256 fingerprints of your Android signing certificate(s); written into `/.well-known/assetlinks.json` so mobile sign-in app links verify | `AB:CD:...` |
 | `VITE_APPLE_TEAM_ID` | Apple developer team ID; written into `/.well-known/apple-app-site-association` | `ABCDE12345` |
+| `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` | Optional. Chrome/Edge origin-trial token for **your** web origin; it injects `<meta http-equiv="origin-trial">` into `index.html` so the browser exposes the WebMCP API (browser AI agents). It only makes the API available: the feature stays off until each user enables it in Settings. Unset = no tag; not needed when testing behind `chrome://flags/#enable-webmcp-testing`. See [Browser AI agents](https://docs.hisaabo.in/ai/webmcp/) | `Az4f...` |
 | `VITE_TURNSTILE_SITE_KEY` | Turnstile site key used by the sign-in page. The published Docker images contain only the API; you build the web app yourself. Leave it unset in a self-hosted web build that does not use Turnstile: the sign-in form then skips the challenge, and the API must not have `TURNSTILE_SECRET_KEY` set (it would answer "Turnstile verification required") | `0x4AAA...` |
 
 ### Cloudflare Pages (Store)
@@ -89,22 +90,30 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `NODE_ENV` | Yes | Environment | `production` |
 | `CORS_ORIGINS` | Yes | Comma-separated allowed origins | `https://app.hisaabo.in,https://store.hisaabo.in` |
 | `APP_URL` | Yes | Frontend URL (for magic links and the native sign-in page) | `https://app.hisaabo.in` |
-| `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). A set value must be a valid `http(s)` URL or startup fails | `https://api.hisaabo.in` |
+| `API_PUBLIC_URL` | Recommended (production) | Public base URL of the API, used for absolute links (UPI pay links in PDFs) and store share metadata. Optional: if unset the API starts with a warning and falls back (see [Upgrading from v0.9.x](#upgrading-from-v09x)). In production a set value that is not a valid `http(s)` URL fails startup (outside production it is ignored with a warning) | `https://api.hisaabo.in` |
 | `LEGACY_V09_CLIENT_COMPAT` | No | Default on; set to `false` to disable every v0.9.x client compatibility path at once: the Turnstile exemption for installed v0.9.x mobile/desktop apps on `sendMagicLink`, the bearer-token sign-in signature, and the `source=` app handoff. Deprecated, removed in 0.11.0 | `false` |
 | `ALLOW_OPEN_SIGNUP` | No | Self-hosted only. By default signup is invite-only after the first owner; `true` restores open signup | `false` |
 | `ENCRYPTION_KEY` | Yes (production and `MULTI_TENANT=true`) | AES-256-GCM key for field-level encryption: exactly **64 hex characters** (32 bytes); startup rejects anything else in multi-tenant mode. In single-tenant production a malformed key only logs a warning and saving/reading encrypted credentials (e-invoice, carrier API keys) fails until it is fixed. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | `a1b2c3...` |
 | `ENCRYPTION_KEY_PREVIOUS` | No | Previous encryption key — set only during key rotation | |
+| `DB_ENCRYPTION_KEY` | No | Legacy alias for `ENCRYPTION_KEY`: the encryption code reads it when `ENCRYPTION_KEY` is unset, but startup validation in production and multi-tenant mode still requires `ENCRYPTION_KEY` itself, so set that (to the same value) instead | |
 | `RESEND_API_KEY` | Yes | Email service API key (magic links, invites) | `re_xxx` |
 | `EMAIL_FROM` | No | From address for emails | `Hisaabo <noreply@hisaabo.in>` |
 | `MULTI_TENANT` | No | Enable multi-tenancy | `true` |
 | `CONTROL_DATABASE_URL` | No | Separate control DB (multi-tenant only). Also used for the cache invalidation `LISTEN` connection, so it must be a direct (non-PgBouncer-transaction-mode) URL; see [caching](architecture/caching.md) | `postgresql://...` |
 | `TRUST_PROXY_HOPS` | No | Number of trusted reverse proxies in front of the API (default `1`; `0` = API exposed directly, forwarding headers ignored). Drives client-IP detection for rate limiting and audit logs | `1` |
 | `TRUST_CLOUDFLARE` | No | `true` to honour `cf-connecting-ip`; only when the API is reachable exclusively via Cloudflare | `false` |
-| `EXPORT_SECRET` | No | Optional dedicated secret for signing import tokens (falls back to `SESSION_SECRET`) | |
+| `SESSION_SECRET` | No | Fallback root secret for signing export/import tokens and store OTP codes. The signing key is derived from the first of `ENCRYPTION_KEY`, `SESSION_SECRET`, `EXPORT_SECRET` that is set. Because production and multi-tenant mode require `ENCRYPTION_KEY`, leave this unset there; it only matters in development, where a fixed built-in secret is used when none is set. | |
+| `EXPORT_SECRET` | No | Last-priority fallback for the same signing root as `SESSION_SECRET` (used only when neither `ENCRYPTION_KEY` nor `SESSION_SECRET` is set). Leave unset in production | |
 | `TURNSTILE_SECRET_KEY` | Yes (production) | Cloudflare Turnstile secret. Required for every sign-in request and for the public store. The only exception is the deprecated v0.9.x native-app exemption below (`LEGACY_V09_CLIENT_COMPAT`); account creation always requires a token | `0x4AAA...` |
 | `SMS_PROVIDER` | No | Store phone OTP provider: `console` (dev only) or `webhook`. Needed before a store can enable phone OTP | `webhook` |
 | `SMS_WEBHOOK_URL` | With `SMS_PROVIDER=webhook` | Endpoint that receives `{ "to": "+91...", "message": "..." }` | `https://sms.example.com/send` |
 | `SMS_WEBHOOK_SECRET` | With `SMS_PROVIDER=webhook` | HMAC-SHA256 key; each request carries `X-Hisaabo-Signature` (hex of the body HMAC) | |
+| `STORE_PUBLIC_URL` | No | Public base URL of the storefront, used as the canonical URL in storefront share metadata (Open Graph). Unset: the API's own public base URL is used (the storefront is assumed to live on the API origin, as on a single-host self-host) | `https://store.hisaabo.in` |
+| `STORE_ALLOWED_ORIGINS` | No | Extra exact origins (comma-separated, full origins) allowed to call the public store endpoints, in addition to `CORS_ORIGINS`. A request with a disallowed `Origin`/`Referer` is rejected and logged; requests that carry neither header are not rejected (Turnstile and rate limits still apply) | `https://shop.example.com` |
+| `STORE_ALLOWED_SUBDOMAINS_OF` | No | Comma-separated parent domains whose subdomains are all allowed on the public store endpoints (for custom storefront domains under one zone) | `hisaabo.in` |
+| `STORE_DIST_DIR` | No | Directory holding a built store SPA (`index.html`) colocated with the API, so `GET /store/<slug>` serves it with per-store meta injected. The published images do not ship the store, so by default a minimal SEO shell is served | `/app/store` |
+| `OG_FONT_DIR` | No | Override the directory the storefront Open Graph image renderer loads fonts from (`NotoSans-Regular.ttf` and `NotoSans-Bold.ttf` are required; default: the fonts bundled with the API). Only needed for a custom image | `/app/packages/api/fonts` |
+| `SHIPPING_WEBHOOK_SECRET` | To receive carrier webhooks | HMAC-SHA256 secret for `POST /webhooks/shipping/:businessId`. Without it the endpoint answers 503; each request must carry `x-webhook-signature` (hex HMAC of the raw body, or of `<timestamp>.<body>` when the carrier also sends `x-webhook-timestamp`) | |
 | `SHIPPING_WEBHOOK_REQUIRE_TIMESTAMP` | No | `true` rejects carrier webhooks that lack a valid timestamp (optional by default) | `false` |
 | `BACKUP_ENCRYPTION_KEY` | With offsite backup | Passphrase for backup encryption; offsite upload is refused without it | |
 | `QUEUE_DATABASE_URL` | No | Database holding the job queue (`pgboss` schema). Defaults to `CONTROL_DATABASE_URL`, then `DATABASE_URL`; only set it to point at the same database through a different (e.g. direct) URL | `postgresql://...` |
@@ -118,6 +127,26 @@ Container images are not published from `main` either: `release.yml` builds and 
 | `QUEUE_DASHBOARD_ENABLED` | No | `true` serves the operator dashboard at `/ops` (off by default; every `/ops` path is a plain 404 otherwise). Requires `ENCRYPTION_KEY` | `false` |
 | `OPS_IP_ALLOWLIST` | No (recommended with `/ops`) | Comma-separated CIDRs (IPv4/IPv6) allowed to reach `/ops`; others get a plain 404. Uses the same client-IP rules as rate limiting (`TRUST_PROXY_HOPS`) | `203.0.113.0/24` |
 | `OPS_SESSION_IDLE_MINUTES` / `OPS_SESSION_MAX_HOURS` / `OPS_STEP_UP_MINUTES` | No | `/ops` session idle timeout, absolute lifetime, and how long a TOTP step-up covers destructive actions (defaults 15 / 8 / 5) | `15` |
+| `QUEUE_HEARTBEAT_FILE` | No | Worker only. File the worker touches every 10 seconds to prove liveness (default `/tmp/worker-heartbeat`; the bundled compose healthcheck reads that path, so change it only together with the healthcheck) | `/tmp/worker-heartbeat` |
+| `NOTIFICATIONS_WORKER` | No | The in-process notification dispatcher (outbox delivery plus the hourly collections sweep) that runs inside the **API** process. `true` = on, `false` = off (case-insensitive; any other value is ignored with a warning and the default applies). **Unset: on for single-tenant / self-hosted installs, off when `MULTI_TENANT=true`.** A multi-tenant operator who wants notifications dispatched sets `NOTIFICATIONS_WORKER=true`; until then nothing is dispatched and events queue in `notification_outbox`. Once it is enabled they are delivered, except events older than 72 hours, which are expired instead (so enable it before you need notifications, not after a long pause). With it on, a multi-tenant deployment scans **every** tenant database each `NOTIFICATIONS_FULL_SWEEP_SECONDS`, which churns the tenant connection pool (`TENANT_POOL_MAX`) when there are many tenants. Set `false` on replicas that should only serve requests (claiming from the outbox is safe across replicas) | `true` |
+| `NOTIFICATIONS_FULL_SWEEP_SECONDS` | No | Multi-tenant only, and only where the dispatcher is on: how often every active tenant is scanned for pending notification events (default 60, minimum 5; smaller or invalid values fall back to 60). Raise it on large installs | `60` |
+| `PUSH_PROVIDER` | No | Mobile push transport: `none` (default; the inbox and email copies still work) or `gorush`. `gorush` needs `GORUSH_URL` and your own app build with Apple/Firebase credentials; any other value logs a warning and disables push | `gorush` |
+| `GORUSH_URL` | With `PUSH_PROVIDER=gorush` | Base URL of the Gorush sidecar. Gorush's push endpoint has no authentication, so use a private-network address (a compose service name) and never publish its port | `http://gorush:8088` |
+| `APNS_TOPIC` | No | iOS bundle id passed to Gorush for APNs (default `in.hisaabo.app`). Set it to the bundle id of **your** app build | `in.hisaabo.app` |
+| `PUSH_INSTANCE_ID` | No | Name this deployment uses in the shared push quota counters (default `default`) | `prod` |
+| `PUSH_QUOTA_INSTANCE_DAY` / `PUSH_QUOTA_INSTANCE_MINUTE` | No | Hard ceiling on pushes this deployment may send per day / per minute. Defaults: unlimited when self-hosted, 2,000,000 / 2,000 when `MULTI_TENANT=true` | `2000000` |
+| `PUSH_QUOTA_USER_HOUR` / `PUSH_QUOTA_USER_DAY` | No | Pushes per recipient per hour / day; overflow stays inbox-only (urgent security and compliance events are exempt). Defaults 60 / 200 | `60` |
+| `STORAGE_DRIVER` | No | Where uploaded item images are stored: `local` (default) or `s3` (Cloudflare R2, AWS S3, MinIO). An unknown value falls back to `local` with a warning | `s3` |
+| `STORAGE_LOCAL_DIR` | No | Directory for `STORAGE_DRIVER=local`. The images set it to `/storage/objects` and `docker-compose.prod.yml` pins it there (the `api_storage` volume), so a value in `.env.prod` has no effect with that compose file. Without it the default is `./.storage/objects` relative to the working directory | `/storage/objects` |
+| `STORAGE_S3_ENDPOINT` / `STORAGE_S3_BUCKET` / `STORAGE_S3_ACCESS_KEY_ID` / `STORAGE_S3_SECRET_ACCESS_KEY` | With `STORAGE_DRIVER=s3` | S3-compatible endpoint, bucket and credentials. The driver is created the first time storage is used (for example an item image upload), and fails with a configuration error if any of the four is missing. `STORAGE_S3_REGION` is optional (default `auto`) | `https://<account>.r2.cloudflarestorage.com` |
+| `TENANT_POOL_MAX` / `TENANT_POOL_PER_DB_MAX` | No | Multi-tenant only. Maximum number of cached tenant database pools (LRU eviction, default 50) and connections per tenant pool (default 5) | `50` |
+| `NIC_EWB_CLIENT_ID` / `NIC_EWB_CLIENT_SECRET` / `NIC_EWB_USERNAME` / `NIC_EWB_PASSWORD` | To generate e-way bills | Server-wide NIC E-Way Bill API credentials. All four are required: without them e-way bill generation, cancellation and the other mutations fail with "E-Way Bill API credentials are not configured". (E-invoice IRP credentials are different: they are entered per business in the app and stored encrypted.) | |
+| `NIC_EWB_SANDBOX` | No | E-way bill calls go to the NIC sandbox unless this is exactly `false`. Set `false` in production | `false` |
+| `LOG_LEVEL` | No | Log level: a pino level such as `debug`, `info`, `warn`, `error` (default `info` in production, `debug` otherwise) | `info` |
+| `MIGRATION_LOCK_TIMEOUT` | No | Migrations set a Postgres `lock_timeout` so DDL that cannot get its table lock gives up instead of queueing every other query behind it (a full outage of that table). A number with an optional `ms`, `s` or `min` suffix (a bare number is milliseconds); `0` disables the timeout. Default `5s`; an invalid value logs a warning and uses the default | `5s` |
+| `MIGRATION_LOCK_RETRIES` | No | How many times a migration that hit that lock timeout is retried, with exponential backoff (1 s, 2 s, 4 s, ... capped at 30 s, plus jitter), after the first attempt. Default 5; an invalid value logs a warning and uses the default. Raise both on a busy database if an upgrade logs `lock timeout - retrying` and finally `could not acquire a lock` | `5` |
+| `HISAABO_LOG_STDERR` | No | `1` sends log lines to stderr instead of stdout. The `admin api-key` command sets it itself so that stdout carries only the key block; set it when you capture the stdout of another operator command in a script. Not needed for the API or the worker | `1` |
+| `DISABLE_RATE_LIMIT` | No | `1` bypasses the tRPC rate limiter for test harnesses that seed in tight bursts. Ignored when `NODE_ENV=production`; never set it on a real deployment | `1` |
 
 ### GitHub Actions Secrets
 
@@ -133,6 +162,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 |---|---|---|
 | `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
 | `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
+| `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` | deploy-web | Chrome/Edge origin-trial token for the web origin, passed to the web build so the page carries the `origin-trial` meta tag. A variable, not a secret (the token is public in the page HTML). Tokens are bound to one origin, so define it on the `production` environment to keep it off the preview alias. Unset or empty = no tag. Desktop builds do not use it |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
 
@@ -191,7 +221,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml pull api worker
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d api worker
 ```
 
-The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
+The entrypoint script runs pending migrations automatically before starting the server (the `api` container only). A migration that cannot get a table lock within `MIGRATION_LOCK_TIMEOUT` rolls back and is retried (`MIGRATION_LOCK_RETRIES`), so live queries are not left queued behind a long-running transaction. Migrations are forward-only; see [ROLLBACK.md](ROLLBACK.md) before downgrading.
 
 ### Background job worker
 

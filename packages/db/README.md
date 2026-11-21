@@ -27,7 +27,7 @@ In self-hosted mode (`MULTI_TENANT=false`), both databases are the same PostgreS
 | Table | Description |
 |---|---|
 | `tenants` | Organizations. Each has a slug, plan, status, and optional per-tenant DB credentials (cloud mode) |
-| `users` | User accounts with email, optional name, Argon2id password hash, email verification status |
+| `users` | User accounts with email, optional name, Argon2id password hash (password sign-in is deprecated in 0.10.0 and removed in 0.11.0), email verification status |
 | `sessions` | Active sessions with token hash, user ID, expiry timestamp |
 | `tenant_members` | Join table: which users belong to which tenants, with their role |
 | `magic_link_tokens` | Hashed magic link tokens with expiry |

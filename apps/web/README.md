@@ -27,7 +27,7 @@ The desktop app (`apps/desktop`) wraps this app in a Tauri v2 shell with no code
 
 ## Running locally
 
-**Prerequisites:** Node.js 20+, pnpm 9+, a running API server
+**Prerequisites:** Node.js 22.12+, pnpm 9+, a running API server
 
 ```bash
 # From the monorepo root
