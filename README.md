@@ -8,7 +8,7 @@
 [![codecov](https://codecov.io/gh/hisaabo/hisaabo/graph/badge.svg)](https://codecov.io/gh/hisaabo/hisaabo)
 [![Release](https://img.shields.io/github/v/release/hisaabo/hisaabo?include_prereleases&label=release)](https://github.com/hisaabo/hisaabo/releases)
 [![License: O'Saasy](https://img.shields.io/badge/license-O'Saasy-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-6567_passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-6829_passing-brightgreen)]()
 [![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -316,7 +316,7 @@ Hisaabo is not a side project. It is production-hardened financial software.
 
 | Dimension | What is in place |
 |---|---|
-| **Testing** | 6,500+ automated unit and integration tests (the integration tests run against real PostgreSQL), plus a Playwright end-to-end suite. See the Tests badge above for the current count |
+| **Testing** | 6,800+ automated unit and integration tests (the integration tests run against real PostgreSQL), plus 240+ Playwright end-to-end tests. See the Tests badge above for the current count |
 | **Logging** | Structured JSON logging (pino) with request-ID correlation across the full request lifecycle |
 | **Security** | CSRF protection, rate limiting (general + PDF-specific), session cookies with HttpOnly/Secure/SameSite=Lax, Argon2id-hashed legacy passwords (password sign-in is deprecated in 0.10.0 and removed in 0.11.0; magic links are the sign-in path) |
 | **Data Integrity** | All money as NUMERIC(15,2), `FOR UPDATE` row locking on payment allocation, PostgreSQL NUMERIC arithmetic for stock (no JS floats) |
