@@ -6,11 +6,49 @@
  *   - API helper for calling tRPC procedures directly (seeding)
  *   - Common navigation helpers
  */
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 import { settle } from "./settle";
 
 export { settle };
 export type { Page };
+
+/**
+ * index.html pulls in Google Fonts (a render-blocking stylesheet that also
+ * delays the `load` event and script execution) and Cloudflare's Turnstile
+ * script. Every test starts a fresh browser context, so each page load paid a
+ * fresh round trip to the public internet and could stall on a slow or
+ * unreachable host (the one baseline failure, gst.spec's `page.goto`, was a 30s
+ * wait for `load` during which the app made no requests at all). Serve them
+ * empty instead: nothing under test depends
+ * on web fonts or on the Turnstile widget (the e2e web build has no Turnstile
+ * site key, so sign-in never opens the challenge). E2E_ALLOW_EXTERNAL=1 (or
+ * E2E_DEV=1, whose dev build does use Turnstile's test key) restores real fetches.
+ */
+const THIRD_PARTY_HOSTS: Record<string, string> = {
+  "fonts.googleapis.com": "text/css",
+  "fonts.gstatic.com": "font/woff2",
+  "challenges.cloudflare.com": "text/javascript",
+};
+
+export async function stubThirdParty(context: BrowserContext): Promise<void> {
+  if (process.env.E2E_ALLOW_EXTERNAL === "1" || process.env.E2E_DEV === "1") return;
+  await context.route(
+    (url) => url.hostname in THIRD_PARTY_HOSTS,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: THIRD_PARTY_HOSTS[new URL(route.request().url()).hostname],
+        body: "",
+      }),
+  );
+}
+
+/** `browser.newContext()` with the third-party stubs applied. */
+export async function newContext(browser: Browser, options?: BrowserContextOptions): Promise<BrowserContext> {
+  const context = await browser.newContext(options);
+  await stubThirdParty(context);
+  return context;
+}
 
 /** Helper to call tRPC mutations/queries directly via HTTP for seeding */
 export class ApiHelper {
@@ -87,6 +125,10 @@ export class ApiHelper {
 export const test = base.extend<{
   api: ApiHelper;
 }>({
+  context: async ({ context }, use) => {
+    await stubThirdParty(context);
+    await use(context);
+  },
   api: async ({ page }, use) => {
     const baseUrl = process.env.API_URL ?? "http://localhost:3000";
     const api = new ApiHelper(page, baseUrl);

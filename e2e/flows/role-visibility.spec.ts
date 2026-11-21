@@ -11,7 +11,7 @@
  * Only tests seller + accountant (the two most different permission sets)
  * because the free plan limits to 3 team members total.
  */
-import { test, expect, ApiHelper, settle } from "../helpers/fixtures";
+import { test, expect, ApiHelper, newContext, settle } from "../helpers/fixtures";
 import { markEmailVerified, registerUser, sessionStorageState } from "../helpers/seed";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
@@ -86,7 +86,7 @@ async function createRoleUser(
   // load the resulting session cookie into a fresh browser context.
   const { sessionToken } = await registerUser(API_URL, { email, password, name });
   await markEmailVerified(email); // invite acceptance requires a verified email
-  const context = await browser.newContext({ storageState: sessionStorageState(sessionToken) });
+  const context = await newContext(browser, { storageState: sessionStorageState(sessionToken) });
   const page = await context.newPage();
 
   // Step 3: Visit the invite acceptance page
@@ -125,7 +125,7 @@ test.describe("Role: Seller", () => {
   let roleCtx: any;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: "e2e/.auth/user.json" });
     const ownerPage = await ownerCtx.newPage();
 
     const result = await createRoleUser(browser, ownerPage, "seller");
@@ -243,7 +243,7 @@ test.describe("Role: Accountant", () => {
   let setupFailed = false;
 
   test.beforeAll(async ({ browser }) => {
-    const ownerCtx = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const ownerCtx = await newContext(browser, { storageState: "e2e/.auth/user.json" });
     const ownerPage = await ownerCtx.newPage();
 
     try {

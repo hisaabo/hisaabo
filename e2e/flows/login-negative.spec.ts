@@ -5,11 +5,11 @@
  * unauthenticated redirects. These tests use fresh browser contexts
  * WITHOUT storageState to simulate unauthenticated users.
  */
-import { test, expect, settle } from "../helpers/fixtures";
+import { test, expect, newContext, settle } from "../helpers/fixtures";
 
 test.describe("Login Negative Paths", () => {
   test("login page renders magic link sign-in with no password option", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await newContext(browser);
     const page = await ctx.newPage();
 
     await page.goto("/login");
@@ -35,7 +35,7 @@ test.describe("Login Negative Paths", () => {
   });
 
   test("invalid email is rejected without sending a magic link", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await newContext(browser);
     const page = await ctx.newPage();
 
     await page.goto("/login");
@@ -56,7 +56,7 @@ test.describe("Login Negative Paths", () => {
   });
 
   test("unauthenticated user visiting /invoices is redirected to /login", async ({ browser }) => {
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ctx = await newContext(browser, { storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
 
     await page.goto("/invoices");
@@ -67,7 +67,7 @@ test.describe("Login Negative Paths", () => {
   });
 
   test("unauthenticated user visiting /parties is redirected to /login", async ({ browser }) => {
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ctx = await newContext(browser, { storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
 
     await page.goto("/parties");

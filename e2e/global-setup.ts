@@ -9,11 +9,14 @@ import { test as setup, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { registerUser, sessionStorageState, type GlobalSeed } from "./helpers/seed";
+import { stubThirdParty } from "./helpers/fixtures";
 
 const AUTH_FILE = path.join(__dirname, ".auth", "user.json");
 const SEED_FILE = path.join(__dirname, ".auth", "seed.json");
 
 setup("authenticate", async ({ page, request }) => {
+  await stubThirdParty(page.context());
+
   // Ensure .auth directory exists
   const authDir = path.dirname(AUTH_FILE);
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
