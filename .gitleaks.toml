@@ -28,6 +28,8 @@ regexes = [
   '''^fcm-bad-keys-0001$''',
   # Placeholder key in README / MCP docs API-key examples.
   '''^hisaabo_key_\.\.\.$''',
+  # Synthetic magic-link token fixture in apps/web/src/__tests__/auth-{confirm-email-change,verify-handoff}.test.tsx.
+  '''^2a9423c5-f74c-4b8d-ae86-69dcd0d3b306-O6dyYP1ALEctOdHyFi9hqoaIUfazpWM0$''',
 ]
 
 # 2. The one schema comment showing the key-prefix display format.
