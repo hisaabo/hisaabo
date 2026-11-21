@@ -54,6 +54,15 @@ RUN pnpm --filter @hisaabo/db exec esbuild src/migrate-cli.ts \
       --outfile=dist/migrate.mjs \
       --external:postgres --external:drizzle-orm --external:dotenv --external:pg-boss
 
+# Guard: fail the build if the bundle inlined a CommonJS dependency. A CJS dep
+# (e.g. pg-boss) bundled into ESM output makes esbuild emit a `__require` shim
+# that throws "Dynamic require of ..." at runtime. migrate.ts treats the lazy
+# installQueueSchema() failure as non-fatal, so the pgboss job-queue schema
+# would silently never be installed. Add the offending package to --external.
+RUN if grep -q 'Dynamic require of' packages/db/dist/migrate.mjs; then \
+      echo "FATAL: migrate.mjs bundles a CommonJS dependency; add it to --external" >&2; exit 1; \
+    fi
+
 # ── Stage 2: Production runtime ──────────────────────────────
 FROM node:22-alpine AS runtime
 WORKDIR /app
