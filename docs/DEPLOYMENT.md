@@ -159,6 +159,7 @@ Container images are not published from `main` either: `release.yml` builds and 
 |---|---|---|
 | `PREVIEW_API_URL` | deploy-web, deploy-store | Staging API URL for `main` previews. Unset = no web/store previews |
 | `CF_PAGES_PRODUCTION_BRANCH` | deploy-web, deploy-store, deploy-api-docs | Production branch of the Pages projects (default `main`) |
+| `VITE_WEBMCP_ORIGIN_TRIAL_TOKEN` | deploy-web | Chrome/Edge origin-trial token for the web origin, passed to the web build so the page carries the `origin-trial` meta tag. A variable, not a secret (the token is public in the page HTML). Tokens are bound to one origin, so define it on the `production` environment to keep it off the preview alias. Unset or empty = no tag. Desktop builds do not use it |
 
 Note: `GITHUB_TOKEN` is provided automatically by GitHub Actions for GHCR pushes.
 
