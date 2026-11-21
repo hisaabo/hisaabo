@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,19 @@ import {
 import { API_KEY_DEFAULT_TTL_MS } from "../../lib/api-keys.js";
 
 const factory = createCallerFactory(appRouter);
-const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+
+/**
+ * The stored credential is a one-way digest, never the key. Asserted structurally (the tests do not
+ * re-hash the key): a 64-hex digest that is neither the key nor contains it, and the 20-character display
+ * prefix. That the stored value is the right digest is proven by the key authenticating through the real
+ * request path (createContext), which hashes what it is given and looks the row up.
+ */
+function expectDigestNotKey(row: { keyHash: string; keyPrefix: string }, rawKey: string) {
+  expect(row.keyHash).toMatch(/^[0-9a-f]{64}$/);
+  expect(row.keyHash).not.toBe(rawKey);
+  expect(row.keyHash).not.toContain(rawKey);
+  expect(row.keyPrefix).toBe(rawKey.slice(0, 20));
+}
 const DAY = 86_400_000;
 
 type Role = "owner" | "superadmin" | "admin" | "seller_manager" | "seller" | "accountant" | "member";
@@ -107,7 +119,7 @@ describe("api-key create: who may hold a key", () => {
     const rows = await keyRows(tenant.id);
     expect(rows).toHaveLength(1);
     const row = rows[0];
-    expect(row.keyHash).toBe(sha256(issued.key));
+    expectDigestNotKey(row, issued.key);
     expect(row.keyPrefix).toBe(issued.keyPrefix);
     expect(row.userId).toBe(user.id);
     expect(row.name).toBe("MCP server");
@@ -307,7 +319,8 @@ describe("A3: stdout carries only the key block", () => {
       const raw = /Key\s+(hisaabo_key_\S+)/.exec(res.stdout)![1];
       expect(res.stderr).not.toContain(raw);
       const [row] = await keyRows(tenant.id);
-      expect(row.keyHash).toBe(sha256(raw));
+      expectDigestNotKey(row, raw);
+      expect((await (await withKey(raw)).auth.me()).user?.id).toBe(user.id); // the printed key works
     }, 90_000);
   }
 });
@@ -323,7 +336,8 @@ describe("api-key CLI (runApiKey): output, audit and secrecy", () => {
     const [row] = await keyRows(tenant.id);
     const raw = /Key\s+(hisaabo_key_\S+)/.exec(cap.out)?.[1];
     expect(raw).toBeTruthy();
-    expect(sha256(raw!)).toBe(row.keyHash);
+    expectDigestNotKey(row, raw!);
+    expect((await (await withKey(raw!)).auth.me()).user?.id).toBe(user.id); // the printed key works
     expect(cap.out.split(raw!)).toHaveLength(2); // exactly once
     expect(cap.out).toContain(`ID       ${row.id}`);
     expect(cap.out).toContain(`Prefix   ${row.keyPrefix}`);
@@ -380,7 +394,10 @@ describe("api-key CLI (runApiKey): output, audit and secrecy", () => {
       expect(text).toContain("2026-05-01T10:00:00.000Z"); // last used
       expect(text).toContain("(expired)");
       expect(text).toContain("never"); // b has never been used
-      for (const secret of [a.key, b.key, sha256(a.key), sha256(b.key)]) expect(text).not.toContain(secret);
+      // the stored digests come straight from the rows (no re-hashing in the test)
+      const storedHashes = (await keyRows(tenant.id)).map((r) => r.keyHash);
+      expect(storedHashes).toHaveLength(2);
+      for (const secret of [a.key, b.key, ...storedHashes]) expect(text).not.toContain(secret);
       // the prefix is only 20 characters of a 54 character key
       expect(text).not.toContain(a.key.slice(0, 30));
     }
@@ -464,7 +481,7 @@ describe("the router's apiKey.create still behaves as before (shared minting cod
     expect(Object.keys(created).sort()).toEqual(["expiresAt", "id", "key", "keyPrefix", "name"]);
     expect(created.key).toMatch(/^hisaabo_key_/);
     const [row] = await keyRows(tenant.id);
-    expect(row.keyHash).toBe(sha256(created.key));
+    expectDigestNotKey(row, created.key);
     expect((await (await withKey(created.key)).auth.me()).user?.id).toBe(user.id);
 
     const [ev] = await getTenantTestDb().select().from(notificationOutbox).where(eq(notificationOutbox.dedupeKey, `api_key.created:${created.id}`));
