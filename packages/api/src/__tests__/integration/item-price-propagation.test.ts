@@ -271,7 +271,7 @@ describe("item.updatePricesFromDocument — happy paths", () => {
 
 describe("item.updatePricesFromDocument — idempotent", () => {
   it("a second identical call changes and logs nothing", async () => {
-    const [before] = await Promise.all([auditRowsFor(rice.id)]);
+    const before = await auditRowsFor(rice.id);
     const first = await asOwner.item.updatePricesFromDocument({ updates: [{ itemId: rice.id, side: "sale", newPrice: "95" }] });
     expect(first.updated).toHaveLength(1);
     const afterFirst = await auditRowsFor(rice.id);
