@@ -29,8 +29,11 @@ export const tenants = pgTable("tenants", {
   plan: tenantPlanEnum("plan").default("free").notNull(),
   status: tenantStatusEnum("status").default("active").notNull(),
   // Owner-level switch: true = the web app never registers browser AI agent
-  // (WebMCP) tools for anyone in this organization. Read live (auth.me), not
-  // cached, and deliberately NOT in the cache-invalidation trigger columns.
+  // (WebMCP) tools for anyone in this organization. auth.me reads it live; the API
+  // enforces it from the cached membership entry (api/src/lib/authz.ts), so it IS
+  // one of the columns the hisaabo_cache_tenants trigger watches (status, plan,
+  // webmcp_disabled: see cache-triggers.ts and migrations 0028 / control 0010), and
+  // a change drops that entry on every instance.
   webmcpDisabled: boolean("webmcp_disabled").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
