@@ -6,7 +6,7 @@ import { router, viewerProcedure, memberProcedure, adminProcedure } from "../trp
 import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
-import { applyInvoiceCancel, reverseInvoiceEffects } from "../lib/invoice-cancel.js";
+import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
@@ -685,7 +685,7 @@ export const invoiceRouter = router({
         }
 
         const [invoice] = await tx.update(invoices)
-          .set({ status: input.status, updatedAt: new Date() })
+          .set({ status: input.status, updatedAt: new Date(), ...(isCancelling ? staleEInvoiceErrorPatch(before) : {}) })
           .where(and(eq(invoices.id, input.id), eq(invoices.businessId, ctx.businessId)))
           .returning();
 

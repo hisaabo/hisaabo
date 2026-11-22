@@ -1,15 +1,20 @@
 /**
- * invoice-cancel.ts — the single definition of what cancelling an
- * invoice-backed document means.
+ * invoice-cancel.ts — what cancelling an invoice-backed document means, in one
+ * place.
  *
- * Used by `invoice.updateStatus`, the document router factory (credit notes,
- * delivery challans, ...) and `eInvoice.cancel`, so a cancel done through any
- * of them has exactly the same rules and the same effects:
- *   - the role rule (seller_manager window) and the "no payments allocated,
- *     no live IRN" guard,
- *   - stock reversal (and purchase ITC reversal for purchase invoices),
- *   - status = "cancelled", which is what GSTR-1/3B, the ledger and party
- *     balances filter on.
+ * The EFFECTS of a cancel are defined here and nowhere else:
+ *   - `applyInvoiceCancel`: the role rule (seller_manager window), the "no
+ *     payments allocated, no live IRN" guard, and the stock reversal (plus
+ *     purchase ITC reversal) for documentType "invoice";
+ *   - `applyDocumentCancel`: the same guard and the stock reversal for the other
+ *     document types (credit/debit notes, challans, returns, ...).
+ * `invoice.updateStatus` and the document router factory each lock the row and
+ * run their own status transition, then call the matching `apply...Cancel`.
+ * `cancelInvoiceInTx` is the whole thing (lock, rules, effects, status write) for
+ * a caller that has only an id and a document of any type: `eInvoice.cancel`.
+ * A cancel done through any of them therefore reverses exactly the same effects,
+ * and sets status = "cancelled", which is what GSTR-1/3B, the ledger and party
+ * balances filter on.
  */
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
@@ -25,7 +30,7 @@ import type { TenantDatabase } from "../trpc.js";
 import { requireCan, type AppAbility } from "./permissions.js";
 import { applyStockDeltas } from "./stock-adjust.js";
 import { assertNoPaymentsOrActiveIrn } from "./invoice-unlink-guard.js";
-import { DOCUMENT_STOCK_EFFECT, reverseDocumentStockEffect } from "./document-stock-reversal.js";
+import { DOCUMENT_STOCK_EFFECT, reverseDocumentStockEffect, type StockEffect } from "./document-stock-reversal.js";
 
 export type CancelTx = Parameters<Parameters<TenantDatabase["transaction"]>[0]>[0];
 
@@ -107,6 +112,31 @@ export async function applyInvoiceCancel(
 }
 
 /**
+ * The document-type counterpart of `applyInvoiceCancel` (credit/debit notes,
+ * challans, returns, ...): refused while payments are allocated or an IRN is still
+ * live, then the document's stock effect is undone. `stockEffect` is what
+ * creating that type did (see DOCUMENT_STOCK_EFFECT). Runs in the caller's
+ * row-locked transaction.
+ */
+export async function applyDocumentCancel(
+  tx: CancelTx,
+  businessId: string,
+  target: CancelTarget,
+  stockEffect: StockEffect,
+): Promise<void> {
+  await assertNoPaymentsOrActiveIrn(tx, "cancel", target);
+  await reverseDocumentStockEffect(tx, businessId, target.id, stockEffect);
+}
+
+/**
+ * A half-cancel (IRN cancelled, invoice still live) leaves an explanatory
+ * eInvoiceError on the row. Finishing the cancel by any path clears it.
+ */
+export function staleEInvoiceErrorPatch(row: { eInvoiceStatus: string | null }): { eInvoiceError?: null } {
+  return row.eInvoiceStatus === "cancelled" ? { eInvoiceError: null } : {};
+}
+
+/**
  * Everything that can refuse a cancel for a predictable reason, for any
  * invoice-backed document type, without writing anything. `eInvoice.cancel`
  * runs this BEFORE calling the IRP (with `irnCancelled`, because by the time
@@ -137,7 +167,7 @@ export async function assertCancellable(
  * re-run `assertCancellable` under the lock, reverse its effects and set
  * status = "cancelled". `extra` is written in the same UPDATE, so the caller can
  * make its own state change (the e-invoice IRN state) land atomically with the
- * cancel. Returns `changed: false` (and writes nothing) when it is already cancelled.
+ * cancel. Returns `changed: false` (reversing nothing, writing only `extra`) when it is already cancelled.
  */
 export async function cancelInvoiceInTx(
   tx: CancelTx,
@@ -159,20 +189,16 @@ export async function cancelInvoiceInTx(
     return { invoice: updated!, fromStatus: before.status, changed: false };
   }
 
+  const t = opts.irnCancelled ? { ...before, eInvoiceStatus: "cancelled" } : before;
   await assertCancellable(tx, actor, before, opts);
   if (before.documentType === "invoice") {
     await reverseInvoiceEffects(tx, actor.businessId, before);
   } else {
-    await reverseDocumentStockEffect(
-      tx,
-      actor.businessId,
-      before.id,
-      DOCUMENT_STOCK_EFFECT[before.documentType] ?? "none",
-    );
+    await applyDocumentCancel(tx, actor.businessId, t, DOCUMENT_STOCK_EFFECT[before.documentType] ?? "none");
   }
 
   const [invoice] = await tx.update(invoices)
-    .set({ ...opts.extra, status: "cancelled", updatedAt: new Date() })
+    .set({ ...staleEInvoiceErrorPatch(before), ...opts.extra, status: "cancelled", updatedAt: new Date() })
     .where(and(eq(invoices.id, before.id), eq(invoices.businessId, actor.businessId)))
     .returning();
   return { invoice: invoice!, fromStatus: before.status, changed: true };
