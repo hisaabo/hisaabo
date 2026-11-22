@@ -13,7 +13,9 @@
  * ledger entry (itc-reversal-entries.ts): every path that cancels or deletes
  * one, through either function above, takes it away again.
  * `invoice.updateStatus` and the document router factory each lock the row and
- * run their own status transition, then call the matching `apply...Cancel`.
+ * run their own status transition, then call the matching `apply...Cancel`
+ * (`invoice.updateStatus` picks by the row's documentType, because it is also the
+ * route for finishing the cancel of a credit note, challan, ... whose IRN is gone).
  * `cancelInvoiceInTx` is the whole thing (lock, rules, effects, status write) for
  * a caller that has only an id and a document of any type: `eInvoice.cancel`.
  * A cancel done through any of them therefore reverses exactly the same effects,

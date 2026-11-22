@@ -7,7 +7,8 @@ import { TRPCError } from "@trpc/server";
 import { requireCan } from "../lib/permissions.js";
 import { logAudit } from "../lib/audit.js";
 import { claimIdempotencyKey, completeIdempotencyKey, replayedRecordGone } from "../lib/idempotency.js";
-import { applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { applyDocumentCancel, applyInvoiceCancel, reverseInvoiceEffects, staleEInvoiceErrorPatch } from "../lib/invoice-cancel.js";
+import { DOCUMENT_STOCK_EFFECT } from "../lib/document-stock-reversal.js";
 import { assertNoPaymentsOrActiveIrn } from "../lib/invoice-unlink-guard.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
@@ -755,8 +756,18 @@ export const invoiceRouter = router({
 
         const isCancelling = input.status === "cancelled" && before.status !== "cancelled";
         if (isCancelling) {
-          // Same rules and effects as cancelling through eInvoice.cancel (lib/invoice-cancel.ts).
-          await applyInvoiceCancel(tx, ctx, before);
+          // Same rules and effects as cancelling through eInvoice.cancel and the document
+          // routers (lib/invoice-cancel.ts), by document type: applyInvoiceCancel undoes an
+          // invoice's stock by its sale / purchase side, which is wrong for every other
+          // type (a credit note moves no stock, a sales return added stock, a purchase return
+          // removed it). They get applyDocumentCancel with their own DOCUMENT_STOCK_EFFECT.
+          // This route stays open to them because it is the one the 0.10.1 upgrade notes
+          // give for finishing a document whose IRN was already cancelled.
+          if (before.documentType === "invoice") {
+            await applyInvoiceCancel(tx, ctx, before);
+          } else {
+            await applyDocumentCancel(tx, ctx.businessId, before, DOCUMENT_STOCK_EFFECT[before.documentType] ?? "none");
+          }
         }
 
         const [invoice] = await tx.update(invoices)
