@@ -186,23 +186,49 @@ describe("golden 12C: the same lines on a purchase", () => {
 });
 
 describe("golden 12D: invoice-level round-off, discount and charges", () => {
-  // BUG: invoice.create stores subtotal/tax from the LINES but total_amount also
-  // includes round-off, charges and the invoice-level discount, and derive-ledger
-  // posts Dr Receivable = total, Cr Sales = subtotal, Cr GST = tax. Any invoice with
-  // a round-off (the web default is ON), extra charge or invoice discount therefore
-  // produces an UNBALANCED derived entry, and the trial balance and balance sheet
-  // stop balancing. The expectation below is the correct one (books balance).
+  // The invoice total is subtotal + GST - invoice discount + additional charges + round-off,
+  // so the receivable (at the total) only balances if each adjustment posts to an account of
+  // its own: Round Off (5030), Discount Allowed (5020), Other Charges (4020).
 
-  it.fails("round-off -0.55 (total 762.00) keeps the trial balance balanced", async () => {
+  it("round-off -0.55 (total 762.00) keeps the trial balance balanced", async () => {
     const w = await createGoldenWorld();
     const customer = await addParty(w, "customer", "MH");
     const inv = await addInvoice(w, "sale", customer.id, LINES, { date: DATE, roundOff: "-0.55" });
     expect(inv.totalAmount).toBe("762.00"); // 659.96 + 102.59 - 0.55
     const b = await book(w);
-    expect(b.tb.totalDebit).toBe(b.tb.totalCredit); // today: 762.00 vs 762.55
+    expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
+    expect(tbRows(b)).toEqual([
+      ["1100", "762.00", "0.00"],
+      ["2100", "0.00", "51.29"],
+      ["2101", "0.00", "51.30"],
+      ["4000", "0.00", "659.96"],
+      ["5030", "0.55", "0.00"], // the 0.55 the customer does not pay is a cost
+    ]);
+    expect(b.tb.totalDebit).toBe("762.55"); // 762.00 + 0.55
+    expect(b.tb.totalCredit).toBe("762.55"); // 659.96 + 51.29 + 51.30
+    expect(plSummary(b).netProfit).toBe("659.41"); // 659.96 - 0.55
+    expectBooksBalance(b);
   });
 
-  it.fails("an invoice-level discount of 50.00 (total 712.55) keeps the trial balance balanced", async () => {
+  it("a positive round-off of +0.45 (total 763.00) is income", async () => {
+    const w = await createGoldenWorld();
+    const customer = await addParty(w, "customer", "MH");
+    const inv = await addInvoice(w, "sale", customer.id, LINES, { date: DATE, roundOff: "0.45" });
+    expect(inv.totalAmount).toBe("763.00"); // 659.96 + 102.59 + 0.45
+    const b = await book(w);
+    expect(tbRows(b)).toEqual([
+      ["1100", "763.00", "0.00"],
+      ["2100", "0.00", "51.29"],
+      ["2101", "0.00", "51.30"],
+      ["4000", "0.00", "659.96"],
+      ["5030", "0.00", "0.45"],
+    ]);
+    expect(b.tb.totalDebit).toBe("763.00");
+    expect(b.tb.totalCredit).toBe("763.00");
+    expectBooksBalance(b);
+  });
+
+  it("an invoice-level discount of 50.00 (total 712.55) keeps the trial balance balanced", async () => {
     const w = await createGoldenWorld();
     const customer = await addParty(w, "customer", "MH");
     const inv = await addInvoice(w, "sale", customer.id, LINES, {
@@ -211,10 +237,21 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     });
     expect(inv.totalAmount).toBe("712.55"); // 659.96 + 102.59 - 50.00
     const b = await book(w);
-    expect(b.tb.totalDebit).toBe(b.tb.totalCredit); // today: 712.55 vs 762.55
+    expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
+    expect(tbRows(b)).toEqual([
+      ["1100", "712.55", "0.00"],
+      ["2100", "0.00", "51.29"], // GST stays on the pre-discount value: the discount is given after tax
+      ["2101", "0.00", "51.30"],
+      ["4000", "0.00", "659.96"],
+      ["5020", "50.00", "0.00"], // Discount Allowed
+    ]);
+    expect(b.tb.totalDebit).toBe("762.55"); // 712.55 + 50.00
+    expect(b.tb.totalCredit).toBe("762.55");
+    expect(plSummary(b).netProfit).toBe("609.96"); // 659.96 - 50.00
+    expectBooksBalance(b);
   });
 
-  it.fails("an additional charge of 25.00 (total 787.55) keeps the trial balance balanced", async () => {
+  it("an additional charge of 25.00 (total 787.55) keeps the trial balance balanced", async () => {
     const w = await createGoldenWorld();
     const customer = await addParty(w, "customer", "MH");
     const inv = await addInvoice(w, "sale", customer.id, LINES, {
@@ -223,7 +260,18 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     });
     expect(inv.totalAmount).toBe("787.55"); // 659.96 + 102.59 + 25.00
     const b = await book(w);
-    expect(b.tb.totalDebit).toBe(b.tb.totalCredit); // today: 787.55 vs 762.55
+    expect(b.tb.totalDebit).toBe(b.tb.totalCredit);
+    expect(tbRows(b)).toEqual([
+      ["1100", "787.55", "0.00"],
+      ["2100", "0.00", "51.29"],
+      ["2101", "0.00", "51.30"],
+      ["4000", "0.00", "659.96"],
+      ["4020", "0.00", "25.00"], // Other Charges
+    ]);
+    expect(b.tb.totalDebit).toBe("787.55");
+    expect(b.tb.totalCredit).toBe("787.55");
+    expect(plSummary(b).netProfit).toBe("684.96"); // 659.96 + 25.00
+    expectBooksBalance(b);
   });
 
   it("the round-off invoice can still be settled in full at its stored total (operational side is fine)", async () => {
@@ -239,5 +287,65 @@ describe("golden 12D: invoice-level round-off, discount and charges", () => {
     });
     expect((await w.caller.invoice.getById({ id: inv.id }))?.status).toBe("paid");
     expect((await w.caller.party.getById({ id: customer.id }))?.balance).toBe("0.00");
+  });
+
+  it("a settled round-off invoice leaves a zero receivable in the ledger too", async () => {
+    const w = await createGoldenWorld();
+    const customer = await addParty(w, "customer", "MH");
+    const inv = await addInvoice(w, "sale", customer.id, LINES, { date: DATE, roundOff: "-0.55" });
+    await addPayment(w, {
+      partyId: customer.id,
+      invoiceId: inv.id,
+      amount: "762.00",
+      mode: "cash",
+      date: "2025-10-20T10:00:00.000Z",
+    });
+    const b = await book(w);
+    expect(tbRows(b)).toEqual([
+      ["1000", "762.00", "0.00"],
+      ["1100", "762.00", "762.00"], // fully collected
+      ["2100", "0.00", "51.29"],
+      ["2101", "0.00", "51.30"],
+      ["4000", "0.00", "659.96"],
+      ["5030", "0.55", "0.00"],
+    ]);
+    expectBooksBalance(b);
+  });
+});
+
+describe("golden 12E: the same adjustments on a purchase", () => {
+  it("discount 50.00 + charge 25.00 + round-off 0.45 (total 738.00) balance on the payable", async () => {
+    const w = await createGoldenWorld();
+    const supplier = await addParty(w, "supplier", "MH");
+    const inv = await w.caller.invoice.create({
+      partyId: supplier.id,
+      type: "purchase",
+      invoiceDate: DATE,
+      lineItems: LINES.map((l) => ({
+        itemName: l.name,
+        quantity: l.qty,
+        unitPrice: l.price,
+        taxPercent: l.tax ?? "0",
+        discountPercent: l.discount ?? "0",
+      })),
+      invoiceDiscount: "50.00",
+      roundOff: "0.45",
+      charges: [{ label: "Freight", amount: "25.00" }],
+    });
+    expect(inv.totalAmount).toBe("738.00"); // 659.96 + 102.59 - 50.00 + 25.00 + 0.45
+    const b = await book(w);
+    expect(tbRows(b)).toEqual([
+      ["1510", "51.29", "0.00"],
+      ["1511", "51.30", "0.00"],
+      ["2000", "0.00", "738.00"],
+      ["4200", "0.00", "50.00"], // Discount Received
+      ["5000", "659.96", "0.00"],
+      ["5030", "0.45", "0.00"], // Round Off: a higher payable is a cost
+      ["5100", "25.00", "0.00"], // freight inward is a direct cost
+    ]);
+    // Debits 51.29 + 51.30 + 659.96 + 25.00 + 0.45 = 788.00; credits 738.00 + 50.00 = 788.00.
+    expect(b.tb.totalDebit).toBe("788.00");
+    expect(b.tb.totalCredit).toBe("788.00");
+    expectBooksBalance(b);
   });
 });

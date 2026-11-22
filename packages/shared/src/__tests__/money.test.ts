@@ -301,3 +301,40 @@ describe("money.toNumber — converts money string to JS number (display use onl
     expect(money.toNumber("-99.99")).toBe(-99.99);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// money.splitHalf — the one CGST / SGST split
+// ─────────────────────────────────────────────────────────────────────────────
+describe("money.splitHalf — splits an amount in two halves that sum exactly, odd paisa to the second", () => {
+  it("splits an even number of paise equally", () => {
+    expect(money.splitHalf("100.00")).toEqual(["50.00", "50.00"]);
+    expect(money.splitHalf("900.00")).toEqual(["450.00", "450.00"]);
+  });
+
+  it("gives the odd paisa to the second half (CGST = floor, SGST = remainder)", () => {
+    // 10259 paise -> 5129 + 5130
+    expect(money.splitHalf("102.59")).toEqual(["51.29", "51.30"]);
+    expect(money.splitHalf("0.01")).toEqual(["0.00", "0.01"]);
+    expect(money.splitHalf("1.01")).toEqual(["0.50", "0.51"]);
+  });
+
+  it("the halves always add back to the input", () => {
+    for (const amount of ["0.00", "0.01", "0.03", "17.77", "102.59", "999999999.99"]) {
+      const [a, b] = money.splitHalf(amount);
+      expect(money.add(a, b)).toBe(money.add(amount, "0"));
+    }
+  });
+
+  it("accepts numbers as well as strings", () => {
+    expect(money.splitHalf(102.59)).toEqual(["51.29", "51.30"]);
+  });
+
+  it("splits a negative amount symmetrically", () => {
+    expect(money.splitHalf("-102.59")).toEqual(["-51.29", "-51.30"]);
+    expect(money.splitHalf("-0.01")).toEqual(["0.00", "-0.01"]);
+  });
+
+  it("treats junk as zero, like the rest of the module", () => {
+    expect(money.splitHalf("abc")).toEqual(["0.00", "0.00"]);
+  });
+});

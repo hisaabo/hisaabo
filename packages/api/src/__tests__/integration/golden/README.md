@@ -35,7 +35,7 @@ test itself.
 | `09-bank-movements-not-ledgered` | Bank transfer and manual "interest" deposit | **documented gap** |
 | `10-opening-balances` | Party and bank opening balances | **documented gap** + 1 bug |
 | `11-financial-year-boundary` | 31 Mar / 1 Apr, TB per FY, default FY derivation | pass (+ documented gaps) |
-| `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass + 5 bugs |
+| `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass + 2 bugs |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass + 1 bug |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
@@ -140,7 +140,6 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 | Where | What |
 | --- | --- |
-| `invoice.ts:381-387` + `derive-ledger.ts:289-293` | Invoice round-off, invoice-level discount and extra charges are in `total_amount` but not in the posted lines, so the derived entry is unbalanced and the TB / balance sheet stop balancing (12D) |
 | `reports.ts:1548-1555` | `grossProfit` looks for 4010 Sales Returns among the expense items (it is seeded as income) and ignores 5010 Purchase Returns (05A, 05B) |
 | `gst-reports.ts:468-474` | GSTR-3B output tax is not netted by credit notes / returns / debit notes (05A) |
 | `gst-reports.ts:415-429` | GSTR-3B ITC query has no `documentType = 'invoice'` filter: purchase returns and purchase debit notes are *added* to ITC (05B) |

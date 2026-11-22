@@ -1,5 +1,14 @@
 import { chartOfAccounts } from "@hisaabo/db";
 
+/**
+ * System accounts the derived ledger posts invoice-level adjustments to
+ * (see ledger-documents.ts). Existing businesses get them from migration
+ * `0023_ledger_adjustment_accounts` (drizzle/) / `0010_...` (drizzle-tenant/).
+ */
+export const OTHER_CHARGES_CODE = "4020";
+export const DISCOUNT_ALLOWED_CODE = "5020";
+export const ROUND_OFF_CODE = "5030";
+
 interface SeedAccount {
   code: string;
   name: string;
@@ -37,12 +46,14 @@ const DEFAULT_ACCOUNTS: SeedAccount[] = [
   // Income
   { code: "4000", name: "Sales", accountType: "income" },
   { code: "4010", name: "Sales Returns", accountType: "income" },
+  { code: OTHER_CHARGES_CODE, name: "Other Charges", accountType: "income" },
   { code: "4100", name: "Other Income", accountType: "income" },
   { code: "4200", name: "Discount Received", accountType: "income" },
 
   // Expenses
   { code: "5000", name: "Purchases", accountType: "expense" },
   { code: "5010", name: "Purchase Returns", accountType: "expense" },
+  { code: DISCOUNT_ALLOWED_CODE, name: "Discount Allowed", accountType: "expense" },
   { code: "5100", name: "Direct Expenses", accountType: "expense" },
   { code: "5200", name: "Salary & Wages", accountType: "expense" },
   { code: "5300", name: "Rent", accountType: "expense" },
@@ -57,6 +68,7 @@ const DEFAULT_ACCOUNTS: SeedAccount[] = [
   { code: "5970", name: "Bad Debts", accountType: "expense" },
   { code: "5980", name: "Professional Fees", accountType: "expense" },
   { code: "5990", name: "Miscellaneous Expenses", accountType: "expense" },
+  { code: ROUND_OFF_CODE, name: "Round Off", accountType: "expense" },
 ];
 
 export async function seedChartOfAccounts(
