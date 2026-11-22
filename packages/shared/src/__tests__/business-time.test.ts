@@ -11,6 +11,9 @@ import {
   businessDateParts,
   businessDayStart,
   businessMonthStart,
+  businessTimeOfDayMs,
+  businessInstant,
+  addMonthsClampedYmd,
   businessMonthWindow,
   businessFinancialYearWindow,
   businessFinancialYearStartYear,
@@ -242,5 +245,28 @@ describe("the presets cover the same days as a hand-picked range", () => {
     const lastDay = p === "this-month" ? "2026-11-30" : "2026-10-31";
     const r = resolveDayRange(`${month}-01`, lastDay);
     expect([iso(w.from), iso(w.before)]).toEqual([iso(r.from!), iso(r.before!)]);
+  });
+});
+
+describe("calendar-month arithmetic and the IST time of day (recurring run dates)", () => {
+  it.each([
+    [{ year: 2026, month: 1, day: 31 }, 1, { year: 2026, month: 2, day: 28 }], // 31 Jan + 1 month
+    [{ year: 2028, month: 1, day: 31 }, 1, { year: 2028, month: 2, day: 29 }], // leap year
+    [{ year: 2026, month: 4, day: 30 }, 1, { year: 2026, month: 5, day: 30 }],
+    [{ year: 2026, month: 3, day: 31 }, 1, { year: 2026, month: 4, day: 30 }],
+    [{ year: 2025, month: 11, day: 30 }, 3, { year: 2026, month: 2, day: 28 }], // across a year end
+    [{ year: 2026, month: 5, day: 31 }, 12, { year: 2027, month: 5, day: 31 }],
+    [{ year: 2026, month: 1, day: 15 }, -1, { year: 2025, month: 12, day: 15 }],
+    [{ year: 2026, month: 3, day: 31 }, -1, { year: 2026, month: 2, day: 28 }],
+  ])("%j + %i month(s) = %j", (from, months, expected) => {
+    expect(addMonthsClampedYmd(from, months)).toEqual(expected);
+  });
+
+  it("the IST time of day of an instant, and the instant of a day at a time of day", () => {
+    expect(businessTimeOfDayMs(new Date("2026-03-31T18:30:00.000Z"))).toBe(0); // 00:00 IST
+    expect(businessTimeOfDayMs(new Date("2026-03-31T20:15:00.000Z"))).toBe((1 * 60 + 45) * 60 * 1000); // 01:45 IST
+    expect(businessTimeOfDayMs(new Date("2026-04-01T00:00:00.000Z"))).toBe((5 * 60 + 30) * 60 * 1000); // 05:30 IST
+    expect(iso(businessInstant("2026-04-01", (20 * 60) * 60 * 1000))).toBe("2026-04-01T14:30:00.000Z"); // 20:00 IST
+    expect(iso(businessInstant({ year: 2026, month: 4, day: 1 }))).toBe("2026-03-31T18:30:00.000Z");
   });
 });

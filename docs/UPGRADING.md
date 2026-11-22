@@ -402,6 +402,31 @@ Charts and exports that list months or financial years will move a document date
 
 **The business time zone is fixed to IST for now.** `businesses` has no time zone column and every business is Indian. A per-business time zone (and the migration that goes with it) is planned for 0.11.0; until then a business outside India sees IST days.
 
+### Recurring invoices run on IST calendar days
+
+A recurring template's next run date was worked out in the API server's time zone. The web app stores a start date as IST midnight (18:30 UTC the evening before), so on a UTC server the arithmetic saw the day before and the clamp to short months moved the day: a monthly template due on the 1st ran 1 Feb, 1 Mar, then **29 Mar**, 29 Apr and so on, and one starting on the 31st landed on the 28th for good. From 0.10.1 the next run is computed on the IST calendar (`@hisaabo/shared` business-time), whatever the server's `TZ`:
+
+- the IST **day** moves and the IST **time of day** is kept; weekly, every two weeks and custom intervals add whole days;
+- monthly, quarterly, half-yearly and yearly runs add calendar months and **clamp to the month's last day** (31 Jan gives 28 Feb, or 29 Feb in a leap year; 30 Apr gives 30 May);
+- a template created with a **start date in the future** keeps its start day for good: runs are counted from the start date, so "the 1st" is always the 1st and "the 31st" comes back after a short month (31 Jan, 28 Feb, 31 Mar, 30 Apr, 31 May). A template created with a start date of today or earlier counts each run from the previous one, as before (31 Jan, 28 Feb, 28 Mar: the clamped day sticks);
+- the **end date** is a calendar day, and a run ON that day still happens (before, a run later in the day than the end date's midnight was cut);
+- the scheduler's due check is unchanged (a run is due once its instant has passed, which does not depend on a time zone), a run is generated **once** and dated the day it runs, and **catch-up** is unchanged: each missed occurrence generates one invoice dated that day (never back-dated), up to 12 per template per minute.
+
+**Stored templates are not rewritten.** Every stored run date keeps its instant, and its IST day is the day it was due (dates from the web app are IST midnight; dates from the API, CLI or an import with a bare date are 05:30 IST on the same day), so no stored run shifts by a day. Only the arithmetic that produces the following dates changed. A template that had already drifted (for example a monthly template whose next run is 29 Mar) runs on that stored date; if it was created with a future start date it returns to its start day at the run after that, otherwise it keeps the day it drifted to. Find the templates worth a look:
+
+```sql
+SELECT id, name, frequency, start_date, next_run_date,
+       to_char(start_date AT TIME ZONE 'Asia/Kolkata', 'DD')    AS start_day_ist,
+       to_char(next_run_date AT TIME ZONE 'Asia/Kolkata', 'DD') AS next_day_ist
+FROM recurring_invoice_templates
+WHERE status IN ('active', 'paused')
+  AND frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly')
+  AND start_date > created_at
+  AND to_char(start_date AT TIME ZONE 'Asia/Kolkata', 'DD') <> to_char(next_run_date AT TIME ZONE 'Asia/Kolkata', 'DD');
+```
+
+(a start day of 29, 30 or 31 legitimately differs from the next run's day in a short month). For a template without a future start date, pause and resume it on the day you want it to run: resuming counts from now.
+
 ### E-invoice cancellation now cancels the invoice
 
 Cancelling an e-invoice (IRN) used to cancel the IRN at the NIC portal and nothing else: the invoice itself stayed live (`sent`, `partial`, `paid`, ...), so it kept counting in GSTR-1 and GSTR-3B, the ledger, party balances and stock. Under GST an e-invoice whose IRN is cancelled is cancelled: it cannot be amended, and a fresh invoice with a new number is issued if the customer still needs billing.

@@ -91,6 +91,29 @@ export function businessYearMonth(instant: Date): { year: number; month: number 
   return { year, month };
 }
 
+/** Milliseconds since 00:00 on the business calendar of the instant's day (the time of day in IST). */
+export function businessTimeOfDayMs(instant: Date): number {
+  return (((instant.getTime() + BUSINESS_UTC_OFFSET_MS) % DAY_MS) + DAY_MS) % DAY_MS;
+}
+
+/** The instant `timeOfDayMs` after 00:00 on the business calendar of `date`. */
+export function businessInstant(date: Ymd | DateParts, timeOfDayMs = 0): Date {
+  return new Date(businessDayStart(date).getTime() + timeOfDayMs);
+}
+
+/**
+ * A calendar date `months` months later (or earlier, negative), with the day kept when the target
+ * month has it and otherwise clamped to the month's last day: 31 Jan + 1 month is 28 Feb (29 in a
+ * leap year), 30 Apr + 1 month is 30 May.
+ */
+export function addMonthsClampedYmd(date: DateParts, months: number): DateParts {
+  const total = date.year * 12 + (date.month - 1) + months;
+  const year = Math.floor(total / 12);
+  const month = (((total % 12) + 12) % 12) + 1;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { year, month, day: Math.min(date.day, lastDay) };
+}
+
 // ── Half-open windows ──────────────────────────────────────────────────────────
 
 /** A half-open window of instants: `from` inclusive, `before` exclusive. */

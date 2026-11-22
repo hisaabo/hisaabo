@@ -23,7 +23,7 @@ import {
   recurringInvoiceTemplates,
   recurringInvoiceRuns,
 } from "@hisaabo/db";
-import { generateInvoiceInTx, toTemplateRow, computeNextRunDate } from "./recurring-invoice-generator.js";
+import { generateInvoiceInTx, toTemplateRow, computeNextRunDate, templateAnchor } from "./recurring-invoice-generator.js";
 import { RECURRING_RUNS_PER_MONTH_FREE } from "./plan-limits.js";
 import { businessYearMonth, businessMonthStart } from "@hisaabo/shared";
 
@@ -124,7 +124,7 @@ async function processOccurrence(db: SchedulerDb, templateId: string): Promise<b
         });
         await tx.update(recurringInvoiceTemplates)
           .set({
-            nextRunDate: computeNextRunDate(tpl.nextRunDate, tpl.frequency, tpl.customIntervalDays),
+            nextRunDate: computeNextRunDate(tpl.nextRunDate, tpl.frequency, tpl.customIntervalDays, templateAnchor(tpl)),
             updatedAt: new Date(),
           })
           .where(eq(recurringInvoiceTemplates.id, tpl.id));
