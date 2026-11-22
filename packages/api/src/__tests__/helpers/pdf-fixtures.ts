@@ -36,6 +36,31 @@ export const FIXTURE_TERMS =
   "3. Interest at 24% per annum will be charged on bills not paid by the due date.\n" +
   "4. Errors and omissions excepted. Complaints, if any, must reach us within 3 days of delivery.";
 
+/** Notes long enough to wrap to ~12 lines in the A4 notes column (and to 9+ on A5). */
+export const LONG_NOTES =
+  "Goods once sold will not be taken back or exchanged. Please check the quantity, brand and expiry dates at the " +
+  "time of delivery; shortages and damages must be reported to our dispatch desk within 24 hours, with photographs " +
+  "and the delivery challan number. Payment is due within 15 days of the invoice date; interest at 18% per annum " +
+  "is charged on overdue amounts, computed daily. Cheques must be drawn in favour of the company name printed on " +
+  "this invoice and are subject to realisation; a charge of Rs. 500 applies to every dishonoured cheque. Cold-chain " +
+  "items are delivered against a signed temperature log. Any dispute is subject to the courts at Pune.";
+
+/** A legal name that wraps to two lines on A5 (three with a logo). Within the 200-char limit. */
+export const LONG_LEGAL_NAME =
+  "Anand Wholesale Traders and Commission Agents Private Limited, trading as Anand Provisions, " +
+  "Anand Cold Storage and Anand Logistics (a Maharashtra registered company)";
+
+/** An item name at the 200-char limit: three or four lines in the A4 / A5 description column. */
+export const VERY_LONG_ITEM_NAME =
+  "Hand-Stitched Premium Cotton Bedsheet Set with Two Pillow Covers, King Size, Pre-Washed, Colour-Fast, " +
+  "Machine Washable, Assorted Floral Prints in Blue, Green and Maroon, Gift Wrapped in a Reusable Fabric Bag";
+
+/** A real (1x1, transparent) PNG, enough to make the templates reserve their logo slot. */
+export const TINY_LOGO_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "base64",
+);
+
 export interface FullInvoiceOptions {
   /** Attach a per-line note to every line item (default true). */
   lineNotes?: boolean;
@@ -128,6 +153,36 @@ export async function buildFullInvoice(lines: number, opts: FullInvoiceOptions =
     isPaidPlan: false,
     status,
   };
+}
+
+const SHORT_NAMES = [
+  "Basmati Rice 25 kg",
+  "Groundnut Oil 15 L",
+  "Wheat Flour 10 kg",
+  "Toor Dal 1 kg",
+  "Steel Container Set",
+  "Turmeric Powder 500 g",
+  "Sugar 5 kg",
+  "Sunflower Oil 5 L",
+];
+
+/**
+ * A "tidy" invoice: the same shape as buildFullInvoice, but every item name and line note fits on
+ * one line, the notes are one line, the terms are two lines and the legal name is short. These
+ * trigger none of the overlap cases, so they must render exactly as they did before those cases
+ * were fixed (the pixel-identity baseline).
+ */
+export async function buildNormalInvoice(lines: number, opts: FullInvoiceOptions = {}): Promise<InvoicePDFData> {
+  const data = await buildFullInvoice(lines, opts);
+  data.lineItems.forEach((li, i) => {
+    li.itemName = `${SHORT_NAMES[i % SHORT_NAMES.length]} #${i + 1}`;
+    if (li.description) li.description = "Deliver before 11 am";
+  });
+  if (data.notes) data.notes = "Thank you for your business.";
+  if (data.termsAndConditions) {
+    data.termsAndConditions = "1. Subject to Pune jurisdiction only.\n2. Errors and omissions excepted.";
+  }
+  return data;
 }
 
 /** Render an invoice to a PDF buffer, exactly as pdf-worker.ts does. */
