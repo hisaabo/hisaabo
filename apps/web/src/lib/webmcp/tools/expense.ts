@@ -113,7 +113,7 @@ const expenseCreate: WebMcpToolDefinition = {
     },
     ["category", "amount", "mode"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Expense", action: "create" },
   summarize: async (input) => {
     const category = str(input.category);

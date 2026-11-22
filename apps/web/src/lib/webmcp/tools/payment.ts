@@ -165,7 +165,7 @@ const paymentCreate: WebMcpToolDefinition = {
     },
     ["partyId", "amount", "mode"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Payment", action: "create" },
   summarize: async (input, ctx) => {
     const amount = str(input.amount);

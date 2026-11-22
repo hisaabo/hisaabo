@@ -278,7 +278,7 @@ const invoiceCreate: WebMcpToolDefinition = {
     },
     ["partyId", "type", "lineItems"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Invoice", action: "create" },
   summarize: async (input, ctx) => {
     const type = enumOf(input.type, INVOICE_TYPES);
@@ -363,7 +363,7 @@ const invoiceUpdateStatus: WebMcpToolDefinition = {
     },
     ["invoiceId", "status"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Invoice", action: "update" },
   summarize: async (input, ctx) => {
     const id = str(input.invoiceId);

@@ -25,7 +25,7 @@ import {
   type ConfirmRequest,
 } from "./confirm";
 import { consumeWrite, isWriteBudgetExhausted, writeBudgetExhaustedMessage, writesRemaining } from "./budget";
-import { fenceValue } from "./fence";
+import { fenceError, fenceValue } from "./fence";
 import type {
   WebMcpConfirmSummary,
   WebMcpToolContext,
@@ -154,10 +154,15 @@ export function toToolResult(value: unknown): WebMcpToolResult {
   return { content: [{ type: "text", text: capText(stringifyValue(fenceValue(value))) }] };
 }
 
-/** Wrap a thrown value as an agent-readable failure. Never leaks internals. */
+/**
+ * Wrap a thrown value as an agent-readable failure. Never leaks internals, and is
+ * fenced like a result: an error can quote text from the user's books (a party
+ * name in "not found", the offending value in a validation message), so it goes
+ * through the same sanitizer and caps inside the same untrusted-data envelope.
+ */
 export function toErrorResult(err: unknown): WebMcpToolResult {
   return {
-    content: [{ type: "text", text: capText(formatAgentError(err)) }],
+    content: [{ type: "text", text: capText(stringifyValue(fenceError(formatAgentError(err)))) }],
     isError: true,
   };
 }

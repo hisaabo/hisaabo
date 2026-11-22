@@ -263,12 +263,12 @@ describe("the API's own rate limit", () => {
   it("reaches the agent as a readable slow-down message", () => {
     const result = toErrorResult(tooManyRequests());
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe("Too many requests: slow down and try again in a moment.");
+    expect(JSON.parse(result.content[0].text).error).toBe("Too many requests: slow down and try again in a moment.");
   });
 
   it("does not mistake other HTTP failures for it", () => {
     const err = new TRPCClientError("Unable to transform response from server");
     Object.assign(err, { meta: { response: { status: 502 } } });
-    expect(toErrorResult(err).content[0].text).toMatch(/^API error:/);
+    expect(JSON.parse(toErrorResult(err).content[0].text).error).toMatch(/^API error:/);
   });
 });

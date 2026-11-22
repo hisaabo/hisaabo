@@ -127,7 +127,7 @@ const partyCreate: WebMcpToolDefinition = {
     },
     ["type", "name"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Party", action: "create" },
   summarize: async (input) => {
     const type = enumOf(input.type, PARTY_TYPES);

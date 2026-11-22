@@ -128,7 +128,7 @@ const itemCreate: WebMcpToolDefinition = {
     },
     ["name"],
   ),
-  annotations: { consequentialHint: true },
+  annotations: { consequentialHint: true, untrustedContentHint: true },
   requires: { resource: "Item", action: "create" },
   summarize: async (input) => {
     const name = str(input.name);

@@ -46,7 +46,11 @@ export interface WebMcpAnnotations {
   readOnlyHint?: boolean;
   /** Tool performs a consequential, real-world or hard-to-reverse action (creating an invoice, recording money). */
   consequentialHint?: boolean;
-  /** Tool returns content that originated from third parties (party names, invoice notes) and may contain prompt injection. */
+  /**
+   * Tool returns content that originated from third parties (party names, invoice notes) and may contain prompt injection.
+   * Set on every read that returns records AND on every write that echoes the saved record back: the text of the record
+   * (a party's name, a payment's note) comes straight back in the result.
+   */
   untrustedContentHint?: boolean;
 }
 
