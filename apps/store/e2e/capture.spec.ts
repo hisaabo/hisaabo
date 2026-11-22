@@ -55,9 +55,9 @@ for (const { width, height } of SIZES) {
     await add(page, "Black Rice");
     await openCartIfClosed(page);
     await page.getByRole("button", { name: /proceed to checkout/i }).click();
-    await page.getByPlaceholder("9876543210").fill("9876543210");
+    await page.getByLabel("Mobile number", { exact: true }).fill("9876543210");
     await page.getByRole("button", { name: /^continue$/i }).click();
-    await page.getByPlaceholder("Your name").fill("Asha Verma");
+    await page.getByLabel("Your name", { exact: true }).fill("Asha Verma");
     await page.getByRole("button", { name: /continue to checkout/i }).click();
     await page.getByText("Success!").waitFor();
     await page.waitForTimeout(500);
@@ -69,5 +69,23 @@ for (const { width, height } of SIZES) {
     await page.getByRole("button", { name: "Privacy Policy" }).click();
     await page.waitForTimeout(500);
     await shot("policy");
+  });
+}
+
+// Extras for the redesigned storefront only (the old one has no photo cards to show).
+for (const { width, height } of SIZES) {
+  test(`capture extras ${PREFIX} @${width}`, async ({ page }) => {
+    test.skip(PREFIX === "before", "the extras use the redesigned storefront");
+    await page.setViewportSize({ width, height });
+    await mockStoreApi(page, { fonts: true, photoLed: true });
+    await page.goto(`/${SLUG}`);
+    await page.getByText("Lakadong Turmeric Powder").first().waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({ path: `${DIR}/${PREFIX}-photos-${width}.png` });
+
+    await page.getByRole("button", { name: "Raw Forest Honey", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "500 g" }).click();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${DIR}/${PREFIX}-item-${width}.png` });
   });
 }
