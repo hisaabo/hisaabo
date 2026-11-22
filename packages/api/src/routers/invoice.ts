@@ -14,7 +14,7 @@ import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
-import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+import { mapInvoiceToIRP, foreignPartyReason } from "../lib/invoice-to-irp.js";
 import { applyStockDeltas } from "../lib/stock-adjust.js";
 import { decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { isPurchaseReversal, recordPurchaseReversalItc, removePurchaseReversalItc } from "../lib/itc-reversal-entries.js";
@@ -568,6 +568,9 @@ export const invoiceRouter = router({
 
           const [party] = await db.select().from(parties).where(eq(parties.id, inv.partyId)).limit(1);
           if (!party?.gstin) return; // B2C — skip
+          // An export (GSTIN "URP" / state code 96) cannot be e-invoiced until 0.11.0:
+          // skip it like B2C, writing nothing. eInvoice.generate states the reason.
+          if (foreignPartyReason(party)) return;
 
           const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
           if (!biz) return;

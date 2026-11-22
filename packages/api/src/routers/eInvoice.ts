@@ -36,7 +36,7 @@ import { requireCan } from "../lib/permissions.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { IRPClient, IRPError } from "../lib/irp-client.js";
 import { IRPNotConfiguredError, loadIrpPublicKey } from "../lib/irp-public-key.js";
-import { mapInvoiceToIRP } from "../lib/invoice-to-irp.js";
+import { mapInvoiceToIRP, EInvoiceNotEligibleError } from "../lib/invoice-to-irp.js";
 import { encryptEInvoiceConfig, decryptEInvoiceConfig } from "../lib/field-encryption.js";
 import { emitNotificationEventSafe } from "../lib/notifications/index.js";
 import { logAudit } from "../lib/audit.js";
@@ -59,6 +59,22 @@ function requireIrpPublicKey(isSandbox: boolean): void {
   } catch (err) {
     if (err instanceof IRPNotConfiguredError) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+    }
+    throw err;
+  }
+}
+
+/**
+ * mapInvoiceToIRP, with an invoice that cannot be e-invoiced (an export; a missing
+ * state) turned into a BAD_REQUEST. Runs before the invoice is marked pending, so a
+ * refusal leaves the invoice exactly as it was.
+ */
+function mapOrRefuse(...args: Parameters<typeof mapInvoiceToIRP>): ReturnType<typeof mapInvoiceToIRP> {
+  try {
+    return mapInvoiceToIRP(...args);
+  } catch (err) {
+    if (err instanceof EInvoiceNotEligibleError) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
     }
     throw err;
   }
@@ -132,7 +148,7 @@ async function generateIRNForInvoice(
     .where(eq(invoiceItems.invoiceId, invoiceId))
     .orderBy(invoiceItems.sortOrder);
 
-  const irpJson = mapInvoiceToIRP(
+  const irpJson = mapOrRefuse(
     {
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: invoice.invoiceDate,

@@ -130,6 +130,10 @@ export interface Line {
   tax?: string;
   /** Line discount percent, default "0". */
   discount?: string;
+  /** Catalogue item the line bills (its HSN / type reach the GST returns and the IRP payload). */
+  itemId?: string;
+  /** Unit the line is billed in ("pcs", "kg", ...). */
+  unit?: string;
 }
 
 function toLineItems(lines: Line[]) {
@@ -139,6 +143,8 @@ function toLineItems(lines: Line[]) {
     unitPrice: l.price,
     taxPercent: l.tax ?? "0",
     discountPercent: l.discount ?? "0",
+    ...(l.itemId ? { itemId: l.itemId } : {}),
+    ...(l.unit ? { selectedUnit: l.unit } : {}),
   }));
 }
 

@@ -315,6 +315,8 @@ describe("mapInvoiceToIRP", () => {
 
     // Basic structure
     expect(result.Version).toBe("1.1");
+    // Inter-state domestic sale: B2B (EXPWP is "export with payment"), IGST shows the inter-state split
+    expect(result.TranDtls.SupTyp).toBe("B2B");
     expect(result.DocDtls.Typ).toBe("INV");
     expect(result.DocDtls.No).toBe("INV-00001");
     expect(result.DocDtls.Dt).toBe("02/04/2026");
@@ -394,6 +396,7 @@ describe("mapInvoiceToIRP", () => {
       },
     );
 
+    expect(result.TranDtls.SupTyp).toBe("B2B");
     // Intra-state: CGST + SGST, no IGST
     expect(result.ItemList[0]!.IgstAmt).toBe(0);
     expect(result.ItemList[0]!.CgstAmt).toBeGreaterThan(0);

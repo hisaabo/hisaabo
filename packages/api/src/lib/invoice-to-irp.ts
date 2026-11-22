@@ -9,6 +9,14 @@
  *
  * Money: all internal amounts are strings (NUMERIC(15,2)), IRP requires numbers.
  * We parse only at the boundary here — never accumulate JS floats.
+ *
+ * SUPPLY TYPE (TranDtls.SupTyp):
+ * The IRP values are B2B, SEZWP, SEZWOP, EXPWP, EXPWOP and DEXP. Hisaabo has no
+ * export / SEZ / deemed-export fields until 0.11.0, so every invoice this mapper
+ * accepts is a domestic B2B supply and SupTyp is always "B2B", intra- or
+ * inter-state alike. Inter- vs intra-state is expressed by IGST vs CGST + SGST
+ * and by the place of supply (BuyerDtls.Pos), never by SupTyp. A party that
+ * looks foreign (GSTIN "URP" or state code 96) is refused rather than mis-filed.
  */
 
 import type { IRPInvoiceJson } from "./irp-client.js";
@@ -39,6 +47,44 @@ export interface IRPParty {
   pincode: string | null;
   phone: string | null;
   email: string | null;
+}
+
+/** TranDtls.SupTyp values in the IRP JSON schema v1.1. */
+export type IRPSupplyType = "B2B" | "SEZWP" | "SEZWOP" | "EXPWP" | "EXPWOP" | "DEXP";
+
+/**
+ * Raised when an invoice cannot be e-invoiced as Hisaabo stands today (an export, or
+ * a seller / buyer whose state cannot be worked out). Nothing has been sent to the IRP:
+ * callers turn it into a plain "cannot generate" message and leave the invoice alone.
+ */
+export class EInvoiceNotEligibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EInvoiceNotEligibleError";
+  }
+}
+
+/** GST state code the IRP uses for "Other Country" (the buyer of an export). */
+const FOREIGN_STATE_CODE = "96";
+
+/** 2-digit state code: the one on file, else the first two digits of the GSTIN (they are the state code). */
+function resolveStateCode(stateCode: string | null | undefined, gstin: string | null | undefined): string | null {
+  const explicit = stateCode?.trim();
+  if (explicit) return explicit;
+  const fromGstin = gstin?.trim().slice(0, 2);
+  return fromGstin && /^\d{2}$/.test(fromGstin) ? fromGstin : null;
+}
+
+/**
+ * Why this party looks foreign (an export), or null for a domestic party. Hisaabo parties
+ * have no country field, so the markers are the GSTIN placeholder "URP" (unregistered
+ * person, what a foreign buyer is filed under) and the "Other Country" state code 96,
+ * whether set on the party or read from the start of its GSTIN.
+ */
+export function foreignPartyReason(party: Pick<IRPParty, "gstin" | "stateCode">): string | null {
+  if (party.gstin?.trim().toUpperCase() === "URP") return 'GSTIN "URP"';
+  if (resolveStateCode(party.stateCode, party.gstin) === FOREIGN_STATE_CODE) return `state code ${FOREIGN_STATE_CODE} (other country)`;
+  return null;
 }
 
 export interface IRPInvoice {
@@ -167,11 +213,28 @@ export function mapInvoiceToIRP(
     throw new Error("Party GSTIN is required for e-invoicing (B2B only)");
   }
 
-  const sellerStateCode = business.stateCode ?? "00";
-  const buyerStateCode = party.stateCode ?? sellerStateCode;
+  const foreignReason = foreignPartyReason(party);
+  if (foreignReason) {
+    throw new EInvoiceNotEligibleError(
+      `Exports aren't supported in e-invoicing yet; available in 0.11. This customer has ${foreignReason}.`,
+    );
+  }
+
+  // The state code on file, else the one in the GSTIN. Never assume "same state as the
+  // seller": that filed an inter-state sale to a party with no state code as CGST + SGST.
+  const sellerStateCode = resolveStateCode(business.stateCode, business.gstin);
+  if (!sellerStateCode) {
+    throw new EInvoiceNotEligibleError("The business has no state code; set the business state in Settings before generating an e-invoice.");
+  }
+  const buyerStateCode = resolveStateCode(party.stateCode, party.gstin);
+  if (!buyerStateCode) {
+    throw new EInvoiceNotEligibleError(`Customer "${party.name}" has no state code; set the customer's state before generating an e-invoice.`);
+  }
   const isInterState = sellerStateCode !== buyerStateCode;
 
-  const supplyType = isInterState ? "EXPWP" : "B2B";
+  // Always B2B (see the header): the IRP wants EXPWP for an export with payment, not
+  // for an inter-state domestic sale.
+  const supplyType: IRPSupplyType = "B2B";
 
   // Map line items
   const itemList = lineItems.map((li, idx) => {
@@ -246,6 +309,8 @@ export function mapInvoiceToIRP(
       TaxSch: "GST",
       SupTyp: supplyType,
       RegRev: invoice.isReverseCharge ? "Y" : "N",
+      // Hisaabo never charges IGST on an intra-state supply; "Y" is for SEZ / deemed
+      // exports, which arrive in 0.11.0.
       IgstOnIntra: "N",
     },
     DocDtls: {

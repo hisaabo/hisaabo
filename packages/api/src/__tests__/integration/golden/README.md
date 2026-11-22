@@ -38,6 +38,7 @@ test itself.
 | `12-rounding` | 7-line invoice with paisa rounding; round-off/discount/charges | pass |
 | `13-document-lifecycle` | Drafts, quotations, cancel, payment delete | pass |
 | `14-purchase-side-reversals` | Credit note / sales return raised from a purchase invoice (`type = purchase`) | pass |
+| `15-einvoice-supply-type` | IRP payload for domestic B2B sales: SupTyp `B2B` intra- and inter-state, place of supply, exports refused | pass |
 
 Per scenario the suite asserts, as applicable: the trial balance (every touched
 account, `debits == credits`), P&L totals, the balance-sheet equation
