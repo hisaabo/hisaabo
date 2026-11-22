@@ -30,14 +30,20 @@ export interface LineItemResult {
  * to the paisa whatever the rounding. (The old float version rounded the per-unit base first and
  * multiplied after, which drifted from the inclusive total for quantities above 1.)
  * `subtotal` is the tax-exclusive value before the discount; `discountAmount` = subtotal - afterDiscount.
- * Returns null when an input is not a plain decimal.
+ * Throws when an input is not a plain decimal (see `calcLineItem`).
  */
-function calcInclusiveLine(item: LineItemInput): LineItemResult | null {
+function calcInclusiveLine(item: LineItemInput): LineItemResult {
   const unit = toPaiseExact(item.unitPrice);
   const qty = parseDecimal(item.quantity);
   const disc = parseDecimal(item.discountPercent || "0");
   const tax = parseDecimal(item.taxPercent || "0");
-  if (unit === null || !qty || !disc || !tax) return null;
+  // Falling through to the tax-exclusive formula here would silently bill a tax-inclusive price as if it were
+  // exclusive (₹118 incl. 18% -> 118 + 21.24): refuse instead. Validated input is always a plain decimal, so this
+  // is only reachable from a half-typed form field (".5", "2.", "1e-1"), which the forms already catch.
+  if (unit === null) throw new Error(`calcLineItem: unit price "${item.unitPrice}" is not a plain amount`);
+  if (!qty) throw new Error(`calcLineItem: quantity "${item.quantity}" is not a plain number`);
+  if (!disc) throw new Error(`calcLineItem: discount "${item.discountPercent}" is not a plain percentage`);
+  if (!tax) throw new Error(`calcLineItem: GST rate "${item.taxPercent}" is not a plain percentage`);
 
   const gross = divRoundHalfUp(unit * qty.int, pow10(qty.scale));
   const discountOnGross = divRoundHalfUp(gross * disc.int, 100n * pow10(disc.scale));
@@ -55,11 +61,7 @@ function calcInclusiveLine(item: LineItemInput): LineItemResult | null {
 }
 
 export function calcLineItem(item: LineItemInput): LineItemResult {
-  if (item.taxInclusive) {
-    const exact = calcInclusiveLine(item);
-    if (exact) return exact;
-    // not plain decimals (never from validated input): fall through to the exclusive path
-  }
+  if (item.taxInclusive) return calcInclusiveLine(item);
 
   // Tax-exclusive (default)
   const subtotal = money.mul(item.unitPrice, item.quantity);
