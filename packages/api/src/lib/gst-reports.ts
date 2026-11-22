@@ -304,8 +304,15 @@ export async function generateGSTR1(
     }
   }
 
-  // Fix 2: Fetch credit notes for the period
-  const rawCreditNotes = await db.select({
+  // Credit and debit notes of the period. GSTR-1 reports OUTWARD supplies, so only SALE-side
+  // documents belong here, and the side is decided by `classifyLedgerDocument` (the rule the
+  // ledger uses): a credit note or sales return created from a PURCHASE invoice has
+  // type = "purchase", reverses that purchase and reduces input credit (GSTR-3B Table 4), so it
+  // is not an outward credit note. A purchase-side debit note / purchase return is a document we
+  // issue to a supplier, likewise not an outward supply.
+  const rawNotes = await db.select({
+    documentType: invoices.documentType,
+    type: invoices.type,
     invoiceNumber: invoices.invoiceNumber,
     invoiceDate: invoices.invoiceDate,
     totalAmount: invoices.totalAmount,
@@ -320,39 +327,22 @@ export async function generateGSTR1(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      inArray(invoices.documentType, ["credit_note", "sales_return"]),
+      eq(invoices.type, "sale"),
+      inArray(invoices.documentType, ["credit_note", "sales_return", "purchase_return", "debit_note"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
     ))
     .orderBy(invoices.invoiceDate);
 
-  // Fix 2: Fetch debit notes for the period
-  const rawDebitNotes = await db.select({
-    invoiceNumber: invoices.invoiceNumber,
-    invoiceDate: invoices.invoiceDate,
-    totalAmount: invoices.totalAmount,
-    subtotal: invoices.subtotal,
-    taxAmount: invoices.taxAmount,
-    referenceDocumentId: invoices.referenceDocumentId,
-    partyName: parties.name,
-    partyGstin: parties.gstin,
-    partyState: parties.state,
-    partyStateCode: parties.stateCode,
-  }).from(invoices)
-    .innerJoin(parties, eq(parties.id, invoices.partyId))
-    .where(and(
-      eq(invoices.businessId, businessId),
-      // GSTR-1 reports OUTWARD supplies, so only sale-side debit notes. A purchase-side
-      // debit note / purchase return is a document we issue to a supplier: it reduces
-      // input credit (GSTR-3B Table 4), it is not an outward supply.
-      eq(invoices.documentType, "debit_note"),
-      eq(invoices.type, "sale"),
-      sql`${invoices.status} != 'cancelled'`,
-      isNull(invoices.deletedAt),
-      ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),
-    ))
-    .orderBy(invoices.invoiceDate);
+  const rawCreditNotes = rawNotes.filter((n) => {
+    const cls = classifyLedgerDocument(n.documentType, n.type);
+    return cls?.side === "sale" && cls.kind === "reversal";
+  });
+  const rawDebitNotes = rawNotes.filter((n) => {
+    const cls = classifyLedgerDocument(n.documentType, n.type);
+    return cls?.side === "sale" && cls.kind === "addition";
+  });
 
   // Resolve original invoice numbers for credit/debit notes that reference an invoice
   const noteRefIds = [
@@ -446,7 +436,10 @@ export async function generateGSTR3B(
   // Purchase-side documents of the period. The documentType filter matters: without it
   // purchase returns and purchase-side debit notes were summed like invoices and ADDED to
   // the input credit. Which documents are purchase-side, and which of them reverse a
-  // purchase, is decided by `classifyLedgerDocument`, the same rule the ledger uses.
+  // purchase, is decided by `classifyLedgerDocument`, the same rule the ledger uses: that
+  // includes a credit note or sales return raised from a PURCHASE invoice (type = "purchase"),
+  // which takes input credit back like a purchase return. Only invoices and these reversals
+  // count; quotations, proformas and challans never reach ITC.
   const purchaseDocs = await db.select({
     documentType: invoices.documentType,
     type: invoices.type,
@@ -459,7 +452,7 @@ export async function generateGSTR3B(
     .innerJoin(parties, eq(parties.id, invoices.partyId))
     .where(and(
       eq(invoices.businessId, businessId),
-      inArray(invoices.documentType, ["invoice", "debit_note", "purchase_return"]),
+      inArray(invoices.documentType, ["invoice", "debit_note", "credit_note", "sales_return", "purchase_return"]),
       sql`${invoices.status} != 'cancelled'`,
       isNull(invoices.deletedAt),
       ...buildBusinessDateFilter(invoices, { from: startDate, to: endDate }),

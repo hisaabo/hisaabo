@@ -57,9 +57,13 @@ describe("classifyLedgerDocument", () => {
     ["invoice", "purchase", { side: "purchase", kind: "invoice" }],
     ["credit_note", "sale", { side: "sale", kind: "reversal" }],
     ["sales_return", "sale", { side: "sale", kind: "reversal" }],
+    // raised from a PURCHASE invoice (the apps copy its type): reverses the purchase
+    ["credit_note", "purchase", { side: "purchase", kind: "reversal" }],
+    ["sales_return", "purchase", { side: "purchase", kind: "reversal" }],
     ["debit_note", "sale", { side: "sale", kind: "addition" }],
     ["debit_note", "purchase", { side: "purchase", kind: "reversal" }],
     ["purchase_return", "purchase", { side: "purchase", kind: "reversal" }],
+    ["purchase_return", "sale", { side: "sale", kind: "reversal" }],
   ])("%s on a %s document", (documentType, type, expected) => {
     expect(classifyLedgerDocument(documentType, type)).toEqual(expected);
   });
@@ -205,6 +209,20 @@ describe("buildDocumentLines", () => {
       ["5030", "0.00", "0.55"],
     ]);
     expect(balanced(lines)).toEqual({ dr: "1205.00", cr: "1205.00" });
+  });
+
+  it("a credit note / sales return raised from a purchase invoice reverses the PURCHASE", () => {
+    const { coa, systemCodes } = seededCoa();
+    for (const documentType of ["credit_note", "sales_return"]) {
+      const lines = buildDocumentLines(doc({ documentType, type: "purchase" }), { coa, systemCodes, sameState: true });
+      expect(rows(lines)).toEqual([
+        ["5010", "0.00", "1000.00"],
+        ["1510", "0.00", "90.00"],
+        ["1511", "0.00", "90.00"],
+        ["2000", "1180.00", "0.00"],
+      ]);
+      expect(balanced(lines)).toEqual({ dr: "1180.00", cr: "1180.00" });
+    }
   });
 
   it("sale-side debit note posts like a sale", () => {

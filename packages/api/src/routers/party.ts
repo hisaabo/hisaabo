@@ -10,7 +10,7 @@ import { warnTallyCsvExportDeprecated } from "../lib/deprecations.js";
 import { escapeLike } from "../lib/escape-like.js";
 import { buildBusinessDateFilter } from "../lib/business-date.js";
 import { paymentLedgerLeg, paymentSettlement, paymentSettledSql, paymentTdsSql } from "../lib/payment-settlement.js";
-import { documentLedgerSide, invoiceBalanceSql, signedOpeningBalance, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
+import { documentLedgerSide, invoiceBalanceSql, invoiceIsLedgerDebitSql, signedOpeningBalance, BALANCE_DOCUMENT_TYPES } from "../lib/party-balance.js";
 
 
 export const partyRouter = router({
@@ -831,119 +831,27 @@ export const partyRouter = router({
       const fromDate = input.fromDate ? new Date(input.fromDate) : null;
       const toDate = input.toDate ? new Date(input.toDate) : null;
 
-      // UNION ALL: invoices + CN/SR/PR/DN + payments
-      // CN/SR/PR reverse the normal debit/credit direction.
+      // UNION ALL: posting documents + payments
       const ledgerRows = await ctx.db.execute(sql`
         WITH ledger AS (
-          -- Sale invoices: debit (customer owes us)
+          -- Every posting document (invoice, credit note, sales return, purchase return, debit
+          -- note). Which side it lands on follows lib/party-balance.ts (classifyLedgerDocument):
+          -- sale invoice and sale debit note = debit; purchase invoice = credit; credit note /
+          -- sales return = credit; purchase return, purchase-side debit note and a credit note /
+          -- sales return raised from a purchase invoice (type = 'purchase') = debit.
           SELECT
             invoice_date AS entry_date,
-            'invoice'::text AS entry_type,
+            CASE WHEN document_type = 'invoice' AND type = 'purchase' THEN 'purchase'
+                 ELSE document_type::text END AS entry_type,
             invoice_number AS document_number,
             id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
+            CASE WHEN ${invoiceIsLedgerDebitSql()} THEN total_amount::numeric ELSE 0::numeric END AS debit,
+            CASE WHEN ${invoiceIsLedgerDebitSql()} THEN 0::numeric ELSE total_amount::numeric END AS credit,
             status
           FROM invoices
           WHERE party_id = ${input.partyId}
             AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type = 'invoice'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Purchase invoices: credit (we owe supplier)
-          SELECT
-            invoice_date AS entry_date,
-            'purchase'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            0::numeric AS debit,
-            total_amount::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type = 'invoice'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Sale credit notes / sales returns: credit (reduces what customer owes)
-          SELECT
-            invoice_date AS entry_date,
-            document_type::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            0::numeric AS debit,
-            total_amount::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type IN ('credit_note', 'sales_return')
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Purchase credit notes / purchase returns: debit (reduces what we owe)
-          SELECT
-            invoice_date AS entry_date,
-            document_type::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type IN ('credit_note', 'purchase_return')
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Sale debit notes: debit (customer owes more)
-          SELECT
-            invoice_date AS entry_date,
-            'debit_note'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'sale'
-            AND document_type = 'debit_note'
-            AND status NOT IN ('cancelled')
-            AND deleted_at IS NULL
-
-          UNION ALL
-
-          -- Purchase debit notes: debit (we debit the supplier, so we owe less), like a purchase return
-          SELECT
-            invoice_date AS entry_date,
-            'debit_note'::text AS entry_type,
-            invoice_number AS document_number,
-            id AS document_id,
-            total_amount::numeric AS debit,
-            0::numeric AS credit,
-            status
-          FROM invoices
-          WHERE party_id = ${input.partyId}
-            AND business_id = ${ctx.businessId}
-            AND type = 'purchase'
-            AND document_type = 'debit_note'
+            AND document_type IN ('invoice', 'credit_note', 'sales_return', 'purchase_return', 'debit_note')
             AND status NOT IN ('cancelled')
             AND deleted_at IS NULL
 

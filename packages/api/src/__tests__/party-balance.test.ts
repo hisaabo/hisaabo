@@ -18,6 +18,8 @@ describe("isBalanceReduction", () => {
     ["sales_return", "sale", true],
     ["purchase_return", "purchase", true],
     ["debit_note", "purchase", true], // we debit the supplier: we owe them less
+    ["credit_note", "purchase", true], // raised from a purchase invoice
+    ["sales_return", "purchase", true],
     ["debit_note", "sale", false], // the customer owes us more
     ["invoice", "sale", false],
     ["invoice", "purchase", false],
@@ -32,6 +34,9 @@ describe("documentLedgerSide (debit-minus-credit statement)", () => {
     ["debit_note", "sale", "debit"],
     ["credit_note", "sale", "credit"],
     ["sales_return", "sale", "credit"],
+    ["credit_note", "purchase", "debit"], // raised from a purchase invoice: reverses the purchase
+    ["sales_return", "purchase", "debit"],
+    ["purchase_return", "sale", "credit"],
     ["invoice", "purchase", "credit"],
     ["purchase_return", "purchase", "debit"],
     ["debit_note", "purchase", "debit"], // was "credit": a purchase-side debit note reduces the payable

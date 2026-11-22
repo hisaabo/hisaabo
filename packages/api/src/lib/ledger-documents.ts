@@ -118,26 +118,34 @@ export interface LedgerDocumentClass {
 }
 
 /**
- * The single answer to "how does this document move the books". `null` for
- * quotations, proformas, delivery challans and anything else that never posts.
+ * The single answer to "how does this document move the books", used by the
+ * ledger, the GSTR-1 / GSTR-3B / GSTR-9 generators and the party balances.
+ * `null` for quotations, proformas, delivery challans and anything else that
+ * never posts.
  *
- * Note the asymmetry on debit notes: a SALE-side debit note adds to the
- * receivable, a PURCHASE-side one (we debit the supplier) reduces the payable
- * and the input tax credit, exactly like a purchase return.
+ * The side is decided by the document's `type` (the type of the invoice it
+ * adjusts), not by its name: the apps create a credit note or a sales return
+ * from a PURCHASE invoice with `type = "purchase"`, and such a document
+ * reverses the purchase (Dr Payable / Cr Purchase Returns / Cr Input GST), not
+ * a sale.
+ *
+ *   invoice                                       -> `invoice`, side by type
+ *   credit_note, sales_return, purchase_return    -> `reversal`, side by type
+ *   debit_note, type sale                         -> sale `addition`: the buyer owes us more
+ *   debit_note, type purchase                     -> purchase `reversal`: we debit the
+ *       supplier, so we owe less and our input credit falls, like a purchase return
  */
 export function classifyLedgerDocument(documentType: string, type: string): LedgerDocumentClass | null {
+  const side: LedgerSide = type === "purchase" ? "purchase" : "sale";
   switch (documentType) {
     case "invoice":
-      return { side: type === "purchase" ? "purchase" : "sale", kind: "invoice" };
+      return { side, kind: "invoice" };
     case "credit_note":
     case "sales_return":
-      return { side: "sale", kind: "reversal" };
-    case "debit_note":
-      return type === "purchase"
-        ? { side: "purchase", kind: "reversal" }
-        : { side: "sale", kind: "addition" };
     case "purchase_return":
-      return { side: "purchase", kind: "reversal" };
+      return { side, kind: "reversal" };
+    case "debit_note":
+      return side === "purchase" ? { side, kind: "reversal" } : { side, kind: "addition" };
     default:
       return null;
   }
