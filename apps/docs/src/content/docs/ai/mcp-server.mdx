@@ -1798,7 +1798,7 @@ These tools are registered like the others and follow the same safety modes; the
 | `report_profit_and_loss`, `report_balance_sheet`, `report_trial_balance`, `report_cash_flow_statement` | Financial statements for a period or date |
 | `report_comparative_profit_and_loss`, `report_comparative_balance_sheet`, `report_comparative_trial_balance` | The same statements for two periods or dates side by side |
 | `report_general_ledger` | General ledger for one account |
-| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true` |
+| `journal_list`, `journal_get`, `journal_create`, `journal_void`, `journal_templates` | Journal entries and templates (manual accounting adjustments). `journal_void` needs `confirm: true`; it posts a reversing entry and keeps both on record (there is no way to delete a journal entry) |
 | `gst_gstr9` | GSTR-9 annual return summary for a financial year |
 | `gstr2b_uploads`, `gstr2b_records`, `gstr2b_summary` | GSTR-2B uploads, records and reconciliation summary by return period |
 | `gstr2b_missing_in_2b`, `gstr2b_missing_in_books` | Purchase invoices missing from GSTR-2B, and GSTR-2B invoices missing from your books |

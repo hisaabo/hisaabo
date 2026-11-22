@@ -223,7 +223,7 @@ hisaabo whoami
 | Command | Description |
 |---|---|
 | `journal list` / `get <id>` | List journal entries or show one |
-| `journal void <id>` | Void a journal entry |
+| `journal void <id>` | Void a journal entry: posts a reversing entry and keeps both on record (there is no delete; the API's `journal.delete` does the same thing since 0.10.1) |
 | `journal templates` | List journal entry templates |
 
 ### Shipments

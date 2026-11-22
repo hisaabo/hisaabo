@@ -582,7 +582,7 @@ function JournalEntriesPage() {
         onCancel={() => setVoidEntryId(null)}
         onConfirm={() => voidEntryId && voidMutation.mutate({ id: voidEntryId })}
         title="Void Journal Entry"
-        description="This will create a reversing entry that cancels out this journal entry. This action cannot be undone."
+        description="This will post a reversing entry that cancels out this journal entry. Both entries stay on record (journal entries are never deleted). This action cannot be undone."
         confirmLabel="Confirm Void"
         variant="danger"
         loading={voidMutation.isPending}
