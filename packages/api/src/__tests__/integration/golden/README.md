@@ -31,7 +31,7 @@ test itself.
 | `05-credit-debit-notes` | Credit note, sales return, sale/purchase debit notes, purchase return | pass |
 | `06-expenses` | 12 expense categories, keyword-mapped, cash and bank | pass |
 | `07-manual-journals` | Capital, equipment, depreciation journals; void nets to zero | pass |
-| `08-itc-utilisation` | `itc.recordUtilization` system journal | pass + 1 bug |
+| `08-itc-utilisation` | `itc.recordUtilization` system journal | pass |
 | `09-bank-movements-not-ledgered` | Bank transfer and manual "interest" deposit | **documented gap** |
 | `10-opening-balances` | Party and bank opening balances | **documented gap** |
 | `11-financial-year-boundary` | 31 Mar / 1 Apr, TB per FY, default FY derivation | pass (+ documented gaps) |
@@ -138,6 +138,10 @@ scenarios (even ones sharing a file) cannot see each other's rows.
 
 ## Known bugs captured as `it.fails`
 
-| Where | What |
-| --- | --- |
-| `itc.ts:389-414`, `:536-579` | Re-recording a period's utilisation upserts the row but posts a second journal; Input GST goes negative (08) |
+None. The nine production bugs this suite first marked with `it.fails` (an
+unbalanced ledger for round-off / discount / charges, gross profit, GSTR-3B
+input credit and output tax, the CGST/SGST odd paisa, GSTR-1 purchase-side debit
+notes, party balances, the supplier opening-balance sign, and the doubled ITC
+utilisation journal) were fixed, each with the same hand-computed literals, and
+their markers removed. Their release note is the 0.10.1 section of
+`docs/UPGRADING.md` ("Corrected accounting and GST figures").

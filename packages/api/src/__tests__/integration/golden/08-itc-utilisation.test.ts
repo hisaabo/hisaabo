@@ -211,15 +211,19 @@ describe("golden 08: ITC utilisation journal", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  // BUG: recordUtilization upserts the utilisation row (unique per period) but ALWAYS
-  // inserts a new journal, and the "available" ITC entries are never consumed, so
-  // re-recording a period double-posts the credit: Input GST goes negative.
-  it.fails("re-recording the same period is idempotent on the ledger (Input CGST stays at 0.00)", async () => {
+  it("re-recording the same period is idempotent on the ledger (Input CGST stays at 0.00)", async () => {
     const w2 = await createGoldenWorld();
     await seedJuly(w2);
     await w2.caller.itc.recordUtilization(UTILISATION);
     await w2.caller.itc.recordUtilization(UTILISATION);
     const b2 = await book(w2);
     expect(tbBalance(b2, "1510")).toBe("0.00");
+    // The same net position as recording it once: Input GST nets to zero, 400 CGST / 500 SGST left to pay.
+    for (const code of ["1510", "1511", "1512", "2102"]) {
+      expect(tbBalance(b2, code)).toBe("0.00");
+    }
+    expect(tbBalance(b2, "2100")).toBe("-400.00");
+    expect(tbBalance(b2, "2101")).toBe("-500.00");
+    expectBooksBalance(b2);
   });
 });

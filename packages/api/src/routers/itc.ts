@@ -18,6 +18,12 @@ import {
 } from "@hisaabo/shared";
 import { router, viewerProcedure, adminProcedure } from "../trpc.js";
 import { requireCan } from "../lib/permissions.js";
+import {
+  findLiveSystemJournals,
+  lockJournalNumbering,
+  nextJournalEntryNumber,
+  reverseJournalEntry,
+} from "../lib/journal-reversal.js";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -384,7 +390,13 @@ export const itcRouter = router({
         });
       }
 
+      const journalNarration = `ITC utilization for return period ${input.returnPeriod}`;
+
       const result = await ctx.db.transaction(async (tx) => {
+        // Serialise with every other journal posting of this business (numbering, and two
+        // concurrent re-records of the same period reversing the same entry).
+        await lockJournalNumbering(tx, ctx.businessId);
+
         // Upsert utilization record (unique on businessId + returnPeriod)
         const [utilization] = await tx
           .insert(itcUtilizations)
@@ -412,6 +424,19 @@ export const itcRouter = router({
             },
           })
           .returning();
+
+        // Recording a period again REPLACES its journal: reverse the system journal(s) this period
+        // already posted (mirrored entry, original marked void, as journal.void does) before
+        // posting the new one, so the ledger never carries the utilisation twice. The credit
+        // balances (Input GST) stay where one utilisation puts them, and recording zero amounts
+        // simply clears the period.
+        const earlier = await findLiveSystemJournals(tx, ctx.businessId, journalNarration);
+        for (const entry of earlier) {
+          await reverseJournalEntry(tx, ctx.businessId, entry, {
+            userId: ctx.user.id,
+            userName: ctx.user.name ?? null,
+          });
+        }
 
         // Create system journal entry: Dr Output GST / Cr Input GST
         // Account codes: Output CGST=2100, Output SGST=2101, Output IGST=2102
@@ -534,16 +559,7 @@ export const itcRouter = router({
           }
 
           // Generate journal entry number
-          const [maxEntry] = await tx
-            .select({
-              count:
-                sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM '[0-9]+$') AS INTEGER)), 0)`,
-            })
-            .from(journalEntries)
-            .where(eq(journalEntries.businessId, ctx.businessId));
-
-          const nextNum = (maxEntry?.count ?? 0) + 1;
-          const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`;
+          const entryNumber = await nextJournalEntryNumber(tx, ctx.businessId);
 
           const [inserted] = await tx
             .insert(journalEntries)
@@ -551,7 +567,7 @@ export const itcRouter = router({
               businessId: ctx.businessId,
               entryNumber,
               entryDate: new Date(),
-              narration: `ITC utilization for return period ${input.returnPeriod}`,
+              narration: journalNarration,
               source: "system",
               createdByUserId: ctx.user.id,
               createdByName: ctx.user.name ?? null,
